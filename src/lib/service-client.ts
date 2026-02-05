@@ -215,9 +215,14 @@ export async function getStatsByModel(runIds: string[]): Promise<ModelStats[]> {
   if (runIds.length === 0) return [];
 
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (EMAILGENERATION_SERVICE_API_KEY) {
+      headers["X-API-Key"] = EMAILGENERATION_SERVICE_API_KEY;
+    }
+
     const response = await fetch(`${EMAILGENERATION_SERVICE_URL}/stats/by-model`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ runIds }),
     });
 
