@@ -7,7 +7,7 @@ import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, orgs } from "../db/schema.js";
-import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
+import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { getAggregatedStats, getStatsByModel, getLeadsForRuns, aggregateCompaniesFromLeads, type AggregatedStats } from "../lib/service-client.js";
 import { extractDomain } from "../lib/domain.js";
 import { ensureOrganization, listRuns, getRun, getRunsBatch, createRun, updateRun, type Run, type RunWithCosts } from "@mcpfactory/runs-client";
@@ -86,10 +86,10 @@ const EMPTY_STATS: AggregatedStats = {
 
 /**
  * GET /internal/performance/leaderboard - Public performance leaderboard
- * No auth — internal network trust (same as /campaigns/all)
+ * Requires API key for service-to-service auth
  * Aggregates stats across ALL campaigns grouped by brand and model
  */
-router.get("/performance/leaderboard", async (_req, res) => {
+router.get("/performance/leaderboard", requireApiKey, async (_req, res) => {
   try {
     // 1. Fetch all campaigns with clerkOrgId
     const allCampaigns = await db
@@ -312,10 +312,10 @@ router.get("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) => 
 
 /**
  * GET /internal/campaigns/all - List all campaigns across all orgs (for scheduler)
- * No serviceAuth - uses internal network trust
+ * Requires API key for service-to-service auth
  * Returns campaigns with clerkOrgId and brandUrl for downstream service calls
  */
-router.get("/campaigns/all", async (_req, res) => {
+router.get("/campaigns/all", requireApiKey, async (_req, res) => {
   try {
     // Join with orgs to get clerkOrgId
     // brandUrl is now stored directly on campaigns, no need to join brands table
@@ -597,9 +597,10 @@ router.get("/campaigns/:id/runs", serviceAuth, async (req: AuthenticatedRequest,
 });
 
 /**
- * GET /internal/campaigns/:id/runs/all - Get campaign runs (no auth, for scheduler)
+ * GET /internal/campaigns/:id/runs/all - Get campaign runs (for scheduler)
+ * Requires API key for service-to-service auth
  */
-router.get("/campaigns/:id/runs/all", async (req, res) => {
+router.get("/campaigns/:id/runs/all", requireApiKey, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -619,8 +620,9 @@ router.get("/campaigns/:id/runs/all", async (req, res) => {
 
 /**
  * POST /internal/campaigns/:id/runs - Create a new campaign run (for scheduler)
+ * Requires API key for service-to-service auth
  */
-router.post("/campaigns/:id/runs", async (req, res) => {
+router.post("/campaigns/:id/runs", requireApiKey, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -646,8 +648,9 @@ router.post("/campaigns/:id/runs", async (req, res) => {
 
 /**
  * PATCH /internal/runs/:id - Update a campaign run
+ * Requires API key for service-to-service auth
  */
-router.patch("/runs/:id", async (req, res) => {
+router.patch("/runs/:id", requireApiKey, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;

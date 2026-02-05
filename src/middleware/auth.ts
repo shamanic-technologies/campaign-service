@@ -154,3 +154,27 @@ export function requireOrg(
   }
   next();
 }
+
+/**
+ * Middleware to verify CAMPAIGN_SERVICE_API_KEY for internal service-to-service calls
+ * Checks x-api-key header against CAMPAIGN_SERVICE_API_KEY env var
+ */
+export function requireApiKey(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  const apiKey = req.headers["x-api-key"] as string;
+  const expectedKey = process.env.CAMPAIGN_SERVICE_API_KEY;
+
+  if (!expectedKey) {
+    console.error("CAMPAIGN_SERVICE_API_KEY not configured");
+    return res.status(500).json({ error: "API key not configured" });
+  }
+
+  if (!apiKey || apiKey !== expectedKey) {
+    return res.status(401).json({ error: "Invalid or missing API key" });
+  }
+
+  next();
+}
