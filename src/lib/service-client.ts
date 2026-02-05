@@ -74,7 +74,12 @@ async function fetchStats<T>(url: string, clerkOrgId: string, body: unknown, api
     const data = await response.json();
     return data.stats as T;
   } catch (error) {
-    console.warn(`Stats fetch error: ${url}`, error);
+    const cause = error instanceof Error && 'cause' in error ? (error.cause as { code?: string }) : null;
+    if (cause?.code === 'ECONNREFUSED') {
+      console.warn(`Stats fetch error: ${url} - connection refused`);
+    } else {
+      console.warn(`Stats fetch error: ${url} - ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
     return null;
   }
 }
@@ -114,7 +119,12 @@ async function fetchData<T>(url: string, clerkOrgId: string, apiKey?: string): P
 
     return await response.json() as T;
   } catch (error) {
-    console.warn(`Data fetch error: ${url}`, error);
+    const cause = error instanceof Error && 'cause' in error ? (error.cause as { code?: string }) : null;
+    if (cause?.code === 'ECONNREFUSED') {
+      console.warn(`Data fetch error: ${url} - connection refused`);
+    } else {
+      console.warn(`Data fetch error: ${url} - ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
     return null;
   }
 }
@@ -219,7 +229,12 @@ export async function getStatsByModel(runIds: string[]): Promise<ModelStats[]> {
     const data = await response.json();
     return data.stats || [];
   } catch (error) {
-    console.warn("Stats by model fetch error:", error);
+    const cause = error instanceof Error && 'cause' in error ? (error.cause as { code?: string }) : null;
+    if (cause?.code === 'ECONNREFUSED') {
+      console.warn(`Stats by model fetch error: ${EMAILGENERATION_SERVICE_URL}/stats/by-model - connection refused`);
+    } else {
+      console.warn(`Stats by model fetch error: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
     return [];
   }
 }
