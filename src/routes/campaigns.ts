@@ -28,7 +28,7 @@ router.get("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedRequest
 
     res.json({ campaigns: results });
   } catch (error) {
-    console.error("List campaigns error:", error);
+    console.error("[Campaign Service] List campaigns error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -53,7 +53,7 @@ router.get("/campaigns/:id", clerkAuth, requireOrg, async (req: AuthenticatedReq
 
     res.json({ campaign });
   } catch (error) {
-    console.error("Get campaign error:", error);
+    console.error("[Campaign Service] Get campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -93,7 +93,7 @@ router.post("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedReques
 
     // Normalize the brandUrl
     const normalizedBrandUrl = normalizeUrl(brandUrl);
-    console.log(`[campaigns] Creating campaign with brandUrl: ${normalizedBrandUrl}`);
+    console.log(`[Campaign Service] Creating campaign with brandUrl: ${normalizedBrandUrl}`);
 
     const [campaign] = await db
       .insert(campaigns)
@@ -124,7 +124,7 @@ router.post("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedReques
 
     res.status(201).json({ campaign });
   } catch (error) {
-    console.error("Create campaign error:", error);
+    console.error("[Campaign Service] Create campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -159,7 +159,7 @@ router.patch("/campaigns/:id", clerkAuth, requireOrg, async (req: AuthenticatedR
 
     res.json({ campaign: updated });
   } catch (error) {
-    console.error("Update campaign error:", error);
+    console.error("[Campaign Service] Update campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -189,7 +189,7 @@ router.post("/campaigns/:id/activate", clerkAuth, requireOrg, async (req: Authen
 
     res.json({ campaign: updated });
   } catch (error) {
-    console.error("Activate campaign error:", error);
+    console.error("[Campaign Service] Activate campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -219,7 +219,7 @@ router.post("/campaigns/:id/pause", clerkAuth, requireOrg, async (req: Authentic
 
     res.json({ campaign: updated });
   } catch (error) {
-    console.error("Pause campaign error:", error);
+    console.error("[Campaign Service] Pause campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -245,7 +245,7 @@ router.delete("/campaigns/:id", clerkAuth, requireOrg, async (req: Authenticated
 
     res.json({ message: "Campaign deleted successfully" });
   } catch (error) {
-    console.error("Delete campaign error:", error);
+    console.error("[Campaign Service] Delete campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

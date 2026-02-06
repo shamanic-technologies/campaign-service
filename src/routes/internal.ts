@@ -151,7 +151,7 @@ router.get("/performance/leaderboard", requireApiKey, async (_req, res) => {
             const runs = await getRunsForCampaign(clerkOrgId, campaignId);
             brandOrgRunIds.push(...runs.map((r: Run) => r.id));
           } catch (err) {
-            console.warn(`Failed to get runs for campaign ${campaignId}:`, err);
+            console.warn(`[Campaign Service] Failed to get runs for campaign ${campaignId}:`, err);
           }
         }
 
@@ -279,7 +279,7 @@ router.get("/performance/leaderboard", requireApiKey, async (_req, res) => {
       updatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Leaderboard error:", error);
+    console.error("[Campaign Service] Leaderboard error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -305,7 +305,7 @@ router.get("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) => 
 
     res.json({ campaigns: orgCampaigns });
   } catch (error) {
-    console.error("List campaigns error:", error);
+    console.error("[Campaign Service] List campaigns error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -354,7 +354,7 @@ router.get("/campaigns/all", requireApiKey, async (_req, res) => {
 
     res.json({ campaigns: enrichedCampaigns });
   } catch (error) {
-    console.error("List all campaigns error:", error);
+    console.error("[Campaign Service] List all campaigns error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -379,7 +379,7 @@ router.get("/campaigns/:id", serviceAuth, async (req: AuthenticatedRequest, res)
 
     res.json({ campaign });
   } catch (error) {
-    console.error("Get campaign error:", error);
+    console.error("[Campaign Service] Get campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -393,7 +393,7 @@ router.get("/campaigns/:id", serviceAuth, async (req: AuthenticatedRequest, res)
  */
 router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    console.log("POST /internal/campaigns - orgId:", req.orgId, "userId:", req.userId, "body:", JSON.stringify(req.body));
+    console.log("[Campaign Service] POST /internal/campaigns - orgId:", req.orgId, "userId:", req.userId, "body:", JSON.stringify(req.body));
 
     const {
       name,
@@ -433,7 +433,7 @@ router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) =>
 
     // Store brandUrl directly - brand-service will be called by worker to upsert brand
     const brandDomain = extractDomain(brandUrl);
-    console.log(`[internal/campaigns] Using brandUrl: ${brandUrl} (domain: ${brandDomain})`);
+    console.log(`[Campaign Service] Using brandUrl: ${brandUrl} (domain: ${brandDomain})`);
 
     const insertData = {
       orgId: req.orgId!,
@@ -460,7 +460,7 @@ router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) =>
       status: "ongoing",
     };
 
-    console.log("Insert data:", JSON.stringify(insertData));
+    console.log("[Campaign Service] Insert data:", JSON.stringify(insertData));
 
     const [campaign] = await db
       .insert(campaigns)
@@ -469,7 +469,7 @@ router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) =>
 
     res.status(201).json({ campaign });
   } catch (error: any) {
-    console.error("Create campaign error:", error.message, error.stack);
+    console.error("[Campaign Service] Create campaign error:", error.message, error.stack);
     res.status(500).json({ error: error.message || "Internal server error" });
   }
 });
@@ -503,7 +503,7 @@ router.patch("/campaigns/:id", serviceAuth, async (req: AuthenticatedRequest, re
 
     res.json({ campaign: updated });
   } catch (error) {
-    console.error("Update campaign error:", error);
+    console.error("[Campaign Service] Update campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -533,7 +533,7 @@ router.post("/campaigns/:id/stop", serviceAuth, async (req: AuthenticatedRequest
 
     res.json({ campaign: updated });
   } catch (error) {
-    console.error("Stop campaign error:", error);
+    console.error("[Campaign Service] Stop campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -563,7 +563,7 @@ router.post("/campaigns/:id/resume", serviceAuth, async (req: AuthenticatedReque
 
     res.json({ campaign: updated });
   } catch (error) {
-    console.error("Resume campaign error:", error);
+    console.error("[Campaign Service] Resume campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -591,7 +591,7 @@ router.get("/campaigns/:id/runs", serviceAuth, async (req: AuthenticatedRequest,
 
     res.json({ runs });
   } catch (error) {
-    console.error("Get campaign runs error:", error);
+    console.error("[Campaign Service] Get campaign runs error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -613,7 +613,7 @@ router.get("/campaigns/:id/runs/all", requireApiKey, async (req, res) => {
 
     res.json({ runs });
   } catch (error) {
-    console.error("Get campaign runs error:", error);
+    console.error("[Campaign Service] Get campaign runs error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -638,10 +638,10 @@ router.post("/campaigns/:id/runs", requireApiKey, async (req, res) => {
       taskName: id,
     });
 
-    console.log(`Created campaign run ${run.id} for campaign ${id}`);
+    console.log(`[Campaign Service] Created campaign run ${run.id} for campaign ${id}`);
     res.json({ run });
   } catch (error) {
-    console.error("Create campaign run error:", error);
+    console.error("[Campaign Service] Create campaign run error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -663,7 +663,7 @@ router.patch("/runs/:id", requireApiKey, async (req, res) => {
 
     res.json({ run });
   } catch (error) {
-    console.error("Update campaign run error:", error);
+    console.error("[Campaign Service] Update campaign run error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -729,7 +729,7 @@ router.get("/campaigns/:id/debug", serviceAuth, async (req: AuthenticatedRequest
 
     res.json(debug);
   } catch (error) {
-    console.error("Get campaign debug error:", error);
+    console.error("[Campaign Service] Get campaign debug error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -763,7 +763,7 @@ router.get("/campaigns/:id/stats", serviceAuth, async (req: AuthenticatedRequest
       getAggregatedStats(runIds, req.clerkOrgId!),
       runIds.length > 0
         ? getRunsBatch(runIds).catch((err) => {
-            console.warn("Failed to fetch run costs for stats:", err);
+            console.warn("[Campaign Service] Failed to fetch run costs for stats:", err);
             return new Map();
           })
         : Promise.resolve(new Map()),
@@ -802,7 +802,7 @@ router.get("/campaigns/:id/stats", serviceAuth, async (req: AuthenticatedRequest
 
     res.json(stats);
   } catch (error) {
-    console.error("Get campaign stats error:", error);
+    console.error("[Campaign Service] Get campaign stats error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -849,7 +849,7 @@ router.get("/campaigns/:id/leads", serviceAuth, async (req: AuthenticatedRequest
 
     res.json({ leads: mappedLeads });
   } catch (error) {
-    console.error("Get campaign leads error:", error);
+    console.error("[Campaign Service] Get campaign leads error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -885,7 +885,7 @@ router.get("/campaigns/:id/companies", serviceAuth, async (req: AuthenticatedReq
 
     res.json({ companies });
   } catch (error) {
-    console.error("Get campaign companies error:", error);
+    console.error("[Campaign Service] Get campaign companies error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

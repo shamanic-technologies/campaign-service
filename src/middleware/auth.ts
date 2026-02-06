@@ -68,7 +68,7 @@ export async function serviceAuth(
 
     next();
   } catch (error) {
-    console.error("Service auth error:", error);
+    console.error("[Campaign Service] Service auth error:", error);
     return res.status(401).json({ error: "Service authentication failed" });
   }
 }
@@ -136,7 +136,7 @@ export async function clerkAuth(
 
     next();
   } catch (error) {
-    console.error("Auth error:", error);
+    console.error("[Campaign Service] Auth error:", error);
     return res.status(401).json({ error: "Authentication failed" });
   }
 }
@@ -168,7 +168,7 @@ export function requireApiKey(
   const expectedKey = process.env.CAMPAIGN_SERVICE_API_KEY;
 
   if (!expectedKey) {
-    console.error("CAMPAIGN_SERVICE_API_KEY not configured");
+    console.error("[Campaign Service] CAMPAIGN_SERVICE_API_KEY not configured");
     return res.status(500).json({ error: "API key not configured" });
   }
 
