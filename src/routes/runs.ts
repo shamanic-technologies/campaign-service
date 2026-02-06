@@ -36,7 +36,7 @@ router.get("/campaigns/:campaignId/runs", clerkAuth, requireOrg, async (req: Aut
 
     res.json({ runs: result.runs });
   } catch (error) {
-    console.error("List runs error:", error);
+    console.error("[Campaign Service] List runs error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -64,7 +64,7 @@ router.get("/campaigns/:campaignId/runs/:runId", clerkAuth, requireOrg, async (r
 
     res.json({ run });
   } catch (error) {
-    console.error("Get run error:", error);
+    console.error("[Campaign Service] Get run error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -102,7 +102,7 @@ router.post("/campaigns/:campaignId/runs", async (req, res) => {
 
     res.status(201).json({ run });
   } catch (error) {
-    console.error("Create run error:", error);
+    console.error("[Campaign Service] Create run error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -123,7 +123,7 @@ router.patch("/runs/:runId", async (req, res) => {
 
     res.json({ run });
   } catch (error) {
-    console.error("Update run error:", error);
+    console.error("[Campaign Service] Update run error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

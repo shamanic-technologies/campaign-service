@@ -67,7 +67,7 @@ async function fetchStats<T>(url: string, clerkOrgId: string, body: unknown, api
     });
 
     if (!response.ok) {
-      console.warn(`Stats fetch failed: ${url} - ${response.status}`);
+      console.warn(`[Campaign Service] Stats fetch failed: ${url} - ${response.status}`);
       return null;
     }
 
@@ -76,9 +76,9 @@ async function fetchStats<T>(url: string, clerkOrgId: string, body: unknown, api
   } catch (error) {
     const cause = error instanceof Error && 'cause' in error ? (error.cause as { code?: string }) : null;
     if (cause?.code === 'ECONNREFUSED') {
-      console.warn(`Stats fetch error: ${url} - connection refused`);
+      console.warn(`[Campaign Service] Stats fetch error: ${url} - connection refused`);
     } else {
-      console.warn(`Stats fetch error: ${url} - ${error instanceof Error ? error.message : 'unknown error'}`);
+      console.warn(`[Campaign Service] Stats fetch error: ${url} - ${error instanceof Error ? error.message : 'unknown error'}`);
     }
     return null;
   }
@@ -113,7 +113,7 @@ async function fetchData<T>(url: string, clerkOrgId: string, apiKey?: string): P
     const response = await fetch(url, { headers });
 
     if (!response.ok) {
-      console.warn(`Data fetch failed: ${url} - ${response.status}`);
+      console.warn(`[Campaign Service] Data fetch failed: ${url} - ${response.status}`);
       return null;
     }
 
@@ -121,9 +121,9 @@ async function fetchData<T>(url: string, clerkOrgId: string, apiKey?: string): P
   } catch (error) {
     const cause = error instanceof Error && 'cause' in error ? (error.cause as { code?: string }) : null;
     if (cause?.code === 'ECONNREFUSED') {
-      console.warn(`Data fetch error: ${url} - connection refused`);
+      console.warn(`[Campaign Service] Data fetch error: ${url} - connection refused`);
     } else {
-      console.warn(`Data fetch error: ${url} - ${error instanceof Error ? error.message : 'unknown error'}`);
+      console.warn(`[Campaign Service] Data fetch error: ${url} - ${error instanceof Error ? error.message : 'unknown error'}`);
     }
     return null;
   }
@@ -227,7 +227,7 @@ export async function getStatsByModel(runIds: string[]): Promise<ModelStats[]> {
     });
 
     if (!response.ok) {
-      console.warn(`Stats by model fetch failed: ${response.status}`);
+      console.warn(`[Campaign Service] Stats by model fetch failed: ${response.status}`);
       return [];
     }
 
@@ -236,9 +236,9 @@ export async function getStatsByModel(runIds: string[]): Promise<ModelStats[]> {
   } catch (error) {
     const cause = error instanceof Error && 'cause' in error ? (error.cause as { code?: string }) : null;
     if (cause?.code === 'ECONNREFUSED') {
-      console.warn(`Stats by model fetch error: ${EMAILGENERATION_SERVICE_URL}/stats/by-model - connection refused`);
+      console.warn(`[Campaign Service] Stats by model fetch error: ${EMAILGENERATION_SERVICE_URL}/stats/by-model - connection refused`);
     } else {
-      console.warn(`Stats by model fetch error: ${error instanceof Error ? error.message : 'unknown error'}`);
+      console.warn(`[Campaign Service] Stats by model fetch error: ${error instanceof Error ? error.message : 'unknown error'}`);
     }
     return [];
   }
