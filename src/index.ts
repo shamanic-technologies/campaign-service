@@ -1,8 +1,15 @@
 import * as Sentry from "@sentry/node";
 import express from "express";
 import cors from "cors";
+import { readFileSync, existsSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { db } from "./db/index.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const openapiPath = join(__dirname, "..", "openapi.json");
 import healthRoutes from "./routes/health.js";
 import campaignsRoutes from "./routes/campaigns.js";
 import runsRoutes from "./routes/runs.js";
@@ -29,6 +36,15 @@ app.use(healthRoutes);
 app.use(campaignsRoutes);
 app.use(runsRoutes);
 app.use("/internal", internalRoutes);
+
+// OpenAPI spec endpoint
+app.get("/openapi.json", (_req, res) => {
+  if (existsSync(openapiPath)) {
+    res.json(JSON.parse(readFileSync(openapiPath, "utf-8")));
+  } else {
+    res.status(404).json({ error: "OpenAPI spec not generated" });
+  }
+});
 
 // 404 handler
 app.use((req, res) => {
