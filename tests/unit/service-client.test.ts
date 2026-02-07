@@ -133,8 +133,8 @@ describe("getAggregatedStats", () => {
     expect(result.stats.emailsSent).toBe(17);
   });
 
-  it("treats missing stats in response as error (not crash)", async () => {
-    // Service returns 200 but { stats: undefined } or {}
+  it("treats missing stats in response as zeros (not crash)", async () => {
+    // Service returns 200 but { stats: undefined } or {} — means no data yet, not an error
     const emptyOk = { ok: true, status: 200, json: () => Promise.resolve({}) };
     const nullStats = { ok: true, status: 200, json: () => Promise.resolve({ stats: null }) };
 
@@ -146,10 +146,10 @@ describe("getAggregatedStats", () => {
 
     const result = await getAggregatedStats(["run-1"], "org-1");
 
-    expect(result.errors).toHaveLength(2);
-    expect(result.errors.map(e => e.service).sort()).toEqual(["emailgen", "postmark"]);
+    expect(result.errors).toHaveLength(0); // no errors, just empty data
     expect(result.stats.leadsFound).toBe(10);
-    expect(result.stats.emailsSent).toBe(4); // only instantly
+    expect(result.stats.emailsGenerated).toBe(0); // emailgen had no stats
+    expect(result.stats.emailsSent).toBe(4); // only instantly (postmark had no stats)
   });
 
   it("uses only postmark stats when instantly fails", async () => {
