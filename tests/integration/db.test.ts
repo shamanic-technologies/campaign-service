@@ -41,6 +41,53 @@ describe("Campaign Service Database", () => {
       expect(campaign.status).toBe("active");
     });
 
+    it("should create a campaign with appId", async () => {
+      const org = await insertTestOrg();
+      const appId = crypto.randomUUID();
+      const campaign = await insertTestCampaign(org.id, {
+        name: "App Campaign",
+        appId,
+      });
+
+      expect(campaign.appId).toBe(appId);
+    });
+
+    it("should store null appId when not provided", async () => {
+      const org = await insertTestOrg();
+      const campaign = await insertTestCampaign(org.id, {
+        name: "No App Campaign",
+      });
+
+      expect(campaign.appId).toBeNull();
+    });
+
+    it("should query campaign and return appId column", async () => {
+      const org = await insertTestOrg();
+      const appId = crypto.randomUUID();
+      await insertTestCampaign(org.id, { name: "Queryable", appId });
+
+      const found = await db.query.campaigns.findFirst({
+        where: eq(campaigns.orgId, org.id),
+      });
+
+      expect(found).toBeDefined();
+      expect(found!.appId).toBe(appId);
+    });
+
+    it("should select all campaigns with appId column present", async () => {
+      const org = await insertTestOrg();
+      const appId = crypto.randomUUID();
+      await insertTestCampaign(org.id, { name: "Select Test", appId });
+
+      const results = await db
+        .select()
+        .from(campaigns)
+        .where(eq(campaigns.orgId, org.id));
+
+      expect(results).toHaveLength(1);
+      expect(results[0].appId).toBe(appId);
+    });
+
     it("should cascade delete when org is deleted", async () => {
       const org = await insertTestOrg();
       const campaign = await insertTestCampaign(org.id);
