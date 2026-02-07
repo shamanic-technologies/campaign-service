@@ -41,6 +41,7 @@ RUN pnpm install --prod --frozen-lockfile || pnpm install --prod
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/drizzle ./drizzle
 COPY --from=builder /app/packages/runs-client/dist ./packages/runs-client/dist
+COPY --from=builder /app/openapi.json ./openapi.json
 
 # Force IPv4 first to avoid IPv6 connection issues with Neon
 ENV NODE_OPTIONS="--dns-result-order=ipv4first"
