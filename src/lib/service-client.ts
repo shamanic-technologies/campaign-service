@@ -6,12 +6,14 @@ const APOLLO_SERVICE_URL = process.env.APOLLO_SERVICE_URL || "http://localhost:3
 const EMAILGENERATION_SERVICE_URL = process.env.EMAILGENERATION_SERVICE_URL || "http://localhost:3004";
 const POSTMARK_SERVICE_URL = process.env.POSTMARK_SERVICE_URL || "http://localhost:3006";
 const INSTANTLY_SERVICE_URL = process.env.INSTANTLY_SERVICE_URL || "http://localhost:3007";
+const LEAD_SERVICE_URL = process.env.LEAD_SERVICE_URL || "http://localhost:3008";
 
 // Service API keys for inter-service auth
 const APOLLO_SERVICE_API_KEY = process.env.APOLLO_SERVICE_API_KEY;
 const EMAILGENERATION_SERVICE_API_KEY = process.env.EMAILGENERATION_SERVICE_API_KEY;
 const POSTMARK_SERVICE_API_KEY = process.env.POSTMARK_SERVICE_API_KEY;
 const INSTANTLY_SERVICE_API_KEY = process.env.INSTANTLY_SERVICE_API_KEY;
+const LEAD_SERVICE_API_KEY = process.env.LEAD_SERVICE_API_KEY;
 
 interface ApolloStats {
   leadsFound: number;
@@ -58,6 +60,18 @@ export interface StatsError {
 
 export interface AggregatedStatsResult {
   stats: AggregatedStats;
+  errors: StatsError[];
+}
+
+export interface StatsFilters {
+  clerkOrgId?: string;
+  appId?: string;
+  brandId?: string;
+  campaignId?: string;
+}
+
+export interface FilteredStatsResult {
+  stats: AggregatedStats & { leadsServed: number };
   errors: StatsError[];
 }
 
@@ -342,4 +356,90 @@ export async function getAggregatedStats(
     },
     errors,
   };
+}
+
+/**
+ * Get stats using direct filters (no runId resolution needed).
+ * Calls Postmark, Instantly, EmailGeneration, and Lead service in parallel.
+ */
+export async function getFilteredStats(filters: StatsFilters): Promise<FilteredStatsResult> {
+  const errors: StatsError[] = [];
+
+  // Build filter bodies for each service
+  const sendingBody: Record<string, string> = {};
+  const emailGenBody: Record<string, string> = {};
+  if (filters.clerkOrgId) {
+    sendingBody.clerkOrgId = filters.clerkOrgId;
+  }
+  if (filters.brandId) {
+    sendingBody.brandId = filters.brandId;
+    emailGenBody.brandId = filters.brandId;
+  }
+  if (filters.appId) {
+    sendingBody.appId = filters.appId;
+    emailGenBody.appId = filters.appId;
+  }
+  if (filters.campaignId) {
+    sendingBody.campaignId = filters.campaignId;
+    emailGenBody.campaignId = filters.campaignId;
+  }
+
+  // Call all 4 services in parallel
+  const [postmarkResult, instantlyResult, emailGenResult, leadResult] = await Promise.all([
+    fetchStats<EmailSendingStats>(`${POSTMARK_SERVICE_URL}/stats`, "postmark", filters.clerkOrgId || "", sendingBody, POSTMARK_SERVICE_API_KEY),
+    fetchStats<EmailSendingStats>(`${INSTANTLY_SERVICE_URL}/stats`, "instantly", filters.clerkOrgId || "", sendingBody, INSTANTLY_SERVICE_API_KEY),
+    fetchStats<EmailGenStats>(`${EMAILGENERATION_SERVICE_URL}/stats`, "emailgen", filters.clerkOrgId || "", emailGenBody, EMAILGENERATION_SERVICE_API_KEY),
+    fetchLeadStats(filters),
+  ]);
+
+  if (!postmarkResult.ok) errors.push({ service: postmarkResult.service, error: postmarkResult.error });
+  if (!instantlyResult.ok) errors.push({ service: instantlyResult.service, error: instantlyResult.error });
+  if (!emailGenResult.ok) errors.push({ service: emailGenResult.service, error: emailGenResult.error });
+  if (!leadResult.ok) errors.push({ service: leadResult.service, error: leadResult.error });
+
+  const postmarkData = postmarkResult.ok ? postmarkResult.data : null;
+  const instantlyData = instantlyResult.ok ? instantlyResult.data : null;
+  const emailStats = addSendingStats(postmarkData, instantlyData);
+
+  return {
+    stats: {
+      leadsFound: 0, // Not fetched in filtered stats (no Apollo)
+      leadsServed: leadResult.ok ? (leadResult.data.leadsServed || 0) : 0,
+      emailsGenerated: emailGenResult.ok ? (emailGenResult.data.emailsGenerated ?? 0) : 0,
+      ...emailStats,
+    },
+    errors,
+  };
+}
+
+async function fetchLeadStats(filters: StatsFilters): Promise<ServiceResult<{ leadsServed: number }>> {
+  try {
+    const params = new URLSearchParams();
+    if (filters.brandId) params.set("brandId", filters.brandId);
+    if (filters.campaignId) params.set("campaignId", filters.campaignId);
+
+    const headers: Record<string, string> = {};
+    if (LEAD_SERVICE_API_KEY) headers["X-API-Key"] = LEAD_SERVICE_API_KEY;
+    if (filters.clerkOrgId) headers["X-Org-Id"] = filters.clerkOrgId;
+    if (filters.appId) headers["X-App-Id"] = filters.appId;
+
+    const url = `${LEAD_SERVICE_URL}/stats${params.toString() ? `?${params}` : ""}`;
+    const response = await fetch(url, { headers });
+
+    if (!response.ok) {
+      const msg = `HTTP ${response.status}`;
+      console.warn(`[Campaign Service] Lead stats fetch failed: ${url} - ${msg}`);
+      return { ok: false, service: "lead", error: msg };
+    }
+
+    const data = await response.json();
+    return { ok: true, data: { leadsServed: data.leadsServed ?? data.count ?? 0 } };
+  } catch (error) {
+    const cause = error instanceof Error && 'cause' in error ? (error.cause as { code?: string }) : null;
+    const msg = cause?.code === 'ECONNREFUSED'
+      ? 'connection refused'
+      : (error instanceof Error ? error.message : 'unknown error');
+    console.warn(`[Campaign Service] Lead stats fetch error: ${msg}`);
+    return { ok: false, service: "lead", error: msg };
+  }
 }

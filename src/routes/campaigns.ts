@@ -2,8 +2,9 @@ import { Router } from "express";
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
-import { clerkAuth, requireOrg, AuthenticatedRequest } from "../middleware/auth.js";
+import { clerkAuth, requireOrg, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { normalizeUrl } from "../lib/domain.js";
+import { getFilteredStats } from "../lib/service-client.js";
 
 const router = Router();
 
@@ -81,6 +82,7 @@ router.post("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedReques
       notifyFrequency,
       notifyChannel,
       notifyDestination,
+      appId,
     } = req.body;
 
     if (!name) {
@@ -101,6 +103,7 @@ router.post("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedReques
         orgId: req.orgId!,
         createdByUserId: req.userId!,
         name,
+        appId: appId || null,
         brandUrl: normalizedBrandUrl,  // Store brandUrl directly, brand-service is source of truth
         personTitles,
         qOrganizationKeywordTags,
@@ -246,6 +249,31 @@ router.delete("/campaigns/:id", clerkAuth, requireOrg, async (req: Authenticated
     res.json({ message: "Campaign deleted successfully" });
   } catch (error) {
     console.error("[Campaign Service] Delete campaign error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /stats - Get aggregated stats with direct filters
+ * Passes filters to downstream services (no runId resolution needed)
+ * Requires API key for service-to-service auth
+ */
+router.post("/stats", requireApiKey, async (req, res) => {
+  try {
+    const { clerkOrgId, appId, brandId, campaignId } = req.body;
+
+    if (!clerkOrgId && !appId && !brandId && !campaignId) {
+      return res.status(400).json({ error: "At least one filter required: clerkOrgId, appId, brandId, or campaignId" });
+    }
+
+    const result = await getFilteredStats({ clerkOrgId, appId, brandId, campaignId });
+
+    res.json({
+      stats: result.stats,
+      serviceErrors: result.errors.length > 0 ? result.errors : undefined,
+    });
+  } catch (error) {
+    console.error("[Campaign Service] Filtered stats error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

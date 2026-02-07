@@ -47,7 +47,11 @@ export const campaigns = pgTable(
     // Brand ID from brand-service (set by worker after brand-upsert)
     // Nullable initially, populated when brand is created/found in brand-service
     brandId: uuid("brand_id"),
-    
+
+    // App ID from external app/product service
+    // Nullable, populated when campaign is associated with an app
+    appId: uuid("app_id"),
+
     // Apollo targeting criteria (using Apollo API naming)
     personTitles: text("person_titles").array(),           // ["CEO", "CTO", "Founder"]
     qOrganizationKeywordTags: text("q_organization_keyword_tags").array(), // ["SaaS", "fintech"]
@@ -89,6 +93,7 @@ export const campaigns = pgTable(
   },
   (table) => [
     index("idx_campaigns_org").on(table.orgId),
+    index("idx_campaigns_app_id").on(table.appId),
   ]
 );
 
