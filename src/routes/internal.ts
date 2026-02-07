@@ -433,6 +433,10 @@ router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) =>
       return res.status(400).json({ error: "brandUrl is required" });
     }
 
+    if (!appId) {
+      return res.status(400).json({ error: "appId is required" });
+    }
+
     // Validate at least one budget is set
     if (!maxBudgetDailyUsd && !maxBudgetWeeklyUsd && !maxBudgetMonthlyUsd && !maxBudgetTotalUsd) {
       return res.status(400).json({
@@ -447,7 +451,7 @@ router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) =>
     const insertData = {
       orgId: req.orgId!,
       brandUrl,  // Store URL directly, no brandId needed
-      appId: appId || null,
+      appId,
       createdByUserId: req.userId || null,
       name,
       personTitles,

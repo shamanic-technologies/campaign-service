@@ -93,6 +93,10 @@ router.post("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedReques
       return res.status(400).json({ error: "brandUrl is required" });
     }
 
+    if (!appId) {
+      return res.status(400).json({ error: "appId is required" });
+    }
+
     // Normalize the brandUrl
     const normalizedBrandUrl = normalizeUrl(brandUrl);
     console.log(`[Campaign Service] Creating campaign with brandUrl: ${normalizedBrandUrl}`);
@@ -103,7 +107,7 @@ router.post("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedReques
         orgId: req.orgId!,
         createdByUserId: req.userId!,
         name,
-        appId: appId || null,
+        appId,
         brandUrl: normalizedBrandUrl,  // Store brandUrl directly, brand-service is source of truth
         personTitles,
         qOrganizationKeywordTags,

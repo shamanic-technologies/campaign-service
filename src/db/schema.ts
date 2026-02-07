@@ -49,7 +49,7 @@ export const campaigns = pgTable(
     brandId: uuid("brand_id"),
 
     // App ID from external app/product service
-    // Nullable, populated when campaign is associated with an app
+    // Required at API level for new campaigns, nullable in DB for legacy rows
     appId: uuid("app_id"),
 
     // Apollo targeting criteria (using Apollo API naming)
