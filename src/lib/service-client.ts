@@ -89,6 +89,10 @@ async function fetchStats<T>(url: string, serviceName: string, clerkOrgId: strin
     }
 
     const data = await response.json();
+    if (data.stats == null) {
+      console.warn(`[Campaign Service] Stats fetch returned no stats: ${url}`);
+      return { ok: false, service: serviceName, error: "no stats in response" };
+    }
     return { ok: true, data: data.stats as T };
   } catch (error) {
     const cause = error instanceof Error && 'cause' in error ? (error.cause as { code?: string }) : null;
