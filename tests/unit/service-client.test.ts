@@ -133,6 +133,25 @@ describe("getAggregatedStats", () => {
     expect(result.stats.emailsSent).toBe(17);
   });
 
+  it("treats missing stats in response as error (not crash)", async () => {
+    // Service returns 200 but { stats: undefined } or {}
+    const emptyOk = { ok: true, status: 200, json: () => Promise.resolve({}) };
+    const nullStats = { ok: true, status: 200, json: () => Promise.resolve({ stats: null }) };
+
+    mockFetch
+      .mockResolvedValueOnce(okResponse(APOLLO_STATS))
+      .mockResolvedValueOnce(emptyOk)       // emailgen returns no stats field
+      .mockResolvedValueOnce(nullStats)      // postmark returns stats: null
+      .mockResolvedValueOnce(okResponse(INSTANTLY_STATS));
+
+    const result = await getAggregatedStats(["run-1"], "org-1");
+
+    expect(result.errors).toHaveLength(2);
+    expect(result.errors.map(e => e.service).sort()).toEqual(["emailgen", "postmark"]);
+    expect(result.stats.leadsFound).toBe(10);
+    expect(result.stats.emailsSent).toBe(4); // only instantly
+  });
+
   it("uses only postmark stats when instantly fails", async () => {
     mockFetch
       .mockResolvedValueOnce(okResponse(APOLLO_STATS))
