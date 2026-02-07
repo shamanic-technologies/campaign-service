@@ -18,6 +18,6 @@ const doc = {
 };
 
 const outputFile = join(projectRoot, "openapi.json");
-const routes = [join(projectRoot, "src/index.ts")];
+const routes = [join(projectRoot, "dist/index.js")];
 
 swaggerAutogen({ openapi: "3.0.0" })(outputFile, routes, doc);

@@ -4,11 +4,11 @@
  */
 
 import { Router } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, orgs } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
-import { getAggregatedStats, getStatsByModel, getLeadsForRuns, aggregateCompaniesFromLeads, type AggregatedStats } from "../lib/service-client.js";
+import { getAggregatedStats, getStatsByModel, getLeadsForRuns, aggregateCompaniesFromLeads, type AggregatedStats, type StatsError } from "../lib/service-client.js";
 import { extractDomain } from "../lib/domain.js";
 import { ensureOrganization, listRuns, getRun, getRunsBatch, createRun, updateRun, type Run, type RunWithCosts } from "@mcpfactory/runs-client";
 
@@ -138,6 +138,7 @@ router.get("/performance/leaderboard", requireApiKey, async (_req, res) => {
     // 3. For each brand, get runs + stats (batched by org)
     const brandResults = [];
     const allRunIdsByOrg = new Map<string, string[]>(); // clerkOrgId -> all runIds (for model leaderboard)
+    const allServiceErrors: StatsError[] = [];
 
     for (const [, group] of brandGroups) {
       let brandStats = { ...EMPTY_STATS };
@@ -163,12 +164,13 @@ router.get("/performance/leaderboard", requireApiKey, async (_req, res) => {
         allRunIdsByOrg.set(clerkOrgId, existing);
 
         // Get stats and costs in parallel
-        const [stats, runsMap] = await Promise.all([
+        const [statsResult, runsMap] = await Promise.all([
           getAggregatedStats(brandOrgRunIds, clerkOrgId),
           getRunsBatch(brandOrgRunIds).catch(() => new Map() as Map<string, RunWithCosts>),
         ]);
 
-        brandStats = sumStats(brandStats, stats);
+        brandStats = sumStats(brandStats, statsResult.stats);
+        allServiceErrors.push(...statsResult.errors);
 
         for (const run of runsMap.values()) {
           brandCostCents += parseFloat(run.totalCostInUsdCents) || 0;
@@ -196,12 +198,13 @@ router.get("/performance/leaderboard", requireApiKey, async (_req, res) => {
 
     // 4. Model leaderboard — get email generation stats grouped by model
     const allRunIds = Array.from(allRunIdsByOrg.values()).flat();
-    const modelStatsRaw = await getStatsByModel(allRunIds);
+    const modelStatsResult = await getStatsByModel(allRunIds);
+    allServiceErrors.push(...modelStatsResult.errors);
 
-    // For each model, get postmark stats using the model's specific runIds
+    // For each model, get sending stats using the model's specific runIds
     const modelResults = [];
-    for (const ms of modelStatsRaw) {
-      // Get postmark stats for this model's runIds (batch by org)
+    for (const ms of modelStatsResult.stats) {
+      // Get sending stats for this model's runIds (batch by org)
       let modelAgg = { ...EMPTY_STATS };
       let modelCostCents = 0;
 
@@ -215,11 +218,12 @@ router.get("/performance/leaderboard", requireApiKey, async (_req, res) => {
       }
 
       for (const [clerkOrgId, runIds] of modelRunsByOrg) {
-        const [stats, runsMap] = await Promise.all([
+        const [statsResult, runsMap] = await Promise.all([
           getAggregatedStats(runIds, clerkOrgId),
           getRunsBatch(runIds).catch(() => new Map() as Map<string, RunWithCosts>),
         ]);
-        modelAgg = sumStats(modelAgg, stats);
+        modelAgg = sumStats(modelAgg, statsResult.stats);
+        allServiceErrors.push(...statsResult.errors);
         for (const run of runsMap.values()) {
           modelCostCents += parseFloat(run.totalCostInUsdCents) || 0;
         }
@@ -272,10 +276,14 @@ router.get("/performance/leaderboard", requireApiKey, async (_req, res) => {
       };
     }
 
+    // Deduplicate service errors
+    const uniqueErrors = [...new Map(allServiceErrors.map(e => [`${e.service}:${e.error}`, e])).values()];
+
     res.json({
       brands: brandResults,
       models: modelResults,
       hero,
+      serviceErrors: uniqueErrors.length > 0 ? uniqueErrors : undefined,
       updatedAt: new Date().toISOString(),
     });
   } catch (error) {
@@ -736,7 +744,7 @@ router.get("/campaigns/:id/debug", serviceAuth, async (req: AuthenticatedRequest
 
 /**
  * GET /internal/campaigns/:id/stats - Get campaign statistics
- * Aggregates stats from all services (apollo, emailgen, postmark)
+ * Aggregates stats from all services (apollo, emailgen, postmark, instantly)
  */
 router.get("/campaigns/:id/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
@@ -759,7 +767,7 @@ router.get("/campaigns/:id/stats", serviceAuth, async (req: AuthenticatedRequest
     const runIds = runs.map(r => r.id);
 
     // Aggregate stats from other services + fetch run costs in parallel
-    const [aggregated, runsWithCosts] = await Promise.all([
+    const [aggregatedResult, runsWithCosts] = await Promise.all([
       getAggregatedStats(runIds, req.clerkOrgId!),
       runIds.length > 0
         ? getRunsBatch(runIds).catch((err) => {
@@ -768,6 +776,8 @@ router.get("/campaigns/:id/stats", serviceAuth, async (req: AuthenticatedRequest
           })
         : Promise.resolve(new Map()),
     ]);
+
+    const aggregated = aggregatedResult.stats;
 
     // Sum total cost across all top-level runs (each includes recursive children costs)
     let totalCostInUsdCents = 0;
@@ -798,6 +808,8 @@ router.get("/campaigns/:id/stats", serviceAuth, async (req: AuthenticatedRequest
       repliesNotInterested: aggregated.repliesNotInterested,
       repliesOutOfOffice: aggregated.repliesOutOfOffice,
       repliesUnsubscribe: aggregated.repliesUnsubscribe,
+      // Service errors (if any downstream service failed)
+      serviceErrors: aggregatedResult.errors.length > 0 ? aggregatedResult.errors : undefined,
     };
 
     res.json(stats);
@@ -886,6 +898,79 @@ router.get("/campaigns/:id/companies", serviceAuth, async (req: AuthenticatedReq
     res.json({ companies });
   } catch (error) {
     console.error("[Campaign Service] Get campaign companies error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/campaigns/batch-stats - Get stats for multiple campaigns
+ * Requires API key for service-to-service auth
+ */
+router.post("/campaigns/batch-stats", requireApiKey, async (req, res) => {
+  try {
+    const { campaignIds } = req.body;
+
+    if (!Array.isArray(campaignIds) || campaignIds.length === 0) {
+      return res.status(400).json({ error: "campaignIds array is required" });
+    }
+
+    // Look up all campaigns + their org's clerkOrgId in one query
+    const campaignRows = await db
+      .select({
+        id: campaigns.id,
+        clerkOrgId: orgs.clerkOrgId,
+      })
+      .from(campaigns)
+      .innerJoin(orgs, eq(campaigns.orgId, orgs.id))
+      .where(inArray(campaigns.id, campaignIds));
+
+    const campaignMap = new Map(
+      campaignRows.map(r => [r.id, r.clerkOrgId])
+    );
+
+    const results: Record<string, unknown> = {};
+
+    // Process each campaign in parallel
+    await Promise.all(
+      campaignIds.map(async (campaignId: string) => {
+        const clerkOrgId = campaignMap.get(campaignId);
+        if (!clerkOrgId) {
+          results[campaignId] = { error: "Campaign not found" };
+          return;
+        }
+
+        try {
+          const runs = await getRunsForCampaign(clerkOrgId, campaignId);
+          const runIds = runs.map(r => r.id);
+
+          const [statsResult, runsWithCosts] = await Promise.all([
+            getAggregatedStats(runIds, clerkOrgId),
+            runIds.length > 0
+              ? getRunsBatch(runIds).catch(() => new Map() as Map<string, RunWithCosts>)
+              : Promise.resolve(new Map() as Map<string, RunWithCosts>),
+          ]);
+
+          let totalCostInUsdCents = 0;
+          for (const run of runsWithCosts.values()) {
+            totalCostInUsdCents += parseFloat(run.totalCostInUsdCents) || 0;
+          }
+
+          results[campaignId] = {
+            stats: statsResult.stats,
+            serviceErrors: statsResult.errors.length > 0 ? statsResult.errors : undefined,
+            totalCostInUsdCents: totalCostInUsdCents > 0 ? String(totalCostInUsdCents) : null,
+            totalRuns: runs.length,
+          };
+        } catch (err) {
+          console.warn(`[Campaign Service] Batch stats failed for campaign ${campaignId}:`, err);
+          results[campaignId] = { error: "Failed to fetch stats" };
+        }
+      })
+    );
+
+    res.json({ results });
+  } catch (error) {
+    console.error("[Campaign Service] Batch stats error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
