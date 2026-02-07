@@ -48,6 +48,7 @@ export async function insertTestCampaign(
     maxBudgetTotalUsd?: string;
     personTitles?: string[];
     organizationLocations?: string[];
+    appId?: string;
   } = {}
 ) {
   const [campaign] = await db
@@ -60,6 +61,7 @@ export async function insertTestCampaign(
       maxBudgetTotalUsd: data.maxBudgetTotalUsd,
       personTitles: data.personTitles,
       organizationLocations: data.organizationLocations,
+      appId: data.appId || null,
     })
     .returning();
   return campaign;
