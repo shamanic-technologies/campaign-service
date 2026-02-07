@@ -275,18 +275,20 @@ const EMPTY_SENDING_STATS: EmailSendingStats = {
   repliesOutOfOffice: 0, repliesUnsubscribe: 0,
 };
 
-function addSendingStats(a: EmailSendingStats, b: EmailSendingStats): EmailSendingStats {
+function addSendingStats(a?: EmailSendingStats | null, b?: EmailSendingStats | null): EmailSendingStats {
+  const x = a ?? EMPTY_SENDING_STATS;
+  const y = b ?? EMPTY_SENDING_STATS;
   return {
-    emailsSent: a.emailsSent + b.emailsSent,
-    emailsOpened: a.emailsOpened + b.emailsOpened,
-    emailsClicked: a.emailsClicked + b.emailsClicked,
-    emailsReplied: a.emailsReplied + b.emailsReplied,
-    emailsBounced: a.emailsBounced + b.emailsBounced,
-    repliesWillingToMeet: a.repliesWillingToMeet + b.repliesWillingToMeet,
-    repliesInterested: a.repliesInterested + b.repliesInterested,
-    repliesNotInterested: a.repliesNotInterested + b.repliesNotInterested,
-    repliesOutOfOffice: a.repliesOutOfOffice + b.repliesOutOfOffice,
-    repliesUnsubscribe: a.repliesUnsubscribe + b.repliesUnsubscribe,
+    emailsSent: (x.emailsSent || 0) + (y.emailsSent || 0),
+    emailsOpened: (x.emailsOpened || 0) + (y.emailsOpened || 0),
+    emailsClicked: (x.emailsClicked || 0) + (y.emailsClicked || 0),
+    emailsReplied: (x.emailsReplied || 0) + (y.emailsReplied || 0),
+    emailsBounced: (x.emailsBounced || 0) + (y.emailsBounced || 0),
+    repliesWillingToMeet: (x.repliesWillingToMeet || 0) + (y.repliesWillingToMeet || 0),
+    repliesInterested: (x.repliesInterested || 0) + (y.repliesInterested || 0),
+    repliesNotInterested: (x.repliesNotInterested || 0) + (y.repliesNotInterested || 0),
+    repliesOutOfOffice: (x.repliesOutOfOffice || 0) + (y.repliesOutOfOffice || 0),
+    repliesUnsubscribe: (x.repliesUnsubscribe || 0) + (y.repliesUnsubscribe || 0),
   };
 }
 
@@ -323,8 +325,8 @@ export async function getAggregatedStats(
   if (!instantlyResult.ok) errors.push({ service: instantlyResult.service, error: instantlyResult.error });
 
   // Sum Postmark + Instantly email metrics (a campaign uses one or the other)
-  const postmarkData = postmarkResult.ok ? postmarkResult.data : EMPTY_SENDING_STATS;
-  const instantlyData = instantlyResult.ok ? instantlyResult.data : EMPTY_SENDING_STATS;
+  const postmarkData = postmarkResult.ok ? postmarkResult.data : null;
+  const instantlyData = instantlyResult.ok ? instantlyResult.data : null;
   const emailStats = addSendingStats(postmarkData, instantlyData);
 
   return {
