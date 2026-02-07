@@ -422,6 +422,7 @@ router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) =>
       notifyFrequency,
       notifyChannel,
       notifyDestination,
+      appId,
     } = req.body;
 
     if (!name) {
@@ -446,6 +447,7 @@ router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) =>
     const insertData = {
       orgId: req.orgId!,
       brandUrl,  // Store URL directly, no brandId needed
+      appId: appId || null,
       createdByUserId: req.userId || null,
       name,
       personTitles,
