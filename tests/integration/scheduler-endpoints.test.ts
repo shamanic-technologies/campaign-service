@@ -27,6 +27,8 @@ vi.mock("@mcpfactory/runs-client", () => ({
 import app from "../../src/index.js";
 import { cleanTestData, closeDb, insertTestOrg, insertTestCampaign } from "../helpers/test-db.js";
 
+const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
+
 describe("Scheduler Endpoints", () => {
   beforeEach(async () => {
     await cleanTestData();
@@ -51,6 +53,7 @@ describe("Scheduler Endpoints", () => {
 
       const res = await request(app)
         .get("/internal/campaigns/all")
+        .set("x-api-key", API_KEY)
         .expect(200);
 
       expect(res.body.campaigns).toHaveLength(2);
@@ -63,6 +66,7 @@ describe("Scheduler Endpoints", () => {
 
       const res = await request(app)
         .get("/internal/campaigns/all")
+        .set("x-api-key", API_KEY)
         .expect(200);
 
       expect(res.body.campaigns[0].clerkOrgId).toBe("org_test_clerk");
@@ -71,6 +75,7 @@ describe("Scheduler Endpoints", () => {
     it("should return empty array when no campaigns", async () => {
       const res = await request(app)
         .get("/internal/campaigns/all")
+        .set("x-api-key", API_KEY)
         .expect(200);
 
       expect(res.body.campaigns).toHaveLength(0);
@@ -91,6 +96,7 @@ describe("Scheduler Endpoints", () => {
 
       const res = await request(app)
         .get(`/internal/campaigns/${campaign.id}/runs/all`)
+        .set("x-api-key", API_KEY)
         .expect(200);
 
       expect(res.body.runs).toHaveLength(2);
@@ -103,6 +109,7 @@ describe("Scheduler Endpoints", () => {
 
       const res = await request(app)
         .get(`/internal/campaigns/${campaign.id}/runs/all`)
+        .set("x-api-key", API_KEY)
         .expect(200);
 
       expect(res.body.runs).toHaveLength(0);
@@ -124,6 +131,7 @@ describe("Scheduler Endpoints", () => {
 
       const res = await request(app)
         .post(`/internal/campaigns/${campaign.id}/runs`)
+        .set("x-api-key", API_KEY)
         .expect(200);
 
       expect(res.body.run).toBeDefined();
@@ -140,6 +148,7 @@ describe("Scheduler Endpoints", () => {
     it("should return 404 for non-existent campaign", async () => {
       const res = await request(app)
         .post("/internal/campaigns/00000000-0000-0000-0000-000000000000/runs")
+        .set("x-api-key", API_KEY)
         .expect(404);
 
       expect(res.body.error).toContain("not found");
@@ -156,6 +165,7 @@ describe("Scheduler Endpoints", () => {
 
       const res = await request(app)
         .patch("/internal/runs/run-1")
+        .set("x-api-key", API_KEY)
         .send({ status: "completed" })
         .expect(200);
 
@@ -171,6 +181,7 @@ describe("Scheduler Endpoints", () => {
 
       const res = await request(app)
         .patch("/internal/runs/run-2")
+        .set("x-api-key", API_KEY)
         .send({ status: "failed" })
         .expect(200);
 
@@ -180,6 +191,7 @@ describe("Scheduler Endpoints", () => {
     it("should return 400 for invalid status", async () => {
       const res = await request(app)
         .patch("/internal/runs/run-1")
+        .set("x-api-key", API_KEY)
         .send({ status: "invalid" })
         .expect(400);
 
@@ -191,6 +203,7 @@ describe("Scheduler Endpoints", () => {
 
       const res = await request(app)
         .patch("/internal/runs/00000000-0000-0000-0000-000000000000")
+        .set("x-api-key", API_KEY)
         .send({ status: "completed" })
         .expect(500);
 
@@ -209,6 +222,7 @@ describe("Scheduler Endpoints", () => {
       // 1. Scheduler lists all campaigns
       const listRes = await request(app)
         .get("/internal/campaigns/all")
+        .set("x-api-key", API_KEY)
         .expect(200);
 
       expect(listRes.body.campaigns).toHaveLength(1);
@@ -217,6 +231,7 @@ describe("Scheduler Endpoints", () => {
       // 2. Scheduler checks runs for this campaign (returns empty)
       const runsRes = await request(app)
         .get(`/internal/campaigns/${campaign.id}/runs/all`)
+        .set("x-api-key", API_KEY)
         .expect(200);
 
       expect(runsRes.body.runs).toHaveLength(0);
@@ -233,6 +248,7 @@ describe("Scheduler Endpoints", () => {
 
       const createRes = await request(app)
         .post(`/internal/campaigns/${campaign.id}/runs`)
+        .set("x-api-key", API_KEY)
         .expect(200);
 
       expect(createRes.body.run.status).toBe("running");
@@ -247,6 +263,7 @@ describe("Scheduler Endpoints", () => {
 
       const updateRes = await request(app)
         .patch(`/internal/runs/${runId}`)
+        .set("x-api-key", API_KEY)
         .send({ status: "completed" })
         .expect(200);
 
@@ -257,6 +274,7 @@ describe("Scheduler Endpoints", () => {
 
       const runsRes2 = await request(app)
         .get(`/internal/campaigns/${campaign.id}/runs/all`)
+        .set("x-api-key", API_KEY)
         .expect(200);
 
       expect(runsRes2.body.runs).toHaveLength(1);

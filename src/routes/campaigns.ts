@@ -1,10 +1,9 @@
 import { Router } from "express";
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaigns } from "../db/schema.js";
+import { campaigns, orgs } from "../db/schema.js";
 import { clerkAuth, requireOrg, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { normalizeUrl } from "../lib/domain.js";
-import { getFilteredStats } from "../lib/service-client.js";
 
 const router = Router();
 
@@ -15,7 +14,7 @@ const router = Router();
 router.get("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedRequest, res) => {
   try {
     const { brandId } = req.query;
-    
+
     let results = await db
       .select()
       .from(campaigns)
@@ -254,9 +253,9 @@ router.delete("/campaigns/:id", clerkAuth, requireOrg, async (req: Authenticated
 });
 
 /**
- * POST /stats - Get aggregated stats with direct filters
- * Passes filters to downstream services (no runId resolution needed)
- * Requires API key for service-to-service auth
+ * POST /stats - Campaign stats from own DB
+ * Returns campaign counts, status breakdown, and budget totals.
+ * Requires API key for service-to-service auth.
  */
 router.post("/stats", requireApiKey, async (req, res) => {
   try {
@@ -266,14 +265,49 @@ router.post("/stats", requireApiKey, async (req, res) => {
       return res.status(400).json({ error: "At least one filter required: clerkOrgId, appId, brandId, or campaignId" });
     }
 
-    const result = await getFilteredStats({ clerkOrgId, appId, brandId, campaignId });
+    // Build where conditions
+    const conditions = [];
+    if (clerkOrgId) {
+      // Join with orgs to filter by clerkOrgId
+      const org = await db.query.orgs.findFirst({
+        where: eq(orgs.clerkOrgId, clerkOrgId),
+        columns: { id: true },
+      });
+      if (org) conditions.push(eq(campaigns.orgId, org.id));
+      else return res.json({ stats: { totalCampaigns: 0, byStatus: {}, budgetTotalUsd: null, maxLeadsTotal: null } });
+    }
+    if (appId) conditions.push(eq(campaigns.appId, appId));
+    if (brandId) conditions.push(eq(campaigns.brandId, brandId));
+    if (campaignId) conditions.push(eq(campaigns.id, campaignId));
+
+    const where = conditions.length === 1 ? conditions[0] : and(...conditions);
+
+    const matching = await db
+      .select()
+      .from(campaigns)
+      .where(where);
+
+    // Status breakdown
+    const byStatus: Record<string, number> = {};
+    let budgetTotalUsd = 0;
+    let maxLeadsTotal = 0;
+
+    for (const c of matching) {
+      byStatus[c.status] = (byStatus[c.status] || 0) + 1;
+      if (c.maxBudgetTotalUsd) budgetTotalUsd += parseFloat(c.maxBudgetTotalUsd);
+      if (c.maxLeads) maxLeadsTotal += c.maxLeads;
+    }
 
     res.json({
-      stats: result.stats,
-      serviceErrors: result.errors.length > 0 ? result.errors : undefined,
+      stats: {
+        totalCampaigns: matching.length,
+        byStatus,
+        budgetTotalUsd: budgetTotalUsd > 0 ? budgetTotalUsd : null,
+        maxLeadsTotal: maxLeadsTotal > 0 ? maxLeadsTotal : null,
+      },
     });
   } catch (error) {
-    console.error("[Campaign Service] Filtered stats error:", error);
+    console.error("[Campaign Service] Stats error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
