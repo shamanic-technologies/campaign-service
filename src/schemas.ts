@@ -16,7 +16,7 @@ export const CampaignSchema = z.object({
   name: z.string(),
   brandUrl: z.string().nullable(),
   brandId: z.string().uuid().nullable(),
-  appId: z.string().uuid().nullable(),
+  appId: z.string().nullable(),
   personTitles: z.array(z.string()).nullable(),
   qOrganizationKeywordTags: z.array(z.string()).nullable(),
   organizationLocations: z.array(z.string()).nullable(),
@@ -60,7 +60,7 @@ export const CreateCampaignBody = z.object({
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
-  appId: z.string().uuid().optional(),
+  appId: z.string().optional(),
 }).openapi("CreateCampaignBody");
 
 export const UpdateCampaignBody = z.object({
@@ -83,7 +83,7 @@ export const UpdateCampaignBody = z.object({
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
-  appId: z.string().uuid().optional(),
+  appId: z.string().optional(),
 }).openapi("UpdateCampaignBody");
 
 // --- Stats ---
