@@ -3,7 +3,9 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, orgs } from "../db/schema.js";
 import { clerkAuth, requireOrg, AuthenticatedRequest } from "../middleware/auth.js";
+import { validateBody } from "../middleware/validate.js";
 import { ensureOrganization, listRuns, getRun, createRun, updateRun } from "@mcpfactory/runs-client";
+import { RunStatusUpdate } from "../schemas.js";
 
 const router = Router();
 
@@ -110,14 +112,10 @@ router.post("/campaigns/:campaignId/runs", async (req, res) => {
 /**
  * PATCH /runs/:runId - Update run status (internal/service use)
  */
-router.patch("/runs/:runId", async (req, res) => {
+router.patch("/runs/:runId", validateBody(RunStatusUpdate), async (req, res) => {
   try {
     const { runId } = req.params;
     const { status } = req.body;
-
-    if (status !== "completed" && status !== "failed") {
-      return res.status(400).json({ error: "Status must be 'completed' or 'failed'" });
-    }
 
     const run = await updateRun(runId, status);
 

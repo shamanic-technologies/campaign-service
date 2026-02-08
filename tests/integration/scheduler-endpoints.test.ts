@@ -195,7 +195,7 @@ describe("Scheduler Endpoints", () => {
         .send({ status: "invalid" })
         .expect(400);
 
-      expect(res.body.error).toContain("Status must be");
+      expect(res.body.error).toContain("completed");
     });
 
     it("should return 500 when runs-service fails", async () => {

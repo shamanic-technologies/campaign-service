@@ -3,7 +3,9 @@ import { eq, and, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, orgs } from "../db/schema.js";
 import { clerkAuth, requireOrg, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
+import { validateBody } from "../middleware/validate.js";
 import { normalizeUrl } from "../lib/domain.js";
+import { CreateCampaignBody, UpdateCampaignBody, StatsFilterBody } from "../schemas.js";
 
 const router = Router();
 
@@ -61,11 +63,11 @@ router.get("/campaigns/:id", clerkAuth, requireOrg, async (req: AuthenticatedReq
 /**
  * POST /campaigns - Create a new campaign
  */
-router.post("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedRequest, res) => {
+router.post("/campaigns", clerkAuth, requireOrg, validateBody(CreateCampaignBody), async (req: AuthenticatedRequest, res) => {
   try {
     const {
       name,
-      brandUrl,  // URL of the brand to promote
+      brandUrl,
       personTitles,
       qOrganizationKeywordTags,
       organizationLocations,
@@ -83,14 +85,6 @@ router.post("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedReques
       notifyDestination,
       appId,
     } = req.body;
-
-    if (!name) {
-      return res.status(400).json({ error: "Campaign name is required" });
-    }
-
-    if (!brandUrl) {
-      return res.status(400).json({ error: "brandUrl is required" });
-    }
 
     // Normalize the brandUrl
     const normalizedBrandUrl = normalizeUrl(brandUrl);
@@ -134,7 +128,7 @@ router.post("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedReques
 /**
  * PATCH /campaigns/:id - Update a campaign
  */
-router.patch("/campaigns/:id", clerkAuth, requireOrg, async (req: AuthenticatedRequest, res) => {
+router.patch("/campaigns/:id", clerkAuth, requireOrg, validateBody(UpdateCampaignBody), async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
 
@@ -257,13 +251,9 @@ router.delete("/campaigns/:id", clerkAuth, requireOrg, async (req: Authenticated
  * Returns campaign counts, status breakdown, and budget totals.
  * Requires API key for service-to-service auth.
  */
-router.post("/stats", requireApiKey, async (req, res) => {
+router.post("/stats", requireApiKey, validateBody(StatsFilterBody), async (req, res) => {
   try {
     const { clerkOrgId, appId, brandId, campaignId } = req.body;
-
-    if (!clerkOrgId && !appId && !brandId && !campaignId) {
-      return res.status(400).json({ error: "At least one filter required: clerkOrgId, appId, brandId, or campaignId" });
-    }
 
     // Build where conditions
     const conditions = [];
