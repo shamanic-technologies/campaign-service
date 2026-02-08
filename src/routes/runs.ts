@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import { campaigns, orgs } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
-import { ensureOrganization, listRuns, getRun, createRun, updateRun } from "@mcpfactory/runs-client";
+import { listRuns, getRun, createRun, updateRun } from "@mcpfactory/runs-client";
 import { RunStatusUpdate } from "../schemas.js";
 
 const router = Router();
@@ -20,7 +20,7 @@ router.get("/campaigns/:campaignId/runs/list", requireApiKey, async (req, res) =
 
     const campaign = await db.query.campaigns.findFirst({
       where: eq(campaigns.id, campaignId),
-      columns: { orgId: true },
+      columns: { orgId: true, brandId: true, appId: true },
     });
     if (!campaign) {
       return res.status(404).json({ error: "Campaign not found" });
@@ -34,9 +34,9 @@ router.get("/campaigns/:campaignId/runs/list", requireApiKey, async (req, res) =
       return res.status(404).json({ error: "Organization not found" });
     }
 
-    const runsOrgId = await ensureOrganization(org.clerkOrgId);
     const result = await listRuns({
-      organizationId: runsOrgId,
+      clerkOrgId: org.clerkOrgId,
+      appId: "mcpfactory",
       serviceName: "campaign-service",
       taskName: campaignId,
     });
@@ -68,9 +68,9 @@ router.get("/campaigns/:campaignId/runs", requireApiKey, serviceAuth, async (req
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const runsOrgId = await ensureOrganization(req.clerkOrgId!);
     const result = await listRuns({
-      organizationId: runsOrgId,
+      clerkOrgId: req.clerkOrgId!,
+      appId: "mcpfactory",
       serviceName: "campaign-service",
       taskName: campaignId,
     });
@@ -134,11 +134,13 @@ router.post("/campaigns/:campaignId/runs", requireApiKey, async (req, res) => {
       return res.status(500).json({ error: "Organization not found" });
     }
 
-    const runsOrgId = await ensureOrganization(org.clerkOrgId);
     const run = await createRun({
-      organizationId: runsOrgId,
+      clerkOrgId: org.clerkOrgId,
+      appId: "mcpfactory",
       serviceName: "campaign-service",
       taskName: campaignId,
+      brandId: campaign.brandId ?? undefined,
+      campaignId,
     });
 
     res.status(201).json({ run });
