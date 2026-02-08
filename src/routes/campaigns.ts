@@ -6,7 +6,7 @@ import { clerkAuth, requireOrg, requireApiKey, AuthenticatedRequest } from "../m
 import { validateBody } from "../middleware/validate.js";
 import { normalizeUrl, extractDomain } from "../lib/domain.js";
 import { ensureOrganization, listRuns, getRunsBatch, type Run, type RunWithCosts } from "@mcpfactory/runs-client";
-import { CreateCampaignBody, UpdateCampaignBody, StatsFilterBody, BatchStatsBody } from "../schemas.js";
+import { CreateCampaignBody, UpdateCampaignBody, StatsFilterBody, BatchBudgetUsageBody } from "../schemas.js";
 
 const router = Router();
 
@@ -57,9 +57,9 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
 });
 
 /**
- * POST /campaigns/batch-stats - Get stats for multiple campaigns
+ * POST /campaigns/batch-budget-usage - Get cost and run data for multiple campaigns
  */
-router.post("/campaigns/batch-stats", requireApiKey, validateBody(BatchStatsBody), async (req, res) => {
+router.post("/campaigns/batch-budget-usage", requireApiKey, validateBody(BatchBudgetUsageBody), async (req, res) => {
   try {
     const { campaignIds } = req.body;
 
@@ -121,7 +121,7 @@ router.post("/campaigns/batch-stats", requireApiKey, validateBody(BatchStatsBody
             totalCostInUsdCents: totalCostInUsdCents > 0 ? String(totalCostInUsdCents) : null,
           };
         } catch (err) {
-          console.warn(`[Campaign Service] Batch stats failed for campaign ${campaignId}:`, err);
+          console.warn(`[Campaign Service] Batch budget usage failed for campaign ${campaignId}:`, err);
           results[campaignId] = { error: "Failed to fetch stats" };
         }
       })
@@ -129,7 +129,7 @@ router.post("/campaigns/batch-stats", requireApiKey, validateBody(BatchStatsBody
 
     res.json({ results });
   } catch (error) {
-    console.error("[Campaign Service] Batch stats error:", error);
+    console.error("[Campaign Service] Batch budget usage error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

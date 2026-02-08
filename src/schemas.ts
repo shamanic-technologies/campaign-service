@@ -107,11 +107,11 @@ export const StatsResponse = z.object({
   }),
 }).openapi("StatsResponse");
 
-// --- Batch stats ---
+// --- Batch budget usage ---
 
-export const BatchStatsBody = z.object({
+export const BatchBudgetUsageBody = z.object({
   campaignIds: z.array(z.string()).min(1, "campaignIds array is required"),
-}).openapi("BatchStatsBody");
+}).openapi("BatchBudgetUsageBody");
 
 // --- Run status ---
 
