@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, orgs } from "../db/schema.js";
-import { clerkAuth, requireOrg, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
+import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { ensureOrganization, listRuns, getRun, createRun, updateRun } from "@mcpfactory/runs-client";
 import { RunStatusUpdate } from "../schemas.js";
@@ -53,7 +53,7 @@ router.get("/campaigns/:campaignId/runs/list", requireApiKey, async (req, res) =
 /**
  * GET /campaigns/:campaignId/runs - List all runs for a campaign
  */
-router.get("/campaigns/:campaignId/runs", clerkAuth, requireOrg, async (req: AuthenticatedRequest, res) => {
+router.get("/campaigns/:campaignId/runs", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { campaignId } = req.params;
 
@@ -85,7 +85,7 @@ router.get("/campaigns/:campaignId/runs", clerkAuth, requireOrg, async (req: Aut
 /**
  * GET /campaigns/:campaignId/runs/:runId - Get a specific run
  */
-router.get("/campaigns/:campaignId/runs/:runId", clerkAuth, requireOrg, async (req: AuthenticatedRequest, res) => {
+router.get("/campaigns/:campaignId/runs/:runId", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { campaignId, runId } = req.params;
 

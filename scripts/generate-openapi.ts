@@ -20,13 +20,6 @@ const __dirname = dirname(__filename);
 const registry = new OpenAPIRegistry();
 
 // --- Security schemes ---
-const bearerAuth = registry.registerComponent("securitySchemes", "bearerAuth", {
-  type: "http",
-  scheme: "bearer",
-  bearerFormat: "JWT",
-  description: "Clerk JWT token",
-});
-
 const apiKeyAuth = registry.registerComponent("securitySchemes", "apiKeyAuth", {
   type: "apiKey",
   in: "header",
@@ -69,7 +62,7 @@ registry.registerPath({
   path: "/campaigns",
   tags: ["Campaigns"],
   summary: "List campaigns for org",
-  security: [{ [bearerAuth.name]: [] }],
+  security: [{ [apiKeyAuth.name]: [] }],
   request: { query: z.object({ brandId: z.string().optional() }).openapi("CampaignsQuery") },
   responses: {
     200: { description: "List of campaigns", content: { "application/json": { schema: z.object({ campaigns: z.array(CampaignSchema) }) } } },
@@ -82,7 +75,7 @@ registry.registerPath({
   path: "/campaigns/{id}",
   tags: ["Campaigns"],
   summary: "Get a specific campaign",
-  security: [{ [bearerAuth.name]: [] }],
+  security: [{ [apiKeyAuth.name]: [] }],
   request: { params: z.object({ id: z.string().uuid() }) },
   responses: {
     200: { description: "Campaign details", content: { "application/json": { schema: z.object({ campaign: CampaignSchema }) } } },
@@ -95,7 +88,7 @@ registry.registerPath({
   path: "/campaigns",
   tags: ["Campaigns"],
   summary: "Create a new campaign",
-  security: [{ [bearerAuth.name]: [] }],
+  security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: CreateCampaignBody } } } },
   responses: {
     201: { description: "Campaign created", content: { "application/json": { schema: z.object({ campaign: CampaignSchema }) } } },
@@ -108,7 +101,7 @@ registry.registerPath({
   path: "/campaigns/{id}",
   tags: ["Campaigns"],
   summary: "Update a campaign",
-  security: [{ [bearerAuth.name]: [] }],
+  security: [{ [apiKeyAuth.name]: [] }],
   request: {
     params: z.object({ id: z.string().uuid() }),
     body: { content: { "application/json": { schema: UpdateCampaignBody } } },
@@ -124,7 +117,7 @@ registry.registerPath({
   path: "/campaigns/{id}",
   tags: ["Campaigns"],
   summary: "Delete a campaign",
-  security: [{ [bearerAuth.name]: [] }],
+  security: [{ [apiKeyAuth.name]: [] }],
   request: { params: z.object({ id: z.string().uuid() }) },
   responses: {
     200: { description: "Campaign deleted", content: { "application/json": { schema: z.object({ message: z.string() }) } } },
@@ -161,7 +154,7 @@ registry.registerPath({
   path: "/campaigns/{campaignId}/runs",
   tags: ["Runs"],
   summary: "List runs for a campaign",
-  security: [{ [bearerAuth.name]: [] }],
+  security: [{ [apiKeyAuth.name]: [] }],
   request: { params: z.object({ campaignId: z.string().uuid() }) },
   responses: {
     200: { description: "List of runs", content: { "application/json": { schema: z.object({ runs: z.array(RunSchema) }) } } },
@@ -174,7 +167,7 @@ registry.registerPath({
   path: "/campaigns/{campaignId}/runs/{runId}",
   tags: ["Runs"],
   summary: "Get a specific run",
-  security: [{ [bearerAuth.name]: [] }],
+  security: [{ [apiKeyAuth.name]: [] }],
   request: { params: z.object({ campaignId: z.string().uuid(), runId: z.string().uuid() }) },
   responses: {
     200: { description: "Run details", content: { "application/json": { schema: z.object({ run: RunSchema }) } } },
