@@ -8,9 +8,11 @@ import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, orgs } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
+import { validateBody } from "../middleware/validate.js";
 import { getLeadsForRuns, aggregateCompaniesFromLeads } from "../lib/service-client.js";
 import { extractDomain } from "../lib/domain.js";
 import { ensureOrganization, listRuns, getRunsBatch, createRun, updateRun, type Run, type RunWithCosts } from "@mcpfactory/runs-client";
+import { CreateCampaignInternalBody, UpdateCampaignBody, BatchStatsBody, RunStatusUpdate } from "../schemas.js";
 
 const router = Router();
 
@@ -157,7 +159,7 @@ router.get("/campaigns/:id", serviceAuth, async (req: AuthenticatedRequest, res)
 /**
  * POST /internal/campaigns - Create a new campaign
  */
-router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) => {
+router.post("/campaigns", serviceAuth, validateBody(CreateCampaignInternalBody), async (req: AuthenticatedRequest, res) => {
   try {
     console.log("[Campaign Service] POST /internal/campaigns - orgId:", req.orgId, "userId:", req.userId, "body:", JSON.stringify(req.body));
 
@@ -182,20 +184,6 @@ router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) =>
       notifyDestination,
       appId,
     } = req.body;
-
-    if (!name) {
-      return res.status(400).json({ error: "Campaign name is required" });
-    }
-
-    if (!brandUrl) {
-      return res.status(400).json({ error: "brandUrl is required" });
-    }
-
-    if (!maxBudgetDailyUsd && !maxBudgetWeeklyUsd && !maxBudgetMonthlyUsd && !maxBudgetTotalUsd) {
-      return res.status(400).json({
-        error: "At least one budget must be set (maxBudgetDailyUsd, maxBudgetWeeklyUsd, maxBudgetMonthlyUsd, or maxBudgetTotalUsd)"
-      });
-    }
 
     const brandDomain = extractDomain(brandUrl);
     console.log(`[Campaign Service] Using brandUrl: ${brandUrl} (domain: ${brandDomain})`);
@@ -243,7 +231,7 @@ router.post("/campaigns", serviceAuth, async (req: AuthenticatedRequest, res) =>
 /**
  * PATCH /internal/campaigns/:id - Update a campaign
  */
-router.patch("/campaigns/:id", serviceAuth, async (req: AuthenticatedRequest, res) => {
+router.patch("/campaigns/:id", serviceAuth, validateBody(UpdateCampaignBody), async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
 
@@ -412,14 +400,10 @@ router.post("/campaigns/:id/runs", requireApiKey, async (req, res) => {
 /**
  * PATCH /internal/runs/:id - Update a campaign run
  */
-router.patch("/runs/:id", requireApiKey, async (req, res) => {
+router.patch("/runs/:id", requireApiKey, validateBody(RunStatusUpdate), async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-
-    if (status !== "completed" && status !== "failed") {
-      return res.status(400).json({ error: "Status must be 'completed' or 'failed'" });
-    }
 
     const run = await updateRun(id, status);
 
@@ -625,13 +609,9 @@ router.get("/campaigns/:id/companies", serviceAuth, async (req: AuthenticatedReq
  * POST /internal/campaigns/batch-stats - Get stats for multiple campaigns
  * Returns campaign DB data + run counts (no downstream service proxying)
  */
-router.post("/campaigns/batch-stats", requireApiKey, async (req, res) => {
+router.post("/campaigns/batch-stats", requireApiKey, validateBody(BatchStatsBody), async (req, res) => {
   try {
     const { campaignIds } = req.body;
-
-    if (!Array.isArray(campaignIds) || campaignIds.length === 0) {
-      return res.status(400).json({ error: "campaignIds array is required" });
-    }
 
     const campaignRows = await db
       .select({
