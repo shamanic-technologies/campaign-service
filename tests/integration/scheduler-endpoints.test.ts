@@ -3,13 +3,11 @@ import request from "supertest";
 
 // vi.hoisted ensures these are available when vi.mock factory runs (hoisted to top)
 const {
-  mockEnsureOrganization,
   mockListRuns,
   mockCreateRun,
   mockUpdateRun,
   mockGetRun,
 } = vi.hoisted(() => ({
-  mockEnsureOrganization: vi.fn(),
   mockListRuns: vi.fn(),
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
@@ -17,7 +15,6 @@ const {
 }));
 
 vi.mock("@mcpfactory/runs-client", () => ({
-  ensureOrganization: mockEnsureOrganization,
   listRuns: mockListRuns,
   getRun: mockGetRun,
   createRun: mockCreateRun,
@@ -34,7 +31,6 @@ describe("Scheduler Endpoints", () => {
     await cleanTestData();
     vi.clearAllMocks();
     // Reset default mock values
-    mockEnsureOrganization.mockResolvedValue("runs-org-uuid");
     mockListRuns.mockResolvedValue({ runs: [] });
   });
 
@@ -100,7 +96,13 @@ describe("Scheduler Endpoints", () => {
         .expect(200);
 
       expect(res.body.runs).toHaveLength(2);
-      expect(mockEnsureOrganization).toHaveBeenCalledWith("org_runs_test");
+      expect(mockListRuns).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clerkOrgId: "org_runs_test",
+          appId: "mcpfactory",
+          serviceName: "campaign-service",
+        })
+      );
     });
 
     it("should return empty array for campaign with no runs", async () => {
@@ -138,7 +140,8 @@ describe("Scheduler Endpoints", () => {
       expect(res.body.run.status).toBe("running");
       expect(mockCreateRun).toHaveBeenCalledWith(
         expect.objectContaining({
-          organizationId: "runs-org-uuid",
+          clerkOrgId: "org_create_run",
+          appId: "mcpfactory",
           serviceName: "campaign-service",
           taskName: campaign.id,
         })

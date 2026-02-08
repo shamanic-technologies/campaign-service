@@ -5,7 +5,7 @@ import { campaigns, orgs } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { normalizeUrl, extractDomain } from "../lib/domain.js";
-import { ensureOrganization, listRuns, getRunsBatch, type Run, type RunWithCosts } from "@mcpfactory/runs-client";
+import { listRuns, getRunsBatch, type Run, type RunWithCosts } from "@mcpfactory/runs-client";
 import { CreateCampaignBody, UpdateCampaignBody, StatsFilterBody, BatchBudgetUsageBody } from "../schemas.js";
 
 const router = Router();
@@ -90,9 +90,9 @@ router.post("/campaigns/batch-budget-usage", requireApiKey, validateBody(BatchBu
         }
 
         try {
-          const runsOrgId = await ensureOrganization(row.clerkOrgId);
           const runResult = await listRuns({
-            organizationId: runsOrgId,
+            clerkOrgId: row.clerkOrgId,
+            appId: "mcpfactory",
             serviceName: "campaign-service",
             taskName: campaignId,
           });
