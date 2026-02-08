@@ -55,6 +55,7 @@ export const CreateCampaignBody = z.object({
   maxBudgetWeeklyUsd: z.string().optional(),
   maxBudgetMonthlyUsd: z.string().optional(),
   maxBudgetTotalUsd: z.string().optional(),
+  maxLeads: z.number().int().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   notifyFrequency: z.string().optional(),
