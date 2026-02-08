@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, orgs } from "../db/schema.js";
-import { clerkAuth, requireOrg, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
+import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { normalizeUrl, extractDomain } from "../lib/domain.js";
 import { ensureOrganization, listRuns, getRunsBatch, type Run, type RunWithCosts } from "@mcpfactory/runs-client";
@@ -190,7 +190,7 @@ router.post("/campaigns/stats", requireApiKey, validateBody(StatsFilterBody), as
 /**
  * GET /campaigns - List all campaigns for org
  */
-router.get("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedRequest, res) => {
+router.get("/campaigns", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { brandId } = req.query;
 
@@ -214,7 +214,7 @@ router.get("/campaigns", clerkAuth, requireOrg, async (req: AuthenticatedRequest
 /**
  * GET /campaigns/:id - Get a specific campaign
  */
-router.get("/campaigns/:id", clerkAuth, requireOrg, async (req: AuthenticatedRequest, res) => {
+router.get("/campaigns/:id", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
 
@@ -239,7 +239,7 @@ router.get("/campaigns/:id", clerkAuth, requireOrg, async (req: AuthenticatedReq
 /**
  * POST /campaigns - Create a new campaign
  */
-router.post("/campaigns", clerkAuth, requireOrg, validateBody(CreateCampaignBody), async (req: AuthenticatedRequest, res) => {
+router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaignBody), async (req: AuthenticatedRequest, res) => {
   try {
     const {
       name,
@@ -303,7 +303,7 @@ router.post("/campaigns", clerkAuth, requireOrg, validateBody(CreateCampaignBody
 /**
  * PATCH /campaigns/:id - Update a campaign (including status: "active" | "stopped")
  */
-router.patch("/campaigns/:id", clerkAuth, requireOrg, validateBody(UpdateCampaignBody), async (req: AuthenticatedRequest, res) => {
+router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCampaignBody), async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
 
@@ -340,7 +340,7 @@ router.patch("/campaigns/:id", clerkAuth, requireOrg, validateBody(UpdateCampaig
 /**
  * DELETE /campaigns/:id - Delete a campaign
  */
-router.delete("/campaigns/:id", clerkAuth, requireOrg, async (req: AuthenticatedRequest, res) => {
+router.delete("/campaigns/:id", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
 
