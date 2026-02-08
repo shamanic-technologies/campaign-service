@@ -79,7 +79,7 @@ export const UpdateCampaignBody = z.object({
   maxLeads: z.number().int().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
-  status: z.string().optional(),
+  status: z.enum(["activate", "stop"]).optional(),
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
@@ -106,33 +106,6 @@ export const StatsResponse = z.object({
     maxLeadsTotal: z.number().nullable(),
   }),
 }).openapi("StatsResponse");
-
-// --- Internal campaign routes ---
-
-export const CreateCampaignInternalBody = z.object({
-  name: z.string().min(1, "Campaign name is required"),
-  brandUrl: z.string().min(1, "brandUrl is required"),
-  personTitles: z.array(z.string()).optional(),
-  qOrganizationKeywordTags: z.array(z.string()).optional(),
-  organizationLocations: z.array(z.string()).optional(),
-  organizationNumEmployeesRanges: z.array(z.string()).optional(),
-  qOrganizationIndustryTagIds: z.array(z.string()).optional(),
-  qKeywords: z.string().optional(),
-  maxBudgetDailyUsd: z.string().optional(),
-  maxBudgetWeeklyUsd: z.string().optional(),
-  maxBudgetMonthlyUsd: z.string().optional(),
-  maxBudgetTotalUsd: z.string().optional(),
-  maxLeads: z.union([z.string(), z.number()]).optional(),
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
-  notifyFrequency: z.string().optional(),
-  notifyChannel: z.string().optional(),
-  notifyDestination: z.string().optional(),
-  appId: z.string().uuid().optional(),
-}).refine(
-  (data) => data.maxBudgetDailyUsd || data.maxBudgetWeeklyUsd || data.maxBudgetMonthlyUsd || data.maxBudgetTotalUsd,
-  { message: "At least one budget must be set (maxBudgetDailyUsd, maxBudgetWeeklyUsd, maxBudgetMonthlyUsd, or maxBudgetTotalUsd)" }
-).openapi("CreateCampaignInternalBody");
 
 // --- Batch stats ---
 
