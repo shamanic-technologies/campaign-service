@@ -64,6 +64,13 @@
       "when": 1770300000000,
       "tag": "0008_add_app_id",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1770400000000,
+      "tag": "0009_normalize_status",
+      "breakpoints": true
     }
   ]
 }
