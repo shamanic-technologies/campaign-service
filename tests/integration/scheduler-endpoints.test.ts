@@ -43,7 +43,7 @@ describe("Scheduler Endpoints", () => {
     await closeDb();
   });
 
-  describe("GET /internal/campaigns/all", () => {
+  describe("GET /campaigns/list", () => {
     it("should return all campaigns across all orgs", async () => {
       const org1 = await insertTestOrg({ clerkOrgId: "org_1" });
       const org2 = await insertTestOrg({ clerkOrgId: "org_2" });
@@ -52,7 +52,7 @@ describe("Scheduler Endpoints", () => {
       await insertTestCampaign(org2.id, { name: "Org2 Campaign", status: "ongoing" });
 
       const res = await request(app)
-        .get("/internal/campaigns/all")
+        .get("/campaigns/list")
         .set("x-api-key", API_KEY)
         .expect(200);
 
@@ -65,7 +65,7 @@ describe("Scheduler Endpoints", () => {
       await insertTestCampaign(org.id, { name: "Test", status: "ongoing" });
 
       const res = await request(app)
-        .get("/internal/campaigns/all")
+        .get("/campaigns/list")
         .set("x-api-key", API_KEY)
         .expect(200);
 
@@ -74,7 +74,7 @@ describe("Scheduler Endpoints", () => {
 
     it("should return empty array when no campaigns", async () => {
       const res = await request(app)
-        .get("/internal/campaigns/all")
+        .get("/campaigns/list")
         .set("x-api-key", API_KEY)
         .expect(200);
 
@@ -82,7 +82,7 @@ describe("Scheduler Endpoints", () => {
     });
   });
 
-  describe("GET /internal/campaigns/:id/runs/all", () => {
+  describe("GET /campaigns/:id/runs/list", () => {
     it("should return runs from runs-service for a campaign", async () => {
       const org = await insertTestOrg({ clerkOrgId: "org_runs_test" });
       const campaign = await insertTestCampaign(org.id);
@@ -95,7 +95,7 @@ describe("Scheduler Endpoints", () => {
       });
 
       const res = await request(app)
-        .get(`/internal/campaigns/${campaign.id}/runs/all`)
+        .get(`/campaigns/${campaign.id}/runs/list`)
         .set("x-api-key", API_KEY)
         .expect(200);
 
@@ -108,7 +108,7 @@ describe("Scheduler Endpoints", () => {
       const campaign = await insertTestCampaign(org.id);
 
       const res = await request(app)
-        .get(`/internal/campaigns/${campaign.id}/runs/all`)
+        .get(`/campaigns/${campaign.id}/runs/list`)
         .set("x-api-key", API_KEY)
         .expect(200);
 
@@ -116,7 +116,7 @@ describe("Scheduler Endpoints", () => {
     });
   });
 
-  describe("POST /internal/campaigns/:id/runs", () => {
+  describe("POST /campaigns/:id/runs", () => {
     it("should create a new campaign run via runs-service", async () => {
       const org = await insertTestOrg({ clerkOrgId: "org_create_run" });
       const campaign = await insertTestCampaign(org.id, { status: "ongoing" });
@@ -130,9 +130,9 @@ describe("Scheduler Endpoints", () => {
       });
 
       const res = await request(app)
-        .post(`/internal/campaigns/${campaign.id}/runs`)
+        .post(`/campaigns/${campaign.id}/runs`)
         .set("x-api-key", API_KEY)
-        .expect(200);
+        .expect(201);
 
       expect(res.body.run).toBeDefined();
       expect(res.body.run.status).toBe("running");
@@ -147,15 +147,15 @@ describe("Scheduler Endpoints", () => {
 
     it("should return 404 for non-existent campaign", async () => {
       const res = await request(app)
-        .post("/internal/campaigns/00000000-0000-0000-0000-000000000000/runs")
+        .post("/campaigns/00000000-0000-0000-0000-000000000000/runs")
         .set("x-api-key", API_KEY)
         .expect(404);
 
-      expect(res.body.error).toContain("not found");
+      expect(res.body.error.toLowerCase()).toContain("not found");
     });
   });
 
-  describe("PATCH /internal/runs/:id", () => {
+  describe("PATCH /runs/:id", () => {
     it("should update run status to completed", async () => {
       mockUpdateRun.mockResolvedValue({
         id: "run-1",
@@ -164,7 +164,7 @@ describe("Scheduler Endpoints", () => {
       });
 
       const res = await request(app)
-        .patch("/internal/runs/run-1")
+        .patch("/runs/run-1")
         .set("x-api-key", API_KEY)
         .send({ status: "completed" })
         .expect(200);
@@ -180,7 +180,7 @@ describe("Scheduler Endpoints", () => {
       });
 
       const res = await request(app)
-        .patch("/internal/runs/run-2")
+        .patch("/runs/run-2")
         .set("x-api-key", API_KEY)
         .send({ status: "failed" })
         .expect(200);
@@ -190,7 +190,7 @@ describe("Scheduler Endpoints", () => {
 
     it("should return 400 for invalid status", async () => {
       const res = await request(app)
-        .patch("/internal/runs/run-1")
+        .patch("/runs/run-1")
         .set("x-api-key", API_KEY)
         .send({ status: "invalid" })
         .expect(400);
@@ -202,7 +202,7 @@ describe("Scheduler Endpoints", () => {
       mockUpdateRun.mockRejectedValueOnce(new Error("Run not found"));
 
       const res = await request(app)
-        .patch("/internal/runs/00000000-0000-0000-0000-000000000000")
+        .patch("/runs/00000000-0000-0000-0000-000000000000")
         .set("x-api-key", API_KEY)
         .send({ status: "completed" })
         .expect(500);
@@ -221,7 +221,7 @@ describe("Scheduler Endpoints", () => {
 
       // 1. Scheduler lists all campaigns
       const listRes = await request(app)
-        .get("/internal/campaigns/all")
+        .get("/campaigns/list")
         .set("x-api-key", API_KEY)
         .expect(200);
 
@@ -230,7 +230,7 @@ describe("Scheduler Endpoints", () => {
 
       // 2. Scheduler checks runs for this campaign (returns empty)
       const runsRes = await request(app)
-        .get(`/internal/campaigns/${campaign.id}/runs/all`)
+        .get(`/campaigns/${campaign.id}/runs/list`)
         .set("x-api-key", API_KEY)
         .expect(200);
 
@@ -247,9 +247,9 @@ describe("Scheduler Endpoints", () => {
       mockCreateRun.mockResolvedValue(newRun);
 
       const createRes = await request(app)
-        .post(`/internal/campaigns/${campaign.id}/runs`)
+        .post(`/campaigns/${campaign.id}/runs`)
         .set("x-api-key", API_KEY)
-        .expect(200);
+        .expect(201);
 
       expect(createRes.body.run.status).toBe("running");
       const runId = createRes.body.run.id;
@@ -262,7 +262,7 @@ describe("Scheduler Endpoints", () => {
       });
 
       const updateRes = await request(app)
-        .patch(`/internal/runs/${runId}`)
+        .patch(`/runs/${runId}`)
         .set("x-api-key", API_KEY)
         .send({ status: "completed" })
         .expect(200);
@@ -273,7 +273,7 @@ describe("Scheduler Endpoints", () => {
       mockListRuns.mockResolvedValue({ runs: [{ ...newRun, status: "completed" }] });
 
       const runsRes2 = await request(app)
-        .get(`/internal/campaigns/${campaign.id}/runs/all`)
+        .get(`/campaigns/${campaign.id}/runs/list`)
         .set("x-api-key", API_KEY)
         .expect(200);
 
