@@ -9,7 +9,7 @@ import {
   UpdateCampaignBody,
   StatsFilterBody,
   StatsResponse,
-  BatchStatsBody,
+  BatchBudgetUsageBody,
   RunStatusUpdate,
   ErrorResponse,
 } from "../src/schemas.js";
@@ -239,12 +239,12 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/campaigns/batch-stats",
+  path: "/campaigns/batch-budget-usage",
   tags: ["Scheduler"],
-  summary: "Get stats for multiple campaigns",
-  description: "Returns campaign DB data + run counts for each campaign",
+  summary: "Get cost and run data for multiple campaigns",
+  description: "Returns budget usage (totalCostInUsdCents) and run counts per campaign",
   security: [{ [apiKeyAuth.name]: [] }],
-  request: { body: { content: { "application/json": { schema: BatchStatsBody } } } },
+  request: { body: { content: { "application/json": { schema: BatchBudgetUsageBody } } } },
   responses: {
     200: {
       description: "Stats per campaign",
