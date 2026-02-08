@@ -50,7 +50,7 @@ export const campaigns = pgTable(
 
     // App ID from external app/product service
     // Nullable, populated when campaign is associated with an app
-    appId: uuid("app_id"),
+    appId: text("app_id"),
 
     // Apollo targeting criteria (using Apollo API naming)
     personTitles: text("person_titles").array(),           // ["CEO", "CTO", "Founder"]
