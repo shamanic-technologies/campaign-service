@@ -44,8 +44,10 @@ export const CampaignSchema = z.object({
 
 export const CreateCampaignBody = z.object({
   name: z.string().min(1, "Campaign name is required"),
+  clerkOrgId: z.string().min(1, "clerkOrgId is required"),
   brandUrl: z.string().min(1, "brandUrl is required"),
-  brandId: z.string().uuid().optional(),
+  brandId: z.string().uuid("brandId must be a valid UUID"),
+  appId: z.string().min(1, "appId is required"),
   personTitles: z.array(z.string()).optional(),
   qOrganizationKeywordTags: z.array(z.string()).optional(),
   organizationLocations: z.array(z.string()).optional(),
@@ -62,7 +64,6 @@ export const CreateCampaignBody = z.object({
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
-  appId: z.string().optional(),
 }).openapi("CreateCampaignBody");
 
 export const UpdateCampaignBody = z.object({
