@@ -245,6 +245,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       name,
       brandUrl,
       brandId,
+      appId,
       personTitles,
       qOrganizationKeywordTags,
       organizationLocations,
@@ -261,7 +262,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       notifyFrequency,
       notifyChannel,
       notifyDestination,
-      appId,
     } = req.body;
 
     const normalizedBrandUrl = normalizeUrl(brandUrl);
@@ -271,11 +271,11 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       .insert(campaigns)
       .values({
         orgId: req.orgId!,
-        createdByUserId: req.userId!,
+        createdByUserId: req.userId ?? null,
         name,
-        appId: appId || null,
+        appId,
         brandUrl: normalizedBrandUrl,
-        brandId: brandId || null,
+        brandId,
         personTitles,
         qOrganizationKeywordTags,
         organizationLocations,
