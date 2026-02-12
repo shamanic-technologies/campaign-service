@@ -88,6 +88,42 @@ describe("Campaign Service Database", () => {
       expect(results[0].appId).toBe(appId);
     });
 
+    it("should create a campaign with brandId", async () => {
+      const org = await insertTestOrg();
+      const brandId = crypto.randomUUID();
+      const campaign = await insertTestCampaign(org.id, {
+        name: "Brand Campaign",
+        brandId,
+      });
+
+      expect(campaign.brandId).toBe(brandId);
+    });
+
+    it("should store null brandId when not provided", async () => {
+      const org = await insertTestOrg();
+      const campaign = await insertTestCampaign(org.id, {
+        name: "No Brand Campaign",
+      });
+
+      expect(campaign.brandId).toBeNull();
+    });
+
+    it("should query campaigns by brandId", async () => {
+      const org = await insertTestOrg();
+      const brandId = crypto.randomUUID();
+      await insertTestCampaign(org.id, { name: "With Brand", brandId });
+      await insertTestCampaign(org.id, { name: "Without Brand" });
+
+      const results = await db
+        .select()
+        .from(campaigns)
+        .where(eq(campaigns.brandId, brandId));
+
+      expect(results).toHaveLength(1);
+      expect(results[0].name).toBe("With Brand");
+      expect(results[0].brandId).toBe(brandId);
+    });
+
     it("should cascade delete when org is deleted", async () => {
       const org = await insertTestOrg();
       const campaign = await insertTestCampaign(org.id);

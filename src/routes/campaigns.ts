@@ -244,6 +244,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     const {
       name,
       brandUrl,
+      brandId,
       personTitles,
       qOrganizationKeywordTags,
       organizationLocations,
@@ -274,6 +275,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         name,
         appId: appId || null,
         brandUrl: normalizedBrandUrl,
+        brandId: brandId || null,
         personTitles,
         qOrganizationKeywordTags,
         organizationLocations,

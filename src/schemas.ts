@@ -45,6 +45,7 @@ export const CampaignSchema = z.object({
 export const CreateCampaignBody = z.object({
   name: z.string().min(1, "Campaign name is required"),
   brandUrl: z.string().min(1, "brandUrl is required"),
+  brandId: z.string().uuid().optional(),
   personTitles: z.array(z.string()).optional(),
   qOrganizationKeywordTags: z.array(z.string()).optional(),
   organizationLocations: z.array(z.string()).optional(),
@@ -67,6 +68,7 @@ export const CreateCampaignBody = z.object({
 export const UpdateCampaignBody = z.object({
   name: z.string().optional(),
   brandUrl: z.string().optional(),
+  brandId: z.string().uuid().optional(),
   personTitles: z.array(z.string()).optional(),
   qOrganizationKeywordTags: z.array(z.string()).optional(),
   organizationLocations: z.array(z.string()).optional(),
