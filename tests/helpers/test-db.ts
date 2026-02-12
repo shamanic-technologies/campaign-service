@@ -49,6 +49,7 @@ export async function insertTestCampaign(
     personTitles?: string[];
     organizationLocations?: string[];
     appId?: string;
+    brandId?: string;
   } = {}
 ) {
   const [campaign] = await db
@@ -62,6 +63,7 @@ export async function insertTestCampaign(
       personTitles: data.personTitles,
       organizationLocations: data.organizationLocations,
       appId: data.appId || null,
+      brandId: data.brandId || null,
     })
     .returning();
   return campaign;
