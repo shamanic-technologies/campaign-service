@@ -6,6 +6,8 @@ process.env.SERVICE_SECRET_KEY = "test-service-secret";
 process.env.RUNS_SERVICE_URL = "https://runs.mcpfactory.org";
 process.env.RUNS_SERVICE_API_KEY = "test-api-key";
 process.env.CAMPAIGN_SERVICE_API_KEY = "test-api-key";
+process.env.WINDMILL_SERVICE_URL = "https://windmill.test.local";
+process.env.WINDMILL_SERVICE_API_KEY = "test-windmill-key";
 
 beforeAll(() => console.log("Test suite starting..."));
 afterAll(() => console.log("Test suite complete."));
