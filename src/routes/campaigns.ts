@@ -329,6 +329,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     // Trigger workflow on activation, routed by campaign type
     if (req.body.status === "activate") {
+      console.log(`[Campaign Service] Activation triggered: campaignId=${updated.id}, type=${updated.type}, clerkOrgId=${req.clerkOrgId}`);
       executeCampaignWorkflow(updated.type, {
         campaignId: updated.id,
         clerkOrgId: req.clerkOrgId!,

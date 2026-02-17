@@ -258,12 +258,17 @@ export async function executeCampaignWorkflow(
   const url = process.env.WINDMILL_SERVICE_URL;
   const apiKey = process.env.WINDMILL_SERVICE_API_KEY;
 
+  console.log(`[Workflow] executeCampaignWorkflow called: type=${type}, campaignId=${inputs.campaignId}, clerkOrgId=${inputs.clerkOrgId}`);
+
   if (!url || !apiKey) {
-    console.warn("[Campaign Service] WINDMILL_SERVICE_URL or WINDMILL_SERVICE_API_KEY not set, skipping workflow execution");
+    console.warn("[Workflow] WINDMILL_SERVICE_URL or WINDMILL_SERVICE_API_KEY not set, skipping workflow execution");
     return;
   }
 
-  const res = await fetch(`${url}/workflows/by-name/${type}/execute`, {
+  const executeUrl = `${url}/workflows/by-name/${type}/execute`;
+  console.log(`[Workflow] POST ${executeUrl}`);
+
+  const res = await fetch(executeUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -281,12 +286,12 @@ export async function executeCampaignWorkflow(
 
   if (!res.ok) {
     const body = await res.text();
-    console.error(`[Campaign Service] Workflow execution failed (${res.status}):`, body);
+    console.error(`[Workflow] Execution failed (${res.status}): ${body}`);
     return;
   }
 
   const data = await res.json() as { id?: string; status?: string };
-  console.log(`[Campaign Service] Workflow ${type} started: run=${data.id}, status=${data.status}`);
+  console.log(`[Workflow] ${type} started successfully: windmillRunId=${data.id}, status=${data.status}`);
 }
 
 export { buildColdEmailDag };
