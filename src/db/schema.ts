@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, uniqueIndex, index, date, decimal, jsonb, integer } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, uniqueIndex, index, date, decimal, integer } from "drizzle-orm/pg-core";
 
 // Local users table (maps to Clerk)
 export const users = pgTable(
@@ -52,16 +52,8 @@ export const campaigns = pgTable(
     // Nullable, populated when campaign is associated with an app
     appId: text("app_id"),
 
-    // Apollo targeting criteria (using Apollo API naming)
-    personTitles: text("person_titles").array(),           // ["CEO", "CTO", "Founder"]
-    qOrganizationKeywordTags: text("q_organization_keyword_tags").array(), // ["SaaS", "fintech"]
-    organizationLocations: text("organization_locations").array(),   // ["United States", "California, US"]
-    organizationNumEmployeesRanges: text("organization_num_employees_ranges").array(), // ["1,10", "11,50"]
-    qOrganizationIndustryTagIds: text("q_organization_industry_tag_ids").array(),
-    qKeywords: text("q_keywords"),                         // Full-text search
-    
-    // Store full Apollo request for transparency
-    requestRaw: jsonb("request_raw"),
+    // Free-text target audience description (e.g. "CEOs at SaaS startups in the US")
+    targetAudience: text("target_audience"),
     
     // Budget limits per campaign (at least one required)
     maxBudgetDailyUsd: decimal("max_budget_daily_usd", { precision: 10, scale: 2 }),
