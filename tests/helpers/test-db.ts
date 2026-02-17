@@ -46,8 +46,7 @@ export async function insertTestCampaign(
     status?: string;
     maxBudgetDailyUsd?: string;
     maxBudgetTotalUsd?: string;
-    personTitles?: string[];
-    organizationLocations?: string[];
+    targetAudience?: string;
     appId?: string;
     brandId?: string;
   } = {}
@@ -60,8 +59,7 @@ export async function insertTestCampaign(
       status: data.status || "ongoing",
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",
       maxBudgetTotalUsd: data.maxBudgetTotalUsd,
-      personTitles: data.personTitles,
-      organizationLocations: data.organizationLocations,
+      targetAudience: data.targetAudience || null,
       appId: data.appId || null,
       brandId: data.brandId || null,
     })
