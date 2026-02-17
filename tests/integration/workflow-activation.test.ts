@@ -8,6 +8,21 @@ const { mockExecuteColdEmailOutreach } = vi.hoisted(() => ({
 vi.mock("../../src/lib/workflows.js", () => ({
   executeColdEmailOutreach: mockExecuteColdEmailOutreach,
   deployWorkflows: vi.fn(),
+  COLD_EMAIL_PROMPT: "test prompt",
+  COLD_EMAIL_VARIABLES: ["leadFirstName"],
+}));
+
+vi.mock("../../src/lib/gate-check.js", () => ({
+  runGateChecks: vi.fn().mockResolvedValue({ allowed: true }),
+}));
+
+vi.mock("@mcpfactory/runs-client", () => ({
+  createRun: vi.fn().mockResolvedValue({ id: "mock-run-id" }),
+  updateRun: vi.fn().mockResolvedValue({}),
+  listRuns: vi.fn().mockResolvedValue({ runs: [] }),
+  getRun: vi.fn(),
+  getRunsBatch: vi.fn().mockResolvedValue(new Map()),
+  addCosts: vi.fn(),
 }));
 
 import app from "../../src/index.js";
@@ -74,17 +89,10 @@ describe("Workflow activation on PATCH", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(mockExecuteColdEmailOutreach).toHaveBeenCalledOnce();
-    expect(mockExecuteColdEmailOutreach).toHaveBeenCalledWith(
-      expect.objectContaining({
-        brandId: validBody.brandId,
-        brandUrl: "https://example.com",
-        campaignId,
-        clerkOrgId: "org_activation_test",
-        targetAudience: "CTOs at SaaS companies",
-        targetOutcome: "Book sales demos",
-        valueForTarget: "Enterprise analytics at startup pricing",
-      })
-    );
+    expect(mockExecuteColdEmailOutreach).toHaveBeenCalledWith({
+      campaignId,
+      clerkOrgId: "org_activation_test",
+    });
   });
 
   it("should NOT trigger workflow when status is set to stop", async () => {

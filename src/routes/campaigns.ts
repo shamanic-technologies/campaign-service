@@ -325,16 +325,10 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       .returning();
 
     // Trigger cold email workflow on activation
-    if (req.body.status === "activate" && updated.brandId && updated.brandUrl) {
+    if (req.body.status === "activate") {
       executeColdEmailOutreach({
-        brandId: updated.brandId,
-        brandUrl: updated.brandUrl,
         campaignId: updated.id,
         clerkOrgId: req.clerkOrgId!,
-        clerkUserId: req.clerkUserId,
-        targetAudience: updated.targetAudience,
-        targetOutcome: updated.targetOutcome,
-        valueForTarget: updated.valueForTarget,
       }).catch((err) => {
         console.error(`[Campaign Service] Failed to trigger workflow for campaign ${id}:`, err);
       });

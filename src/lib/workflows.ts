@@ -1,10 +1,33 @@
-const COLD_EMAIL_PROMPT = `You are an expert sales copywriter. Write a personalized cold email for a potential client.
+export const COLD_EMAIL_PROMPT = `You are an expert sales copywriter. Write a personalized cold email for a potential client.
 
 ## Recipient Information
-{{recipientInfo}}
+- Name: {{leadFirstName}} {{leadLastName}}
+- Title: {{leadTitle}}
+- Email: {{leadEmail}}
+- LinkedIn: {{leadLinkedinUrl}}
+- Company: {{leadCompanyName}}
+- Domain: {{leadCompanyDomain}}
+- Industry: {{leadCompanyIndustry}}
+- Company Size: {{leadCompanySize}} employees
+- Revenue: {{leadCompanyRevenueUsd}}
 
 ## Sender / Our Company
-{{senderInfo}}
+- Company: {{clientCompanyName}}
+- Website: {{clientBrandUrl}}
+- Overview: {{clientCompanyOverview}}
+- Value Proposition: {{clientValueProposition}}
+- Target Audience: {{clientTargetAudience}}
+- Pain Points We Solve: {{clientCustomerPainPoints}}
+- Key Features: {{clientKeyFeatures}}
+- Differentiators: {{clientProductDifferentiators}}
+- Competitors: {{clientCompetitors}}
+- Social Proof: {{clientSocialProof}}
+- CTA: {{clientCallToAction}}
+- Additional Context: {{clientAdditionalContext}}
+
+## Campaign Goals
+- Target Outcome: {{targetOutcome}}
+- Value for Target: {{valueForTarget}}
 
 ## Reference: Cold Email Frameworks
 Use your expertise to craft the email. Here are proven frameworks for reference:
@@ -17,9 +40,6 @@ Describe current pain (Before), paint ideal future (After), position solution as
 
 **AIDA (Attention-Interest-Desire-Action)**
 Hook attention, build interest with value, create desire, end with CTA.
-
-**SPIN (Situation-Problem-Implication-Need-Payoff)**
-Acknowledge situation, surface problems, explore implications, highlight payoff.
 
 ## Reference: Industry Best Practices (Gong Research, 28M+ emails analyzed)
 - Avoid product pitches in cold emails (reduces replies by 57%)
@@ -39,162 +59,158 @@ SUBJECT: [subject line]
 ---
 [email body in plain text]`;
 
+export const COLD_EMAIL_VARIABLES = [
+  "leadFirstName", "leadLastName", "leadTitle", "leadEmail",
+  "leadLinkedinUrl", "leadCompanyName", "leadCompanyDomain",
+  "leadCompanyIndustry", "leadCompanySize", "leadCompanyRevenueUsd",
+  "clientCompanyName", "clientBrandUrl", "clientCompanyOverview",
+  "clientValueProposition", "clientTargetAudience", "clientCustomerPainPoints",
+  "clientKeyFeatures", "clientProductDifferentiators", "clientCompetitors",
+  "clientSocialProof", "clientCallToAction", "clientAdditionalContext",
+  "targetOutcome", "valueForTarget",
+];
+
 const APP_ID = "mcpfactory";
 
+/**
+ * Build the cold-email-outreach DAG.
+ *
+ * Pipeline: start-run → email-generate → email-send → end-run
+ *
+ * - start-run: gate checks + create run + campaign/brand/lead fetch (campaign-service internal)
+ * - email-generate: generate email via AI (emailgeneration-service, NO RETRY)
+ * - email-send: send email (email-gateway-service, NO RETRY, validate success field)
+ * - end-run: finalize run + re-trigger (campaign-service internal)
+ *
+ * On DAG error: end-run is called with success=false via onError handler.
+ */
 function buildColdEmailDag() {
   return {
     nodes: [
+      // Step 1–4: Gate checks + create run + fetch campaign + brand profile + lead
       {
-        id: "register-prompt",
+        id: "start-run",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/internal/start-run",
+          retries: 0, // Contains non-idempotent lead fetch
+        },
+        inputMapping: {
+          "body.campaignId": "$ref:flow_input.campaignId",
+          "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+        },
+      },
+      // Step 5: Generate email (non-idempotent, NO RETRY)
+      {
+        id: "email-generate",
         type: "http.call",
         config: {
           service: "emailgeneration",
-          method: "PUT",
-          path: "/prompts",
+          method: "POST",
+          path: "/generate",
+          retries: 0,
           body: {
-            appId: APP_ID,
             type: "cold-email",
-            prompt: COLD_EMAIL_PROMPT,
-            variables: ["recipientInfo", "senderInfo"],
           },
         },
         inputMapping: {
-          "headers.x-clerk-org-id": "$ref:flow_input.clerkOrgId",
+          "headers.x-clerk-org-id": "$ref:start-run.output.clerkOrgId",
+          "body.appId": "$ref:start-run.output.appId",
+          "body.brandId": "$ref:start-run.output.brandId",
+          "body.campaignId": "$ref:start-run.output.campaignId",
+          "body.runId": "$ref:start-run.output.runId",
+          "body.apolloEnrichmentId": "$ref:start-run.output.lead.externalId",
+          // Lead fields
+          "body.leadFirstName": "$ref:start-run.output.lead.data.first_name",
+          "body.leadLastName": "$ref:start-run.output.lead.data.last_name",
+          "body.leadTitle": "$ref:start-run.output.lead.data.title",
+          "body.leadEmail": "$ref:start-run.output.lead.data.email",
+          "body.leadLinkedinUrl": "$ref:start-run.output.lead.data.linkedin_url",
+          "body.leadCompanyName": "$ref:start-run.output.lead.data.organization_name",
+          "body.leadCompanyDomain": "$ref:start-run.output.lead.data.organization.primary_domain",
+          "body.leadCompanyIndustry": "$ref:start-run.output.lead.data.organization.industry",
+          "body.leadCompanySize": "$ref:start-run.output.lead.data.organization.estimated_num_employees",
+          "body.leadCompanyRevenueUsd": "$ref:start-run.output.lead.data.organization.annual_revenue_printed",
+          // Client/brand fields
+          "body.clientCompanyName": "$ref:start-run.output.clientData.companyName",
+          "body.clientBrandUrl": "$ref:start-run.output.clientData.brandUrl",
+          "body.clientCompanyOverview": "$ref:start-run.output.clientData.companyOverview",
+          "body.clientValueProposition": "$ref:start-run.output.clientData.valueProposition",
+          "body.clientTargetAudience": "$ref:start-run.output.clientData.targetAudience",
+          "body.clientCustomerPainPoints": "$ref:start-run.output.clientData.customerPainPoints",
+          "body.clientKeyFeatures": "$ref:start-run.output.clientData.keyFeatures",
+          "body.clientProductDifferentiators": "$ref:start-run.output.clientData.productDifferentiators",
+          "body.clientCompetitors": "$ref:start-run.output.clientData.competitors",
+          "body.clientSocialProof": "$ref:start-run.output.clientData.socialProof",
+          "body.clientCallToAction": "$ref:start-run.output.clientData.callToAction",
+          "body.clientAdditionalContext": "$ref:start-run.output.clientData.additionalContext",
+          // Campaign fields
+          "body.targetOutcome": "$ref:start-run.output.targetOutcome",
+          "body.valueForTarget": "$ref:start-run.output.valueForTarget",
         },
       },
+      // Step 6: Send email (non-idempotent, NO RETRY)
       {
-        id: "extract-brand",
+        id: "email-send",
         type: "http.call",
         config: {
-          service: "brand",
+          service: "email-gateway",
           method: "POST",
-          path: "/sales-profile",
-          body: { appId: APP_ID },
-        },
-        inputMapping: {
-          "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
-          "body.url": "$ref:flow_input.brandUrl",
-          "body.clerkUserId": "$ref:flow_input.clerkUserId",
-          "body.parentRunId": "$ref:flow_input.runId",
-        },
-      },
-      {
-        id: "suggest-icp",
-        type: "http.call",
-        config: {
-          service: "brand",
-          method: "POST",
-          path: "/icp-suggestion",
-          body: { appId: APP_ID },
-        },
-        inputMapping: {
-          "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
-          "body.url": "$ref:flow_input.brandUrl",
-          "body.clerkUserId": "$ref:flow_input.clerkUserId",
-          "body.targetAudience": "$ref:flow_input.targetAudience",
-        },
-      },
-      {
-        id: "search-leads",
-        type: "http.call",
-        config: {
-          service: "apollo",
-          method: "POST",
-          path: "/search",
-          body: { appId: APP_ID, perPage: 25 },
-        },
-        inputMapping: {
-          "headers.x-clerk-org-id": "$ref:flow_input.clerkOrgId",
-          "body.brandId": "$ref:flow_input.brandId",
-          "body.campaignId": "$ref:flow_input.campaignId",
-          "body.runId": "$ref:flow_input.runId",
-          "body.personTitles": "$ref:suggest-icp.output.suggestion.personTitles",
-          "body.qOrganizationKeywordTags": "$ref:suggest-icp.output.suggestion.qOrganizationKeywordTags",
-          "body.organizationLocations": "$ref:suggest-icp.output.suggestion.organizationLocations",
-        },
-      },
-      {
-        id: "process-leads",
-        type: "for-each",
-        config: {
-          iterator: "$ref:search-leads.output.people",
-          skipFailures: true,
-          dag: {
-            nodes: [
-              {
-                id: "enrich-lead",
-                type: "http.call",
-                config: {
-                  service: "apollo",
-                  method: "POST",
-                  path: "/enrich",
-                  body: { appId: APP_ID },
-                },
-                inputMapping: {
-                  "headers.x-clerk-org-id": "$ref:flow_input.clerkOrgId",
-                  "body.apolloPersonId": "$ref:item.id",
-                  "body.brandId": "$ref:flow_input.brandId",
-                  "body.campaignId": "$ref:flow_input.campaignId",
-                  "body.runId": "$ref:flow_input.runId",
-                },
-              },
-              {
-                id: "generate-email",
-                type: "http.call",
-                config: {
-                  service: "emailgeneration",
-                  method: "POST",
-                  path: "/generate",
-                  body: { appId: APP_ID, type: "cold-email" },
-                },
-                inputMapping: {
-                  "headers.x-clerk-org-id": "$ref:flow_input.clerkOrgId",
-                  "body.runId": "$ref:flow_input.runId",
-                  "body.brandId": "$ref:flow_input.brandId",
-                  "body.campaignId": "$ref:flow_input.campaignId",
-                  "body.apolloEnrichmentId": "$ref:enrich-lead.output.enrichmentId",
-                  "body.variables.recipientInfo": "$ref:enrich-lead.output.person",
-                  "body.variables.senderInfo": "$ref:flow_input.senderInfo",
-                },
-              },
-              {
-                id: "send-email",
-                type: "http.call",
-                config: {
-                  service: "email-gateway",
-                  method: "POST",
-                  path: "/send",
-                  body: { type: "broadcast", appId: APP_ID },
-                },
-                inputMapping: {
-                  "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
-                  "body.brandId": "$ref:flow_input.brandId",
-                  "body.campaignId": "$ref:flow_input.campaignId",
-                  "body.runId": "$ref:flow_input.runId",
-                  "body.to": "$ref:enrich-lead.output.person.email",
-                  "body.recipientFirstName": "$ref:enrich-lead.output.person.firstName",
-                  "body.recipientLastName": "$ref:enrich-lead.output.person.lastName",
-                  "body.recipientCompany": "$ref:enrich-lead.output.person.organizationName",
-                  "body.subject": "$ref:generate-email.output.subject",
-                  "body.htmlBody": "$ref:generate-email.output.bodyHtml",
-                  "body.textBody": "$ref:generate-email.output.bodyText",
-                },
-              },
-            ],
-            edges: [
-              { from: "enrich-lead", to: "generate-email" },
-              { from: "generate-email", to: "send-email" },
-            ],
+          path: "/send",
+          retries: 0,
+          body: {
+            type: "broadcast",
+            tag: "cold-email",
+            metadata: {
+              source: "mcpfactory-campaign-service",
+            },
           },
+          // Validate that gateway returns success: true (HTTP 200 with success: false is an error)
+          validateResponse: { field: "success", equals: true },
+        },
+        inputMapping: {
+          "body.appId": "$ref:start-run.output.appId",
+          "body.clerkOrgId": "$ref:start-run.output.clerkOrgId",
+          "body.brandId": "$ref:start-run.output.brandId",
+          "body.campaignId": "$ref:start-run.output.campaignId",
+          "body.runId": "$ref:start-run.output.runId",
+          "body.to": "$ref:start-run.output.lead.data.email",
+          "body.recipientFirstName": "$ref:start-run.output.lead.data.first_name",
+          "body.recipientLastName": "$ref:start-run.output.lead.data.last_name",
+          "body.recipientCompany": "$ref:start-run.output.lead.data.organization_name",
+          "body.subject": "$ref:email-generate.output.subject",
+          "body.htmlBody": "$ref:email-generate.output.bodyHtml",
+          "body.metadata.emailGenerationId": "$ref:email-generate.output.id",
+        },
+      },
+      // Step 7: Finalize run + re-trigger
+      {
+        id: "end-run",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/internal/end-run",
+          body: {
+            success: true,
+          },
+        },
+        inputMapping: {
+          "body.runId": "$ref:start-run.output.runId",
+          "body.campaignId": "$ref:start-run.output.campaignId",
+          "body.clerkOrgId": "$ref:start-run.output.clerkOrgId",
         },
       },
     ],
     edges: [
-      { from: "register-prompt", to: "extract-brand" },
-      { from: "extract-brand", to: "suggest-icp" },
-      { from: "suggest-icp", to: "search-leads" },
-      { from: "search-leads", to: "process-leads" },
+      { from: "start-run", to: "email-generate" },
+      { from: "email-generate", to: "email-send" },
+      { from: "email-send", to: "end-run" },
     ],
+    // Error handler: call end-run with success=false when any node fails.
+    onError: "end-run",
   };
 }
 
@@ -218,7 +234,7 @@ export async function deployWorkflows(): Promise<void> {
       workflows: [
         {
           name: "cold-email-outreach",
-          description: "Full cold email pipeline: prompt → brand → ICP → leads → enrich → generate → send",
+          description: "Cold email pipeline: gate checks → lead → generate → send → re-trigger (1 lead per run)",
           dag: buildColdEmailDag(),
         },
       ],
@@ -231,23 +247,14 @@ export async function deployWorkflows(): Promise<void> {
     return;
   }
 
-  const data = await res.json();
-  console.log("[Campaign Service] Workflows deployed:", data.workflows?.map((w: { name: string; action: string }) => `${w.name} (${w.action})`).join(", "));
+  const data = await res.json() as { workflows?: Array<{ name: string; action: string }> };
+  console.log("[Campaign Service] Workflows deployed:", data.workflows?.map((w) => `${w.name} (${w.action})`).join(", "));
 }
 
-interface CampaignWorkflowInputs {
-  brandId: string;
-  brandUrl: string;
+export async function executeColdEmailOutreach(inputs: {
   campaignId: string;
   clerkOrgId: string;
-  clerkUserId?: string;
-  targetAudience?: string | null;
-  targetOutcome?: string | null;
-  valueForTarget?: string | null;
-  salesProfile?: unknown;
-}
-
-export async function executeColdEmailOutreach(inputs: CampaignWorkflowInputs): Promise<void> {
+}): Promise<void> {
   const url = process.env.WINDMILL_SERVICE_URL;
   const apiKey = process.env.WINDMILL_SERVICE_API_KEY;
 
@@ -266,14 +273,8 @@ export async function executeColdEmailOutreach(inputs: CampaignWorkflowInputs): 
       appId: APP_ID,
       orgId: inputs.clerkOrgId,
       inputs: {
-        brandId: inputs.brandId,
-        brandUrl: inputs.brandUrl,
         campaignId: inputs.campaignId,
         clerkOrgId: inputs.clerkOrgId,
-        clerkUserId: inputs.clerkUserId,
-        targetAudience: inputs.targetAudience ?? "",
-        targetOutcome: inputs.targetOutcome ?? "",
-        valueForTarget: inputs.valueForTarget ?? "",
       },
     }),
   });
@@ -284,7 +285,7 @@ export async function executeColdEmailOutreach(inputs: CampaignWorkflowInputs): 
     return;
   }
 
-  const data = await res.json();
+  const data = await res.json() as { id?: string; status?: string };
   console.log(`[Campaign Service] Cold email workflow started: run=${data.id}, status=${data.status}`);
 }
 

@@ -44,13 +44,17 @@ export async function insertTestCampaign(
   data: {
     name?: string;
     status?: string;
+    brandUrl?: string;
+    brandId?: string;
+    appId?: string;
     maxBudgetDailyUsd?: string;
+    maxBudgetWeeklyUsd?: string;
+    maxBudgetMonthlyUsd?: string;
     maxBudgetTotalUsd?: string;
+    maxLeads?: number;
     targetAudience?: string;
     targetOutcome?: string;
     valueForTarget?: string;
-    appId?: string;
-    brandId?: string;
   } = {}
 ) {
   const [campaign] = await db
@@ -59,13 +63,17 @@ export async function insertTestCampaign(
       orgId,
       name: data.name || `Test Campaign ${Date.now()}`,
       status: data.status || "ongoing",
+      brandUrl: data.brandUrl || null,
+      brandId: data.brandId || null,
+      appId: data.appId || null,
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",
-      maxBudgetTotalUsd: data.maxBudgetTotalUsd,
+      maxBudgetWeeklyUsd: data.maxBudgetWeeklyUsd || null,
+      maxBudgetMonthlyUsd: data.maxBudgetMonthlyUsd || null,
+      maxBudgetTotalUsd: data.maxBudgetTotalUsd || null,
+      maxLeads: data.maxLeads || null,
       targetAudience: data.targetAudience || null,
       targetOutcome: data.targetOutcome || null,
       valueForTarget: data.valueForTarget || null,
-      appId: data.appId || null,
-      brandId: data.brandId || null,
     })
     .returning();
   return campaign;
