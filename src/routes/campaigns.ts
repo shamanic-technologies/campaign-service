@@ -7,6 +7,7 @@ import { validateBody } from "../middleware/validate.js";
 import { normalizeUrl, extractDomain } from "../lib/domain.js";
 import { listRuns, getRunsBatch, type Run, type RunWithCosts } from "@mcpfactory/runs-client";
 import { CreateCampaignBody, UpdateCampaignBody, StatsFilterBody, BatchBudgetUsageBody } from "../schemas.js";
+import { executeColdEmailOutreach } from "../lib/workflows.js";
 
 const router = Router();
 
@@ -322,6 +323,22 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       .set(updates)
       .where(eq(campaigns.id, id))
       .returning();
+
+    // Trigger cold email workflow on activation
+    if (req.body.status === "activate" && updated.brandId && updated.brandUrl) {
+      executeColdEmailOutreach({
+        brandId: updated.brandId,
+        brandUrl: updated.brandUrl,
+        campaignId: updated.id,
+        clerkOrgId: req.clerkOrgId!,
+        clerkUserId: req.clerkUserId,
+        targetAudience: updated.targetAudience,
+        targetOutcome: updated.targetOutcome,
+        valueForTarget: updated.valueForTarget,
+      }).catch((err) => {
+        console.error(`[Campaign Service] Failed to trigger workflow for campaign ${id}:`, err);
+      });
+    }
 
     res.json({ campaign: updated });
   } catch (error) {
