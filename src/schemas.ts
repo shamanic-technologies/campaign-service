@@ -14,6 +14,7 @@ export const CampaignSchema = z.object({
   orgId: z.string().uuid(),
   createdByUserId: z.string().uuid().nullable(),
   name: z.string(),
+  type: z.string(),
   brandUrl: z.string().nullable(),
   brandId: z.string().uuid().nullable(),
   appId: z.string().nullable(),
@@ -40,6 +41,7 @@ export const CampaignSchema = z.object({
 
 export const CreateCampaignBody = z.object({
   name: z.string().min(1, "Campaign name is required"),
+  type: z.string().min(1, "type is required"),
   clerkOrgId: z.string().min(1, "clerkOrgId is required"),
   brandUrl: z.string().min(1, "brandUrl is required"),
   brandId: z.string().uuid("brandId must be a valid UUID"),

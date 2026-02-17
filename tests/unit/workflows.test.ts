@@ -183,15 +183,15 @@ describe("Workflow module", () => {
     });
   });
 
-  describe("executeColdEmailOutreach", () => {
-    it("should call POST /workflows/by-name/cold-email-outreach/execute with campaignId and clerkOrgId", async () => {
+  describe("executeCampaignWorkflow", () => {
+    it("should call POST /workflows/by-name/{type}/execute with type, campaignId, and clerkOrgId", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ id: "run-123", status: "queued" }),
       });
 
-      const { executeColdEmailOutreach } = await import("../../src/lib/workflows.js");
-      await executeColdEmailOutreach({
+      const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
+      await executeCampaignWorkflow("cold-email-outreach", {
         campaignId: "campaign-1",
         clerkOrgId: "org_test",
       });
@@ -210,6 +210,22 @@ describe("Workflow module", () => {
       });
     });
 
+    it("should use type parameter in workflow URL", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "run-456", status: "queued" }),
+      });
+
+      const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
+      await executeCampaignWorkflow("journalist-pitch", {
+        campaignId: "campaign-2",
+        clerkOrgId: "org_test",
+      });
+
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://windmill.test.local/workflows/by-name/journalist-pitch/execute");
+    });
+
     it("should not throw when execution fails", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -217,9 +233,9 @@ describe("Workflow module", () => {
         text: async () => "Workflow not found",
       });
 
-      const { executeColdEmailOutreach } = await import("../../src/lib/workflows.js");
+      const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
       await expect(
-        executeColdEmailOutreach({
+        executeCampaignWorkflow("cold-email-outreach", {
           campaignId: "campaign-1",
           clerkOrgId: "org_test",
         })

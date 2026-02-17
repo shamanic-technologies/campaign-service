@@ -29,7 +29,7 @@ vi.mock("@mcpfactory/runs-client", () => ({
 }));
 
 vi.mock("../../src/lib/workflows.js", () => ({
-  executeColdEmailOutreach: mockExecute,
+  executeCampaignWorkflow: mockExecute,
   deployWorkflows: vi.fn(),
   COLD_EMAIL_PROMPT: "test prompt {{leadFirstName}}",
   COLD_EMAIL_VARIABLES: ["leadFirstName"],
@@ -358,10 +358,13 @@ describe("Internal routes", () => {
       // Wait for async re-trigger
       await new Promise((r) => setTimeout(r, 100));
 
-      expect(mockExecute).toHaveBeenCalledWith({
-        campaignId: campaign.id,
-        clerkOrgId: org.clerkOrgId,
-      });
+      expect(mockExecute).toHaveBeenCalledWith(
+        "cold-email-outreach",
+        {
+          campaignId: campaign.id,
+          clerkOrgId: org.clerkOrgId,
+        },
+      );
     });
 
     it("should NOT re-trigger if campaign is stopped", async () => {

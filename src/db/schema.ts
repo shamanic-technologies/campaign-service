@@ -40,7 +40,10 @@ export const campaigns = pgTable(
       .references(() => users.id),  // Optional - MCP calls don't have user context
     
     name: text("name").notNull(),
-    
+
+    // Campaign type — determines which Windmill DAG to execute
+    type: text("type").notNull().default("cold-email-outreach"),
+
     // Brand URL - used to identify which brand this campaign promotes
     brandUrl: text("brand_url"),
     

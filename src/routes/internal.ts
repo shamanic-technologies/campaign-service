@@ -5,7 +5,7 @@ import { campaigns, orgs } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { createRun, updateRun } from "@mcpfactory/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
-import { executeColdEmailOutreach } from "../lib/workflows.js";
+import { executeCampaignWorkflow } from "../lib/workflows.js";
 import { extractDomain } from "../lib/domain.js";
 
 const router = Router();
@@ -270,7 +270,7 @@ router.post("/internal/end-run", requireApiKey, async (req, res) => {
       if (campaign?.status !== "ongoing") return;
 
       // Fire-and-forget: start-run in the next workflow execution will do gate checks
-      executeColdEmailOutreach({ campaignId, clerkOrgId }).catch((err) => {
+      executeCampaignWorkflow(campaign.type, { campaignId, clerkOrgId }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });
     } catch (err) {

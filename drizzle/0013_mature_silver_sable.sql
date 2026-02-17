@@ -1,0 +1,1 @@
+ALTER TABLE "campaigns" ADD COLUMN "type" text DEFAULT 'cold-email-outreach' NOT NULL;
