@@ -47,6 +47,8 @@ export async function insertTestCampaign(
     maxBudgetDailyUsd?: string;
     maxBudgetTotalUsd?: string;
     targetAudience?: string;
+    targetOutcome?: string;
+    valueForTarget?: string;
     appId?: string;
     brandId?: string;
   } = {}
@@ -60,6 +62,8 @@ export async function insertTestCampaign(
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",
       maxBudgetTotalUsd: data.maxBudgetTotalUsd,
       targetAudience: data.targetAudience || null,
+      targetOutcome: data.targetOutcome || null,
+      valueForTarget: data.valueForTarget || null,
       appId: data.appId || null,
       brandId: data.brandId || null,
     })

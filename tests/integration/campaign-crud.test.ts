@@ -21,6 +21,8 @@ describe("Campaign CRUD", () => {
     brandUrl: "https://example.com",
     brandId: crypto.randomUUID(),
     appId: "mcpfactory",
+    targetOutcome: "Book sales demos",
+    valueForTarget: "Access to enterprise analytics at startup pricing",
   };
 
   describe("POST /campaigns", () => {
@@ -111,6 +113,66 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign.targetAudience).toBeNull();
     });
 
+    it("should create a campaign with targetOutcome and valueForTarget", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(201);
+
+      expect(res.body.campaign.targetOutcome).toBe("Book sales demos");
+      expect(res.body.campaign.valueForTarget).toBe("Access to enterprise analytics at startup pricing");
+    });
+
+    it("should reject when targetOutcome is missing", async () => {
+      const { targetOutcome, ...body } = validBody;
+
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send(body)
+        .expect(400);
+
+      expect(res.body.error).toBeDefined();
+    });
+
+    it("should reject when valueForTarget is missing", async () => {
+      const { valueForTarget, ...body } = validBody;
+
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send(body)
+        .expect(400);
+
+      expect(res.body.error).toBeDefined();
+    });
+
+    it("should reject when targetOutcome is empty string", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send({ ...validBody, targetOutcome: "" })
+        .expect(400);
+
+      expect(res.body.error).toBeDefined();
+    });
+
+    it("should reject when valueForTarget is empty string", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send({ ...validBody, valueForTarget: "" })
+        .expect(400);
+
+      expect(res.body.error).toBeDefined();
+    });
+
     it("should reject Apollo fields that no longer exist", async () => {
       const res = await request(app)
         .post("/campaigns")
@@ -146,6 +208,30 @@ describe("Campaign CRUD", () => {
         .expect(200);
 
       expect(updateRes.body.campaign.targetAudience).toBe(newAudience);
+    });
+
+    it("should update targetOutcome and valueForTarget", async () => {
+      const createRes = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(201);
+
+      const campaignId = createRes.body.campaign.id;
+
+      const updateRes = await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send({
+          targetOutcome: "Recruit community ambassadors",
+          valueForTarget: "Early access to beta features",
+        })
+        .expect(200);
+
+      expect(updateRes.body.campaign.targetOutcome).toBe("Recruit community ambassadors");
+      expect(updateRes.body.campaign.valueForTarget).toBe("Early access to beta features");
     });
   });
 });
