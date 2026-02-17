@@ -13,6 +13,7 @@ const openapiPath = join(__dirname, "..", "openapi.json");
 import healthRoutes from "./routes/health.js";
 import campaignsRoutes from "./routes/campaigns.js";
 import runsRoutes from "./routes/runs.js";
+import internalRoutes from "./routes/internal.js";
 import { deployWorkflows } from "./lib/workflows.js";
 const app = express();
 const PORT = process.env.PORT || 3003;
@@ -34,6 +35,7 @@ app.use(express.json());
 app.use(healthRoutes);
 app.use(campaignsRoutes);
 app.use(runsRoutes);
+app.use(internalRoutes);
 
 // OpenAPI spec endpoint
 app.get("/openapi.json", (_req, res) => {
