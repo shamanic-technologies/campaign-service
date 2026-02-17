@@ -54,6 +54,12 @@ export const campaigns = pgTable(
 
     // Free-text target audience description (e.g. "CEOs at SaaS startups in the US")
     targetAudience: text("target_audience"),
+
+    // What the user wants to achieve (e.g. "Book sales demos", "Get press coverage")
+    targetOutcome: text("target_outcome"),
+
+    // What the target audience gains from responding (e.g. "Access to enterprise analytics at startup pricing")
+    valueForTarget: text("value_for_target"),
     
     // Budget limits per campaign (at least one required)
     maxBudgetDailyUsd: decimal("max_budget_daily_usd", { precision: 10, scale: 2 }),
