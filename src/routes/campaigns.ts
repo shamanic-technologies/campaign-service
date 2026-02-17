@@ -7,7 +7,7 @@ import { validateBody } from "../middleware/validate.js";
 import { normalizeUrl, extractDomain } from "../lib/domain.js";
 import { listRuns, getRunsBatch, type Run, type RunWithCosts } from "@mcpfactory/runs-client";
 import { CreateCampaignBody, UpdateCampaignBody, StatsFilterBody, BatchBudgetUsageBody } from "../schemas.js";
-import { executeColdEmailOutreach } from "../lib/workflows.js";
+import { executeCampaignWorkflow } from "../lib/workflows.js";
 
 const router = Router();
 
@@ -23,6 +23,7 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
         id: campaigns.id,
         orgId: campaigns.orgId,
         name: campaigns.name,
+        type: campaigns.type,
         status: campaigns.status,
         targetAudience: campaigns.targetAudience,
         targetOutcome: campaigns.targetOutcome,
@@ -240,6 +241,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
   try {
     const {
       name,
+      type,
       brandUrl,
       brandId,
       appId,
@@ -267,6 +269,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         orgId: req.orgId!,
         createdByUserId: req.userId ?? null,
         name,
+        type,
         appId,
         brandUrl: normalizedBrandUrl,
         brandId,
@@ -324,9 +327,9 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       .where(eq(campaigns.id, id))
       .returning();
 
-    // Trigger cold email workflow on activation
+    // Trigger workflow on activation, routed by campaign type
     if (req.body.status === "activate") {
-      executeColdEmailOutreach({
+      executeCampaignWorkflow(updated.type, {
         campaignId: updated.id,
         clerkOrgId: req.clerkOrgId!,
       }).catch((err) => {

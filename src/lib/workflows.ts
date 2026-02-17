@@ -251,10 +251,10 @@ export async function deployWorkflows(): Promise<void> {
   console.log("[Campaign Service] Workflows deployed:", data.workflows?.map((w) => `${w.name} (${w.action})`).join(", "));
 }
 
-export async function executeColdEmailOutreach(inputs: {
-  campaignId: string;
-  clerkOrgId: string;
-}): Promise<void> {
+export async function executeCampaignWorkflow(
+  type: string,
+  inputs: { campaignId: string; clerkOrgId: string },
+): Promise<void> {
   const url = process.env.WINDMILL_SERVICE_URL;
   const apiKey = process.env.WINDMILL_SERVICE_API_KEY;
 
@@ -263,7 +263,7 @@ export async function executeColdEmailOutreach(inputs: {
     return;
   }
 
-  const res = await fetch(`${url}/workflows/by-name/cold-email-outreach/execute`, {
+  const res = await fetch(`${url}/workflows/by-name/${type}/execute`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -286,7 +286,7 @@ export async function executeColdEmailOutreach(inputs: {
   }
 
   const data = await res.json() as { id?: string; status?: string };
-  console.log(`[Campaign Service] Cold email workflow started: run=${data.id}, status=${data.status}`);
+  console.log(`[Campaign Service] Workflow ${type} started: run=${data.id}, status=${data.status}`);
 }
 
 export { buildColdEmailDag };

@@ -43,6 +43,7 @@ export async function insertTestCampaign(
   orgId: string,
   data: {
     name?: string;
+    type?: string;
     status?: string;
     brandUrl?: string;
     brandId?: string;
@@ -62,6 +63,7 @@ export async function insertTestCampaign(
     .values({
       orgId,
       name: data.name || `Test Campaign ${Date.now()}`,
+      type: data.type || "cold-email-outreach",
       status: data.status || "ongoing",
       brandUrl: data.brandUrl || null,
       brandId: data.brandId || null,

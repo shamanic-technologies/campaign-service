@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 
-const { mockExecuteColdEmailOutreach } = vi.hoisted(() => ({
-  mockExecuteColdEmailOutreach: vi.fn(),
+const { mockExecuteCampaignWorkflow } = vi.hoisted(() => ({
+  mockExecuteCampaignWorkflow: vi.fn(),
 }));
 
 vi.mock("../../src/lib/workflows.js", () => ({
-  executeColdEmailOutreach: mockExecuteColdEmailOutreach,
+  executeCampaignWorkflow: mockExecuteCampaignWorkflow,
   deployWorkflows: vi.fn(),
   COLD_EMAIL_PROMPT: "test prompt",
   COLD_EMAIL_VARIABLES: ["leadFirstName"],
@@ -32,6 +32,7 @@ const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
 const validBody = {
   name: "Activation Test Campaign",
+  type: "cold-email-outreach",
   clerkOrgId: "org_activation_test",
   brandUrl: "https://example.com",
   brandId: crypto.randomUUID(),
@@ -45,7 +46,7 @@ describe("Workflow activation on PATCH", () => {
   beforeEach(async () => {
     await cleanTestData();
     vi.clearAllMocks();
-    mockExecuteColdEmailOutreach.mockResolvedValue(undefined);
+    mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
   });
 
   afterAll(async () => {
@@ -73,7 +74,7 @@ describe("Workflow activation on PATCH", () => {
       .expect(200);
 
     vi.clearAllMocks();
-    mockExecuteColdEmailOutreach.mockResolvedValue(undefined);
+    mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
 
     // Activate
     const activateRes = await request(app)
@@ -88,11 +89,14 @@ describe("Workflow activation on PATCH", () => {
     // Wait a tick for the fire-and-forget promise
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(mockExecuteColdEmailOutreach).toHaveBeenCalledOnce();
-    expect(mockExecuteColdEmailOutreach).toHaveBeenCalledWith({
-      campaignId,
-      clerkOrgId: "org_activation_test",
-    });
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledOnce();
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
+      "cold-email-outreach",
+      {
+        campaignId,
+        clerkOrgId: "org_activation_test",
+      },
+    );
   });
 
   it("should NOT trigger workflow when status is set to stop", async () => {
@@ -114,7 +118,7 @@ describe("Workflow activation on PATCH", () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(mockExecuteColdEmailOutreach).not.toHaveBeenCalled();
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
   });
 
   it("should NOT trigger workflow when updating non-status fields", async () => {
@@ -136,11 +140,11 @@ describe("Workflow activation on PATCH", () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(mockExecuteColdEmailOutreach).not.toHaveBeenCalled();
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
   });
 
   it("should still return 200 even if workflow execution fails", async () => {
-    mockExecuteColdEmailOutreach.mockRejectedValue(new Error("Windmill down"));
+    mockExecuteCampaignWorkflow.mockRejectedValue(new Error("Windmill down"));
 
     const createRes = await request(app)
       .post("/campaigns")

@@ -17,6 +17,7 @@ describe("Campaign CRUD", () => {
 
   const validBody = {
     name: "Test Campaign",
+    type: "cold-email-outreach",
     clerkOrgId: "org_test_crud",
     brandUrl: "https://example.com",
     brandId: crypto.randomUUID(),
@@ -36,8 +37,22 @@ describe("Campaign CRUD", () => {
 
       expect(res.body.campaign).toBeDefined();
       expect(res.body.campaign.name).toBe("Test Campaign");
+      expect(res.body.campaign.type).toBe("cold-email-outreach");
       expect(res.body.campaign.brandId).toBe(validBody.brandId);
       expect(res.body.campaign.appId).toBe("mcpfactory");
+    });
+
+    it("should reject when type is missing", async () => {
+      const { type, ...body } = validBody;
+
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send(body)
+        .expect(400);
+
+      expect(res.body.error).toBeDefined();
     });
 
     it("should reject when brandId is missing", async () => {
