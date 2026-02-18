@@ -195,23 +195,25 @@ describe("Workflow module", () => {
       });
     });
 
-    it("should configure brand-profile node with keyType and correct inputMapping", () => {
+    it("should configure brand-profile node with dynamic keyType from start-run", () => {
       const dag = buildColdEmailDag();
       const brandProfile = dag.nodes.find((n) => n.id === "brand-profile");
-      expect(brandProfile?.config.body).toEqual({ keyType: "byok" });
+      expect(brandProfile?.config.body).toBeUndefined();
       expect(brandProfile?.inputMapping).toEqual({
         "body.appId": "$ref:start-run.output.appId",
         "body.clerkOrgId": "$ref:start-run.output.clerkOrgId",
         "body.url": "$ref:start-run.output.brandUrl",
         "body.clerkUserId": "$ref:start-run.output.clerkUserId",
         "body.parentRunId": "$ref:start-run.output.runId",
+        "body.keyType": "$ref:start-run.output.keySource",
       });
     });
 
-    it("should configure fetch-lead node with keySource: byok in body", () => {
+    it("should configure fetch-lead node with dynamic keySource from start-run", () => {
       const dag = buildColdEmailDag();
       const fetchLead = dag.nodes.find((n) => n.id === "fetch-lead");
-      expect(fetchLead?.config.body).toEqual({ keySource: "byok" });
+      expect(fetchLead?.config.body).toBeUndefined();
+      expect(fetchLead?.inputMapping?.["body.keySource"]).toBe("$ref:start-run.output.keySource");
     });
 
     it("should configure fetch-lead node with custom headers and searchParams", () => {

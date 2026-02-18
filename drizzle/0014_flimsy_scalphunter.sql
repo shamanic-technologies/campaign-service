@@ -1,0 +1,1 @@
+ALTER TABLE "campaigns" ADD COLUMN "key_source" text DEFAULT 'byok' NOT NULL;
