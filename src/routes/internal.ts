@@ -51,12 +51,14 @@ async function ensurePromptRegistered(clerkOrgId: string): Promise<void> {
 /**
  * POST /internal/start-run
  *
- * Performs gate checks, creates a run, fetches campaign + brand profile + next lead.
- * Returns all data needed for the email pipeline, or an error status.
+ * Performs gate checks, creates a run, and returns campaign data
+ * for downstream DAG nodes (brand-profile, fetch-lead, etc.).
+ *
+ * Brand profile and lead fetching are handled by separate DAG nodes,
+ * NOT by this endpoint.
  *
  * Returns:
- *   200 — run started, lead found
- *   204 — no lead found (run created then immediately failed)
+ *   200 — run started, campaign data returned
  *   400 — bad request
  *   404 — campaign/org not found
  *   409 — gate check blocked
@@ -137,129 +139,29 @@ router.post("/internal/start-run", requireApiKey, async (req, res) => {
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);
 
-    // Fetch brand sales profile (best-effort)
+    // Build searchParams from campaign targetAudience so the fetch-lead
+    // DAG node can pass them to lead-service for Apollo auto-fill.
+    const searchParams = campaign.targetAudience
+      ? { qKeywords: campaign.targetAudience }
+      : null;
+
     const brandDomain = extractDomain(campaign.brandUrl);
-    let clientData: Record<string, unknown> = {
-      companyName: brandDomain,
-      brandUrl: campaign.brandUrl,
-    };
 
-    try {
-      const brandUrl = process.env.BRAND_SERVICE_URL;
-      const brandApiKey = process.env.BRAND_SERVICE_API_KEY;
-      if (brandUrl && brandApiKey) {
-        console.log(`[Start Run] Fetching brand profile from ${brandUrl}/sales-profile...`);
-        const profileRes = await fetch(`${brandUrl}/sales-profile`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": brandApiKey,
-          },
-          body: JSON.stringify({
-            appId: campaign.appId || APP_ID,
-            clerkOrgId,
-            url: campaign.brandUrl,
-            clerkUserId: campaign.createdByUserId || "system",
-            keyType: "byok",
-            parentRunId: run.id,
-          }),
-        });
-        if (profileRes.ok) {
-          const profile = await profileRes.json() as Record<string, unknown>;
-          console.log(`[Start Run] Brand profile OK: companyName=${profile.companyName}`);
-          clientData = {
-            companyName: (profile.companyName as string) || brandDomain,
-            brandUrl: campaign.brandUrl,
-            companyOverview: profile.companyOverview,
-            valueProposition: profile.valueProposition,
-            targetAudience: profile.targetAudience,
-            customerPainPoints: Array.isArray(profile.customerPainPoints) && profile.customerPainPoints.length ? profile.customerPainPoints : undefined,
-            keyFeatures: Array.isArray(profile.keyFeatures) && profile.keyFeatures.length ? profile.keyFeatures : undefined,
-            productDifferentiators: Array.isArray(profile.productDifferentiators) && profile.productDifferentiators.length ? profile.productDifferentiators : undefined,
-            competitors: Array.isArray(profile.competitors) && profile.competitors.length ? profile.competitors : undefined,
-            socialProof: profile.socialProof,
-            callToAction: profile.callToAction,
-            additionalContext: profile.additionalContext,
-          };
-        } else {
-          console.warn(`[Start Run] Brand profile failed (${profileRes.status}), using fallback: companyName=${brandDomain}`);
-        }
-      } else {
-        console.warn("[Start Run] BRAND_SERVICE_URL or BRAND_SERVICE_API_KEY not set, using fallback clientData");
-      }
-    } catch (err) {
-      console.warn("[Start Run] Brand profile fetch failed (best-effort):", err);
-    }
+    console.log(`[Start Run] SUCCESS — runId=${run.id}, brandDomain=${brandDomain}, searchParams=${searchParams ? "yes" : "none"}`);
 
-    // Fetch next lead from lead-service (non-idempotent, no retry)
-    const leadServiceUrl = process.env.LEAD_SERVICE_URL;
-    const leadApiKey = process.env.LEAD_SERVICE_API_KEY;
-    if (!leadServiceUrl || !leadApiKey) {
-      console.error("[Start Run] LEAD_SERVICE_URL or LEAD_SERVICE_API_KEY not set — failing run");
-      await updateRun(run.id, "failed");
-      return res.status(500).json({ error: "Lead service not configured" });
-    }
-
-    let lead: { externalId: string; data: Record<string, unknown> } | null = null;
-    try {
-      // Build searchParams from campaign targetAudience so lead-service
-      // can auto-fill from Apollo when the buffer is empty.
-      const searchParams = campaign.targetAudience
-        ? { qKeywords: campaign.targetAudience }
-        : undefined;
-      console.log(`[Start Run] Fetching next lead from ${leadServiceUrl}/buffer/next for campaign ${campaignId} (searchParams=${searchParams ? "yes" : "none"})...`);
-      const leadRes = await fetch(`${leadServiceUrl}/buffer/next`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": leadApiKey,
-          "x-app-id": APP_ID,
-          "x-org-id": clerkOrgId,
-        },
-        body: JSON.stringify({
-          campaignId,
-          brandId: campaign.brandId,
-          parentRunId: run.id,
-          ...(searchParams && { searchParams }),
-        }),
-      });
-
-      if (!leadRes.ok) {
-        throw new Error(`Lead service returned ${leadRes.status}`);
-      }
-
-      const leadData = await leadRes.json() as { found?: boolean; lead?: { externalId: string; data: Record<string, unknown> } };
-      console.log(`[Start Run] Lead response: found=${leadData.found}, hasLead=${!!leadData.lead}, email=${leadData.lead?.data?.email || "none"}`);
-      if (!leadData.found || !leadData.lead || !leadData.lead.data?.email) {
-        // No lead found or no email → fail run immediately
-        console.warn(`[Start Run] No lead available — failing run ${run.id} and returning 204`);
-        await updateRun(run.id, "failed");
-        return res.status(204).send();
-      }
-      lead = leadData.lead;
-    } catch (err) {
-      console.error("[Start Run] Lead fetch failed:", err);
-      await updateRun(run.id, "failed");
-      return res.status(204).send();
-    }
-
-    console.log(`[Start Run] SUCCESS — runId=${run.id}, leadEmail=${lead.data.email}, leadExternalId=${lead.externalId}`);
-
-    // Return all data for the downstream DAG nodes
+    // Return campaign data for downstream DAG nodes
     res.json({
       runId: run.id,
       campaignId,
       clerkOrgId,
       brandId: campaign.brandId,
+      brandUrl: campaign.brandUrl,
+      brandDomain,
       appId: campaign.appId || APP_ID,
       clerkUserId: campaign.createdByUserId,
       targetOutcome: campaign.targetOutcome,
       valueForTarget: campaign.valueForTarget,
-      lead: {
-        externalId: lead.externalId,
-        data: lead.data,
-      },
-      clientData,
+      searchParams,
     });
   } catch (error) {
     console.error("[Start Run] Unhandled error:", error);

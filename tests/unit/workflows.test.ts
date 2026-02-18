@@ -22,24 +22,34 @@ describe("Workflow module", () => {
   });
 
   describe("buildColdEmailDag", () => {
-    it("should produce a valid DAG with nodes and edges", () => {
+    it("should produce a valid DAG with 6 nodes and 6 edges", () => {
       const dag = buildColdEmailDag();
       expect(dag.nodes).toBeDefined();
       expect(dag.edges).toBeDefined();
-      expect(dag.nodes.length).toBe(4);
-      expect(dag.edges.length).toBe(3);
+      expect(dag.nodes.length).toBe(6);
+      expect(dag.edges.length).toBe(6);
     });
 
-    it("should have the correct node sequence: start-run → email-generate → email-send → end-run", () => {
+    it("should have the correct node IDs", () => {
       const dag = buildColdEmailDag();
       const nodeIds = dag.nodes.map((n) => n.id);
-      expect(nodeIds).toEqual(["start-run", "email-generate", "email-send", "end-run"]);
+      expect(nodeIds).toEqual([
+        "start-run",
+        "brand-profile",
+        "fetch-lead",
+        "email-generate",
+        "email-send",
+        "end-run",
+      ]);
     });
 
-    it("should have correct edge ordering", () => {
+    it("should have correct edges with parallel fan-out after start-run", () => {
       const dag = buildColdEmailDag();
       expect(dag.edges).toEqual([
-        { from: "start-run", to: "email-generate" },
+        { from: "start-run", to: "brand-profile" },
+        { from: "start-run", to: "fetch-lead" },
+        { from: "brand-profile", to: "email-generate" },
+        { from: "fetch-lead", to: "email-generate" },
         { from: "email-generate", to: "email-send" },
         { from: "email-send", to: "end-run" },
       ]);
@@ -62,6 +72,8 @@ describe("Workflow module", () => {
         serviceMap[node.id] = node.config.service as string;
       }
       expect(serviceMap["start-run"]).toBe("campaign");
+      expect(serviceMap["brand-profile"]).toBe("brand");
+      expect(serviceMap["fetch-lead"]).toBe("lead");
       expect(serviceMap["email-generate"]).toBe("emailgeneration");
       expect(serviceMap["email-send"]).toBe("email-gateway");
       expect(serviceMap["end-run"]).toBe("campaign");
@@ -69,7 +81,7 @@ describe("Workflow module", () => {
 
     it("should set retries: 0 at top-level on non-idempotent nodes", () => {
       const dag = buildColdEmailDag();
-      const noRetryNodes = ["start-run", "email-generate", "email-send"];
+      const noRetryNodes = ["fetch-lead", "email-generate", "email-send"];
       for (const nodeId of noRetryNodes) {
         const node = dag.nodes.find((n) => n.id === nodeId);
         // retries must be top-level on the node, NOT inside config
@@ -78,11 +90,26 @@ describe("Workflow module", () => {
       }
     });
 
+    it("should NOT set retries: 0 on start-run (idempotent after extracting lead fetch)", () => {
+      const dag = buildColdEmailDag();
+      const startRun = dag.nodes.find((n) => n.id === "start-run");
+      expect(startRun?.retries).toBeUndefined();
+    });
+
     it("should have validateResponse on email-send to catch success: false", () => {
       const dag = buildColdEmailDag();
       const emailSend = dag.nodes.find((n) => n.id === "email-send");
       expect(emailSend?.config.validateResponse).toEqual({
         field: "success",
+        equals: true,
+      });
+    });
+
+    it("should have validateResponse on fetch-lead to catch found: false", () => {
+      const dag = buildColdEmailDag();
+      const fetchLead = dag.nodes.find((n) => n.id === "fetch-lead");
+      expect(fetchLead?.config.validateResponse).toEqual({
+        field: "found",
         equals: true,
       });
     });
@@ -98,34 +125,65 @@ describe("Workflow module", () => {
       expect(endRun?.config.body).toEqual({ success: true });
     });
 
-    it("should map all lead data fields from start-run to email-generate", () => {
+    it("should configure brand-profile node with keyType and correct inputMapping", () => {
+      const dag = buildColdEmailDag();
+      const brandProfile = dag.nodes.find((n) => n.id === "brand-profile");
+      expect(brandProfile?.config.body).toEqual({ keyType: "byok" });
+      expect(brandProfile?.inputMapping).toEqual({
+        "body.appId": "$ref:start-run.output.appId",
+        "body.clerkOrgId": "$ref:start-run.output.clerkOrgId",
+        "body.url": "$ref:start-run.output.brandUrl",
+        "body.clerkUserId": "$ref:start-run.output.clerkUserId",
+        "body.parentRunId": "$ref:start-run.output.runId",
+      });
+    });
+
+    it("should configure fetch-lead node with custom headers and searchParams", () => {
+      const dag = buildColdEmailDag();
+      const fetchLead = dag.nodes.find((n) => n.id === "fetch-lead");
+      const mapping = fetchLead?.inputMapping || {};
+      expect(mapping["headers.x-app-id"]).toBe("$ref:start-run.output.appId");
+      expect(mapping["headers.x-org-id"]).toBe("$ref:start-run.output.clerkOrgId");
+      expect(mapping["body.campaignId"]).toBe("$ref:start-run.output.campaignId");
+      expect(mapping["body.brandId"]).toBe("$ref:start-run.output.brandId");
+      expect(mapping["body.parentRunId"]).toBe("$ref:start-run.output.runId");
+      expect(mapping["body.searchParams"]).toBe("$ref:start-run.output.searchParams");
+    });
+
+    it("should map lead data from fetch-lead and brand data from brand-profile to email-generate", () => {
       const dag = buildColdEmailDag();
       const emailGen = dag.nodes.find((n) => n.id === "email-generate");
       const mapping = emailGen?.inputMapping || {};
 
-      // Lead fields
-      expect(mapping["body.leadFirstName"]).toBe("$ref:start-run.output.lead.data.first_name");
-      expect(mapping["body.leadLastName"]).toBe("$ref:start-run.output.lead.data.last_name");
-      expect(mapping["body.leadEmail"]).toBe("$ref:start-run.output.lead.data.email");
-      expect(mapping["body.leadCompanyName"]).toBe("$ref:start-run.output.lead.data.organization_name");
+      // Lead fields come from fetch-lead
+      expect(mapping["body.leadFirstName"]).toBe("$ref:fetch-lead.output.lead.data.first_name");
+      expect(mapping["body.leadLastName"]).toBe("$ref:fetch-lead.output.lead.data.last_name");
+      expect(mapping["body.leadEmail"]).toBe("$ref:fetch-lead.output.lead.data.email");
+      expect(mapping["body.leadCompanyName"]).toBe("$ref:fetch-lead.output.lead.data.organization_name");
+      expect(mapping["body.apolloEnrichmentId"]).toBe("$ref:fetch-lead.output.lead.externalId");
 
-      // Client fields
-      expect(mapping["body.clientCompanyName"]).toBe("$ref:start-run.output.clientData.companyName");
-      expect(mapping["body.clientBrandUrl"]).toBe("$ref:start-run.output.clientData.brandUrl");
+      // Brand fields come from brand-profile
+      expect(mapping["body.clientCompanyName"]).toBe("$ref:start-run.output.brandDomain");
+      expect(mapping["body.clientBrandUrl"]).toBe("$ref:start-run.output.brandUrl");
+      expect(mapping["body.clientCompanyOverview"]).toBe("$ref:brand-profile.output.profile.companyOverview");
+      expect(mapping["body.clientValueProposition"]).toBe("$ref:brand-profile.output.profile.valueProposition");
 
-      // Campaign fields
+      // Campaign fields from start-run
       expect(mapping["body.targetOutcome"]).toBe("$ref:start-run.output.targetOutcome");
       expect(mapping["body.valueForTarget"]).toBe("$ref:start-run.output.valueForTarget");
     });
 
-    it("should pass email-generate output to email-send", () => {
+    it("should map lead data from fetch-lead to email-send", () => {
       const dag = buildColdEmailDag();
       const emailSend = dag.nodes.find((n) => n.id === "email-send");
       const mapping = emailSend?.inputMapping || {};
 
+      expect(mapping["body.to"]).toBe("$ref:fetch-lead.output.lead.data.email");
+      expect(mapping["body.recipientFirstName"]).toBe("$ref:fetch-lead.output.lead.data.first_name");
+      expect(mapping["body.recipientLastName"]).toBe("$ref:fetch-lead.output.lead.data.last_name");
+      expect(mapping["body.recipientCompany"]).toBe("$ref:fetch-lead.output.lead.data.organization_name");
       expect(mapping["body.subject"]).toBe("$ref:email-generate.output.subject");
       expect(mapping["body.htmlBody"]).toBe("$ref:email-generate.output.bodyHtml");
-      expect(mapping["body.metadata.emailGenerationId"]).toBe("$ref:email-generate.output.id");
     });
 
     it("should use flow_input for start-run inputs", () => {
@@ -158,7 +216,7 @@ describe("Workflow module", () => {
       expect(body.appId).toBe("mcpfactory");
       expect(body.workflows).toHaveLength(1);
       expect(body.workflows[0].name).toBe("cold-email-outreach");
-      expect(body.workflows[0].dag.nodes).toHaveLength(4);
+      expect(body.workflows[0].dag.nodes).toHaveLength(6);
       expect(body.workflows[0].dag.onError).toBe("end-run");
     });
 
