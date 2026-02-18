@@ -161,9 +161,3 @@ export const EndRunBody = z.object({
 export const EndRunResponse = z.object({
   status: z.string(),
 }).openapi("EndRunResponse");
-
-// --- Prepare email vars (DAG node: stringify brand-profile fields) ---
-
-export const PrepareEmailVarsBody = z.record(z.string(), z.unknown()).openapi("PrepareEmailVarsBody");
-
-export const PrepareEmailVarsResponse = z.record(z.string(), z.string()).openapi("PrepareEmailVarsResponse");
