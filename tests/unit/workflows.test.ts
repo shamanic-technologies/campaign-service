@@ -22,30 +22,33 @@ describe("Workflow module", () => {
   });
 
   describe("buildColdEmailDag", () => {
-    it("should produce a valid DAG with 6 nodes and 6 edges", () => {
+    it("should produce a valid DAG with 8 nodes and 7 edges", () => {
       const dag = buildColdEmailDag();
       expect(dag.nodes).toBeDefined();
       expect(dag.edges).toBeDefined();
-      expect(dag.nodes.length).toBe(6);
-      expect(dag.edges.length).toBe(6);
+      expect(dag.nodes.length).toBe(8);
+      expect(dag.edges.length).toBe(7);
     });
 
     it("should have the correct node IDs", () => {
       const dag = buildColdEmailDag();
       const nodeIds = dag.nodes.map((n) => n.id);
       expect(nodeIds).toEqual([
+        "gate-check",
         "start-run",
         "brand-profile",
         "fetch-lead",
         "email-generate",
         "email-send",
         "end-run",
+        "end-run-error",
       ]);
     });
 
-    it("should have correct edges with parallel fan-out after start-run", () => {
+    it("should have correct edges with gate-check first and parallel fan-out after start-run", () => {
       const dag = buildColdEmailDag();
       expect(dag.edges).toEqual([
+        { from: "gate-check", to: "start-run" },
         { from: "start-run", to: "brand-profile" },
         { from: "start-run", to: "fetch-lead" },
         { from: "brand-profile", to: "email-generate" },
@@ -71,17 +74,19 @@ describe("Workflow module", () => {
       for (const node of dag.nodes) {
         serviceMap[node.id] = node.config.service as string;
       }
+      expect(serviceMap["gate-check"]).toBe("campaign");
       expect(serviceMap["start-run"]).toBe("campaign");
       expect(serviceMap["brand-profile"]).toBe("brand");
       expect(serviceMap["fetch-lead"]).toBe("lead");
       expect(serviceMap["email-generate"]).toBe("emailgeneration");
       expect(serviceMap["email-send"]).toBe("email-gateway");
       expect(serviceMap["end-run"]).toBe("campaign");
+      expect(serviceMap["end-run-error"]).toBe("campaign");
     });
 
-    it("should set retries: 0 at top-level on non-idempotent nodes", () => {
+    it("should set retries: 0 at top-level on non-retryable nodes", () => {
       const dag = buildColdEmailDag();
-      const noRetryNodes = ["fetch-lead", "email-generate", "email-send"];
+      const noRetryNodes = ["gate-check", "fetch-lead", "email-generate", "email-send"];
       for (const nodeId of noRetryNodes) {
         const node = dag.nodes.find((n) => n.id === nodeId);
         // retries must be top-level on the node, NOT inside config
@@ -90,10 +95,19 @@ describe("Workflow module", () => {
       }
     });
 
-    it("should NOT set retries: 0 on start-run (idempotent after extracting lead fetch)", () => {
+    it("should NOT set retries: 0 on start-run (idempotent)", () => {
       const dag = buildColdEmailDag();
       const startRun = dag.nodes.find((n) => n.id === "start-run");
       expect(startRun?.retries).toBeUndefined();
+    });
+
+    it("should have validateResponse on gate-check to catch allowed: false", () => {
+      const dag = buildColdEmailDag();
+      const gateCheck = dag.nodes.find((n) => n.id === "gate-check");
+      expect(gateCheck?.config.validateResponse).toEqual({
+        field: "allowed",
+        equals: true,
+      });
     });
 
     it("should have validateResponse on email-send to catch success: false", () => {
@@ -114,15 +128,42 @@ describe("Workflow module", () => {
       });
     });
 
-    it("should have onError handler pointing to end-run", () => {
+    it("should have onError handler pointing to end-run-error (not end-run)", () => {
       const dag = buildColdEmailDag();
-      expect(dag.onError).toBe("end-run");
+      expect(dag.onError).toBe("end-run-error");
     });
 
-    it("should set success: true in end-run body (overridden to false by onError)", () => {
+    it("should set success: true in end-run body and success: false in end-run-error body", () => {
       const dag = buildColdEmailDag();
       const endRun = dag.nodes.find((n) => n.id === "end-run");
+      const endRunError = dag.nodes.find((n) => n.id === "end-run-error");
       expect(endRun?.config.body).toEqual({ success: true });
+      expect(endRunError?.config.body).toEqual({ success: false });
+    });
+
+    it("should use /gate-check path (no /internal prefix)", () => {
+      const dag = buildColdEmailDag();
+      const gateCheck = dag.nodes.find((n) => n.id === "gate-check");
+      expect(gateCheck?.config.path).toBe("/gate-check");
+    });
+
+    it("should use /start-run and /end-run paths (no /internal prefix)", () => {
+      const dag = buildColdEmailDag();
+      const startRun = dag.nodes.find((n) => n.id === "start-run");
+      const endRun = dag.nodes.find((n) => n.id === "end-run");
+      const endRunError = dag.nodes.find((n) => n.id === "end-run-error");
+      expect(startRun?.config.path).toBe("/start-run");
+      expect(endRun?.config.path).toBe("/end-run");
+      expect(endRunError?.config.path).toBe("/end-run");
+    });
+
+    it("should configure gate-check node with flow_input mapping", () => {
+      const dag = buildColdEmailDag();
+      const gateCheck = dag.nodes.find((n) => n.id === "gate-check");
+      expect(gateCheck?.inputMapping).toEqual({
+        "body.campaignId": "$ref:flow_input.campaignId",
+        "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+      });
     });
 
     it("should configure brand-profile node with keyType and correct inputMapping", () => {
@@ -186,10 +227,31 @@ describe("Workflow module", () => {
       expect(mapping["body.htmlBody"]).toBe("$ref:email-generate.output.bodyHtml");
     });
 
-    it("should use flow_input for start-run inputs", () => {
+    it("should use flow_input for gate-check and start-run inputs", () => {
       const dag = buildColdEmailDag();
+      const gateCheck = dag.nodes.find((n) => n.id === "gate-check");
       const startRun = dag.nodes.find((n) => n.id === "start-run");
+      expect(gateCheck?.inputMapping).toEqual({
+        "body.campaignId": "$ref:flow_input.campaignId",
+        "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+      });
       expect(startRun?.inputMapping).toEqual({
+        "body.campaignId": "$ref:flow_input.campaignId",
+        "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+      });
+    });
+
+    it("should use flow_input for end-run and end-run-error (not start-run.output)", () => {
+      const dag = buildColdEmailDag();
+      const endRun = dag.nodes.find((n) => n.id === "end-run");
+      const endRunError = dag.nodes.find((n) => n.id === "end-run-error");
+
+      // Both should use flow_input, NOT $ref:start-run.output
+      expect(endRun?.inputMapping).toEqual({
+        "body.campaignId": "$ref:flow_input.campaignId",
+        "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+      });
+      expect(endRunError?.inputMapping).toEqual({
         "body.campaignId": "$ref:flow_input.campaignId",
         "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
       });
@@ -216,8 +278,8 @@ describe("Workflow module", () => {
       expect(body.appId).toBe("mcpfactory");
       expect(body.workflows).toHaveLength(1);
       expect(body.workflows[0].name).toBe("cold-email-outreach");
-      expect(body.workflows[0].dag.nodes).toHaveLength(6);
-      expect(body.workflows[0].dag.onError).toBe("end-run");
+      expect(body.workflows[0].dag.nodes).toHaveLength(8);
+      expect(body.workflows[0].dag.onError).toBe("end-run-error");
     });
 
     it("should not throw when windmill env vars are missing", async () => {
