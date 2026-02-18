@@ -151,6 +151,7 @@ export const EndRunBody = z.object({
   campaignId: z.string().uuid("campaignId must be a valid UUID"),
   clerkOrgId: z.string().min(1, "clerkOrgId is required"),
   success: z.boolean(),
+  leadFound: z.boolean().optional(),
 }).openapi("EndRunBody");
 
 export const EndRunResponse = z.object({

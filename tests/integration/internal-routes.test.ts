@@ -489,5 +489,75 @@ describe("Pipeline routes", () => {
 
       expect(mockExecute).not.toHaveBeenCalled();
     });
+
+    it("should auto-stop campaign and NOT re-trigger when leadFound is false", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+        status: "ongoing",
+      });
+
+      mockListRuns.mockResolvedValue({
+        runs: [
+          { id: "run-789", status: "running", startedAt: new Date().toISOString() },
+        ],
+      });
+
+      const res = await request(app)
+        .post("/end-run")
+        .set("x-api-key", API_KEY)
+        .send({
+          campaignId: campaign.id,
+          clerkOrgId: org.clerkOrgId,
+          success: true,
+          leadFound: false,
+        })
+        .expect(200);
+
+      expect(res.body.status).toBe("completed");
+      expect(mockUpdateRun).toHaveBeenCalledWith("run-789", "completed");
+
+      // Wait for async auto-stop
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Should NOT re-trigger
+      expect(mockExecute).not.toHaveBeenCalled();
+    });
+
+    it("should re-trigger normally when leadFound is true", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+        status: "ongoing",
+      });
+
+      mockListRuns.mockResolvedValue({
+        runs: [
+          { id: "run-101", status: "running", startedAt: new Date().toISOString() },
+        ],
+      });
+
+      await request(app)
+        .post("/end-run")
+        .set("x-api-key", API_KEY)
+        .send({
+          campaignId: campaign.id,
+          clerkOrgId: org.clerkOrgId,
+          success: true,
+          leadFound: true,
+        })
+        .expect(200);
+
+      // Wait for async re-trigger
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        "cold-email-outreach",
+        {
+          campaignId: campaign.id,
+          clerkOrgId: org.clerkOrgId,
+        },
+      );
+    });
   });
 });
