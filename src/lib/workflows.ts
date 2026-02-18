@@ -6,6 +6,7 @@ export const COLD_EMAIL_PROMPT = `You are an expert sales copywriter. Write a pe
 - Email: {{leadEmail}}
 - LinkedIn: {{leadLinkedinUrl}}
 - Company: {{leadCompanyName}}
+- Company Details: {{leadCompanyOrganization}}
 
 ## Sender / Our Company
 - Company: {{clientCompanyName}}
@@ -57,7 +58,7 @@ SUBJECT: [subject line]
 
 export const COLD_EMAIL_VARIABLES = [
   "leadFirstName", "leadLastName", "leadTitle", "leadEmail",
-  "leadLinkedinUrl", "leadCompanyName",
+  "leadLinkedinUrl", "leadCompanyName", "leadCompanyOrganization",
   "clientCompanyName", "clientBrandUrl", "clientCompanyOverview",
   "clientValueProposition", "clientTargetAudience", "clientCustomerPainPoints",
   "clientKeyFeatures", "clientProductDifferentiators", "clientCompetitors",
@@ -187,6 +188,7 @@ function buildColdEmailDag() {
           "body.leadEmail": "$ref:fetch-lead.output.lead.data.email",
           "body.leadLinkedinUrl": "$ref:fetch-lead.output.lead.data.linkedin_url",
           "body.leadCompanyName": "$ref:fetch-lead.output.lead.data.organization_name",
+          "body.leadCompanyOrganization": "$ref:fetch-lead.output.lead.data.organization",
           // Client/brand fields from brand-profile
           "body.clientCompanyName": "$ref:start-run.output.brandDomain",
           "body.clientBrandUrl": "$ref:start-run.output.brandUrl",
