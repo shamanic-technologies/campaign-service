@@ -143,9 +143,6 @@ function buildColdEmailDag() {
           service: "lead",
           method: "POST",
           path: "/buffer/next",
-          body: {
-            keySource: "byok",
-          },
         },
         inputMapping: {
           "headers.x-app-id": "$ref:start-run.output.appId",
@@ -154,6 +151,7 @@ function buildColdEmailDag() {
           "body.brandId": "$ref:start-run.output.brandId",
           "body.parentRunId": "$ref:start-run.output.runId",
           "body.searchParams": "$ref:start-run.output.searchParams",
+          "body.keySource": "$ref:start-run.output.keySource",
         },
       },
       // Step 3: Condition — branch on found=true/false
@@ -169,9 +167,6 @@ function buildColdEmailDag() {
           service: "brand",
           method: "POST",
           path: "/sales-profile",
-          body: {
-            keyType: "byok",
-          },
         },
         inputMapping: {
           "body.appId": "$ref:start-run.output.appId",
@@ -179,6 +174,7 @@ function buildColdEmailDag() {
           "body.url": "$ref:start-run.output.brandUrl",
           "body.clerkUserId": "$ref:start-run.output.clerkUserId",
           "body.parentRunId": "$ref:start-run.output.runId",
+          "body.keyType": "$ref:start-run.output.keySource",
         },
       },
       // Step 4b: Generate email (non-idempotent, NO RETRY)

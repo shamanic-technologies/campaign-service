@@ -28,6 +28,7 @@ export const CampaignSchema = z.object({
   maxLeads: z.number().int().nullable(),
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),
+  keySource: z.string(),
   status: z.string(),
   toResumeAt: z.string().nullable(),
   notifyFrequency: z.string().nullable(),
@@ -56,6 +57,7 @@ export const CreateCampaignBody = z.object({
   maxLeads: z.number().int().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
+  keySource: z.enum(["byok", "app"]),
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
@@ -76,6 +78,7 @@ export const UpdateCampaignBody = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   status: z.enum(["activate", "stop"]).optional(),
+  keySource: z.enum(["byok", "app"]).optional(),
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
@@ -145,6 +148,7 @@ export const StartRunResponse = z.object({
   targetOutcome: z.string().nullable(),
   valueForTarget: z.string().nullable(),
   searchParams: z.record(z.string(), z.unknown()).nullable(),
+  keySource: z.enum(["byok", "app"]),
 }).openapi("StartRunResponse");
 
 export const EndRunBody = z.object({

@@ -99,6 +99,13 @@
       "when": 1771328408543,
       "tag": "0013_mature_silver_sable",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1771408508723,
+      "tag": "0014_flimsy_scalphunter",
+      "breakpoints": true
     }
   ]
 }

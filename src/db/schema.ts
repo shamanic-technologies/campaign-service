@@ -77,6 +77,9 @@ export const campaigns = pgTable(
     startDate: date("start_date"),
     endDate: date("end_date"),
     
+    // Key source: how downstream services resolve API keys ('byok' = org's own keys, 'app' = platform keys)
+    keySource: text("key_source").notNull().default("byok"),
+
     // Status: 'ongoing' or 'stopped'
     status: text("status").notNull().default("ongoing"),
     toResumeAt: timestamp("to_resume_at", { withTimezone: true }),

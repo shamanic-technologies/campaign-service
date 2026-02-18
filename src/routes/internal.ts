@@ -206,6 +206,7 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       targetOutcome: campaign.targetOutcome,
       valueForTarget: campaign.valueForTarget,
       searchParams,
+      keySource: campaign.keySource,
     });
   } catch (error) {
     console.error("[Start Run] Unhandled error:", error);
