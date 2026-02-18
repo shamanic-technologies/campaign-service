@@ -8,7 +8,7 @@ import { createRun, listRuns, updateRun } from "@mcpfactory/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
 import { executeCampaignWorkflow } from "../lib/workflows.js";
 import { extractDomain } from "../lib/domain.js";
-import { GateCheckBody, StartRunBody, EndRunBody } from "../schemas.js";
+import { GateCheckBody, StartRunBody, EndRunBody, PrepareEmailVarsBody } from "../schemas.js";
 
 const router = Router();
 const APP_ID = "mcpfactory";
@@ -307,5 +307,38 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+/**
+ * POST /prepare-email-vars
+ *
+ * Accepts raw brand-profile fields (which may be strings, arrays, or objects)
+ * and returns all values stringified for use as email template variables.
+ *
+ * Called as a DAG node between brand-profile and email-generate to bridge
+ * the type mismatch: brand-service returns arrays/objects for some fields,
+ * but emailgeneration-service expects Record<string, string>.
+ */
+router.post("/prepare-email-vars", requireApiKey, validateBody(PrepareEmailVarsBody), async (req, res) => {
+  const result: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(req.body as Record<string, unknown>)) {
+    result[key] = stringifyValue(value);
+  }
+
+  res.json(result);
+});
+
+function stringifyValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => (typeof v === "string" ? v : JSON.stringify(v)))
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
 
 export default router;

@@ -354,6 +354,95 @@ describe("Pipeline routes", () => {
     });
   });
 
+  // === POST /prepare-email-vars ===
+
+  describe("POST /prepare-email-vars", () => {
+    it("should pass through string values unchanged", async () => {
+      const res = await request(app)
+        .post("/prepare-email-vars")
+        .set("x-api-key", API_KEY)
+        .send({
+          companyOverview: "A SaaS company",
+          valueProposition: "Save time",
+        })
+        .expect(200);
+
+      expect(res.body.companyOverview).toBe("A SaaS company");
+      expect(res.body.valueProposition).toBe("Save time");
+    });
+
+    it("should join arrays into comma-separated strings", async () => {
+      const res = await request(app)
+        .post("/prepare-email-vars")
+        .set("x-api-key", API_KEY)
+        .send({
+          customerPainPoints: ["slow onboarding", "high churn"],
+          keyFeatures: ["analytics", "automation", "integrations"],
+          competitors: ["Competitor A", "Competitor B"],
+        })
+        .expect(200);
+
+      expect(res.body.customerPainPoints).toBe("slow onboarding, high churn");
+      expect(res.body.keyFeatures).toBe("analytics, automation, integrations");
+      expect(res.body.competitors).toBe("Competitor A, Competitor B");
+    });
+
+    it("should stringify objects to JSON", async () => {
+      const socialProof = {
+        caseStudies: ["Case A"],
+        testimonials: [{ quote: "Great product", name: "Jane" }],
+        results: ["50% faster"],
+      };
+
+      const res = await request(app)
+        .post("/prepare-email-vars")
+        .set("x-api-key", API_KEY)
+        .send({ socialProof })
+        .expect(200);
+
+      expect(res.body.socialProof).toBe(JSON.stringify(socialProof));
+    });
+
+    it("should convert null and undefined to empty strings", async () => {
+      const res = await request(app)
+        .post("/prepare-email-vars")
+        .set("x-api-key", API_KEY)
+        .send({
+          callToAction: null,
+          additionalContext: "some context",
+        })
+        .expect(200);
+
+      expect(res.body.callToAction).toBe("");
+      expect(res.body.additionalContext).toBe("some context");
+    });
+
+    it("should handle mixed types in a single request", async () => {
+      const res = await request(app)
+        .post("/prepare-email-vars")
+        .set("x-api-key", API_KEY)
+        .send({
+          companyOverview: "A company",
+          customerPainPoints: ["pain1", "pain2"],
+          socialProof: { results: ["10x ROI"] },
+          callToAction: null,
+        })
+        .expect(200);
+
+      expect(res.body.companyOverview).toBe("A company");
+      expect(res.body.customerPainPoints).toBe("pain1, pain2");
+      expect(res.body.socialProof).toBe(JSON.stringify({ results: ["10x ROI"] }));
+      expect(res.body.callToAction).toBe("");
+    });
+
+    it("should require API key", async () => {
+      await request(app)
+        .post("/prepare-email-vars")
+        .send({ companyOverview: "test" })
+        .expect(401);
+    });
+  });
+
   // === POST /end-run ===
 
   describe("POST /end-run", () => {

@@ -22,12 +22,12 @@ describe("Workflow module", () => {
   });
 
   describe("buildColdEmailDag", () => {
-    it("should produce a valid DAG with 9 nodes and 7 edges", () => {
+    it("should produce a valid DAG with 10 nodes and 8 edges", () => {
       const dag = buildColdEmailDag();
       expect(dag.nodes).toBeDefined();
       expect(dag.edges).toBeDefined();
-      expect(dag.nodes.length).toBe(9);
-      expect(dag.edges.length).toBe(7);
+      expect(dag.nodes.length).toBe(10);
+      expect(dag.edges.length).toBe(8);
     });
 
     it("should have the correct node IDs", () => {
@@ -39,6 +39,7 @@ describe("Workflow module", () => {
         "fetch-lead",
         "check-lead",
         "brand-profile",
+        "prepare-vars",
         "email-generate",
         "email-send",
         "end-run",
@@ -53,7 +54,8 @@ describe("Workflow module", () => {
         { from: "start-run", to: "fetch-lead" },
         { from: "fetch-lead", to: "check-lead" },
         { from: "check-lead", to: "brand-profile", condition: "results.fetch_lead.found == true" },
-        { from: "brand-profile", to: "email-generate" },
+        { from: "brand-profile", to: "prepare-vars" },
+        { from: "prepare-vars", to: "email-generate" },
         { from: "email-generate", to: "email-send" },
         { from: "check-lead", to: "end-run" },
       ]);
@@ -90,6 +92,7 @@ describe("Workflow module", () => {
       expect(serviceMap["gate-check"]).toBe("campaign");
       expect(serviceMap["start-run"]).toBe("campaign");
       expect(serviceMap["brand-profile"]).toBe("brand");
+      expect(serviceMap["prepare-vars"]).toBe("campaign");
       expect(serviceMap["fetch-lead"]).toBe("lead");
       expect(serviceMap["email-generate"]).toBe("emailgeneration");
       expect(serviceMap["email-send"]).toBe("email-gateway");
@@ -195,6 +198,26 @@ describe("Workflow module", () => {
       });
     });
 
+    it("should configure prepare-vars node to stringify brand-profile fields", () => {
+      const dag = buildColdEmailDag();
+      const prepareVars = dag.nodes.find((n) => n.id === "prepare-vars");
+      expect(prepareVars?.type).toBe("http.call");
+      expect(prepareVars?.config.service).toBe("campaign");
+      expect(prepareVars?.config.path).toBe("/prepare-email-vars");
+      expect(prepareVars?.inputMapping).toEqual({
+        "body.companyOverview": "$ref:brand-profile.output.profile.companyOverview",
+        "body.valueProposition": "$ref:brand-profile.output.profile.valueProposition",
+        "body.targetAudience": "$ref:brand-profile.output.profile.targetAudience",
+        "body.customerPainPoints": "$ref:brand-profile.output.profile.customerPainPoints",
+        "body.keyFeatures": "$ref:brand-profile.output.profile.keyFeatures",
+        "body.productDifferentiators": "$ref:brand-profile.output.profile.productDifferentiators",
+        "body.competitors": "$ref:brand-profile.output.profile.competitors",
+        "body.socialProof": "$ref:brand-profile.output.profile.socialProof",
+        "body.callToAction": "$ref:brand-profile.output.profile.callToAction",
+        "body.additionalContext": "$ref:brand-profile.output.profile.additionalContext",
+      });
+    });
+
     it("should configure brand-profile node with dynamic keyType from start-run", () => {
       const dag = buildColdEmailDag();
       const brandProfile = dag.nodes.find((n) => n.id === "brand-profile");
@@ -247,11 +270,11 @@ describe("Workflow module", () => {
       expect(mapping["body.variables.leadEmail"]).toBe("$ref:fetch-lead.output.lead.data.email");
       expect(mapping["body.variables.leadCompanyName"]).toBe("$ref:fetch-lead.output.lead.data.organizationName");
 
-      // Brand fields from brand-profile — nested under variables
+      // Brand fields from prepare-vars (stringified brand-profile output) — nested under variables
       expect(mapping["body.variables.clientCompanyName"]).toBe("$ref:start-run.output.brandDomain");
       expect(mapping["body.variables.clientBrandUrl"]).toBe("$ref:start-run.output.brandUrl");
-      expect(mapping["body.variables.clientCompanyOverview"]).toBe("$ref:brand-profile.output.profile.companyOverview");
-      expect(mapping["body.variables.clientValueProposition"]).toBe("$ref:brand-profile.output.profile.valueProposition");
+      expect(mapping["body.variables.clientCompanyOverview"]).toBe("$ref:prepare-vars.output.companyOverview");
+      expect(mapping["body.variables.clientValueProposition"]).toBe("$ref:prepare-vars.output.valueProposition");
 
       // Campaign fields from start-run — nested under variables
       expect(mapping["body.variables.targetOutcome"]).toBe("$ref:start-run.output.targetOutcome");
@@ -338,7 +361,7 @@ describe("Workflow module", () => {
       expect(body.appId).toBe("mcpfactory");
       expect(body.workflows).toHaveLength(1);
       expect(body.workflows[0].name).toBe("cold-email-outreach");
-      expect(body.workflows[0].dag.nodes).toHaveLength(9);
+      expect(body.workflows[0].dag.nodes).toHaveLength(10);
       expect(body.workflows[0].dag.onError).toBe("end-run-error");
     });
 
