@@ -57,7 +57,7 @@ export const CreateCampaignBody = z.object({
   maxLeads: z.number().int().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
-  keySource: z.enum(["byok", "app"]),
+  keySource: z.enum(["byok", "app"], { error: "keySource is required and must be \"byok\" or \"app\"" }).openapi({ description: "How downstream services resolve API keys. \"byok\" = org's own keys via key-service, \"app\" = platform keys." }),
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
