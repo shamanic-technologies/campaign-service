@@ -67,12 +67,14 @@ describe("Workflow module", () => {
       expect(serviceMap["end-run"]).toBe("campaign");
     });
 
-    it("should set retries: 0 on non-idempotent nodes", () => {
+    it("should set retries: 0 at top-level on non-idempotent nodes", () => {
       const dag = buildColdEmailDag();
       const noRetryNodes = ["start-run", "email-generate", "email-send"];
       for (const nodeId of noRetryNodes) {
         const node = dag.nodes.find((n) => n.id === nodeId);
-        expect(node?.config.retries).toBe(0);
+        // retries must be top-level on the node, NOT inside config
+        expect(node?.retries).toBe(0);
+        expect(node?.config.retries).toBeUndefined();
       }
     });
 
