@@ -76,31 +76,49 @@ const APP_ID = "mcpfactory";
  * Build the cold-email-outreach DAG.
  *
  * Pipeline:
- *   start-run → brand-profile ↘
- *                                → email-generate → email-send → end-run
- *            → fetch-lead     ↗
+ *   gate-check → start-run → brand-profile ↘
+ *                                            → email-generate → email-send → end-run
+ *                          → fetch-lead    ↗
  *
- * - start-run:      gate checks + create run (campaign-service internal)
+ * - gate-check:     validate budget/volume/status limits (campaign-service)
+ * - start-run:      create run + return campaign data (campaign-service)
  * - brand-profile:  fetch brand sales profile (brand-service)
  * - fetch-lead:     pull next lead from buffer (lead-service, NO RETRY)
  * - email-generate: generate email via AI (emailgeneration-service, NO RETRY)
  * - email-send:     send email (email-gateway-service, NO RETRY, validate success)
- * - end-run:        finalize run + re-trigger (campaign-service internal)
+ * - end-run:        finalize run as completed + re-trigger (campaign-service)
+ * - end-run-error:  finalize run as failed + re-trigger (campaign-service, onError handler)
  *
  * brand-profile and fetch-lead run in parallel after start-run.
- * On DAG error: end-run is called with success=false via onError handler.
+ * On DAG error: end-run-error is called with success=false via onError handler.
  */
 function buildColdEmailDag() {
   return {
     nodes: [
-      // Step 1: Gate checks + create run + return campaign data
+      // Step 0: Validate budget, volume, status limits
+      {
+        id: "gate-check",
+        type: "http.call",
+        retries: 0, // Don't retry budget/volume checks (wasteful, next loop will retry)
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/gate-check",
+          validateResponse: { field: "allowed", equals: true },
+        },
+        inputMapping: {
+          "body.campaignId": "$ref:flow_input.campaignId",
+          "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+        },
+      },
+      // Step 1: Create run + return campaign data
       {
         id: "start-run",
         type: "http.call",
         config: {
           service: "campaign",
           method: "POST",
-          path: "/internal/start-run",
+          path: "/start-run",
         },
         inputMapping: {
           "body.campaignId": "$ref:flow_input.campaignId",
@@ -230,26 +248,43 @@ function buildColdEmailDag() {
           "body.metadata.emailGenerationId": "$ref:email-generate.output.id",
         },
       },
-      // Step 5: Finalize run + re-trigger
+      // Step 5: Finalize run as completed + re-trigger
       {
         id: "end-run",
         type: "http.call",
         config: {
           service: "campaign",
           method: "POST",
-          path: "/internal/end-run",
+          path: "/end-run",
           body: {
             success: true,
           },
         },
         inputMapping: {
-          "body.runId": "$ref:start-run.output.runId",
-          "body.campaignId": "$ref:start-run.output.campaignId",
-          "body.clerkOrgId": "$ref:start-run.output.clerkOrgId",
+          "body.campaignId": "$ref:flow_input.campaignId",
+          "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+        },
+      },
+      // Error handler: finalize run as failed + re-trigger
+      {
+        id: "end-run-error",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/end-run",
+          body: {
+            success: false,
+          },
+        },
+        inputMapping: {
+          "body.campaignId": "$ref:flow_input.campaignId",
+          "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
         },
       },
     ],
     edges: [
+      { from: "gate-check", to: "start-run" },
       { from: "start-run", to: "brand-profile" },
       { from: "start-run", to: "fetch-lead" },
       { from: "brand-profile", to: "email-generate" },
@@ -257,8 +292,8 @@ function buildColdEmailDag() {
       { from: "email-generate", to: "email-send" },
       { from: "email-send", to: "end-run" },
     ],
-    // Error handler: call end-run with success=false when any node fails.
-    onError: "end-run",
+    // Error handler: call end-run-error with success=false when any node fails.
+    onError: "end-run-error",
   };
 }
 

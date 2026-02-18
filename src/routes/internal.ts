@@ -3,10 +3,12 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, orgs } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
-import { createRun, updateRun } from "@mcpfactory/runs-client";
+import { validateBody } from "../middleware/validate.js";
+import { createRun, listRuns, updateRun } from "@mcpfactory/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
 import { executeCampaignWorkflow } from "../lib/workflows.js";
 import { extractDomain } from "../lib/domain.js";
+import { GateCheckBody, StartRunBody, EndRunBody } from "../schemas.js";
 
 const router = Router();
 const APP_ID = "mcpfactory";
@@ -49,31 +51,91 @@ async function ensurePromptRegistered(clerkOrgId: string): Promise<void> {
 }
 
 /**
- * POST /internal/start-run
+ * POST /gate-check
  *
- * Performs gate checks, creates a run, and returns campaign data
- * for downstream DAG nodes (brand-profile, fetch-lead, etc.).
+ * Checks whether a campaign is allowed to run a new iteration.
+ * Validates budget limits, volume limits, consecutive failures,
+ * and campaign status.
  *
- * Brand profile and lead fetching are handled by separate DAG nodes,
- * NOT by this endpoint.
+ * Called as the first DAG node. Returns { allowed: true } to proceed
+ * or { allowed: false, reason } to stop. Windmill uses validateResponse
+ * to treat allowed=false as a node error → triggers onError handler.
+ *
+ * Returns:
+ *   200 — gate check result (allowed or blocked)
+ *   404 — campaign/org not found
+ *   500 — internal error
+ */
+router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (req, res) => {
+  try {
+    const { campaignId, clerkOrgId } = req.body;
+    console.log(`[Gate Check] Received request: campaignId=${campaignId}, clerkOrgId=${clerkOrgId}`);
+
+    const org = await db.query.orgs.findFirst({
+      where: eq(orgs.clerkOrgId, clerkOrgId),
+    });
+    if (!org) {
+      console.warn(`[Gate Check] Org not found: ${clerkOrgId}`);
+      return res.status(404).json({ error: "Organization not found" });
+    }
+
+    const campaign = await db.query.campaigns.findFirst({
+      where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, org.id)),
+    });
+    if (!campaign) {
+      console.warn(`[Gate Check] Campaign not found: ${campaignId}`);
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    console.log(`[Gate Check] Running checks for campaign ${campaignId} (status=${campaign.status})...`);
+    const result = await runGateChecks({
+      campaignId,
+      clerkOrgId,
+      brandId: campaign.brandId || "",
+      status: campaign.status,
+      maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
+      maxBudgetWeeklyUsd: campaign.maxBudgetWeeklyUsd,
+      maxBudgetMonthlyUsd: campaign.maxBudgetMonthlyUsd,
+      maxBudgetTotalUsd: campaign.maxBudgetTotalUsd,
+      maxLeads: campaign.maxLeads,
+    });
+
+    if (!result.allowed) {
+      console.warn(`[Gate Check] BLOCKED: reason=${result.reason}, autoStopped=${result.autoStopped}`);
+    } else {
+      console.log(`[Gate Check] PASSED for campaign ${campaignId}`);
+    }
+
+    res.json({
+      allowed: result.allowed,
+      ...(result.reason && { reason: result.reason }),
+      ...(result.autoStopped && { autoStopped: result.autoStopped }),
+    });
+  } catch (error) {
+    console.error("[Gate Check] Unhandled error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /start-run
+ *
+ * Creates a run and returns campaign data for downstream DAG nodes
+ * (brand-profile, fetch-lead, etc.).
+ *
+ * Gate checks are handled by the /gate-check DAG node upstream.
  *
  * Returns:
  *   200 — run started, campaign data returned
- *   400 — bad request
+ *   400 — bad request (missing brandUrl/brandId)
  *   404 — campaign/org not found
- *   409 — gate check blocked
  *   500 — internal error
  */
-router.post("/internal/start-run", requireApiKey, async (req, res) => {
+router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req, res) => {
   try {
     const { campaignId, clerkOrgId } = req.body;
     console.log(`[Start Run] Received request: campaignId=${campaignId}, clerkOrgId=${clerkOrgId}`);
-    if (!campaignId || !clerkOrgId) {
-      console.warn("[Start Run] Missing required fields");
-      return res.status(400).json({ error: "campaignId and clerkOrgId are required" });
-    }
 
-    // Look up org + campaign
     const org = await db.query.orgs.findFirst({
       where: eq(orgs.clerkOrgId, clerkOrgId),
     });
@@ -98,29 +160,6 @@ router.post("/internal/start-run", requireApiKey, async (req, res) => {
       console.warn(`[Start Run] Campaign ${campaignId} has no brandId`);
       return res.status(400).json({ error: "Campaign has no brandId" });
     }
-
-    // Gate checks
-    console.log(`[Start Run] Running gate checks for campaign ${campaignId}...`);
-    const gateResult = await runGateChecks({
-      campaignId,
-      clerkOrgId,
-      brandId: campaign.brandId,
-      status: campaign.status,
-      maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
-      maxBudgetWeeklyUsd: campaign.maxBudgetWeeklyUsd,
-      maxBudgetMonthlyUsd: campaign.maxBudgetMonthlyUsd,
-      maxBudgetTotalUsd: campaign.maxBudgetTotalUsd,
-      maxLeads: campaign.maxLeads,
-    });
-    if (!gateResult.allowed) {
-      console.warn(`[Start Run] Gate check BLOCKED: reason=${gateResult.reason}, autoStopped=${gateResult.autoStopped}`);
-      return res.status(409).json({
-        error: "Gate check failed",
-        reason: gateResult.reason,
-        autoStopped: gateResult.autoStopped || false,
-      });
-    }
-    console.log(`[Start Run] Gate checks PASSED for campaign ${campaignId}`);
 
     // Register prompt template (best-effort, cached per org)
     console.log(`[Start Run] Ensuring prompt registered for org ${clerkOrgId} (cached=${promptRegisteredOrgs.has(clerkOrgId)})`);
@@ -175,25 +214,44 @@ router.post("/internal/start-run", requireApiKey, async (req, res) => {
 });
 
 /**
- * POST /internal/end-run
+ * POST /end-run
  *
- * Marks a run as completed or failed, then re-triggers the workflow
- * if the campaign is still ongoing.
+ * Marks the running run as completed or failed, then re-triggers the
+ * workflow if the campaign is still ongoing.
+ *
+ * Does NOT require runId — finds the running run via runs-service.
+ * This lets it handle both the happy path (email-send → end-run) and
+ * the error path (onError → end-run-error) including cases where
+ * no run was created (gate-check blocked).
  */
-router.post("/internal/end-run", requireApiKey, async (req, res) => {
+router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res) => {
   try {
-    const { runId, campaignId, clerkOrgId, success } = req.body;
-    console.log(`[End Run] Received request: runId=${runId}, campaignId=${campaignId}, clerkOrgId=${clerkOrgId}, success=${success}`);
-    if (!runId || !campaignId || !clerkOrgId) {
-      console.warn("[End Run] Missing required fields");
-      return res.status(400).json({ error: "runId, campaignId, and clerkOrgId are required" });
-    }
+    const { campaignId, clerkOrgId, success } = req.body;
+    console.log(`[End Run] Received request: campaignId=${campaignId}, clerkOrgId=${clerkOrgId}, success=${success}`);
 
-    // Determine run status:
-    // success === true → completed; anything else → failed
     const status = success === true ? "completed" : "failed";
-    console.log(`[End Run] Updating run ${runId} to status=${status}`);
-    await updateRun(runId, status);
+
+    // Find and update running runs for this campaign
+    try {
+      const { runs } = await listRuns({
+        clerkOrgId,
+        appId: APP_ID,
+        serviceName: "campaign-service",
+        taskName: campaignId,
+      });
+
+      const runningRuns = runs.filter((r) => r.status === "running");
+      if (runningRuns.length > 0) {
+        for (const run of runningRuns) {
+          console.log(`[End Run] Updating run ${run.id} to status=${status}`);
+          await updateRun(run.id, status);
+        }
+      } else {
+        console.log(`[End Run] No running runs found for campaign ${campaignId} — skipping run update`);
+      }
+    } catch (err) {
+      console.error(`[End Run] Failed to update runs:`, err);
+    }
 
     // Respond immediately, then re-trigger asynchronously
     res.json({ status });
@@ -217,7 +275,7 @@ router.post("/internal/end-run", requireApiKey, async (req, res) => {
         return;
       }
 
-      // Fire-and-forget: start-run in the next workflow execution will do gate checks
+      // Fire-and-forget: gate-check in the next workflow execution will validate limits
       console.log(`[End Run] Re-triggering workflow type=${campaign.type} for campaign ${campaignId}`);
       executeCampaignWorkflow(campaign.type, { campaignId, clerkOrgId }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);

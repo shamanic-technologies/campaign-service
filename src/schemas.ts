@@ -114,3 +114,45 @@ export const BatchBudgetUsageBody = z.object({
 export const RunStatusUpdate = z.object({
   status: z.enum(["completed", "failed"]),
 }).openapi("RunStatusUpdate");
+
+// --- Pipeline endpoints (called by DAG) ---
+
+export const GateCheckBody = z.object({
+  campaignId: z.string().uuid("campaignId must be a valid UUID"),
+  clerkOrgId: z.string().min(1, "clerkOrgId is required"),
+}).openapi("GateCheckBody");
+
+export const GateCheckResponse = z.object({
+  allowed: z.boolean(),
+  reason: z.string().optional(),
+  autoStopped: z.boolean().optional(),
+}).openapi("GateCheckResponse");
+
+export const StartRunBody = z.object({
+  campaignId: z.string().uuid("campaignId must be a valid UUID"),
+  clerkOrgId: z.string().min(1, "clerkOrgId is required"),
+}).openapi("StartRunBody");
+
+export const StartRunResponse = z.object({
+  runId: z.string().uuid(),
+  campaignId: z.string().uuid(),
+  clerkOrgId: z.string(),
+  brandId: z.string().uuid(),
+  brandUrl: z.string(),
+  brandDomain: z.string(),
+  appId: z.string(),
+  clerkUserId: z.string().nullable(),
+  targetOutcome: z.string().nullable(),
+  valueForTarget: z.string().nullable(),
+  searchParams: z.record(z.string(), z.unknown()).nullable(),
+}).openapi("StartRunResponse");
+
+export const EndRunBody = z.object({
+  campaignId: z.string().uuid("campaignId must be a valid UUID"),
+  clerkOrgId: z.string().min(1, "clerkOrgId is required"),
+  success: z.boolean(),
+}).openapi("EndRunBody");
+
+export const EndRunResponse = z.object({
+  status: z.string(),
+}).openapi("EndRunResponse");

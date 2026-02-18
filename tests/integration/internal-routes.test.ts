@@ -47,7 +47,7 @@ import { cleanTestData, closeDb, insertTestOrg, insertTestCampaign } from "../he
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
-describe("Internal routes", () => {
+describe("Pipeline routes", () => {
   let org: { id: string; clerkOrgId: string };
   const brandId = crypto.randomUUID();
 
@@ -73,26 +73,30 @@ describe("Internal routes", () => {
     await closeDb();
   });
 
-  describe("POST /internal/start-run", () => {
-    it("should return 400 if campaignId or clerkOrgId is missing", async () => {
-      await request(app)
-        .post("/internal/start-run")
-        .set("x-api-key", API_KEY)
-        .send({ campaignId: "some-id" })
-        .expect(400);
+  // === POST /gate-check ===
 
+  describe("POST /gate-check", () => {
+    it("should return 400 if campaignId is missing", async () => {
       await request(app)
-        .post("/internal/start-run")
+        .post("/gate-check")
         .set("x-api-key", API_KEY)
         .send({ clerkOrgId: "some-org" })
         .expect(400);
     });
 
+    it("should return 400 if clerkOrgId is missing", async () => {
+      await request(app)
+        .post("/gate-check")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: crypto.randomUUID() })
+        .expect(400);
+    });
+
     it("should return 404 if org not found", async () => {
       const res = await request(app)
-        .post("/internal/start-run")
+        .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: "fake", clerkOrgId: "nonexistent-org" })
+        .send({ campaignId: crypto.randomUUID(), clerkOrgId: "nonexistent-org" })
         .expect(404);
 
       expect(res.body.error).toBe("Organization not found");
@@ -100,7 +104,124 @@ describe("Internal routes", () => {
 
     it("should return 404 if campaign not found", async () => {
       const res = await request(app)
-        .post("/internal/start-run")
+        .post("/gate-check")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: crypto.randomUUID(), clerkOrgId: org.clerkOrgId })
+        .expect(404);
+
+      expect(res.body.error).toBe("Campaign not found");
+    });
+
+    it("should return allowed: true when gate checks pass", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      const res = await request(app)
+        .post("/gate-check")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(res.body.allowed).toBe(true);
+      expect(res.body.reason).toBeUndefined();
+    });
+
+    it("should return allowed: false with reason when gate checks fail", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      mockGateChecks.mockResolvedValue({
+        allowed: false,
+        reason: "daily budget exceeded",
+      });
+
+      const res = await request(app)
+        .post("/gate-check")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(res.body.allowed).toBe(false);
+      expect(res.body.reason).toBe("daily budget exceeded");
+    });
+
+    it("should return autoStopped flag when campaign is auto-stopped", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      mockGateChecks.mockResolvedValue({
+        allowed: false,
+        reason: "Total budget exceeded",
+        autoStopped: true,
+      });
+
+      const res = await request(app)
+        .post("/gate-check")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(res.body.allowed).toBe(false);
+      expect(res.body.autoStopped).toBe(true);
+    });
+
+    it("should pass campaign data to runGateChecks", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+        maxBudgetDailyUsd: "50.00",
+        maxLeads: 100,
+      });
+
+      await request(app)
+        .post("/gate-check")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(mockGateChecks).toHaveBeenCalledWith(
+        expect.objectContaining({
+          campaignId: campaign.id,
+          clerkOrgId: org.clerkOrgId,
+          brandId,
+          status: "ongoing",
+          maxBudgetDailyUsd: "50.00",
+          maxLeads: 100,
+        }),
+      );
+    });
+  });
+
+  // === POST /start-run ===
+
+  describe("POST /start-run", () => {
+    it("should return 400 if campaignId is missing", async () => {
+      await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ clerkOrgId: "some-org" })
+        .expect(400);
+    });
+
+    it("should return 404 if org not found", async () => {
+      const res = await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: crypto.randomUUID(), clerkOrgId: "nonexistent-org" })
+        .expect(404);
+
+      expect(res.body.error).toBe("Organization not found");
+    });
+
+    it("should return 404 if campaign not found", async () => {
+      const res = await request(app)
+        .post("/start-run")
         .set("x-api-key", API_KEY)
         .send({ campaignId: crypto.randomUUID(), clerkOrgId: org.clerkOrgId })
         .expect(404);
@@ -115,7 +236,7 @@ describe("Internal routes", () => {
       });
 
       const res = await request(app)
-        .post("/internal/start-run")
+        .post("/start-run")
         .set("x-api-key", API_KEY)
         .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
         .expect(400);
@@ -130,33 +251,12 @@ describe("Internal routes", () => {
       });
 
       const res = await request(app)
-        .post("/internal/start-run")
+        .post("/start-run")
         .set("x-api-key", API_KEY)
         .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
         .expect(400);
 
       expect(res.body.error).toBe("Campaign has no brandId");
-    });
-
-    it("should return 409 when gate check fails", async () => {
-      const campaign = await insertTestCampaign(org.id, {
-        brandUrl: "https://example.com",
-        brandId,
-      });
-
-      mockGateChecks.mockResolvedValue({
-        allowed: false,
-        reason: "daily budget exceeded",
-      });
-
-      const res = await request(app)
-        .post("/internal/start-run")
-        .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
-        .expect(409);
-
-      expect(res.body.error).toBe("Gate check failed");
-      expect(res.body.reason).toBe("daily budget exceeded");
     });
 
     it("should return 200 with campaign data and runId", async () => {
@@ -169,7 +269,7 @@ describe("Internal routes", () => {
       });
 
       const res = await request(app)
-        .post("/internal/start-run")
+        .post("/start-run")
         .set("x-api-key", API_KEY)
         .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
         .expect(200);
@@ -183,9 +283,6 @@ describe("Internal routes", () => {
       expect(res.body.appId).toBe("mcpfactory");
       expect(res.body.targetOutcome).toBe("Book demos");
       expect(res.body.valueForTarget).toBe("Analytics platform");
-      // No lead or clientData — those are fetched by separate DAG nodes
-      expect(res.body.lead).toBeUndefined();
-      expect(res.body.clientData).toBeUndefined();
     });
 
     it("should pass all user context as unstructured searchParams", async () => {
@@ -198,7 +295,7 @@ describe("Internal routes", () => {
       });
 
       const res = await request(app)
-        .post("/internal/start-run")
+        .post("/start-run")
         .set("x-api-key", API_KEY)
         .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
         .expect(200);
@@ -217,7 +314,7 @@ describe("Internal routes", () => {
       });
 
       const res = await request(app)
-        .post("/internal/start-run")
+        .post("/start-run")
         .set("x-api-key", API_KEY)
         .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
         .expect(200);
@@ -232,7 +329,7 @@ describe("Internal routes", () => {
       });
 
       const res = await request(app)
-        .post("/internal/start-run")
+        .post("/start-run")
         .set("x-api-key", API_KEY)
         .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
         .expect(200);
@@ -240,28 +337,50 @@ describe("Internal routes", () => {
       expect(res.body.brandDomain).toBe("example.com");
       expect(res.body.brandUrl).toBe("https://www.example.com/path");
     });
-  });
 
-  describe("POST /internal/end-run", () => {
-    it("should return 400 if required fields are missing", async () => {
-      await request(app)
-        .post("/internal/end-run")
-        .set("x-api-key", API_KEY)
-        .send({ runId: "run-1", campaignId: "camp-1" })
-        .expect(400);
-    });
-
-    it("should mark run as completed when success is true", async () => {
+    it("should NOT call gate checks (gate check is a separate DAG node)", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",
         brandId,
       });
 
+      await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(mockGateChecks).not.toHaveBeenCalled();
+    });
+  });
+
+  // === POST /end-run ===
+
+  describe("POST /end-run", () => {
+    it("should return 400 if required fields are missing", async () => {
+      await request(app)
+        .post("/end-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: crypto.randomUUID(), clerkOrgId: "org-1" })
+        .expect(400);
+    });
+
+    it("should find and mark running run as completed when success is true", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      mockListRuns.mockResolvedValue({
+        runs: [
+          { id: "run-123", status: "running", startedAt: new Date().toISOString() },
+        ],
+      });
+
       const res = await request(app)
-        .post("/internal/end-run")
+        .post("/end-run")
         .set("x-api-key", API_KEY)
         .send({
-          runId: "run-123",
           campaignId: campaign.id,
           clerkOrgId: org.clerkOrgId,
           success: true,
@@ -272,17 +391,22 @@ describe("Internal routes", () => {
       expect(mockUpdateRun).toHaveBeenCalledWith("run-123", "completed");
     });
 
-    it("should mark run as failed when success is false", async () => {
+    it("should find and mark running run as failed when success is false", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",
         brandId,
       });
 
+      mockListRuns.mockResolvedValue({
+        runs: [
+          { id: "run-456", status: "running", startedAt: new Date().toISOString() },
+        ],
+      });
+
       const res = await request(app)
-        .post("/internal/end-run")
+        .post("/end-run")
         .set("x-api-key", API_KEY)
         .send({
-          runId: "run-456",
           campaignId: campaign.id,
           clerkOrgId: org.clerkOrgId,
           success: false,
@@ -293,6 +417,28 @@ describe("Internal routes", () => {
       expect(mockUpdateRun).toHaveBeenCalledWith("run-456", "failed");
     });
 
+    it("should skip run update when no running runs exist (gate-check blocked)", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      mockListRuns.mockResolvedValue({ runs: [] });
+
+      const res = await request(app)
+        .post("/end-run")
+        .set("x-api-key", API_KEY)
+        .send({
+          campaignId: campaign.id,
+          clerkOrgId: org.clerkOrgId,
+          success: false,
+        })
+        .expect(200);
+
+      expect(res.body.status).toBe("failed");
+      expect(mockUpdateRun).not.toHaveBeenCalled();
+    });
+
     it("should re-trigger workflow if campaign is still ongoing", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",
@@ -301,10 +447,9 @@ describe("Internal routes", () => {
       });
 
       await request(app)
-        .post("/internal/end-run")
+        .post("/end-run")
         .set("x-api-key", API_KEY)
         .send({
-          runId: "run-789",
           campaignId: campaign.id,
           clerkOrgId: org.clerkOrgId,
           success: true,
@@ -331,10 +476,9 @@ describe("Internal routes", () => {
       });
 
       await request(app)
-        .post("/internal/end-run")
+        .post("/end-run")
         .set("x-api-key", API_KEY)
         .send({
-          runId: "run-stopped",
           campaignId: campaign.id,
           clerkOrgId: org.clerkOrgId,
           success: true,
