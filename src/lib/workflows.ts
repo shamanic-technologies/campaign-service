@@ -91,11 +91,11 @@ function buildColdEmailDag() {
       {
         id: "start-run",
         type: "http.call",
+        retries: 0, // Contains non-idempotent lead fetch
         config: {
           service: "campaign",
           method: "POST",
           path: "/internal/start-run",
-          retries: 0, // Contains non-idempotent lead fetch
         },
         inputMapping: {
           "body.campaignId": "$ref:flow_input.campaignId",
@@ -106,11 +106,11 @@ function buildColdEmailDag() {
       {
         id: "email-generate",
         type: "http.call",
+        retries: 0, // Non-idempotent generation
         config: {
           service: "emailgeneration",
           method: "POST",
           path: "/generate",
-          retries: 0,
           body: {
             type: "cold-email",
           },
@@ -155,11 +155,11 @@ function buildColdEmailDag() {
       {
         id: "email-send",
         type: "http.call",
+        retries: 0, // Non-idempotent send
         config: {
           service: "email-gateway",
           method: "POST",
           path: "/send",
-          retries: 0,
           body: {
             type: "broadcast",
             tag: "cold-email",
