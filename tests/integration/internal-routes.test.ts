@@ -39,6 +39,7 @@ vi.mock("../../src/lib/gate-check.js", () => ({
   runGateChecks: mockGateChecks,
 }));
 
+// Mock fetch for prompt registration (ensurePromptRegistered calls fetch)
 vi.stubGlobal("fetch", mockFetch);
 
 import app from "../../src/index.js";
@@ -63,6 +64,8 @@ describe("Internal routes", () => {
     mockGetRunsBatch.mockResolvedValue(new Map());
     mockGateChecks.mockResolvedValue({ allowed: true });
     mockExecute.mockResolvedValue(undefined);
+    // Default: prompt registration succeeds (best-effort, only fetch call in start-run)
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
   });
 
   afterAll(async () => {
@@ -156,76 +159,13 @@ describe("Internal routes", () => {
       expect(res.body.reason).toBe("daily budget exceeded");
     });
 
-    it("should return 204 when no lead is found", async () => {
-      const campaign = await insertTestCampaign(org.id, {
-        brandUrl: "https://example.com",
-        brandId,
-      });
-
-      // Mock prompt registration
-      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
-      // Mock brand profile (skip)
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
-      // Mock lead fetch — no lead found
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ found: false }),
-      });
-
-      await request(app)
-        .post("/internal/start-run")
-        .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
-        .expect(204);
-
-      // Run should be created then immediately failed
-      expect(mockCreateRun).toHaveBeenCalledOnce();
-      expect(mockUpdateRun).toHaveBeenCalledWith("run-123", "failed");
-    });
-
-    it("should return 200 with full pipeline data when lead is found", async () => {
+    it("should return 200 with campaign data and runId", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",
         brandId,
         appId: "mcpfactory",
         targetOutcome: "Book demos",
         valueForTarget: "Analytics platform",
-      });
-
-      // Use URL-based mock to avoid cache ordering issues
-      mockFetch.mockImplementation((url: string) => {
-        if (url.includes("/prompts")) {
-          return Promise.resolve({ ok: true, json: async () => ({}) });
-        }
-        if (url.includes("/sales-profile")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              companyName: "Example Inc",
-              companyOverview: "A great company",
-              valueProposition: "We make things better",
-            }),
-          });
-        }
-        if (url.includes("/buffer/next")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              found: true,
-              lead: {
-                externalId: "lead-ext-1",
-                data: {
-                  first_name: "John",
-                  last_name: "Doe",
-                  title: "CTO",
-                  email: "john@acme.com",
-                  organization_name: "Acme Corp",
-                },
-              },
-            }),
-          });
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
       });
 
       const res = await request(app)
@@ -238,129 +178,21 @@ describe("Internal routes", () => {
       expect(res.body.campaignId).toBe(campaign.id);
       expect(res.body.clerkOrgId).toBe(org.clerkOrgId);
       expect(res.body.brandId).toBe(brandId);
+      expect(res.body.brandUrl).toBe("https://example.com");
+      expect(res.body.brandDomain).toBe("example.com");
+      expect(res.body.appId).toBe("mcpfactory");
       expect(res.body.targetOutcome).toBe("Book demos");
-      expect(res.body.lead.externalId).toBe("lead-ext-1");
-      expect(res.body.lead.data.email).toBe("john@acme.com");
-      expect(res.body.clientData.companyName).toBe("Example Inc");
-      expect(res.body.clientData.companyOverview).toBe("A great company");
+      expect(res.body.valueForTarget).toBe("Analytics platform");
+      // No lead or clientData — those are fetched by separate DAG nodes
+      expect(res.body.lead).toBeUndefined();
+      expect(res.body.clientData).toBeUndefined();
     });
 
-    it("should pass searchParams with targetAudience to lead service", async () => {
+    it("should include searchParams when targetAudience is set", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",
         brandId,
-        appId: "mcpfactory",
         targetAudience: "CTOs at SaaS startups",
-        targetOutcome: "Book demos",
-        valueForTarget: "Analytics",
-      });
-
-      let capturedLeadBody: Record<string, unknown> | null = null;
-
-      mockFetch.mockImplementation((url: string, opts?: { body?: string }) => {
-        if (url.includes("/prompts")) {
-          return Promise.resolve({ ok: true, json: async () => ({}) });
-        }
-        if (url.includes("/sales-profile")) {
-          return Promise.resolve({ ok: false, status: 500 });
-        }
-        if (url.includes("/buffer/next")) {
-          capturedLeadBody = opts?.body ? JSON.parse(opts.body) : null;
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              found: true,
-              lead: {
-                externalId: "lead-ext-sp",
-                data: { first_name: "Test", email: "test@example.com" },
-              },
-            }),
-          });
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-      });
-
-      await request(app)
-        .post("/internal/start-run")
-        .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
-        .expect(200);
-
-      expect(capturedLeadBody).toBeDefined();
-      expect(capturedLeadBody!.searchParams).toEqual({ qKeywords: "CTOs at SaaS startups" });
-    });
-
-    it("should NOT pass searchParams when targetAudience is null", async () => {
-      const campaign = await insertTestCampaign(org.id, {
-        brandUrl: "https://example.com",
-        brandId,
-        appId: "mcpfactory",
-        targetOutcome: "Book demos",
-        valueForTarget: "Analytics",
-      });
-
-      let capturedLeadBody: Record<string, unknown> | null = null;
-
-      mockFetch.mockImplementation((url: string, opts?: { body?: string }) => {
-        if (url.includes("/prompts")) {
-          return Promise.resolve({ ok: true, json: async () => ({}) });
-        }
-        if (url.includes("/sales-profile")) {
-          return Promise.resolve({ ok: false, status: 500 });
-        }
-        if (url.includes("/buffer/next")) {
-          capturedLeadBody = opts?.body ? JSON.parse(opts.body) : null;
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              found: true,
-              lead: {
-                externalId: "lead-ext-no-sp",
-                data: { first_name: "Test", email: "test2@example.com" },
-              },
-            }),
-          });
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-      });
-
-      await request(app)
-        .post("/internal/start-run")
-        .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
-        .expect(200);
-
-      expect(capturedLeadBody).toBeDefined();
-      expect(capturedLeadBody!.searchParams).toBeUndefined();
-    });
-
-    it("should use fallback clientData when brand profile fails", async () => {
-      const campaign = await insertTestCampaign(org.id, {
-        brandUrl: "https://www.example.com",
-        brandId,
-      });
-
-      // Use URL-based mock to avoid cache ordering issues
-      mockFetch.mockImplementation((url: string) => {
-        if (url.includes("/prompts")) {
-          return Promise.resolve({ ok: true, json: async () => ({}) });
-        }
-        if (url.includes("/sales-profile")) {
-          return Promise.resolve({ ok: false, status: 500, text: async () => "error" });
-        }
-        if (url.includes("/buffer/next")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              found: true,
-              lead: {
-                externalId: "lead-ext-2",
-                data: { first_name: "Jane", email: "jane@test.com" },
-              },
-            }),
-          });
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
       });
 
       const res = await request(app)
@@ -369,9 +201,38 @@ describe("Internal routes", () => {
         .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
         .expect(200);
 
-      // Should fall back to domain-based clientData
-      expect(res.body.clientData.companyName).toBe("example.com");
-      expect(res.body.clientData.brandUrl).toBe("https://www.example.com");
+      expect(res.body.searchParams).toEqual({ qKeywords: "CTOs at SaaS startups" });
+    });
+
+    it("should have null searchParams when targetAudience is absent", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      const res = await request(app)
+        .post("/internal/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(res.body.searchParams).toBeNull();
+    });
+
+    it("should extract brandDomain from brandUrl", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://www.example.com/path",
+        brandId,
+      });
+
+      const res = await request(app)
+        .post("/internal/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(res.body.brandDomain).toBe("example.com");
+      expect(res.body.brandUrl).toBe("https://www.example.com/path");
     });
   });
 

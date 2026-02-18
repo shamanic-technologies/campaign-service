@@ -75,23 +75,28 @@ const APP_ID = "mcpfactory";
 /**
  * Build the cold-email-outreach DAG.
  *
- * Pipeline: start-run → email-generate → email-send → end-run
+ * Pipeline:
+ *   start-run → brand-profile ↘
+ *                                → email-generate → email-send → end-run
+ *            → fetch-lead     ↗
  *
- * - start-run: gate checks + create run + campaign/brand/lead fetch (campaign-service internal)
+ * - start-run:      gate checks + create run (campaign-service internal)
+ * - brand-profile:  fetch brand sales profile (brand-service)
+ * - fetch-lead:     pull next lead from buffer (lead-service, NO RETRY)
  * - email-generate: generate email via AI (emailgeneration-service, NO RETRY)
- * - email-send: send email (email-gateway-service, NO RETRY, validate success field)
- * - end-run: finalize run + re-trigger (campaign-service internal)
+ * - email-send:     send email (email-gateway-service, NO RETRY, validate success)
+ * - end-run:        finalize run + re-trigger (campaign-service internal)
  *
+ * brand-profile and fetch-lead run in parallel after start-run.
  * On DAG error: end-run is called with success=false via onError handler.
  */
 function buildColdEmailDag() {
   return {
     nodes: [
-      // Step 1–4: Gate checks + create run + fetch campaign + brand profile + lead
+      // Step 1: Gate checks + create run + return campaign data
       {
         id: "start-run",
         type: "http.call",
-        retries: 0, // Contains non-idempotent lead fetch
         config: {
           service: "campaign",
           method: "POST",
@@ -102,7 +107,47 @@ function buildColdEmailDag() {
           "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
         },
       },
-      // Step 5: Generate email (non-idempotent, NO RETRY)
+      // Step 2a: Fetch brand sales profile (parallel with fetch-lead)
+      {
+        id: "brand-profile",
+        type: "http.call",
+        config: {
+          service: "brand",
+          method: "POST",
+          path: "/sales-profile",
+          body: {
+            keyType: "byok",
+          },
+        },
+        inputMapping: {
+          "body.appId": "$ref:start-run.output.appId",
+          "body.clerkOrgId": "$ref:start-run.output.clerkOrgId",
+          "body.url": "$ref:start-run.output.brandUrl",
+          "body.clerkUserId": "$ref:start-run.output.clerkUserId",
+          "body.parentRunId": "$ref:start-run.output.runId",
+        },
+      },
+      // Step 2b: Pull next lead from buffer (parallel with brand-profile)
+      {
+        id: "fetch-lead",
+        type: "http.call",
+        retries: 0, // Non-idempotent: consumes from buffer
+        config: {
+          service: "lead",
+          method: "POST",
+          path: "/buffer/next",
+          validateResponse: { field: "found", equals: true },
+        },
+        inputMapping: {
+          "headers.x-app-id": "$ref:start-run.output.appId",
+          "headers.x-org-id": "$ref:start-run.output.clerkOrgId",
+          "body.campaignId": "$ref:start-run.output.campaignId",
+          "body.brandId": "$ref:start-run.output.brandId",
+          "body.parentRunId": "$ref:start-run.output.runId",
+          "body.searchParams": "$ref:start-run.output.searchParams",
+        },
+      },
+      // Step 3: Generate email (non-idempotent, NO RETRY)
       {
         id: "email-generate",
         type: "http.call",
@@ -121,37 +166,37 @@ function buildColdEmailDag() {
           "body.brandId": "$ref:start-run.output.brandId",
           "body.campaignId": "$ref:start-run.output.campaignId",
           "body.runId": "$ref:start-run.output.runId",
-          "body.apolloEnrichmentId": "$ref:start-run.output.lead.externalId",
-          // Lead fields
-          "body.leadFirstName": "$ref:start-run.output.lead.data.first_name",
-          "body.leadLastName": "$ref:start-run.output.lead.data.last_name",
-          "body.leadTitle": "$ref:start-run.output.lead.data.title",
-          "body.leadEmail": "$ref:start-run.output.lead.data.email",
-          "body.leadLinkedinUrl": "$ref:start-run.output.lead.data.linkedin_url",
-          "body.leadCompanyName": "$ref:start-run.output.lead.data.organization_name",
-          "body.leadCompanyDomain": "$ref:start-run.output.lead.data.organization.primary_domain",
-          "body.leadCompanyIndustry": "$ref:start-run.output.lead.data.organization.industry",
-          "body.leadCompanySize": "$ref:start-run.output.lead.data.organization.estimated_num_employees",
-          "body.leadCompanyRevenueUsd": "$ref:start-run.output.lead.data.organization.annual_revenue_printed",
-          // Client/brand fields
-          "body.clientCompanyName": "$ref:start-run.output.clientData.companyName",
-          "body.clientBrandUrl": "$ref:start-run.output.clientData.brandUrl",
-          "body.clientCompanyOverview": "$ref:start-run.output.clientData.companyOverview",
-          "body.clientValueProposition": "$ref:start-run.output.clientData.valueProposition",
-          "body.clientTargetAudience": "$ref:start-run.output.clientData.targetAudience",
-          "body.clientCustomerPainPoints": "$ref:start-run.output.clientData.customerPainPoints",
-          "body.clientKeyFeatures": "$ref:start-run.output.clientData.keyFeatures",
-          "body.clientProductDifferentiators": "$ref:start-run.output.clientData.productDifferentiators",
-          "body.clientCompetitors": "$ref:start-run.output.clientData.competitors",
-          "body.clientSocialProof": "$ref:start-run.output.clientData.socialProof",
-          "body.clientCallToAction": "$ref:start-run.output.clientData.callToAction",
-          "body.clientAdditionalContext": "$ref:start-run.output.clientData.additionalContext",
-          // Campaign fields
+          "body.apolloEnrichmentId": "$ref:fetch-lead.output.lead.externalId",
+          // Lead fields from fetch-lead
+          "body.leadFirstName": "$ref:fetch-lead.output.lead.data.first_name",
+          "body.leadLastName": "$ref:fetch-lead.output.lead.data.last_name",
+          "body.leadTitle": "$ref:fetch-lead.output.lead.data.title",
+          "body.leadEmail": "$ref:fetch-lead.output.lead.data.email",
+          "body.leadLinkedinUrl": "$ref:fetch-lead.output.lead.data.linkedin_url",
+          "body.leadCompanyName": "$ref:fetch-lead.output.lead.data.organization_name",
+          "body.leadCompanyDomain": "$ref:fetch-lead.output.lead.data.organization.primary_domain",
+          "body.leadCompanyIndustry": "$ref:fetch-lead.output.lead.data.organization.industry",
+          "body.leadCompanySize": "$ref:fetch-lead.output.lead.data.organization.estimated_num_employees",
+          "body.leadCompanyRevenueUsd": "$ref:fetch-lead.output.lead.data.organization.annual_revenue_printed",
+          // Client/brand fields from brand-profile
+          "body.clientCompanyName": "$ref:start-run.output.brandDomain",
+          "body.clientBrandUrl": "$ref:start-run.output.brandUrl",
+          "body.clientCompanyOverview": "$ref:brand-profile.output.profile.companyOverview",
+          "body.clientValueProposition": "$ref:brand-profile.output.profile.valueProposition",
+          "body.clientTargetAudience": "$ref:brand-profile.output.profile.targetAudience",
+          "body.clientCustomerPainPoints": "$ref:brand-profile.output.profile.customerPainPoints",
+          "body.clientKeyFeatures": "$ref:brand-profile.output.profile.keyFeatures",
+          "body.clientProductDifferentiators": "$ref:brand-profile.output.profile.productDifferentiators",
+          "body.clientCompetitors": "$ref:brand-profile.output.profile.competitors",
+          "body.clientSocialProof": "$ref:brand-profile.output.profile.socialProof",
+          "body.clientCallToAction": "$ref:brand-profile.output.profile.callToAction",
+          "body.clientAdditionalContext": "$ref:brand-profile.output.profile.additionalContext",
+          // Campaign fields from start-run
           "body.targetOutcome": "$ref:start-run.output.targetOutcome",
           "body.valueForTarget": "$ref:start-run.output.valueForTarget",
         },
       },
-      // Step 6: Send email (non-idempotent, NO RETRY)
+      // Step 4: Send email (non-idempotent, NO RETRY)
       {
         id: "email-send",
         type: "http.call",
@@ -176,16 +221,16 @@ function buildColdEmailDag() {
           "body.brandId": "$ref:start-run.output.brandId",
           "body.campaignId": "$ref:start-run.output.campaignId",
           "body.runId": "$ref:start-run.output.runId",
-          "body.to": "$ref:start-run.output.lead.data.email",
-          "body.recipientFirstName": "$ref:start-run.output.lead.data.first_name",
-          "body.recipientLastName": "$ref:start-run.output.lead.data.last_name",
-          "body.recipientCompany": "$ref:start-run.output.lead.data.organization_name",
+          "body.to": "$ref:fetch-lead.output.lead.data.email",
+          "body.recipientFirstName": "$ref:fetch-lead.output.lead.data.first_name",
+          "body.recipientLastName": "$ref:fetch-lead.output.lead.data.last_name",
+          "body.recipientCompany": "$ref:fetch-lead.output.lead.data.organization_name",
           "body.subject": "$ref:email-generate.output.subject",
           "body.htmlBody": "$ref:email-generate.output.bodyHtml",
           "body.metadata.emailGenerationId": "$ref:email-generate.output.id",
         },
       },
-      // Step 7: Finalize run + re-trigger
+      // Step 5: Finalize run + re-trigger
       {
         id: "end-run",
         type: "http.call",
@@ -205,7 +250,10 @@ function buildColdEmailDag() {
       },
     ],
     edges: [
-      { from: "start-run", to: "email-generate" },
+      { from: "start-run", to: "brand-profile" },
+      { from: "start-run", to: "fetch-lead" },
+      { from: "brand-profile", to: "email-generate" },
+      { from: "fetch-lead", to: "email-generate" },
       { from: "email-generate", to: "email-send" },
       { from: "email-send", to: "end-run" },
     ],
