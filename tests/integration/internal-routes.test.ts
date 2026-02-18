@@ -245,6 +245,95 @@ describe("Internal routes", () => {
       expect(res.body.clientData.companyOverview).toBe("A great company");
     });
 
+    it("should pass searchParams with targetAudience to lead service", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+        appId: "mcpfactory",
+        targetAudience: "CTOs at SaaS startups",
+        targetOutcome: "Book demos",
+        valueForTarget: "Analytics",
+      });
+
+      let capturedLeadBody: Record<string, unknown> | null = null;
+
+      mockFetch.mockImplementation((url: string, opts?: { body?: string }) => {
+        if (url.includes("/prompts")) {
+          return Promise.resolve({ ok: true, json: async () => ({}) });
+        }
+        if (url.includes("/sales-profile")) {
+          return Promise.resolve({ ok: false, status: 500 });
+        }
+        if (url.includes("/buffer/next")) {
+          capturedLeadBody = opts?.body ? JSON.parse(opts.body) : null;
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              found: true,
+              lead: {
+                externalId: "lead-ext-sp",
+                data: { first_name: "Test", email: "test@example.com" },
+              },
+            }),
+          });
+        }
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      });
+
+      await request(app)
+        .post("/internal/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(capturedLeadBody).toBeDefined();
+      expect(capturedLeadBody!.searchParams).toEqual({ qKeywords: "CTOs at SaaS startups" });
+    });
+
+    it("should NOT pass searchParams when targetAudience is null", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+        appId: "mcpfactory",
+        targetOutcome: "Book demos",
+        valueForTarget: "Analytics",
+      });
+
+      let capturedLeadBody: Record<string, unknown> | null = null;
+
+      mockFetch.mockImplementation((url: string, opts?: { body?: string }) => {
+        if (url.includes("/prompts")) {
+          return Promise.resolve({ ok: true, json: async () => ({}) });
+        }
+        if (url.includes("/sales-profile")) {
+          return Promise.resolve({ ok: false, status: 500 });
+        }
+        if (url.includes("/buffer/next")) {
+          capturedLeadBody = opts?.body ? JSON.parse(opts.body) : null;
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              found: true,
+              lead: {
+                externalId: "lead-ext-no-sp",
+                data: { first_name: "Test", email: "test2@example.com" },
+              },
+            }),
+          });
+        }
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      });
+
+      await request(app)
+        .post("/internal/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(capturedLeadBody).toBeDefined();
+      expect(capturedLeadBody!.searchParams).toBeUndefined();
+    });
+
     it("should use fallback clientData when brand profile fails", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://www.example.com",
