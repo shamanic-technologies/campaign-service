@@ -196,11 +196,11 @@ describe("Workflow module", () => {
       const emailGen = dag.nodes.find((n) => n.id === "email-generate");
       const mapping = emailGen?.inputMapping || {};
 
-      // Lead fields come from fetch-lead
-      expect(mapping["body.leadFirstName"]).toBe("$ref:fetch-lead.output.lead.data.first_name");
-      expect(mapping["body.leadLastName"]).toBe("$ref:fetch-lead.output.lead.data.last_name");
+      // Lead fields come from fetch-lead (flat camelCase per Apollo spec)
+      expect(mapping["body.leadFirstName"]).toBe("$ref:fetch-lead.output.lead.data.firstName");
+      expect(mapping["body.leadLastName"]).toBe("$ref:fetch-lead.output.lead.data.lastName");
       expect(mapping["body.leadEmail"]).toBe("$ref:fetch-lead.output.lead.data.email");
-      expect(mapping["body.leadCompanyName"]).toBe("$ref:fetch-lead.output.lead.data.organization_name");
+      expect(mapping["body.leadCompanyName"]).toBe("$ref:fetch-lead.output.lead.data.organizationName");
       expect(mapping["body.apolloEnrichmentId"]).toBe("$ref:fetch-lead.output.lead.externalId");
 
       // Brand fields come from brand-profile
@@ -220,9 +220,9 @@ describe("Workflow module", () => {
       const mapping = emailSend?.inputMapping || {};
 
       expect(mapping["body.to"]).toBe("$ref:fetch-lead.output.lead.data.email");
-      expect(mapping["body.recipientFirstName"]).toBe("$ref:fetch-lead.output.lead.data.first_name");
-      expect(mapping["body.recipientLastName"]).toBe("$ref:fetch-lead.output.lead.data.last_name");
-      expect(mapping["body.recipientCompany"]).toBe("$ref:fetch-lead.output.lead.data.organization_name");
+      expect(mapping["body.recipientFirstName"]).toBe("$ref:fetch-lead.output.lead.data.firstName");
+      expect(mapping["body.recipientLastName"]).toBe("$ref:fetch-lead.output.lead.data.lastName");
+      expect(mapping["body.recipientCompany"]).toBe("$ref:fetch-lead.output.lead.data.organizationName");
       expect(mapping["body.subject"]).toBe("$ref:email-generate.output.subject");
       expect(mapping["body.htmlBody"]).toBe("$ref:email-generate.output.bodyHtml");
     });
