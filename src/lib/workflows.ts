@@ -81,8 +81,6 @@ const APP_ID = "mcpfactory";
  *                                           ↓                   │
  *                                     brand-profile             │
  *                                           ↓                   │
- *                                     prepare-vars              │
- *                                           ↓                   │
  *                                     email-generate            │
  *                                           ↓                   │
  *                                     email-send                │
@@ -94,7 +92,6 @@ const APP_ID = "mcpfactory";
  * - fetch-lead:     pull next lead from buffer (lead-service, NO RETRY)
  * - check-lead:     condition node — branches on found=true/false
  * - brand-profile:  fetch brand sales profile (brand-service, only when lead found)
- * - prepare-vars:   stringify brand-profile arrays/objects → flat strings (campaign-service)
  * - email-generate: generate email via AI (emailgeneration-service, NO RETRY)
  * - email-send:     send email (email-gateway-service, NO RETRY, validate success)
  * - end-run:        finalize run (always called, receives leadFound flag)
@@ -180,30 +177,7 @@ function buildColdEmailDag() {
           "body.keyType": "$ref:start-run.output.keySource",
         },
       },
-      // Step 4b: Stringify brand-profile fields for email template variables
-      // Brand-service returns arrays/objects; emailgeneration expects Record<string, string>
-      {
-        id: "prepare-vars",
-        type: "http.call",
-        config: {
-          service: "campaign",
-          method: "POST",
-          path: "/prepare-email-vars",
-        },
-        inputMapping: {
-          "body.companyOverview": "$ref:brand-profile.output.profile.companyOverview",
-          "body.valueProposition": "$ref:brand-profile.output.profile.valueProposition",
-          "body.targetAudience": "$ref:brand-profile.output.profile.targetAudience",
-          "body.customerPainPoints": "$ref:brand-profile.output.profile.customerPainPoints",
-          "body.keyFeatures": "$ref:brand-profile.output.profile.keyFeatures",
-          "body.productDifferentiators": "$ref:brand-profile.output.profile.productDifferentiators",
-          "body.competitors": "$ref:brand-profile.output.profile.competitors",
-          "body.socialProof": "$ref:brand-profile.output.profile.socialProof",
-          "body.callToAction": "$ref:brand-profile.output.profile.callToAction",
-          "body.additionalContext": "$ref:brand-profile.output.profile.additionalContext",
-        },
-      },
-      // Step 4c: Generate email (non-idempotent, NO RETRY)
+      // Step 4b: Generate email (non-idempotent, NO RETRY)
       {
         id: "email-generate",
         type: "http.call",
@@ -236,19 +210,19 @@ function buildColdEmailDag() {
           "body.variables.leadCompanyIndustry": "$ref:fetch-lead.output.lead.data.organizationIndustry",
           "body.variables.leadCompanySize": "$ref:fetch-lead.output.lead.data.organizationSize",
           "body.variables.leadCompanyRevenueUsd": "$ref:fetch-lead.output.lead.data.organizationRevenueUsd",
-          // Client/brand fields from prepare-vars (stringified brand-profile output)
+          // Client/brand fields from brand-profile
           "body.variables.clientCompanyName": "$ref:start-run.output.brandDomain",
           "body.variables.clientBrandUrl": "$ref:start-run.output.brandUrl",
-          "body.variables.clientCompanyOverview": "$ref:prepare-vars.output.companyOverview",
-          "body.variables.clientValueProposition": "$ref:prepare-vars.output.valueProposition",
-          "body.variables.clientTargetAudience": "$ref:prepare-vars.output.targetAudience",
-          "body.variables.clientCustomerPainPoints": "$ref:prepare-vars.output.customerPainPoints",
-          "body.variables.clientKeyFeatures": "$ref:prepare-vars.output.keyFeatures",
-          "body.variables.clientProductDifferentiators": "$ref:prepare-vars.output.productDifferentiators",
-          "body.variables.clientCompetitors": "$ref:prepare-vars.output.competitors",
-          "body.variables.clientSocialProof": "$ref:prepare-vars.output.socialProof",
-          "body.variables.clientCallToAction": "$ref:prepare-vars.output.callToAction",
-          "body.variables.clientAdditionalContext": "$ref:prepare-vars.output.additionalContext",
+          "body.variables.clientCompanyOverview": "$ref:brand-profile.output.profile.companyOverview",
+          "body.variables.clientValueProposition": "$ref:brand-profile.output.profile.valueProposition",
+          "body.variables.clientTargetAudience": "$ref:brand-profile.output.profile.targetAudience",
+          "body.variables.clientCustomerPainPoints": "$ref:brand-profile.output.profile.customerPainPoints",
+          "body.variables.clientKeyFeatures": "$ref:brand-profile.output.profile.keyFeatures",
+          "body.variables.clientProductDifferentiators": "$ref:brand-profile.output.profile.productDifferentiators",
+          "body.variables.clientCompetitors": "$ref:brand-profile.output.profile.competitors",
+          "body.variables.clientSocialProof": "$ref:brand-profile.output.profile.socialProof",
+          "body.variables.clientCallToAction": "$ref:brand-profile.output.profile.callToAction",
+          "body.variables.clientAdditionalContext": "$ref:brand-profile.output.profile.additionalContext",
           // Campaign fields from start-run
           "body.variables.targetOutcome": "$ref:start-run.output.targetOutcome",
           "body.variables.valueForTarget": "$ref:start-run.output.valueForTarget",
@@ -329,8 +303,7 @@ function buildColdEmailDag() {
       { from: "start-run", to: "fetch-lead" },
       { from: "fetch-lead", to: "check-lead" },
       { from: "check-lead", to: "brand-profile", condition: "results.fetch_lead.found == true" },
-      { from: "brand-profile", to: "prepare-vars" },
-      { from: "prepare-vars", to: "email-generate" },
+      { from: "brand-profile", to: "email-generate" },
       { from: "email-generate", to: "email-send" },
       { from: "check-lead", to: "end-run" },
     ],
