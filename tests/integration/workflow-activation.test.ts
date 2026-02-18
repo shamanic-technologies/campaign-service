@@ -42,7 +42,7 @@ const validBody = {
   targetAudience: "CTOs at SaaS companies",
 };
 
-describe("Workflow activation on PATCH", () => {
+describe("Workflow trigger", () => {
   beforeEach(async () => {
     await cleanTestData();
     vi.clearAllMocks();
@@ -54,122 +54,173 @@ describe("Workflow activation on PATCH", () => {
     await closeDb();
   });
 
-  it("should trigger workflow when status is set to activate", async () => {
-    // Create campaign
-    const createRes = await request(app)
-      .post("/campaigns")
-      .set("x-api-key", API_KEY)
-      .set("x-clerk-org-id", "org_activation_test")
-      .send(validBody)
-      .expect(201);
+  describe("on campaign creation", () => {
+    it("should trigger workflow immediately when campaign is created", async () => {
+      const createRes = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send(validBody)
+        .expect(201);
 
-    const campaignId = createRes.body.campaign.id;
+      const campaignId = createRes.body.campaign.id;
 
-    // Stop it first so we can activate
-    await request(app)
-      .patch(`/campaigns/${campaignId}`)
-      .set("x-api-key", API_KEY)
-      .set("x-clerk-org-id", "org_activation_test")
-      .send({ status: "stop" })
-      .expect(200);
+      // Wait a tick for the fire-and-forget promise
+      await new Promise((r) => setTimeout(r, 50));
 
-    vi.clearAllMocks();
-    mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
+      expect(mockExecuteCampaignWorkflow).toHaveBeenCalledOnce();
+      expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
+        "cold-email-outreach",
+        {
+          campaignId,
+          clerkOrgId: "org_activation_test",
+        },
+      );
+    });
 
-    // Activate
-    const activateRes = await request(app)
-      .patch(`/campaigns/${campaignId}`)
-      .set("x-api-key", API_KEY)
-      .set("x-clerk-org-id", "org_activation_test")
-      .send({ status: "activate" })
-      .expect(200);
+    it("should still return 201 even if initial workflow execution fails", async () => {
+      mockExecuteCampaignWorkflow.mockRejectedValue(new Error("Windmill down"));
 
-    expect(activateRes.body.campaign.status).toBe("ongoing");
+      const createRes = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send(validBody)
+        .expect(201);
 
-    // Wait a tick for the fire-and-forget promise
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledOnce();
-    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
-      "cold-email-outreach",
-      {
-        campaignId,
-        clerkOrgId: "org_activation_test",
-      },
-    );
+      expect(createRes.body.campaign).toBeDefined();
+      expect(createRes.body.campaign.status).toBe("ongoing");
+    });
   });
 
-  it("should NOT trigger workflow when status is set to stop", async () => {
-    const createRes = await request(app)
-      .post("/campaigns")
-      .set("x-api-key", API_KEY)
-      .set("x-clerk-org-id", "org_activation_test")
-      .send(validBody)
-      .expect(201);
+  describe("on PATCH activate", () => {
+    it("should trigger workflow when status is set to activate", async () => {
+      // Create campaign (triggers workflow once)
+      const createRes = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send(validBody)
+        .expect(201);
 
-    const campaignId = createRes.body.campaign.id;
+      const campaignId = createRes.body.campaign.id;
 
-    await request(app)
-      .patch(`/campaigns/${campaignId}`)
-      .set("x-api-key", API_KEY)
-      .set("x-clerk-org-id", "org_activation_test")
-      .send({ status: "stop" })
-      .expect(200);
+      // Stop it first so we can activate
+      await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send({ status: "stop" })
+        .expect(200);
 
-    await new Promise((r) => setTimeout(r, 50));
+      vi.clearAllMocks();
+      mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
 
-    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
-  });
+      // Activate
+      const activateRes = await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send({ status: "activate" })
+        .expect(200);
 
-  it("should NOT trigger workflow when updating non-status fields", async () => {
-    const createRes = await request(app)
-      .post("/campaigns")
-      .set("x-api-key", API_KEY)
-      .set("x-clerk-org-id", "org_activation_test")
-      .send(validBody)
-      .expect(201);
+      expect(activateRes.body.campaign.status).toBe("ongoing");
 
-    const campaignId = createRes.body.campaign.id;
+      // Wait a tick for the fire-and-forget promise
+      await new Promise((r) => setTimeout(r, 50));
 
-    await request(app)
-      .patch(`/campaigns/${campaignId}`)
-      .set("x-api-key", API_KEY)
-      .set("x-clerk-org-id", "org_activation_test")
-      .send({ name: "Updated Name" })
-      .expect(200);
+      expect(mockExecuteCampaignWorkflow).toHaveBeenCalledOnce();
+      expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
+        "cold-email-outreach",
+        {
+          campaignId,
+          clerkOrgId: "org_activation_test",
+        },
+      );
+    });
 
-    await new Promise((r) => setTimeout(r, 50));
+    it("should NOT trigger workflow on stop (only creation trigger)", async () => {
+      const createRes = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send(validBody)
+        .expect(201);
 
-    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
-  });
+      const campaignId = createRes.body.campaign.id;
 
-  it("should still return 200 even if workflow execution fails", async () => {
-    mockExecuteCampaignWorkflow.mockRejectedValue(new Error("Windmill down"));
+      // Clear mocks after creation trigger
+      await new Promise((r) => setTimeout(r, 50));
+      vi.clearAllMocks();
+      mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
 
-    const createRes = await request(app)
-      .post("/campaigns")
-      .set("x-api-key", API_KEY)
-      .set("x-clerk-org-id", "org_activation_test")
-      .send(validBody)
-      .expect(201);
+      await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send({ status: "stop" })
+        .expect(200);
 
-    const campaignId = createRes.body.campaign.id;
+      await new Promise((r) => setTimeout(r, 50));
 
-    // Stop then activate
-    await request(app)
-      .patch(`/campaigns/${campaignId}`)
-      .set("x-api-key", API_KEY)
-      .set("x-clerk-org-id", "org_activation_test")
-      .send({ status: "stop" })
-      .expect(200);
+      expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+    });
 
-    const activateRes = await request(app)
-      .patch(`/campaigns/${campaignId}`)
-      .set("x-api-key", API_KEY)
-      .set("x-clerk-org-id", "org_activation_test")
-      .send({ status: "activate" })
-      .expect(200);
+    it("should NOT trigger workflow when updating non-status fields", async () => {
+      const createRes = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send(validBody)
+        .expect(201);
 
-    expect(activateRes.body.campaign.status).toBe("ongoing");
+      const campaignId = createRes.body.campaign.id;
+
+      // Clear mocks after creation trigger
+      await new Promise((r) => setTimeout(r, 50));
+      vi.clearAllMocks();
+      mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
+
+      await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send({ name: "Updated Name" })
+        .expect(200);
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+    });
+
+    it("should still return 200 even if workflow execution fails on activate", async () => {
+      const createRes = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send(validBody)
+        .expect(201);
+
+      const campaignId = createRes.body.campaign.id;
+
+      // Stop then activate with failing mock
+      await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send({ status: "stop" })
+        .expect(200);
+
+      mockExecuteCampaignWorkflow.mockRejectedValue(new Error("Windmill down"));
+
+      const activateRes = await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_activation_test")
+        .send({ status: "activate" })
+        .expect(200);
+
+      expect(activateRes.body.campaign.status).toBe("ongoing");
+    });
   });
 });

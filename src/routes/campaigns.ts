@@ -290,6 +290,15 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       })
       .returning();
 
+    // Trigger first workflow execution (fire-and-forget)
+    console.log(`[Campaign Service] Campaign created: campaignId=${campaign.id}, type=${campaign.type}, triggering first workflow execution`);
+    executeCampaignWorkflow(campaign.type, {
+      campaignId: campaign.id,
+      clerkOrgId: req.clerkOrgId!,
+    }).catch((err) => {
+      console.error(`[Campaign Service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
+    });
+
     res.status(201).json({ campaign });
   } catch (error) {
     console.error("[Campaign Service] Create campaign error:", error);
