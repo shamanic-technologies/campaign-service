@@ -6,7 +6,10 @@ export const COLD_EMAIL_PROMPT = `You are an expert sales copywriter. Write a pe
 - Email: {{leadEmail}}
 - LinkedIn: {{leadLinkedinUrl}}
 - Company: {{leadCompanyName}}
-- Company Details: {{leadCompanyOrganization}}
+- Domain: {{leadCompanyDomain}}
+- Industry: {{leadCompanyIndustry}}
+- Company Size: {{leadCompanySize}}
+- Revenue: {{leadCompanyRevenueUsd}}
 
 ## Sender / Our Company
 - Company: {{clientCompanyName}}
@@ -58,7 +61,8 @@ SUBJECT: [subject line]
 
 export const COLD_EMAIL_VARIABLES = [
   "leadFirstName", "leadLastName", "leadTitle", "leadEmail",
-  "leadLinkedinUrl", "leadCompanyName", "leadCompanyOrganization",
+  "leadLinkedinUrl", "leadCompanyName", "leadCompanyDomain",
+  "leadCompanyIndustry", "leadCompanySize", "leadCompanyRevenueUsd",
   "clientCompanyName", "clientBrandUrl", "clientCompanyOverview",
   "clientValueProposition", "clientTargetAudience", "clientCustomerPainPoints",
   "clientKeyFeatures", "clientProductDifferentiators", "clientCompetitors",
@@ -181,14 +185,17 @@ function buildColdEmailDag() {
           "body.campaignId": "$ref:start-run.output.campaignId",
           "body.runId": "$ref:start-run.output.runId",
           "body.apolloEnrichmentId": "$ref:fetch-lead.output.lead.externalId",
-          // Lead fields from fetch-lead
-          "body.leadFirstName": "$ref:fetch-lead.output.lead.data.first_name",
-          "body.leadLastName": "$ref:fetch-lead.output.lead.data.last_name",
+          // Lead fields from fetch-lead (flat camelCase per Apollo spec)
+          "body.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName",
+          "body.leadLastName": "$ref:fetch-lead.output.lead.data.lastName",
           "body.leadTitle": "$ref:fetch-lead.output.lead.data.title",
           "body.leadEmail": "$ref:fetch-lead.output.lead.data.email",
-          "body.leadLinkedinUrl": "$ref:fetch-lead.output.lead.data.linkedin_url",
-          "body.leadCompanyName": "$ref:fetch-lead.output.lead.data.organization_name",
-          "body.leadCompanyOrganization": "$ref:fetch-lead.output.lead.data.organization",
+          "body.leadLinkedinUrl": "$ref:fetch-lead.output.lead.data.linkedinUrl",
+          "body.leadCompanyName": "$ref:fetch-lead.output.lead.data.organizationName",
+          "body.leadCompanyDomain": "$ref:fetch-lead.output.lead.data.organizationDomain",
+          "body.leadCompanyIndustry": "$ref:fetch-lead.output.lead.data.organizationIndustry",
+          "body.leadCompanySize": "$ref:fetch-lead.output.lead.data.organizationSize",
+          "body.leadCompanyRevenueUsd": "$ref:fetch-lead.output.lead.data.organizationRevenueUsd",
           // Client/brand fields from brand-profile
           "body.clientCompanyName": "$ref:start-run.output.brandDomain",
           "body.clientBrandUrl": "$ref:start-run.output.brandUrl",
@@ -233,9 +240,9 @@ function buildColdEmailDag() {
           "body.campaignId": "$ref:start-run.output.campaignId",
           "body.runId": "$ref:start-run.output.runId",
           "body.to": "$ref:fetch-lead.output.lead.data.email",
-          "body.recipientFirstName": "$ref:fetch-lead.output.lead.data.first_name",
-          "body.recipientLastName": "$ref:fetch-lead.output.lead.data.last_name",
-          "body.recipientCompany": "$ref:fetch-lead.output.lead.data.organization_name",
+          "body.recipientFirstName": "$ref:fetch-lead.output.lead.data.firstName",
+          "body.recipientLastName": "$ref:fetch-lead.output.lead.data.lastName",
+          "body.recipientCompany": "$ref:fetch-lead.output.lead.data.organizationName",
           "body.subject": "$ref:email-generate.output.subject",
           "body.htmlBody": "$ref:email-generate.output.bodyHtml",
           "body.metadata.emailGenerationId": "$ref:email-generate.output.id",
