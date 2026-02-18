@@ -233,22 +233,43 @@ describe("Workflow module", () => {
       const emailGen = dag.nodes.find((n) => n.id === "email-generate");
       const mapping = emailGen?.inputMapping || {};
 
-      // Lead fields come from fetch-lead (flat camelCase per Apollo spec)
-      expect(mapping["body.leadFirstName"]).toBe("$ref:fetch-lead.output.lead.data.firstName");
-      expect(mapping["body.leadLastName"]).toBe("$ref:fetch-lead.output.lead.data.lastName");
-      expect(mapping["body.leadEmail"]).toBe("$ref:fetch-lead.output.lead.data.email");
-      expect(mapping["body.leadCompanyName"]).toBe("$ref:fetch-lead.output.lead.data.organizationName");
+      // Top-level body fields (GenerateRequest schema fields)
+      expect(mapping["body.appId"]).toBe("$ref:start-run.output.appId");
+      expect(mapping["body.runId"]).toBe("$ref:start-run.output.runId");
+      expect(mapping["body.brandId"]).toBe("$ref:start-run.output.brandId");
+      expect(mapping["body.campaignId"]).toBe("$ref:start-run.output.campaignId");
       expect(mapping["body.apolloEnrichmentId"]).toBe("$ref:fetch-lead.output.lead.externalId");
 
-      // Brand fields come from brand-profile
-      expect(mapping["body.clientCompanyName"]).toBe("$ref:start-run.output.brandDomain");
-      expect(mapping["body.clientBrandUrl"]).toBe("$ref:start-run.output.brandUrl");
-      expect(mapping["body.clientCompanyOverview"]).toBe("$ref:brand-profile.output.profile.companyOverview");
-      expect(mapping["body.clientValueProposition"]).toBe("$ref:brand-profile.output.profile.valueProposition");
+      // Template variables MUST be nested under body.variables (emailgeneration expects z.record)
+      // Lead fields from fetch-lead (flat camelCase per Apollo spec)
+      expect(mapping["body.variables.leadFirstName"]).toBe("$ref:fetch-lead.output.lead.data.firstName");
+      expect(mapping["body.variables.leadLastName"]).toBe("$ref:fetch-lead.output.lead.data.lastName");
+      expect(mapping["body.variables.leadEmail"]).toBe("$ref:fetch-lead.output.lead.data.email");
+      expect(mapping["body.variables.leadCompanyName"]).toBe("$ref:fetch-lead.output.lead.data.organizationName");
 
-      // Campaign fields from start-run
-      expect(mapping["body.targetOutcome"]).toBe("$ref:start-run.output.targetOutcome");
-      expect(mapping["body.valueForTarget"]).toBe("$ref:start-run.output.valueForTarget");
+      // Brand fields from brand-profile — nested under variables
+      expect(mapping["body.variables.clientCompanyName"]).toBe("$ref:start-run.output.brandDomain");
+      expect(mapping["body.variables.clientBrandUrl"]).toBe("$ref:start-run.output.brandUrl");
+      expect(mapping["body.variables.clientCompanyOverview"]).toBe("$ref:brand-profile.output.profile.companyOverview");
+      expect(mapping["body.variables.clientValueProposition"]).toBe("$ref:brand-profile.output.profile.valueProposition");
+
+      // Campaign fields from start-run — nested under variables
+      expect(mapping["body.variables.targetOutcome"]).toBe("$ref:start-run.output.targetOutcome");
+      expect(mapping["body.variables.valueForTarget"]).toBe("$ref:start-run.output.valueForTarget");
+    });
+
+    it("should nest ALL COLD_EMAIL_VARIABLES under body.variables in email-generate (not top-level body)", () => {
+      const dag = buildColdEmailDag();
+      const emailGen = dag.nodes.find((n) => n.id === "email-generate");
+      const mapping = emailGen?.inputMapping || {};
+
+      // Every template variable must be under body.variables.*, not body.*
+      for (const variable of COLD_EMAIL_VARIABLES) {
+        const variablesKey = `body.variables.${variable}`;
+        const topLevelKey = `body.${variable}`;
+        expect(mapping[variablesKey], `Expected body.variables.${variable} to be defined`).toBeDefined();
+        expect(mapping[topLevelKey], `body.${variable} should NOT exist (must be under body.variables)`).toBeUndefined();
+      }
     });
 
     it("should map lead data from fetch-lead to email-send", () => {
