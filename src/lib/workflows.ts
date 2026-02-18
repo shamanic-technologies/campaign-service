@@ -154,6 +154,9 @@ function buildColdEmailDag() {
           service: "lead",
           method: "POST",
           path: "/buffer/next",
+          body: {
+            keySource: "byok",
+          },
           validateResponse: { field: "found", equals: true },
         },
         inputMapping: {

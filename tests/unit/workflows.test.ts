@@ -179,6 +179,12 @@ describe("Workflow module", () => {
       });
     });
 
+    it("should configure fetch-lead node with keySource: byok in body", () => {
+      const dag = buildColdEmailDag();
+      const fetchLead = dag.nodes.find((n) => n.id === "fetch-lead");
+      expect(fetchLead?.config.body).toEqual({ keySource: "byok" });
+    });
+
     it("should configure fetch-lead node with custom headers and searchParams", () => {
       const dag = buildColdEmailDag();
       const fetchLead = dag.nodes.find((n) => n.id === "fetch-lead");
