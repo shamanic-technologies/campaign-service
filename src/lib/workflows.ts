@@ -222,6 +222,7 @@ function buildColdEmailDag() {
           "body.brandId": "$ref:start-run.output.brandId",
           "body.campaignId": "$ref:start-run.output.campaignId",
           "body.runId": "$ref:start-run.output.runId",
+          "body.keyMode": "$ref:start-run.output.keySource",
           "body.apolloEnrichmentId": "$ref:fetch-lead.output.lead.externalId",
           // Template variables — must be nested under body.variables (emailgeneration expects z.record)
           // Lead fields from fetch-lead (flat camelCase per Apollo spec)

@@ -261,6 +261,7 @@ describe("Workflow module", () => {
       expect(mapping["body.runId"]).toBe("$ref:start-run.output.runId");
       expect(mapping["body.brandId"]).toBe("$ref:start-run.output.brandId");
       expect(mapping["body.campaignId"]).toBe("$ref:start-run.output.campaignId");
+      expect(mapping["body.keyMode"]).toBe("$ref:start-run.output.keySource");
       expect(mapping["body.apolloEnrichmentId"]).toBe("$ref:fetch-lead.output.lead.externalId");
 
       // Template variables MUST be nested under body.variables (emailgeneration expects z.record)
