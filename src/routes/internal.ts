@@ -202,7 +202,12 @@ router.post("/internal/start-run", requireApiKey, async (req, res) => {
 
     let lead: { externalId: string; data: Record<string, unknown> } | null = null;
     try {
-      console.log(`[Start Run] Fetching next lead from ${leadServiceUrl}/buffer/next for campaign ${campaignId}...`);
+      // Build searchParams from campaign targetAudience so lead-service
+      // can auto-fill from Apollo when the buffer is empty.
+      const searchParams = campaign.targetAudience
+        ? { qKeywords: campaign.targetAudience }
+        : undefined;
+      console.log(`[Start Run] Fetching next lead from ${leadServiceUrl}/buffer/next for campaign ${campaignId} (searchParams=${searchParams ? "yes" : "none"})...`);
       const leadRes = await fetch(`${leadServiceUrl}/buffer/next`, {
         method: "POST",
         headers: {
@@ -215,6 +220,7 @@ router.post("/internal/start-run", requireApiKey, async (req, res) => {
           campaignId,
           brandId: campaign.brandId,
           parentRunId: run.id,
+          ...(searchParams && { searchParams }),
         }),
       });
 
