@@ -76,21 +76,30 @@ const APP_ID = "mcpfactory";
  * Build the cold-email-outreach DAG.
  *
  * Pipeline:
- *   gate-check → start-run → brand-profile ↘
- *                                            → email-generate → email-send → end-run
- *                          → fetch-lead    ↗
+ *   gate-check → start-run → fetch-lead → check-lead ──────────┐
+ *                                           │ (found=true)      │ (found=false)
+ *                                           ↓                   │
+ *                                     brand-profile             │
+ *                                           ↓                   │
+ *                                     email-generate            │
+ *                                           ↓                   │
+ *                                     email-send                │
+ *                                           ↓                   ↓
+ *                                           end-run (always)
  *
  * - gate-check:     validate budget/volume/status limits (campaign-service)
  * - start-run:      create run + return campaign data (campaign-service)
- * - brand-profile:  fetch brand sales profile (brand-service)
  * - fetch-lead:     pull next lead from buffer (lead-service, NO RETRY)
+ * - check-lead:     condition node — branches on found=true/false
+ * - brand-profile:  fetch brand sales profile (brand-service, only when lead found)
  * - email-generate: generate email via AI (emailgeneration-service, NO RETRY)
  * - email-send:     send email (email-gateway-service, NO RETRY, validate success)
- * - end-run:        finalize run as completed + re-trigger (campaign-service)
- * - end-run-error:  finalize run as failed + re-trigger (campaign-service, onError handler)
+ * - end-run:        finalize run (always called, receives leadFound flag)
+ * - end-run-error:  finalize run as failed (onError handler for real errors)
  *
- * brand-profile and fetch-lead run in parallel after start-run.
- * On DAG error: end-run-error is called with success=false via onError handler.
+ * end-run always executes: when leadFound=true it re-triggers, when leadFound=false
+ * it auto-stops the campaign (no leads = no point retrying).
+ * On real DAG error: end-run-error is called with success=false via onError handler.
  */
 function buildColdEmailDag() {
   return {
@@ -125,7 +134,34 @@ function buildColdEmailDag() {
           "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
         },
       },
-      // Step 2a: Fetch brand sales profile (parallel with fetch-lead)
+      // Step 2: Pull next lead from buffer
+      {
+        id: "fetch-lead",
+        type: "http.call",
+        retries: 0, // Non-idempotent: consumes from buffer
+        config: {
+          service: "lead",
+          method: "POST",
+          path: "/buffer/next",
+          body: {
+            keySource: "byok",
+          },
+        },
+        inputMapping: {
+          "headers.x-app-id": "$ref:start-run.output.appId",
+          "headers.x-org-id": "$ref:start-run.output.clerkOrgId",
+          "body.campaignId": "$ref:start-run.output.campaignId",
+          "body.brandId": "$ref:start-run.output.brandId",
+          "body.parentRunId": "$ref:start-run.output.runId",
+          "body.searchParams": "$ref:start-run.output.searchParams",
+        },
+      },
+      // Step 3: Condition — branch on found=true/false
+      {
+        id: "check-lead",
+        type: "condition",
+      },
+      // Step 4a: Fetch brand sales profile (only when lead found)
       {
         id: "brand-profile",
         type: "http.call",
@@ -145,30 +181,7 @@ function buildColdEmailDag() {
           "body.parentRunId": "$ref:start-run.output.runId",
         },
       },
-      // Step 2b: Pull next lead from buffer (parallel with brand-profile)
-      {
-        id: "fetch-lead",
-        type: "http.call",
-        retries: 0, // Non-idempotent: consumes from buffer
-        config: {
-          service: "lead",
-          method: "POST",
-          path: "/buffer/next",
-          body: {
-            keySource: "byok",
-          },
-          validateResponse: { field: "found", equals: true },
-        },
-        inputMapping: {
-          "headers.x-app-id": "$ref:start-run.output.appId",
-          "headers.x-org-id": "$ref:start-run.output.clerkOrgId",
-          "body.campaignId": "$ref:start-run.output.campaignId",
-          "body.brandId": "$ref:start-run.output.brandId",
-          "body.parentRunId": "$ref:start-run.output.runId",
-          "body.searchParams": "$ref:start-run.output.searchParams",
-        },
-      },
-      // Step 3: Generate email (non-idempotent, NO RETRY)
+      // Step 4b: Generate email (non-idempotent, NO RETRY)
       {
         id: "email-generate",
         type: "http.call",
@@ -217,7 +230,7 @@ function buildColdEmailDag() {
           "body.valueForTarget": "$ref:start-run.output.valueForTarget",
         },
       },
-      // Step 4: Send email (non-idempotent, NO RETRY)
+      // Step 5: Send email (non-idempotent, NO RETRY)
       {
         id: "email-send",
         type: "http.call",
@@ -251,7 +264,7 @@ function buildColdEmailDag() {
           "body.metadata.emailGenerationId": "$ref:email-generate.output.id",
         },
       },
-      // Step 5: Finalize run as completed + re-trigger
+      // Step 6: Finalize run (always called — receives leadFound flag)
       {
         id: "end-run",
         type: "http.call",
@@ -266,6 +279,7 @@ function buildColdEmailDag() {
         inputMapping: {
           "body.campaignId": "$ref:flow_input.campaignId",
           "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+          "body.leadFound": "$ref:fetch-lead.output.found",
         },
       },
       // Error handler: finalize run as failed + re-trigger
@@ -288,14 +302,14 @@ function buildColdEmailDag() {
     ],
     edges: [
       { from: "gate-check", to: "start-run" },
-      { from: "start-run", to: "brand-profile" },
       { from: "start-run", to: "fetch-lead" },
+      { from: "fetch-lead", to: "check-lead" },
+      { from: "check-lead", to: "brand-profile", condition: "results.fetch_lead.found == true" },
       { from: "brand-profile", to: "email-generate" },
-      { from: "fetch-lead", to: "email-generate" },
       { from: "email-generate", to: "email-send" },
-      { from: "email-send", to: "end-run" },
+      { from: "check-lead", to: "end-run" },
     ],
-    // Error handler: call end-run-error with success=false when any node fails.
+    // Error handler: call end-run-error with success=false when any real node fails.
     onError: "end-run-error",
   };
 }

@@ -226,8 +226,8 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
  */
 router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res) => {
   try {
-    const { campaignId, clerkOrgId, success } = req.body;
-    console.log(`[End Run] Received request: campaignId=${campaignId}, clerkOrgId=${clerkOrgId}, success=${success}`);
+    const { campaignId, clerkOrgId, success, leadFound } = req.body;
+    console.log(`[End Run] Received request: campaignId=${campaignId}, clerkOrgId=${clerkOrgId}, success=${success}, leadFound=${leadFound}`);
 
     const status = success === true ? "completed" : "failed";
 
@@ -253,8 +253,26 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
       console.error(`[End Run] Failed to update runs:`, err);
     }
 
-    // Respond immediately, then re-trigger asynchronously
+    // Respond immediately, then handle re-trigger asynchronously
     res.json({ status });
+
+    // No leads found → auto-stop campaign, no re-trigger
+    if (success === true && leadFound === false) {
+      try {
+        const org = await db.query.orgs.findFirst({
+          where: eq(orgs.clerkOrgId, clerkOrgId),
+        });
+        if (org) {
+          await db.update(campaigns)
+            .set({ status: "stopped" })
+            .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, org.id)));
+          console.log(`[End Run] No leads found — auto-stopped campaign ${campaignId}`);
+        }
+      } catch (err) {
+        console.error(`[End Run] Failed to auto-stop campaign:`, err);
+      }
+      return;
+    }
 
     // Re-trigger if campaign is still ongoing
     try {

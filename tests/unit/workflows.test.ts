@@ -22,11 +22,11 @@ describe("Workflow module", () => {
   });
 
   describe("buildColdEmailDag", () => {
-    it("should produce a valid DAG with 8 nodes and 7 edges", () => {
+    it("should produce a valid DAG with 9 nodes and 7 edges", () => {
       const dag = buildColdEmailDag();
       expect(dag.nodes).toBeDefined();
       expect(dag.edges).toBeDefined();
-      expect(dag.nodes.length).toBe(8);
+      expect(dag.nodes.length).toBe(9);
       expect(dag.edges.length).toBe(7);
     });
 
@@ -36,8 +36,9 @@ describe("Workflow module", () => {
       expect(nodeIds).toEqual([
         "gate-check",
         "start-run",
-        "brand-profile",
         "fetch-lead",
+        "check-lead",
+        "brand-profile",
         "email-generate",
         "email-send",
         "end-run",
@@ -45,26 +46,36 @@ describe("Workflow module", () => {
       ]);
     });
 
-    it("should have correct edges with gate-check first and parallel fan-out after start-run", () => {
+    it("should have correct edges with conditional branching after check-lead", () => {
       const dag = buildColdEmailDag();
       expect(dag.edges).toEqual([
         { from: "gate-check", to: "start-run" },
-        { from: "start-run", to: "brand-profile" },
         { from: "start-run", to: "fetch-lead" },
+        { from: "fetch-lead", to: "check-lead" },
+        { from: "check-lead", to: "brand-profile", condition: "results.fetch_lead.found == true" },
         { from: "brand-profile", to: "email-generate" },
-        { from: "fetch-lead", to: "email-generate" },
         { from: "email-generate", to: "email-send" },
-        { from: "email-send", to: "end-run" },
+        { from: "check-lead", to: "end-run" },
       ]);
     });
 
-    it("should use http.call type for all nodes", () => {
+    it("should have check-lead as a condition node (not http.call)", () => {
+      const dag = buildColdEmailDag();
+      const checkLead = dag.nodes.find((n) => n.id === "check-lead");
+      expect(checkLead?.type).toBe("condition");
+    });
+
+    it("should use http.call type for all non-condition nodes", () => {
       const dag = buildColdEmailDag();
       for (const node of dag.nodes) {
-        expect(node.type).toBe("http.call");
-        expect(node.config.service).toBeDefined();
-        expect(node.config.method).toBeDefined();
-        expect(node.config.path).toBeDefined();
+        if (node.id === "check-lead") {
+          expect(node.type).toBe("condition");
+        } else {
+          expect(node.type).toBe("http.call");
+          expect(node.config.service).toBeDefined();
+          expect(node.config.method).toBeDefined();
+          expect(node.config.path).toBeDefined();
+        }
       }
     });
 
@@ -72,7 +83,9 @@ describe("Workflow module", () => {
       const dag = buildColdEmailDag();
       const serviceMap: Record<string, string> = {};
       for (const node of dag.nodes) {
-        serviceMap[node.id] = node.config.service as string;
+        if (node.config?.service) {
+          serviceMap[node.id] = node.config.service as string;
+        }
       }
       expect(serviceMap["gate-check"]).toBe("campaign");
       expect(serviceMap["start-run"]).toBe("campaign");
@@ -119,13 +132,23 @@ describe("Workflow module", () => {
       });
     });
 
-    it("should have validateResponse on fetch-lead to catch found: false", () => {
+    it("should NOT have validateResponse on fetch-lead (handled by check-lead condition)", () => {
       const dag = buildColdEmailDag();
       const fetchLead = dag.nodes.find((n) => n.id === "fetch-lead");
-      expect(fetchLead?.config.validateResponse).toEqual({
-        field: "found",
-        equals: true,
-      });
+      expect(fetchLead?.config.validateResponse).toBeUndefined();
+    });
+
+    it("should have conditional edge from check-lead to brand-profile (found=true branch)", () => {
+      const dag = buildColdEmailDag();
+      const conditionalEdge = dag.edges.find((e) => e.from === "check-lead" && e.to === "brand-profile");
+      expect(conditionalEdge?.condition).toBe("results.fetch_lead.found == true");
+    });
+
+    it("should have unconditional edge from check-lead to end-run (always runs)", () => {
+      const dag = buildColdEmailDag();
+      const endRunEdge = dag.edges.find((e) => e.from === "check-lead" && e.to === "end-run");
+      expect(endRunEdge).toBeDefined();
+      expect(endRunEdge?.condition).toBeUndefined();
     });
 
     it("should have onError handler pointing to end-run-error (not end-run)", () => {
@@ -139,6 +162,12 @@ describe("Workflow module", () => {
       const endRunError = dag.nodes.find((n) => n.id === "end-run-error");
       expect(endRun?.config.body).toEqual({ success: true });
       expect(endRunError?.config.body).toEqual({ success: false });
+    });
+
+    it("should pass leadFound flag to end-run via inputMapping", () => {
+      const dag = buildColdEmailDag();
+      const endRun = dag.nodes.find((n) => n.id === "end-run");
+      expect(endRun?.inputMapping?.["body.leadFound"]).toBe("$ref:fetch-lead.output.found");
     });
 
     it("should use /gate-check path (no /internal prefix)", () => {
@@ -252,11 +281,13 @@ describe("Workflow module", () => {
       const endRun = dag.nodes.find((n) => n.id === "end-run");
       const endRunError = dag.nodes.find((n) => n.id === "end-run-error");
 
-      // Both should use flow_input, NOT $ref:start-run.output
+      // end-run also includes leadFound from fetch-lead
       expect(endRun?.inputMapping).toEqual({
         "body.campaignId": "$ref:flow_input.campaignId",
         "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+        "body.leadFound": "$ref:fetch-lead.output.found",
       });
+      // end-run-error only has flow_input (real errors, no leadFound context)
       expect(endRunError?.inputMapping).toEqual({
         "body.campaignId": "$ref:flow_input.campaignId",
         "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
@@ -284,7 +315,7 @@ describe("Workflow module", () => {
       expect(body.appId).toBe("mcpfactory");
       expect(body.workflows).toHaveLength(1);
       expect(body.workflows[0].name).toBe("cold-email-outreach");
-      expect(body.workflows[0].dag.nodes).toHaveLength(8);
+      expect(body.workflows[0].dag.nodes).toHaveLength(9);
       expect(body.workflows[0].dag.onError).toBe("end-run-error");
     });
 
