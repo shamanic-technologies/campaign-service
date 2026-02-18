@@ -6,10 +6,6 @@ export const COLD_EMAIL_PROMPT = `You are an expert sales copywriter. Write a pe
 - Email: {{leadEmail}}
 - LinkedIn: {{leadLinkedinUrl}}
 - Company: {{leadCompanyName}}
-- Domain: {{leadCompanyDomain}}
-- Industry: {{leadCompanyIndustry}}
-- Company Size: {{leadCompanySize}} employees
-- Revenue: {{leadCompanyRevenueUsd}}
 
 ## Sender / Our Company
 - Company: {{clientCompanyName}}
@@ -61,8 +57,7 @@ SUBJECT: [subject line]
 
 export const COLD_EMAIL_VARIABLES = [
   "leadFirstName", "leadLastName", "leadTitle", "leadEmail",
-  "leadLinkedinUrl", "leadCompanyName", "leadCompanyDomain",
-  "leadCompanyIndustry", "leadCompanySize", "leadCompanyRevenueUsd",
+  "leadLinkedinUrl", "leadCompanyName",
   "clientCompanyName", "clientBrandUrl", "clientCompanyOverview",
   "clientValueProposition", "clientTargetAudience", "clientCustomerPainPoints",
   "clientKeyFeatures", "clientProductDifferentiators", "clientCompetitors",
@@ -192,10 +187,6 @@ function buildColdEmailDag() {
           "body.leadEmail": "$ref:fetch-lead.output.lead.data.email",
           "body.leadLinkedinUrl": "$ref:fetch-lead.output.lead.data.linkedin_url",
           "body.leadCompanyName": "$ref:fetch-lead.output.lead.data.organization_name",
-          "body.leadCompanyDomain": "$ref:fetch-lead.output.lead.data.organization.primary_domain",
-          "body.leadCompanyIndustry": "$ref:fetch-lead.output.lead.data.organization.industry",
-          "body.leadCompanySize": "$ref:fetch-lead.output.lead.data.organization.estimated_num_employees",
-          "body.leadCompanyRevenueUsd": "$ref:fetch-lead.output.lead.data.organization.annual_revenue_printed",
           // Client/brand fields from brand-profile
           "body.clientCompanyName": "$ref:start-run.output.brandDomain",
           "body.clientBrandUrl": "$ref:start-run.output.brandUrl",
