@@ -139,10 +139,15 @@ router.post("/internal/start-run", requireApiKey, async (req, res) => {
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);
 
-    // Build searchParams from campaign targetAudience so the fetch-lead
-    // DAG node can pass them to lead-service for Apollo auto-fill.
-    const searchParams = campaign.targetAudience
-      ? { qKeywords: campaign.targetAudience }
+    // Pass all user context as unstructured searchParams so lead-service's
+    // LLM can transform them into structured Apollo search params.
+    const hasSearchContext = campaign.targetAudience || campaign.targetOutcome || campaign.valueForTarget;
+    const searchParams = hasSearchContext
+      ? {
+          targetAudience: campaign.targetAudience,
+          targetOutcome: campaign.targetOutcome,
+          valueForTarget: campaign.valueForTarget,
+        }
       : null;
 
     const brandDomain = extractDomain(campaign.brandUrl);

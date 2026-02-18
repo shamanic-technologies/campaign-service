@@ -188,11 +188,13 @@ describe("Internal routes", () => {
       expect(res.body.clientData).toBeUndefined();
     });
 
-    it("should include searchParams when targetAudience is set", async () => {
+    it("should pass all user context as unstructured searchParams", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",
         brandId,
-        targetAudience: "CTOs at SaaS startups",
+        targetAudience: "VPs of Sales at B2B SaaS companies",
+        targetOutcome: "Book demo meetings",
+        valueForTarget: "Reduce outbound prospecting time by 80%",
       });
 
       const res = await request(app)
@@ -201,10 +203,14 @@ describe("Internal routes", () => {
         .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
         .expect(200);
 
-      expect(res.body.searchParams).toEqual({ qKeywords: "CTOs at SaaS startups" });
+      expect(res.body.searchParams).toEqual({
+        targetAudience: "VPs of Sales at B2B SaaS companies",
+        targetOutcome: "Book demo meetings",
+        valueForTarget: "Reduce outbound prospecting time by 80%",
+      });
     });
 
-    it("should have null searchParams when targetAudience is absent", async () => {
+    it("should have null searchParams when no user context is set", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",
         brandId,
