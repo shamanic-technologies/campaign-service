@@ -57,6 +57,10 @@ export async function insertTestCampaign(
     targetAudience?: string;
     targetOutcome?: string;
     valueForTarget?: string;
+    urgency?: string;
+    scarcity?: string;
+    riskReversal?: string;
+    socialProof?: string;
   } = {}
 ) {
   const [campaign] = await db
@@ -78,6 +82,10 @@ export async function insertTestCampaign(
       targetAudience: data.targetAudience || null,
       targetOutcome: data.targetOutcome || null,
       valueForTarget: data.valueForTarget || null,
+      urgency: data.urgency || null,
+      scarcity: data.scarcity || null,
+      riskReversal: data.riskReversal || null,
+      socialProof: data.socialProof || null,
     })
     .returning();
   return campaign;

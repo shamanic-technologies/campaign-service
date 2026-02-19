@@ -142,6 +142,26 @@ describe("Campaign CRUD", () => {
       expect(res.body.error).toBeDefined();
     });
 
+    it("should store sales persuasion fields on campaign", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send({
+          ...validBody,
+          urgency: "Limited time offer",
+          scarcity: "Only 10 spots",
+          riskReversal: "Full refund if not satisfied",
+          socialProof: "Used by Fortune 500",
+        })
+        .expect(201);
+
+      expect(res.body.campaign.urgency).toBe("Limited time offer");
+      expect(res.body.campaign.scarcity).toBe("Only 10 spots");
+      expect(res.body.campaign.riskReversal).toBe("Full refund if not satisfied");
+      expect(res.body.campaign.socialProof).toBe("Used by Fortune 500");
+    });
+
     it("should create a campaign with targetAudience", async () => {
       const audience = "CEOs and CTOs at SaaS startups with 1-50 employees in the US";
       const res = await request(app)
