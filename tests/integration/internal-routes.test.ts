@@ -374,6 +374,46 @@ describe("Pipeline routes", () => {
       );
     });
 
+    it("should return sales persuasion fields in start-run response", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+        urgency: "Offer expires in 7 days",
+        scarcity: "Only 5 spots left",
+        riskReversal: "30-day money-back guarantee",
+        socialProof: "Trusted by 500+ companies",
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(res.body.urgency).toBe("Offer expires in 7 days");
+      expect(res.body.scarcity).toBe("Only 5 spots left");
+      expect(res.body.riskReversal).toBe("30-day money-back guarantee");
+      expect(res.body.socialProof).toBe("Trusted by 500+ companies");
+    });
+
+    it("should return null sales fields when not set", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(res.body.urgency).toBeNull();
+      expect(res.body.scarcity).toBeNull();
+      expect(res.body.riskReversal).toBeNull();
+      expect(res.body.socialProof).toBeNull();
+    });
+
     it("should NOT call gate checks (gate check is a separate DAG node)", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",

@@ -206,6 +206,10 @@ describe("Workflow module", () => {
         "body.clerkUserId": "$ref:start-run.output.clerkUserId",
         "body.parentRunId": "$ref:start-run.output.runId",
         "body.keyType": "$ref:start-run.output.keySource",
+        "body.urgency": "$ref:start-run.output.urgency",
+        "body.scarcity": "$ref:start-run.output.scarcity",
+        "body.riskReversal": "$ref:start-run.output.riskReversal",
+        "body.socialProof": "$ref:start-run.output.socialProof",
       });
     });
 

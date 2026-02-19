@@ -66,7 +66,13 @@ export const campaigns = pgTable(
 
     // What the target audience gains from responding (e.g. "Access to enterprise analytics at startup pricing")
     valueForTarget: text("value_for_target"),
-    
+
+    // Sales persuasion fields (user-provided, forwarded to brand-service + email-generate)
+    urgency: text("urgency"),
+    scarcity: text("scarcity"),
+    riskReversal: text("risk_reversal"),
+    socialProof: text("social_proof"),
+
     // Budget limits per campaign (at least one required)
     maxBudgetDailyUsd: decimal("max_budget_daily_usd", { precision: 10, scale: 2 }),
     maxBudgetWeeklyUsd: decimal("max_budget_weekly_usd", { precision: 10, scale: 2 }),

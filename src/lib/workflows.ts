@@ -29,6 +29,12 @@ export const COLD_EMAIL_PROMPT = `You are an expert sales copywriter. Write a pe
 - Target Outcome: {{targetOutcome}}
 - Value for Target: {{valueForTarget}}
 
+## Sales Persuasion Levers (user-provided)
+- Urgency: {{urgency}}
+- Scarcity: {{scarcity}}
+- Risk Reversal: {{riskReversal}}
+- Social Proof (user-provided): {{socialProof}}
+
 ## Reference: Cold Email Frameworks
 Use your expertise to craft the email. Here are proven frameworks for reference:
 
@@ -68,6 +74,7 @@ export const COLD_EMAIL_VARIABLES = [
   "clientKeyFeatures", "clientProductDifferentiators", "clientCompetitors",
   "clientSocialProof", "clientCallToAction", "clientAdditionalContext",
   "targetOutcome", "valueForTarget",
+  "urgency", "scarcity", "riskReversal", "socialProof",
 ];
 
 const APP_ID = "mcpfactory";
@@ -175,6 +182,11 @@ function buildColdEmailDag() {
           "body.clerkUserId": "$ref:start-run.output.clerkUserId",
           "body.parentRunId": "$ref:start-run.output.runId",
           "body.keyType": "$ref:start-run.output.keySource",
+          // User-provided sales context (may complement or override scraped data)
+          "body.urgency": "$ref:start-run.output.urgency",
+          "body.scarcity": "$ref:start-run.output.scarcity",
+          "body.riskReversal": "$ref:start-run.output.riskReversal",
+          "body.socialProof": "$ref:start-run.output.socialProof",
         },
       },
       // Step 4b: Generate email (non-idempotent, NO RETRY)
@@ -226,6 +238,11 @@ function buildColdEmailDag() {
           // Campaign fields from start-run
           "body.variables.targetOutcome": "$ref:start-run.output.targetOutcome",
           "body.variables.valueForTarget": "$ref:start-run.output.valueForTarget",
+          // User-provided sales persuasion fields
+          "body.variables.urgency": "$ref:start-run.output.urgency",
+          "body.variables.scarcity": "$ref:start-run.output.scarcity",
+          "body.variables.riskReversal": "$ref:start-run.output.riskReversal",
+          "body.variables.socialProof": "$ref:start-run.output.socialProof",
         },
       },
       // Step 5: Send email (non-idempotent, NO RETRY)
