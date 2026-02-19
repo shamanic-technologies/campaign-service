@@ -252,11 +252,24 @@ describe("Workflow module", () => {
       expect(mapping["body.variables.leadEmail"]).toBe("$ref:fetch-lead.output.lead.data.email");
       expect(mapping["body.variables.leadCompanyName"]).toBe("$ref:fetch-lead.output.lead.data.organizationName");
 
-      // Brand fields from brand-profile — nested under variables
+      // Brand fields from brand-profile (core) — nested under variables
       expect(mapping["body.variables.clientCompanyName"]).toBe("$ref:start-run.output.brandDomain");
       expect(mapping["body.variables.clientBrandUrl"]).toBe("$ref:start-run.output.brandUrl");
       expect(mapping["body.variables.clientCompanyOverview"]).toBe("$ref:brand-profile.output.profile.companyOverview");
       expect(mapping["body.variables.clientValueProposition"]).toBe("$ref:brand-profile.output.profile.valueProposition");
+
+      // Brand fields from brand-profile (credibility)
+      expect(mapping["body.variables.clientLeadership"]).toBe("$ref:brand-profile.output.profile.leadership");
+      expect(mapping["body.variables.clientFunding"]).toBe("$ref:brand-profile.output.profile.funding");
+      expect(mapping["body.variables.clientAwardsAndRecognition"]).toBe("$ref:brand-profile.output.profile.awardsAndRecognition");
+      expect(mapping["body.variables.clientRevenueMilestones"]).toBe("$ref:brand-profile.output.profile.revenueMilestones");
+
+      // Brand fields from brand-profile (sales persuasion intelligence)
+      expect(mapping["body.variables.clientUrgency"]).toBe("$ref:brand-profile.output.profile.urgency");
+      expect(mapping["body.variables.clientScarcity"]).toBe("$ref:brand-profile.output.profile.scarcity");
+      expect(mapping["body.variables.clientRiskReversal"]).toBe("$ref:brand-profile.output.profile.riskReversal");
+      expect(mapping["body.variables.clientPriceAnchoring"]).toBe("$ref:brand-profile.output.profile.priceAnchoring");
+      expect(mapping["body.variables.clientValueStacking"]).toBe("$ref:brand-profile.output.profile.valueStacking");
 
       // Campaign fields from start-run — nested under variables
       expect(mapping["body.variables.targetOutcome"]).toBe("$ref:start-run.output.targetOutcome");
