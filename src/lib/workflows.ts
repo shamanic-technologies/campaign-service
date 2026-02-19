@@ -21,15 +21,28 @@ export const COLD_EMAIL_PROMPT = `You are an expert sales copywriter. Write a pe
 - Key Features: {{clientKeyFeatures}}
 - Differentiators: {{clientProductDifferentiators}}
 - Competitors: {{clientCompetitors}}
-- Social Proof: {{clientSocialProof}}
+- Social Proof (scraped): {{clientSocialProof}}
 - CTA: {{clientCallToAction}}
 - Additional Context: {{clientAdditionalContext}}
+
+## Company Credibility (scraped from brand website)
+- Leadership Team: {{clientLeadership}}
+- Funding: {{clientFunding}}
+- Awards & Recognition: {{clientAwardsAndRecognition}}
+- Revenue Milestones: {{clientRevenueMilestones}}
+
+## Sales Persuasion Intelligence (scraped from brand website)
+- Urgency Signals: {{clientUrgency}}
+- Scarcity Signals: {{clientScarcity}}
+- Risk Reversal (guarantees, trials, refund policy): {{clientRiskReversal}}
+- Price Anchoring: {{clientPriceAnchoring}}
+- Value Stacking: {{clientValueStacking}}
 
 ## Campaign Goals
 - Target Outcome: {{targetOutcome}}
 - Value for Target: {{valueForTarget}}
 
-## Sales Persuasion Levers (user-provided)
+## Sales Persuasion Levers (user-provided, override scraped if present)
 - Urgency: {{urgency}}
 - Scarcity: {{scarcity}}
 - Risk Reversal: {{riskReversal}}
@@ -66,14 +79,24 @@ SUBJECT: [subject line]
 [email body in plain text]`;
 
 export const COLD_EMAIL_VARIABLES = [
+  // Lead fields from fetch-lead
   "leadFirstName", "leadLastName", "leadTitle", "leadEmail",
   "leadLinkedinUrl", "leadCompanyName", "leadCompanyDomain",
   "leadCompanyIndustry", "leadCompanySize", "leadCompanyRevenueUsd",
+  // Brand fields from brand-profile (core)
   "clientCompanyName", "clientBrandUrl", "clientCompanyOverview",
   "clientValueProposition", "clientTargetAudience", "clientCustomerPainPoints",
   "clientKeyFeatures", "clientProductDifferentiators", "clientCompetitors",
   "clientSocialProof", "clientCallToAction", "clientAdditionalContext",
+  // Brand fields from brand-profile (credibility)
+  "clientLeadership", "clientFunding", "clientAwardsAndRecognition",
+  "clientRevenueMilestones",
+  // Brand fields from brand-profile (sales persuasion intelligence)
+  "clientUrgency", "clientScarcity", "clientRiskReversal",
+  "clientPriceAnchoring", "clientValueStacking",
+  // Campaign fields from start-run
   "targetOutcome", "valueForTarget",
+  // User-provided sales persuasion
   "urgency", "scarcity", "riskReversal", "socialProof",
 ];
 
@@ -222,7 +245,7 @@ function buildColdEmailDag() {
           "body.variables.leadCompanyIndustry": "$ref:fetch-lead.output.lead.data.organizationIndustry",
           "body.variables.leadCompanySize": "$ref:fetch-lead.output.lead.data.organizationSize",
           "body.variables.leadCompanyRevenueUsd": "$ref:fetch-lead.output.lead.data.organizationRevenueUsd",
-          // Client/brand fields from brand-profile
+          // Client/brand fields from brand-profile (core)
           "body.variables.clientCompanyName": "$ref:start-run.output.brandDomain",
           "body.variables.clientBrandUrl": "$ref:start-run.output.brandUrl",
           "body.variables.clientCompanyOverview": "$ref:brand-profile.output.profile.companyOverview",
@@ -235,6 +258,17 @@ function buildColdEmailDag() {
           "body.variables.clientSocialProof": "$ref:brand-profile.output.profile.socialProof",
           "body.variables.clientCallToAction": "$ref:brand-profile.output.profile.callToAction",
           "body.variables.clientAdditionalContext": "$ref:brand-profile.output.profile.additionalContext",
+          // Client/brand fields from brand-profile (credibility)
+          "body.variables.clientLeadership": "$ref:brand-profile.output.profile.leadership",
+          "body.variables.clientFunding": "$ref:brand-profile.output.profile.funding",
+          "body.variables.clientAwardsAndRecognition": "$ref:brand-profile.output.profile.awardsAndRecognition",
+          "body.variables.clientRevenueMilestones": "$ref:brand-profile.output.profile.revenueMilestones",
+          // Client/brand fields from brand-profile (sales persuasion intelligence)
+          "body.variables.clientUrgency": "$ref:brand-profile.output.profile.urgency",
+          "body.variables.clientScarcity": "$ref:brand-profile.output.profile.scarcity",
+          "body.variables.clientRiskReversal": "$ref:brand-profile.output.profile.riskReversal",
+          "body.variables.clientPriceAnchoring": "$ref:brand-profile.output.profile.priceAnchoring",
+          "body.variables.clientValueStacking": "$ref:brand-profile.output.profile.valueStacking",
           // Campaign fields from start-run
           "body.variables.targetOutcome": "$ref:start-run.output.targetOutcome",
           "body.variables.valueForTarget": "$ref:start-run.output.valueForTarget",
