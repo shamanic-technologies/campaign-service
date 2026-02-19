@@ -165,8 +165,8 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
     console.log(`[Start Run] Ensuring prompt registered for org ${clerkOrgId} (cached=${promptRegisteredOrgs.has(clerkOrgId)})`);
     await ensurePromptRegistered(clerkOrgId);
 
-    // Create run in runs-service
-    console.log(`[Start Run] Creating run in runs-service for campaign ${campaignId}...`);
+    // Create run in runs-service (parentRunId links to api-service's parent run)
+    console.log(`[Start Run] Creating run in runs-service for campaign ${campaignId} (parentRunId=${campaign.parentRunId || "none"})...`);
     const run = await createRun({
       clerkOrgId,
       appId: APP_ID,
@@ -175,6 +175,7 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       campaignId,
       brandId: campaign.brandId,
       clerkUserId: campaign.createdByUserId || undefined,
+      parentRunId: campaign.parentRunId || undefined,
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);
 

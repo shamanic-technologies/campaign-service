@@ -34,12 +34,14 @@ const validBody = {
   name: "Activation Test Campaign",
   type: "cold-email-outreach",
   clerkOrgId: "org_activation_test",
+  parentRunId: crypto.randomUUID(),
   brandUrl: "https://example.com",
   brandId: crypto.randomUUID(),
   appId: "mcpfactory",
   targetOutcome: "Book sales demos",
   valueForTarget: "Enterprise analytics at startup pricing",
   targetAudience: "CTOs at SaaS companies",
+  keySource: "byok" as const,
 };
 
 describe("Workflow trigger", () => {
@@ -116,12 +118,12 @@ describe("Workflow trigger", () => {
       vi.clearAllMocks();
       mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
 
-      // Activate
+      // Activate (requires parentRunId)
       const activateRes = await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
         .set("x-clerk-org-id", "org_activation_test")
-        .send({ status: "activate" })
+        .send({ status: "activate", parentRunId: crypto.randomUUID() })
         .expect(200);
 
       expect(activateRes.body.campaign.status).toBe("ongoing");
@@ -217,7 +219,7 @@ describe("Workflow trigger", () => {
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
         .set("x-clerk-org-id", "org_activation_test")
-        .send({ status: "activate" })
+        .send({ status: "activate", parentRunId: crypto.randomUUID() })
         .expect(200);
 
       expect(activateRes.body.campaign.status).toBe("ongoing");

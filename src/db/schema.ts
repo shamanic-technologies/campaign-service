@@ -51,6 +51,9 @@ export const campaigns = pgTable(
     // Nullable initially, populated when brand is created/found in brand-service
     brandId: uuid("brand_id"),
 
+    // Parent run ID from api-service — root of the cost tree for this campaign's runs
+    parentRunId: uuid("parent_run_id"),
+
     // App ID from external app/product service
     // Nullable, populated when campaign is associated with an app
     appId: text("app_id"),
