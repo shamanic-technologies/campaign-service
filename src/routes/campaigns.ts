@@ -242,6 +242,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     const {
       name,
       type,
+      parentRunId,
       brandUrl,
       brandId,
       appId,
@@ -270,6 +271,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         createdByUserId: req.userId ?? null,
         name,
         type,
+        parentRunId,
         appId,
         brandUrl: normalizedBrandUrl,
         brandId,
@@ -322,6 +324,11 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     if (!existing) {
       return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    // Activating requires a parentRunId (api-service creates a parent run first)
+    if (req.body.status === "activate" && !req.body.parentRunId) {
+      return res.status(400).json({ error: "parentRunId is required when activating a campaign" });
     }
 
     const statusMap: Record<string, string> = { activate: "ongoing", stop: "stopped" };

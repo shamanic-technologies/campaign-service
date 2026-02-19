@@ -338,6 +338,42 @@ describe("Pipeline routes", () => {
       expect(res.body.brandUrl).toBe("https://www.example.com/path");
     });
 
+    it("should pass parentRunId to createRun when campaign has one", async () => {
+      const parentRunId = crypto.randomUUID();
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+        parentRunId,
+      });
+
+      await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ parentRunId }),
+      );
+    });
+
+    it("should NOT pass parentRunId to createRun when campaign has none", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.not.objectContaining({ parentRunId: expect.any(String) }),
+      );
+    });
+
     it("should NOT call gate checks (gate check is a separate DAG node)", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",

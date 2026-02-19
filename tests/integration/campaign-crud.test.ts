@@ -19,11 +19,13 @@ describe("Campaign CRUD", () => {
     name: "Test Campaign",
     type: "cold-email-outreach",
     clerkOrgId: "org_test_crud",
+    parentRunId: crypto.randomUUID(),
     brandUrl: "https://example.com",
     brandId: crypto.randomUUID(),
     appId: "mcpfactory",
     targetOutcome: "Book sales demos",
     valueForTarget: "Access to enterprise analytics at startup pricing",
+    keySource: "byok" as const,
   };
 
   describe("POST /campaigns", () => {
@@ -50,6 +52,41 @@ describe("Campaign CRUD", () => {
         .set("x-api-key", API_KEY)
         .set("x-clerk-org-id", "org_test_crud")
         .send(body)
+        .expect(400);
+
+      expect(res.body.error).toBeDefined();
+    });
+
+    it("should store parentRunId on the campaign", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(201);
+
+      expect(res.body.campaign.parentRunId).toBe(validBody.parentRunId);
+    });
+
+    it("should reject when parentRunId is missing", async () => {
+      const { parentRunId, ...body } = validBody;
+
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send(body)
+        .expect(400);
+
+      expect(res.body.error).toBeDefined();
+    });
+
+    it("should reject when parentRunId is not a valid UUID", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send({ ...validBody, parentRunId: "not-a-uuid" })
         .expect(400);
 
       expect(res.body.error).toBeDefined();
@@ -203,6 +240,66 @@ describe("Campaign CRUD", () => {
   });
 
   describe("PATCH /campaigns/:id", () => {
+    it("should reject activate without parentRunId", async () => {
+      const createRes = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(201);
+
+      const campaignId = createRes.body.campaign.id;
+
+      // Stop first
+      await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send({ status: "stop" })
+        .expect(200);
+
+      // Activate without parentRunId → 400
+      const res = await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send({ status: "activate" })
+        .expect(400);
+
+      expect(res.body.error).toBe("parentRunId is required when activating a campaign");
+    });
+
+    it("should accept activate with parentRunId and update stored value", async () => {
+      const createRes = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(201);
+
+      const campaignId = createRes.body.campaign.id;
+
+      // Stop first
+      await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send({ status: "stop" })
+        .expect(200);
+
+      // Activate with new parentRunId
+      const newParentRunId = crypto.randomUUID();
+      const activateRes = await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-clerk-org-id", "org_test_crud")
+        .send({ status: "activate", parentRunId: newParentRunId })
+        .expect(200);
+
+      expect(activateRes.body.campaign.parentRunId).toBe(newParentRunId);
+      expect(activateRes.body.campaign.status).toBe("ongoing");
+    });
+
     it("should update targetAudience", async () => {
       // Create campaign first
       const createRes = await request(app)
