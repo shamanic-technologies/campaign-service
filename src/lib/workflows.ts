@@ -102,6 +102,19 @@ export const COLD_EMAIL_VARIABLES = [
 
 const DEFAULT_APP_ID = process.env.APP_ID || "mcpfactory";
 
+// Confirmed workflow names from workflow-service deploy response.
+// Workflow-service is the authority on names — we use its confirmed name
+// rather than assuming campaign.type = workflow name.
+const deployedWorkflowNames = new Map<string, string>();
+
+/**
+ * Get the confirmed workflow name for a campaign type.
+ * Falls back to the campaign type itself if not yet confirmed by workflow-service.
+ */
+export function getConfirmedWorkflowName(campaignType: string): string {
+  return deployedWorkflowNames.get(campaignType) ?? campaignType;
+}
+
 /**
  * Build the cold-email-outreach DAG.
  *
@@ -364,11 +377,11 @@ function buildColdEmailDag() {
 }
 
 export async function deployWorkflows(): Promise<void> {
-  const url = process.env.WINDMILL_SERVICE_URL;
-  const apiKey = process.env.WINDMILL_SERVICE_API_KEY;
+  const url = process.env.WORKFLOW_SERVICE_URL;
+  const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
 
   if (!url || !apiKey) {
-    console.warn("[Campaign Service] WINDMILL_SERVICE_URL or WINDMILL_SERVICE_API_KEY not set, skipping workflow deployment");
+    console.warn("[Campaign Service] WORKFLOW_SERVICE_URL or WORKFLOW_SERVICE_API_KEY not set, skipping workflow deployment");
     return;
   }
 
@@ -397,6 +410,14 @@ export async function deployWorkflows(): Promise<void> {
   }
 
   const data = await res.json() as { workflows?: Array<{ name: string; action: string }> };
+
+  // Store confirmed workflow names from workflow-service response
+  if (data.workflows) {
+    for (const w of data.workflows) {
+      deployedWorkflowNames.set(w.name, w.name);
+    }
+  }
+
   console.log("[Campaign Service] Workflows deployed:", data.workflows?.map((w) => `${w.name} (${w.action})`).join(", "));
 }
 
@@ -404,13 +425,13 @@ export async function executeCampaignWorkflow(
   type: string,
   inputs: { campaignId: string; clerkOrgId: string; appId: string },
 ): Promise<void> {
-  const url = process.env.WINDMILL_SERVICE_URL;
-  const apiKey = process.env.WINDMILL_SERVICE_API_KEY;
+  const url = process.env.WORKFLOW_SERVICE_URL;
+  const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
 
   console.log(`[Workflow] executeCampaignWorkflow called: type=${type}, campaignId=${inputs.campaignId}, clerkOrgId=${inputs.clerkOrgId}, appId=${inputs.appId}`);
 
   if (!url || !apiKey) {
-    console.warn("[Workflow] WINDMILL_SERVICE_URL or WINDMILL_SERVICE_API_KEY not set, skipping workflow execution");
+    console.warn("[Workflow] WORKFLOW_SERVICE_URL or WORKFLOW_SERVICE_API_KEY not set, skipping workflow execution");
     return;
   }
 
@@ -440,7 +461,7 @@ export async function executeCampaignWorkflow(
   }
 
   const data = await res.json() as { id?: string; status?: string };
-  console.log(`[Workflow] ${type} started successfully: windmillRunId=${data.id}, status=${data.status}`);
+  console.log(`[Workflow] ${type} started successfully: workflowRunId=${data.id}, status=${data.status}`);
 }
 
 export { buildColdEmailDag };
