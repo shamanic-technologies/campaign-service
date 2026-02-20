@@ -19,8 +19,8 @@ async function ensurePromptRegistered(appId: string, clerkOrgId: string): Promis
   const cacheKey = `${appId}:${clerkOrgId}`;
   if (promptRegisteredKeys.has(cacheKey)) return;
 
-  const url = process.env.EMAILGENERATION_SERVICE_URL;
-  const apiKey = process.env.EMAILGENERATION_SERVICE_API_KEY;
+  const url = process.env.CONTENTGENERATION_SERVICE_URL;
+  const apiKey = process.env.CONTENTGENERATION_SERVICE_API_KEY;
   if (!url || !apiKey) return;
 
   try {
