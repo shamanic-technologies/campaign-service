@@ -206,6 +206,7 @@ describe("Workflow module", () => {
         "body.clerkUserId": "$ref:start-run.output.clerkUserId",
         "body.parentRunId": "$ref:start-run.output.runId",
         "body.keyType": "$ref:start-run.output.keySource",
+        "body.workflowName": "$ref:start-run.output.workflowName",
         "body.urgency": "$ref:start-run.output.urgency",
         "body.scarcity": "$ref:start-run.output.scarcity",
         "body.riskReversal": "$ref:start-run.output.riskReversal",
@@ -230,6 +231,7 @@ describe("Workflow module", () => {
       expect(mapping["body.brandId"]).toBe("$ref:start-run.output.brandId");
       expect(mapping["body.parentRunId"]).toBe("$ref:start-run.output.runId");
       expect(mapping["body.searchParams"]).toBe("$ref:start-run.output.searchParams");
+      expect(mapping["body.workflowName"]).toBe("$ref:start-run.output.workflowName");
     });
 
     it("should map lead data from fetch-lead and brand data from brand-profile to email-generate", () => {
@@ -243,6 +245,7 @@ describe("Workflow module", () => {
       expect(mapping["body.brandId"]).toBe("$ref:start-run.output.brandId");
       expect(mapping["body.campaignId"]).toBe("$ref:start-run.output.campaignId");
       expect(mapping["body.keyMode"]).toBe("$ref:start-run.output.keySource");
+      expect(mapping["body.workflowName"]).toBe("$ref:start-run.output.workflowName");
       expect(mapping["body.apolloEnrichmentId"]).toBe("$ref:fetch-lead.output.lead.externalId");
 
       // Template variables MUST be nested under body.variables (emailgeneration expects z.record)
@@ -301,6 +304,7 @@ describe("Workflow module", () => {
       expect(mapping["body.recipientCompany"]).toBe("$ref:fetch-lead.output.lead.data.organizationName");
       expect(mapping["body.subject"]).toBe("$ref:email-generate.output.subject");
       expect(mapping["body.sequence"]).toBe("$ref:email-generate.output.sequence");
+      expect(mapping["body.workflowName"]).toBe("$ref:start-run.output.workflowName");
     });
 
     it("should use flow_input for gate-check and start-run inputs", () => {
@@ -384,9 +388,10 @@ describe("Workflow module", () => {
   });
 
   describe("getConfirmedWorkflowName", () => {
-    it("should fall back to campaign type when no deploy has occurred", () => {
-      expect(getConfirmedWorkflowName("cold-email-outreach")).toBe("cold-email-outreach");
-      expect(getConfirmedWorkflowName("journalist-pitch")).toBe("journalist-pitch");
+    it("should throw when workflow name has not been confirmed by deploy", () => {
+      expect(() => getConfirmedWorkflowName("unknown-workflow")).toThrow(
+        'Workflow name "unknown-workflow" not confirmed by workflow-service'
+      );
     });
 
     it("should return confirmed name after successful deploy", async () => {

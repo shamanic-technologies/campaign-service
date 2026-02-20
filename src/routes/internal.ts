@@ -198,6 +198,8 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
 
     console.log(`[Start Run] SUCCESS — runId=${run.id}, brandDomain=${brandDomain}, searchParams=${searchParams ? "yes" : "none"}`);
 
+    const workflowName = getConfirmedWorkflowName(campaign.type);
+
     // Return campaign data for downstream DAG nodes
     res.json({
       runId: run.id,
@@ -207,6 +209,7 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       brandUrl: campaign.brandUrl,
       brandDomain,
       appId,
+      workflowName,
       clerkUserId: campaign.createdByUserId,
       targetOutcome: campaign.targetOutcome,
       valueForTarget: campaign.valueForTarget,
