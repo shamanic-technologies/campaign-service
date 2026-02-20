@@ -10,8 +10,8 @@ process.env.WORKFLOW_SERVICE_URL = "https://workflow.test.local";
 process.env.WORKFLOW_SERVICE_API_KEY = "test-workflow-key";
 process.env.LEAD_SERVICE_URL = "https://lead.test.local";
 process.env.LEAD_SERVICE_API_KEY = "test-lead-key";
-process.env.CONTENTGENERATION_SERVICE_URL = "https://contentgen.test.local";
-process.env.CONTENTGENERATION_SERVICE_API_KEY = "test-contentgen-key";
+process.env.CONTENT_GENERATION_SERVICE_URL = "https://content-generation.test.local";
+process.env.CONTENT_GENERATION_SERVICE_API_KEY = "test-content-generation-key";
 
 beforeAll(() => console.log("Test suite starting..."));
 afterAll(() => console.log("Test suite complete."));
