@@ -64,6 +64,7 @@ router.post("/campaigns/batch-budget-usage", requireApiKey, validateBody(BatchBu
     const campaignRows = await db
       .select({
         id: campaigns.id,
+        appId: campaigns.appId,
         status: campaigns.status,
         maxLeads: campaigns.maxLeads,
         maxBudgetTotalUsd: campaigns.maxBudgetTotalUsd,
@@ -90,7 +91,7 @@ router.post("/campaigns/batch-budget-usage", requireApiKey, validateBody(BatchBu
         try {
           const runResult = await listRuns({
             clerkOrgId: row.clerkOrgId,
-            appId: "mcpfactory",
+            appId: row.appId || "",
             serviceName: "campaign-service",
             taskName: campaignId,
           });
@@ -305,6 +306,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     executeCampaignWorkflow(campaign.type, {
       campaignId: campaign.id,
       clerkOrgId: req.clerkOrgId!,
+      appId: campaign.appId || "",
     }).catch((err) => {
       console.error(`[Campaign Service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
@@ -357,6 +359,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       executeCampaignWorkflow(updated.type, {
         campaignId: updated.id,
         clerkOrgId: req.clerkOrgId!,
+        appId: updated.appId || "",
       }).catch((err) => {
         console.error(`[Campaign Service] Failed to trigger workflow for campaign ${id}:`, err);
       });

@@ -11,13 +11,13 @@ import { extractDomain } from "../lib/domain.js";
 import { GateCheckBody, StartRunBody, EndRunBody } from "../schemas.js";
 
 const router = Router();
-const APP_ID = "mcpfactory";
 
-// In-memory cache: skip prompt registration if already done for this org
-const promptRegisteredOrgs = new Set<string>();
+// In-memory cache: skip prompt registration if already done for this org+app
+const promptRegisteredKeys = new Set<string>();
 
-async function ensurePromptRegistered(clerkOrgId: string): Promise<void> {
-  if (promptRegisteredOrgs.has(clerkOrgId)) return;
+async function ensurePromptRegistered(appId: string, clerkOrgId: string): Promise<void> {
+  const cacheKey = `${appId}:${clerkOrgId}`;
+  if (promptRegisteredKeys.has(cacheKey)) return;
 
   const url = process.env.EMAILGENERATION_SERVICE_URL;
   const apiKey = process.env.EMAILGENERATION_SERVICE_API_KEY;
@@ -33,7 +33,7 @@ async function ensurePromptRegistered(clerkOrgId: string): Promise<void> {
         "x-clerk-org-id": clerkOrgId,
       },
       body: JSON.stringify({
-        appId: APP_ID,
+        appId,
         type: "cold-email",
         prompt: COLD_EMAIL_PROMPT,
         variables: COLD_EMAIL_VARIABLES,
@@ -41,7 +41,7 @@ async function ensurePromptRegistered(clerkOrgId: string): Promise<void> {
     });
 
     if (res.ok) {
-      promptRegisteredOrgs.add(clerkOrgId);
+      promptRegisteredKeys.add(cacheKey);
     } else {
       console.warn(`[Start Run] Prompt registration failed (${res.status})`);
     }
@@ -91,6 +91,7 @@ router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (re
     const result = await runGateChecks({
       campaignId,
       clerkOrgId,
+      appId: campaign.appId || "",
       brandId: campaign.brandId || "",
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
@@ -161,15 +162,17 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       return res.status(400).json({ error: "Campaign has no brandId" });
     }
 
-    // Register prompt template (best-effort, cached per org)
-    console.log(`[Start Run] Ensuring prompt registered for org ${clerkOrgId} (cached=${promptRegisteredOrgs.has(clerkOrgId)})`);
-    await ensurePromptRegistered(clerkOrgId);
+    // Register prompt template (best-effort, cached per app+org)
+    const appId = campaign.appId || "";
+    const cacheKey = `${appId}:${clerkOrgId}`;
+    console.log(`[Start Run] Ensuring prompt registered for app=${appId} org=${clerkOrgId} (cached=${promptRegisteredKeys.has(cacheKey)})`);
+    await ensurePromptRegistered(appId, clerkOrgId);
 
     // Create run in runs-service (parentRunId links to api-service's parent run)
     console.log(`[Start Run] Creating run in runs-service for campaign ${campaignId} (parentRunId=${campaign.parentRunId || "none"})...`);
     const run = await createRun({
       clerkOrgId,
-      appId: APP_ID,
+      appId,
       serviceName: "campaign-service",
       taskName: campaignId,
       campaignId,
@@ -202,7 +205,7 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       brandId: campaign.brandId,
       brandUrl: campaign.brandUrl,
       brandDomain,
-      appId: campaign.appId || APP_ID,
+      appId,
       clerkUserId: campaign.createdByUserId,
       targetOutcome: campaign.targetOutcome,
       valueForTarget: campaign.valueForTarget,
@@ -237,11 +240,22 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
 
     const status = success === true ? "completed" : "failed";
 
+    // Fetch campaign to get appId
+    const org = await db.query.orgs.findFirst({
+      where: eq(orgs.clerkOrgId, clerkOrgId),
+    });
+    const campaign = org
+      ? await db.query.campaigns.findFirst({
+          where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, org.id)),
+        })
+      : undefined;
+    const appId = campaign?.appId || "";
+
     // Find and update running runs for this campaign
     try {
       const { runs } = await listRuns({
         clerkOrgId,
-        appId: APP_ID,
+        appId,
         serviceName: "campaign-service",
         taskName: campaignId,
       });
@@ -265,9 +279,6 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
     // No leads found → auto-stop campaign, no re-trigger
     if (success === true && leadFound === false) {
       try {
-        const org = await db.query.orgs.findFirst({
-          where: eq(orgs.clerkOrgId, clerkOrgId),
-        });
         if (org) {
           await db.update(campaigns)
             .set({ status: "stopped" })
@@ -282,26 +293,24 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
 
     // Re-trigger if campaign is still ongoing
     try {
-      const org = await db.query.orgs.findFirst({
-        where: eq(orgs.clerkOrgId, clerkOrgId),
-      });
       if (!org) {
         console.warn(`[End Run] Org not found for re-trigger: ${clerkOrgId}`);
         return;
       }
 
-      const campaign = await db.query.campaigns.findFirst({
+      // Re-fetch campaign for fresh status (may have been auto-stopped by gate-check)
+      const freshCampaign = await db.query.campaigns.findFirst({
         where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, org.id)),
       });
-      console.log(`[End Run] Campaign status for re-trigger: ${campaign?.status || "NOT FOUND"}, type=${campaign?.type || "N/A"}`);
-      if (campaign?.status !== "ongoing") {
+      console.log(`[End Run] Campaign status for re-trigger: ${freshCampaign?.status || "NOT FOUND"}, type=${freshCampaign?.type || "N/A"}`);
+      if (freshCampaign?.status !== "ongoing") {
         console.log(`[End Run] Campaign ${campaignId} is not ongoing — skipping re-trigger`);
         return;
       }
 
       // Fire-and-forget: gate-check in the next workflow execution will validate limits
-      console.log(`[End Run] Re-triggering workflow type=${campaign.type} for campaign ${campaignId}`);
-      executeCampaignWorkflow(campaign.type, { campaignId, clerkOrgId }).catch((err) => {
+      console.log(`[End Run] Re-triggering workflow type=${freshCampaign.type} for campaign ${campaignId}`);
+      executeCampaignWorkflow(freshCampaign.type, { campaignId, clerkOrgId, appId }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });
     } catch (err) {

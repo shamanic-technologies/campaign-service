@@ -48,6 +48,7 @@ function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
   return {
     campaignId: "campaign-1",
     clerkOrgId: "org-1",
+    appId: "mcpfactory",
     brandId: "brand-1",
     status: "ongoing",
     maxBudgetDailyUsd: "10.00",
