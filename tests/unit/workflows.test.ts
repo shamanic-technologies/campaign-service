@@ -91,7 +91,7 @@ describe("Workflow module", () => {
       expect(serviceMap["start-run"]).toBe("campaign");
       expect(serviceMap["brand-profile"]).toBe("brand");
       expect(serviceMap["fetch-lead"]).toBe("lead");
-      expect(serviceMap["email-generate"]).toBe("contentgeneration");
+      expect(serviceMap["email-generate"]).toBe("content-generation");
       expect(serviceMap["email-send"]).toBe("email-gateway");
       expect(serviceMap["end-run"]).toBe("campaign");
       expect(serviceMap["end-run-error"]).toBe("campaign");

@@ -237,7 +237,7 @@ function buildColdEmailDag() {
         type: "http.call",
         retries: 0, // Non-idempotent generation
         config: {
-          service: "contentgeneration",
+          service: "content-generation",
           method: "POST",
           path: "/generate",
           body: {
