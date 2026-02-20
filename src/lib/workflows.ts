@@ -109,10 +109,14 @@ const deployedWorkflowNames = new Map<string, string>();
 
 /**
  * Get the confirmed workflow name for a campaign type.
- * Falls back to the campaign type itself if not yet confirmed by workflow-service.
+ * Throws if workflow-service hasn't confirmed this name yet (fail-fast).
  */
 export function getConfirmedWorkflowName(campaignType: string): string {
-  return deployedWorkflowNames.get(campaignType) ?? campaignType;
+  const confirmed = deployedWorkflowNames.get(campaignType);
+  if (!confirmed) {
+    throw new Error(`Workflow name "${campaignType}" not confirmed by workflow-service. Was deployWorkflows() called?`);
+  }
+  return confirmed;
 }
 
 /**
@@ -195,6 +199,7 @@ function buildColdEmailDag() {
           "body.parentRunId": "$ref:start-run.output.runId",
           "body.searchParams": "$ref:start-run.output.searchParams",
           "body.keySource": "$ref:start-run.output.keySource",
+          "body.workflowName": "$ref:start-run.output.workflowName",
         },
       },
       // Step 3: Condition — branch on found=true/false
@@ -218,6 +223,7 @@ function buildColdEmailDag() {
           "body.clerkUserId": "$ref:start-run.output.clerkUserId",
           "body.parentRunId": "$ref:start-run.output.runId",
           "body.keyType": "$ref:start-run.output.keySource",
+          "body.workflowName": "$ref:start-run.output.workflowName",
           // User-provided sales context (may complement or override scraped data)
           "body.urgency": "$ref:start-run.output.urgency",
           "body.scarcity": "$ref:start-run.output.scarcity",
@@ -245,6 +251,7 @@ function buildColdEmailDag() {
           "body.campaignId": "$ref:start-run.output.campaignId",
           "body.runId": "$ref:start-run.output.runId",
           "body.keyMode": "$ref:start-run.output.keySource",
+          "body.workflowName": "$ref:start-run.output.workflowName",
           "body.apolloEnrichmentId": "$ref:fetch-lead.output.lead.externalId",
           // Template variables — must be nested under body.variables (emailgeneration expects z.record)
           // Lead fields from fetch-lead (flat camelCase per Apollo spec)
@@ -317,6 +324,7 @@ function buildColdEmailDag() {
           "body.brandId": "$ref:start-run.output.brandId",
           "body.campaignId": "$ref:start-run.output.campaignId",
           "body.runId": "$ref:start-run.output.runId",
+          "body.workflowName": "$ref:start-run.output.workflowName",
           "body.to": "$ref:fetch-lead.output.lead.data.email",
           "body.recipientFirstName": "$ref:fetch-lead.output.lead.data.firstName",
           "body.recipientLastName": "$ref:fetch-lead.output.lead.data.lastName",
