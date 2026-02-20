@@ -36,7 +36,7 @@ router.get("/campaigns/:campaignId/runs/list", requireApiKey, async (req, res) =
 
     const result = await listRuns({
       clerkOrgId: org.clerkOrgId,
-      appId: "mcpfactory",
+      appId: campaign.appId || "",
       serviceName: "campaign-service",
       taskName: campaignId,
     });
@@ -70,7 +70,7 @@ router.get("/campaigns/:campaignId/runs", requireApiKey, serviceAuth, async (req
 
     const result = await listRuns({
       clerkOrgId: req.clerkOrgId!,
-      appId: "mcpfactory",
+      appId: campaign.appId || "",
       serviceName: "campaign-service",
       taskName: campaignId,
     });
@@ -136,7 +136,7 @@ router.post("/campaigns/:campaignId/runs", requireApiKey, async (req, res) => {
 
     const run = await createRun({
       clerkOrgId: org.clerkOrgId,
-      appId: "mcpfactory",
+      appId: campaign.appId || "",
       serviceName: "campaign-service",
       taskName: campaignId,
       brandId: campaign.brandId ?? undefined,

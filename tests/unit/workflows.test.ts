@@ -300,7 +300,7 @@ describe("Workflow module", () => {
       expect(mapping["body.recipientLastName"]).toBe("$ref:fetch-lead.output.lead.data.lastName");
       expect(mapping["body.recipientCompany"]).toBe("$ref:fetch-lead.output.lead.data.organizationName");
       expect(mapping["body.subject"]).toBe("$ref:email-generate.output.subject");
-      expect(mapping["body.htmlBody"]).toBe("$ref:email-generate.output.bodyHtml");
+      expect(mapping["body.sequence"]).toBe("$ref:email-generate.output.sequence");
     });
 
     it("should use flow_input for gate-check and start-run inputs", () => {
@@ -394,6 +394,7 @@ describe("Workflow module", () => {
       await executeCampaignWorkflow("cold-email-outreach", {
         campaignId: "campaign-1",
         clerkOrgId: "org_test",
+        appId: "mcpfactory",
       });
 
       expect(mockFetch).toHaveBeenCalledOnce();
@@ -420,6 +421,7 @@ describe("Workflow module", () => {
       await executeCampaignWorkflow("journalist-pitch", {
         campaignId: "campaign-2",
         clerkOrgId: "org_test",
+        appId: "mcpfactory",
       });
 
       const [url] = mockFetch.mock.calls[0];
@@ -438,6 +440,7 @@ describe("Workflow module", () => {
         executeCampaignWorkflow("cold-email-outreach", {
           campaignId: "campaign-1",
           clerkOrgId: "org_test",
+          appId: "mcpfactory",
         })
       ).resolves.not.toThrow();
     });

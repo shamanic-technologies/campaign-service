@@ -3,13 +3,13 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 
-const APP_ID = "mcpfactory";
 const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 const MAX_CONSECUTIVE_FAILURES = 3;
 
 export interface GateCheckInput {
   campaignId: string;
   clerkOrgId: string;
+  appId: string;
   brandId: string;
   status: string;
   maxBudgetDailyUsd: string | null;
@@ -34,7 +34,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // Fetch all runs for this campaign
   const { runs } = await listRuns({
     clerkOrgId: campaign.clerkOrgId,
-    appId: APP_ID,
+    appId: campaign.appId,
     serviceName: "campaign-service",
     taskName: campaign.campaignId,
   });
@@ -108,7 +108,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   if (campaign.maxLeads != null) {
     let totalServed: number;
     try {
-      const leadStats = await fetchLeadStats(campaign.clerkOrgId, campaign.campaignId, campaign.brandId);
+      const leadStats = await fetchLeadStats(campaign.clerkOrgId, campaign.campaignId, campaign.brandId, campaign.appId);
       const completedCount = finishedRuns.filter((r: Run) => r.status === "completed").length;
       totalServed = Math.max(leadStats.totalServed, completedCount);
     } catch (err: unknown) {
@@ -153,6 +153,7 @@ async function fetchLeadStats(
   clerkOrgId: string,
   campaignId: string,
   brandId: string,
+  appId: string,
 ): Promise<{ totalServed: number }> {
   const url = process.env.LEAD_SERVICE_URL;
   const apiKey = process.env.LEAD_SERVICE_API_KEY;
@@ -162,7 +163,7 @@ async function fetchLeadStats(
   const res = await fetch(`${url}/stats?${params}`, {
     headers: {
       "x-api-key": apiKey,
-      "x-app-id": APP_ID,
+      "x-app-id": appId,
       "x-org-id": clerkOrgId,
     },
   });

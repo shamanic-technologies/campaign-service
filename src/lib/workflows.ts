@@ -100,7 +100,7 @@ export const COLD_EMAIL_VARIABLES = [
   "urgency", "scarcity", "riskReversal", "socialProof",
 ];
 
-const APP_ID = "mcpfactory";
+const DEFAULT_APP_ID = process.env.APP_ID || "mcpfactory";
 
 /**
  * Build the cold-email-outreach DAG.
@@ -309,7 +309,7 @@ function buildColdEmailDag() {
           "body.recipientLastName": "$ref:fetch-lead.output.lead.data.lastName",
           "body.recipientCompany": "$ref:fetch-lead.output.lead.data.organizationName",
           "body.subject": "$ref:email-generate.output.subject",
-          "body.htmlBody": "$ref:email-generate.output.bodyHtml",
+          "body.sequence": "$ref:email-generate.output.sequence",
           "body.metadata.emailGenerationId": "$ref:email-generate.output.id",
         },
       },
@@ -379,7 +379,7 @@ export async function deployWorkflows(): Promise<void> {
       "x-api-key": apiKey,
     },
     body: JSON.stringify({
-      appId: APP_ID,
+      appId: DEFAULT_APP_ID,
       workflows: [
         {
           name: "cold-email-outreach",
@@ -402,12 +402,12 @@ export async function deployWorkflows(): Promise<void> {
 
 export async function executeCampaignWorkflow(
   type: string,
-  inputs: { campaignId: string; clerkOrgId: string },
+  inputs: { campaignId: string; clerkOrgId: string; appId: string },
 ): Promise<void> {
   const url = process.env.WINDMILL_SERVICE_URL;
   const apiKey = process.env.WINDMILL_SERVICE_API_KEY;
 
-  console.log(`[Workflow] executeCampaignWorkflow called: type=${type}, campaignId=${inputs.campaignId}, clerkOrgId=${inputs.clerkOrgId}`);
+  console.log(`[Workflow] executeCampaignWorkflow called: type=${type}, campaignId=${inputs.campaignId}, clerkOrgId=${inputs.clerkOrgId}, appId=${inputs.appId}`);
 
   if (!url || !apiKey) {
     console.warn("[Workflow] WINDMILL_SERVICE_URL or WINDMILL_SERVICE_API_KEY not set, skipping workflow execution");
@@ -424,7 +424,7 @@ export async function executeCampaignWorkflow(
       "x-api-key": apiKey,
     },
     body: JSON.stringify({
-      appId: APP_ID,
+      appId: inputs.appId,
       orgId: inputs.clerkOrgId,
       inputs: {
         campaignId: inputs.campaignId,
