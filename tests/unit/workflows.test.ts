@@ -91,7 +91,7 @@ describe("Workflow module", () => {
       expect(serviceMap["start-run"]).toBe("campaign");
       expect(serviceMap["brand-profile"]).toBe("brand");
       expect(serviceMap["fetch-lead"]).toBe("lead");
-      expect(serviceMap["email-generate"]).toBe("emailgeneration");
+      expect(serviceMap["email-generate"]).toBe("contentgeneration");
       expect(serviceMap["email-send"]).toBe("email-gateway");
       expect(serviceMap["end-run"]).toBe("campaign");
       expect(serviceMap["end-run-error"]).toBe("campaign");
@@ -248,7 +248,7 @@ describe("Workflow module", () => {
       expect(mapping["body.workflowName"]).toBe("$ref:start-run.output.workflowName");
       expect(mapping["body.apolloEnrichmentId"]).toBe("$ref:fetch-lead.output.lead.externalId");
 
-      // Template variables MUST be nested under body.variables (emailgeneration expects z.record)
+      // Template variables MUST be nested under body.variables (content-generation expects z.record)
       // Lead fields from fetch-lead (flat camelCase per Apollo spec)
       expect(mapping["body.variables.leadFirstName"]).toBe("$ref:fetch-lead.output.lead.data.firstName");
       expect(mapping["body.variables.leadLastName"]).toBe("$ref:fetch-lead.output.lead.data.lastName");

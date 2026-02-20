@@ -139,7 +139,7 @@ export function getConfirmedWorkflowName(campaignType: string): string {
  * - fetch-lead:     pull next lead from buffer (lead-service, NO RETRY)
  * - check-lead:     condition node — branches on found=true/false
  * - brand-profile:  fetch brand sales profile (brand-service, only when lead found)
- * - email-generate: generate email via AI (emailgeneration-service, NO RETRY)
+ * - email-generate: generate email via AI (content-generation-service, NO RETRY)
  * - email-send:     send email (email-gateway-service, NO RETRY, validate success)
  * - end-run:        finalize run (always called, receives leadFound flag)
  * - end-run-error:  finalize run as failed (onError handler for real errors)
@@ -237,7 +237,7 @@ function buildColdEmailDag() {
         type: "http.call",
         retries: 0, // Non-idempotent generation
         config: {
-          service: "emailgeneration",
+          service: "contentgeneration",
           method: "POST",
           path: "/generate",
           body: {
@@ -253,7 +253,7 @@ function buildColdEmailDag() {
           "body.keyMode": "$ref:start-run.output.keySource",
           "body.workflowName": "$ref:start-run.output.workflowName",
           "body.apolloEnrichmentId": "$ref:fetch-lead.output.lead.externalId",
-          // Template variables — must be nested under body.variables (emailgeneration expects z.record)
+          // Template variables — must be nested under body.variables (content-generation expects z.record)
           // Lead fields from fetch-lead (flat camelCase per Apollo spec)
           "body.variables.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName",
           "body.variables.leadLastName": "$ref:fetch-lead.output.lead.data.lastName",
