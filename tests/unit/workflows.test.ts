@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { buildColdEmailDag, COLD_EMAIL_PROMPT, COLD_EMAIL_VARIABLES } from "../../src/lib/workflows.js";
+import { buildColdEmailDag, COLD_EMAIL_PROMPT, COLD_EMAIL_VARIABLES, getConfirmedWorkflowName } from "../../src/lib/workflows.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -348,9 +348,9 @@ describe("Workflow module", () => {
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe("https://windmill.test.local/workflows/deploy");
+      expect(url).toBe("https://workflow.test.local/workflows/deploy");
       expect(opts.method).toBe("PUT");
-      expect(opts.headers["x-api-key"]).toBe("test-windmill-key");
+      expect(opts.headers["x-api-key"]).toBe("test-workflow-key");
 
       const body = JSON.parse(opts.body);
       expect(body.appId).toBe("mcpfactory");
@@ -360,15 +360,15 @@ describe("Workflow module", () => {
       expect(body.workflows[0].dag.onError).toBe("end-run-error");
     });
 
-    it("should not throw when windmill env vars are missing", async () => {
-      const originalUrl = process.env.WINDMILL_SERVICE_URL;
-      delete process.env.WINDMILL_SERVICE_URL;
+    it("should not throw when workflow-service env vars are missing", async () => {
+      const originalUrl = process.env.WORKFLOW_SERVICE_URL;
+      delete process.env.WORKFLOW_SERVICE_URL;
 
       const { deployWorkflows } = await import("../../src/lib/workflows.js");
       await expect(deployWorkflows()).resolves.not.toThrow();
       expect(mockFetch).not.toHaveBeenCalled();
 
-      process.env.WINDMILL_SERVICE_URL = originalUrl;
+      process.env.WORKFLOW_SERVICE_URL = originalUrl;
     });
 
     it("should not throw when deployment fails", async () => {
@@ -380,6 +380,25 @@ describe("Workflow module", () => {
 
       const { deployWorkflows } = await import("../../src/lib/workflows.js");
       await expect(deployWorkflows()).resolves.not.toThrow();
+    });
+  });
+
+  describe("getConfirmedWorkflowName", () => {
+    it("should fall back to campaign type when no deploy has occurred", () => {
+      expect(getConfirmedWorkflowName("cold-email-outreach")).toBe("cold-email-outreach");
+      expect(getConfirmedWorkflowName("journalist-pitch")).toBe("journalist-pitch");
+    });
+
+    it("should return confirmed name after successful deploy", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ workflows: [{ name: "cold-email-outreach", action: "created" }] }),
+      });
+
+      const { deployWorkflows } = await import("../../src/lib/workflows.js");
+      await deployWorkflows();
+
+      expect(getConfirmedWorkflowName("cold-email-outreach")).toBe("cold-email-outreach");
     });
   });
 
@@ -399,7 +418,7 @@ describe("Workflow module", () => {
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe("https://windmill.test.local/workflows/by-name/cold-email-outreach/execute");
+      expect(url).toBe("https://workflow.test.local/workflows/by-name/cold-email-outreach/execute");
       expect(opts.method).toBe("POST");
 
       const body = JSON.parse(opts.body);
@@ -425,7 +444,7 @@ describe("Workflow module", () => {
       });
 
       const [url] = mockFetch.mock.calls[0];
-      expect(url).toBe("https://windmill.test.local/workflows/by-name/journalist-pitch/execute");
+      expect(url).toBe("https://workflow.test.local/workflows/by-name/journalist-pitch/execute");
     });
 
     it("should not throw when execution fails", async () => {

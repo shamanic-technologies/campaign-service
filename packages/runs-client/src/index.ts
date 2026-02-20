@@ -64,6 +64,7 @@ export interface CreateRunParams {
   brandId?: string;
   campaignId?: string;
   parentRunId?: string;
+  workflowName?: string;
 }
 
 export interface CostItem {

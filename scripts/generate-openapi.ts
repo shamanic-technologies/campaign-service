@@ -271,7 +271,7 @@ registry.registerPath({
   },
 });
 
-// === PIPELINE (called by DAG via windmill) ===
+// === PIPELINE (called by DAG via workflow-service) ===
 
 registry.registerPath({
   method: "post",

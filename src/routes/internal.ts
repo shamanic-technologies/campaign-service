@@ -6,7 +6,7 @@ import { requireApiKey } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun } from "@mcpfactory/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
-import { executeCampaignWorkflow } from "../lib/workflows.js";
+import { executeCampaignWorkflow, getConfirmedWorkflowName } from "../lib/workflows.js";
 import { extractDomain } from "../lib/domain.js";
 import { GateCheckBody, StartRunBody, EndRunBody } from "../schemas.js";
 
@@ -179,6 +179,7 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       brandId: campaign.brandId,
       clerkUserId: campaign.createdByUserId || undefined,
       parentRunId: campaign.parentRunId || undefined,
+      workflowName: getConfirmedWorkflowName(campaign.type),
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);
 
