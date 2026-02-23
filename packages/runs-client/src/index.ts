@@ -25,36 +25,6 @@ export interface Run {
   updatedAt: string;
 }
 
-export interface RunCost {
-  id: string;
-  runId: string;
-  costName: string;
-  quantity: string;
-  unitCostInUsdCents: string;
-  totalCostInUsdCents: string;
-  createdAt: string;
-}
-
-export interface DescendantRun {
-  id: string;
-  parentRunId: string | null;
-  serviceName: string;
-  taskName: string;
-  status: string;
-  startedAt: string;
-  completedAt: string | null;
-  costs: RunCost[];
-  ownCostInUsdCents: string;
-}
-
-export interface RunWithCosts extends Run {
-  costs: RunCost[];
-  ownCostInUsdCents: string;
-  childrenCostInUsdCents: string;
-  totalCostInUsdCents: string;
-  descendantRuns: DescendantRun[];
-}
-
 export interface CreateRunParams {
   clerkOrgId: string;
   appId: string;
@@ -65,11 +35,6 @@ export interface CreateRunParams {
   campaignId?: string;
   parentRunId?: string;
   workflowName?: string;
-}
-
-export interface CostItem {
-  costName: string;
-  quantity: number;
 }
 
 export interface ListRunsParams {
@@ -86,6 +51,31 @@ export interface ListRunsParams {
   startedBefore?: string;
   limit?: number;
   offset?: number;
+}
+
+export interface BudgetWindow {
+  label: string;
+  since?: string;
+}
+
+export interface BudgetWindowResult {
+  label: string;
+  totalCostInUsdCents: string;
+  actualCostInUsdCents: string;
+  provisionedCostInUsdCents: string;
+}
+
+export interface StatsBudgetParams {
+  clerkOrgId: string;
+  appId: string;
+  campaignId?: string;
+  brandId?: string;
+  workflowName?: string;
+  windows: BudgetWindow[];
+}
+
+export interface StatsBudgetResponse {
+  windows: BudgetWindowResult[];
 }
 
 // ─── HTTP helpers ────────────────────────────────────────────────────────────
@@ -141,27 +131,6 @@ export async function updateRun(
 }
 
 /**
- * Add cost line items to a run.
- * Cost names must be registered in costs-service.
- */
-export async function addCosts(
-  runId: string,
-  items: CostItem[]
-): Promise<{ costs: RunCost[] }> {
-  return runsRequest<{ costs: RunCost[] }>(`/v1/runs/${runId}/costs`, {
-    method: "POST",
-    body: { items },
-  });
-}
-
-/**
- * Get a single run with costs (including recursive children costs).
- */
-export async function getRun(runId: string): Promise<RunWithCosts> {
-  return runsRequest<RunWithCosts>(`/v1/runs/${runId}`);
-}
-
-/**
  * List runs with filters.
  */
 export async function listRuns(
@@ -188,13 +157,12 @@ export async function listRuns(
 }
 
 /**
- * Fetch multiple runs with costs in parallel.
- * Returns a Map of runId → RunWithCosts.
+ * Get aggregated costs across temporal windows.
+ * Used for budget checks — returns actual + provisioned costs per window.
  */
-export async function getRunsBatch(
-  runIds: string[]
-): Promise<Map<string, RunWithCosts>> {
-  if (runIds.length === 0) return new Map();
-  const results = await Promise.all(runIds.map((id) => getRun(id)));
-  return new Map(results.map((r) => [r.id, r]));
+export async function getStatsBudget(params: StatsBudgetParams): Promise<StatsBudgetResponse> {
+  return runsRequest<StatsBudgetResponse>("/v1/stats/budget", {
+    method: "POST",
+    body: params,
+  });
 }

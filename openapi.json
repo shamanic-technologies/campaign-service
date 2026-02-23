@@ -1,0 +1,1294 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Campaign Service",
+    "description": "API for managing marketing campaigns",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3003"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Service API key (CAMPAIGN_SERVICE_API_KEY)"
+      }
+    },
+    "schemas": {
+      "Campaign": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdByUserId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "brandUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "brandId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "parentRunId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "appId": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetAudience": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetOutcome": {
+            "type": "string",
+            "nullable": true
+          },
+          "valueForTarget": {
+            "type": "string",
+            "nullable": true
+          },
+          "urgency": {
+            "type": "string",
+            "nullable": true
+          },
+          "scarcity": {
+            "type": "string",
+            "nullable": true
+          },
+          "riskReversal": {
+            "type": "string",
+            "nullable": true
+          },
+          "socialProof": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxBudgetDailyUsd": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxBudgetWeeklyUsd": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxBudgetMonthlyUsd": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxBudgetTotalUsd": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxLeads": {
+            "type": "integer",
+            "nullable": true
+          },
+          "startDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "endDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "keySource": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "toResumeAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "notifyFrequency": {
+            "type": "string",
+            "nullable": true
+          },
+          "notifyChannel": {
+            "type": "string",
+            "nullable": true
+          },
+          "notifyDestination": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orgId",
+          "createdByUserId",
+          "name",
+          "type",
+          "brandUrl",
+          "brandId",
+          "parentRunId",
+          "appId",
+          "targetAudience",
+          "targetOutcome",
+          "valueForTarget",
+          "urgency",
+          "scarcity",
+          "riskReversal",
+          "socialProof",
+          "maxBudgetDailyUsd",
+          "maxBudgetWeeklyUsd",
+          "maxBudgetMonthlyUsd",
+          "maxBudgetTotalUsd",
+          "maxLeads",
+          "startDate",
+          "endDate",
+          "keySource",
+          "status",
+          "toResumeAt",
+          "notifyFrequency",
+          "notifyChannel",
+          "notifyDestination",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "CreateCampaignBody": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "clerkOrgId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parentRunId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "brandUrl": {
+            "type": "string",
+            "minLength": 1
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "appId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targetAudience": {
+            "type": "string"
+          },
+          "targetOutcome": {
+            "type": "string",
+            "minLength": 1
+          },
+          "valueForTarget": {
+            "type": "string",
+            "minLength": 1
+          },
+          "urgency": {
+            "type": "string"
+          },
+          "scarcity": {
+            "type": "string"
+          },
+          "riskReversal": {
+            "type": "string"
+          },
+          "socialProof": {
+            "type": "string"
+          },
+          "maxBudgetDailyUsd": {
+            "type": "string"
+          },
+          "maxBudgetWeeklyUsd": {
+            "type": "string"
+          },
+          "maxBudgetMonthlyUsd": {
+            "type": "string"
+          },
+          "maxBudgetTotalUsd": {
+            "type": "string"
+          },
+          "maxLeads": {
+            "type": "integer"
+          },
+          "startDate": {
+            "type": "string"
+          },
+          "endDate": {
+            "type": "string"
+          },
+          "keySource": {
+            "type": "string",
+            "enum": [
+              "byok",
+              "app"
+            ],
+            "description": "How downstream services resolve API keys. \"byok\" = org's own keys via key-service, \"app\" = platform keys."
+          },
+          "notifyFrequency": {
+            "type": "string"
+          },
+          "notifyChannel": {
+            "type": "string"
+          },
+          "notifyDestination": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "clerkOrgId",
+          "parentRunId",
+          "brandUrl",
+          "brandId",
+          "appId",
+          "targetOutcome",
+          "valueForTarget",
+          "keySource"
+        ]
+      },
+      "UpdateCampaignBody": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "parentRunId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "brandUrl": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetAudience": {
+            "type": "string"
+          },
+          "targetOutcome": {
+            "type": "string",
+            "minLength": 1
+          },
+          "valueForTarget": {
+            "type": "string",
+            "minLength": 1
+          },
+          "urgency": {
+            "type": "string"
+          },
+          "scarcity": {
+            "type": "string"
+          },
+          "riskReversal": {
+            "type": "string"
+          },
+          "socialProof": {
+            "type": "string"
+          },
+          "maxBudgetDailyUsd": {
+            "type": "string"
+          },
+          "maxBudgetWeeklyUsd": {
+            "type": "string"
+          },
+          "maxBudgetMonthlyUsd": {
+            "type": "string"
+          },
+          "maxBudgetTotalUsd": {
+            "type": "string"
+          },
+          "maxLeads": {
+            "type": "integer"
+          },
+          "startDate": {
+            "type": "string"
+          },
+          "endDate": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "activate",
+              "stop"
+            ]
+          },
+          "keySource": {
+            "type": "string",
+            "enum": [
+              "byok",
+              "app"
+            ]
+          },
+          "notifyFrequency": {
+            "type": "string"
+          },
+          "notifyChannel": {
+            "type": "string"
+          },
+          "notifyDestination": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          }
+        }
+      },
+      "StatsResponse": {
+        "type": "object",
+        "properties": {
+          "stats": {
+            "type": "object",
+            "properties": {
+              "totalCampaigns": {
+                "type": "number"
+              },
+              "byStatus": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number"
+                }
+              },
+              "budgetTotalUsd": {
+                "type": "number",
+                "nullable": true
+              },
+              "maxLeadsTotal": {
+                "type": "number",
+                "nullable": true
+              }
+            },
+            "required": [
+              "totalCampaigns",
+              "byStatus",
+              "budgetTotalUsd",
+              "maxLeadsTotal"
+            ]
+          }
+        },
+        "required": [
+          "stats"
+        ]
+      },
+      "StatsFilterBody": {
+        "type": "object",
+        "properties": {
+          "clerkOrgId": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          }
+        }
+      },
+      "BatchBudgetUsageBody": {
+        "type": "object",
+        "properties": {
+          "campaignIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "campaignIds"
+        ]
+      },
+      "GateCheckResponse": {
+        "type": "object",
+        "properties": {
+          "allowed": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "autoStopped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "allowed"
+        ]
+      },
+      "GateCheckBody": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clerkOrgId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "campaignId",
+          "clerkOrgId"
+        ]
+      },
+      "StartRunResponse": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "campaignId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clerkOrgId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "brandUrl": {
+            "type": "string"
+          },
+          "brandDomain": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "workflowName": {
+            "type": "string"
+          },
+          "clerkUserId": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetOutcome": {
+            "type": "string",
+            "nullable": true
+          },
+          "valueForTarget": {
+            "type": "string",
+            "nullable": true
+          },
+          "urgency": {
+            "type": "string",
+            "nullable": true
+          },
+          "scarcity": {
+            "type": "string",
+            "nullable": true
+          },
+          "riskReversal": {
+            "type": "string",
+            "nullable": true
+          },
+          "socialProof": {
+            "type": "string",
+            "nullable": true
+          },
+          "searchParams": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "keySource": {
+            "type": "string",
+            "enum": [
+              "byok",
+              "app"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "campaignId",
+          "clerkOrgId",
+          "brandId",
+          "brandUrl",
+          "brandDomain",
+          "appId",
+          "workflowName",
+          "clerkUserId",
+          "targetOutcome",
+          "valueForTarget",
+          "urgency",
+          "scarcity",
+          "riskReversal",
+          "socialProof",
+          "searchParams",
+          "keySource"
+        ]
+      },
+      "StartRunBody": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clerkOrgId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "campaignId",
+          "clerkOrgId"
+        ]
+      },
+      "EndRunResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "EndRunBody": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clerkOrgId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "leadFound": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "campaignId",
+          "clerkOrgId",
+          "success"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "service": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "service"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/debug": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Debug health check with DB status",
+        "responses": {
+          "200": {
+            "description": "Debug info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dbUrlConfigured": {
+                      "type": "boolean"
+                    },
+                    "dbStatus": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "dbUrlConfigured",
+                    "dbStatus"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/campaigns": {
+      "get": {
+        "tags": [
+          "Campaigns"
+        ],
+        "summary": "List campaigns for org",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "brandId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of campaigns",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "campaigns": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Campaign"
+                      }
+                    }
+                  },
+                  "required": [
+                    "campaigns"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Campaigns"
+        ],
+        "summary": "Create a new campaign",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCampaignBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Campaign created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "campaign": {
+                      "$ref": "#/components/schemas/Campaign"
+                    }
+                  },
+                  "required": [
+                    "campaign"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/campaigns/{id}": {
+      "get": {
+        "tags": [
+          "Campaigns"
+        ],
+        "summary": "Get a specific campaign",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Campaign details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "campaign": {
+                      "$ref": "#/components/schemas/Campaign"
+                    }
+                  },
+                  "required": [
+                    "campaign"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Campaigns"
+        ],
+        "summary": "Update a campaign",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCampaignBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Campaign updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "campaign": {
+                      "$ref": "#/components/schemas/Campaign"
+                    }
+                  },
+                  "required": [
+                    "campaign"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Campaigns"
+        ],
+        "summary": "Delete a campaign",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Campaign deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/campaigns/stats": {
+      "post": {
+        "tags": [
+          "Campaigns"
+        ],
+        "summary": "Campaign stats from own DB",
+        "description": "Returns campaign counts, status breakdown, and configured budget totals (not actual costs). Requires API key.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsFilterBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Campaign stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/campaigns/list": {
+      "get": {
+        "tags": [
+          "Scheduler"
+        ],
+        "summary": "List all campaigns across all orgs",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All campaigns with org info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "campaigns": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/Campaign"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "clerkOrgId": {
+                                "type": "string"
+                              },
+                              "brandDomain": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "brandName": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            },
+                            "required": [
+                              "clerkOrgId",
+                              "brandDomain",
+                              "brandName"
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "campaigns"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/campaigns/batch-budget-usage": {
+      "post": {
+        "tags": [
+          "Scheduler"
+        ],
+        "summary": "Get cost data for multiple campaigns",
+        "description": "Returns budget usage (totalCostInUsdCents) per campaign via runs-service stats/budget endpoint",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchBudgetUsageBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stats per campaign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "string"
+                          },
+                          "maxLeads": {
+                            "type": "number",
+                            "nullable": true
+                          },
+                          "maxBudgetTotalUsd": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "totalCostInUsdCents": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "results"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gate-check": {
+      "post": {
+        "tags": [
+          "Pipeline"
+        ],
+        "summary": "Check if a campaign can run a new iteration",
+        "description": "Validates budget limits (daily/weekly/monthly/total) via runs-service stats/budget, volume limits (maxLeads), campaign status, and consecutive failures. Auto-stops the campaign if total budget or maxLeads is exceeded. Called as the first DAG node.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateCheckBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Gate check result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateCheckResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Campaign or org not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/start-run": {
+      "post": {
+        "tags": [
+          "Pipeline"
+        ],
+        "summary": "Create a run and return campaign data for downstream nodes",
+        "description": "Creates a new run in runs-service and returns all campaign data needed by downstream DAG nodes (brand-profile, fetch-lead, email-generate, etc.).",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRunBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Run created, campaign data returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing brandUrl or brandId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Campaign or org not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/end-run": {
+      "post": {
+        "tags": [
+          "Pipeline"
+        ],
+        "summary": "Finalize run and re-trigger workflow if campaign is ongoing",
+        "description": "Finds any running runs for the campaign and marks them as completed or failed. Then re-triggers the workflow if the campaign is still ongoing. Does not require runId — finds running runs via runs-service.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndRunBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Run finalized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndRunResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

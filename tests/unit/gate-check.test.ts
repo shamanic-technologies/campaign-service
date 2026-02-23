@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const {
   mockListRuns,
   mockUpdateRun,
-  mockGetRunsBatch,
+  mockGetStatsBudget,
   mockDbUpdate,
 } = vi.hoisted(() => {
   const mockSet = vi.fn().mockReturnValue({
@@ -12,7 +12,7 @@ const {
   return {
     mockListRuns: vi.fn(),
     mockUpdateRun: vi.fn(),
-    mockGetRunsBatch: vi.fn(),
+    mockGetStatsBudget: vi.fn(),
     mockDbUpdate: vi.fn().mockReturnValue({ set: mockSet }),
   };
 });
@@ -20,8 +20,7 @@ const {
 vi.mock("@mcpfactory/runs-client", () => ({
   listRuns: mockListRuns,
   updateRun: mockUpdateRun,
-  getRunsBatch: mockGetRunsBatch,
-  getRun: vi.fn(),
+  getStatsBudget: mockGetStatsBudget,
 }));
 
 vi.mock("../../src/db/index.js", () => ({
@@ -79,11 +78,22 @@ function makeRun(overrides: Partial<{ id: string; status: string; startedAt: str
   };
 }
 
+function makeBudgetResponse(windows: Array<{ label: string; totalCostInUsdCents: string }>) {
+  return {
+    windows: windows.map(w => ({
+      label: w.label,
+      totalCostInUsdCents: w.totalCostInUsdCents,
+      actualCostInUsdCents: w.totalCostInUsdCents,
+      provisionedCostInUsdCents: "0",
+    })),
+  };
+}
+
 describe("Gate Check", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListRuns.mockResolvedValue({ runs: [] });
-    mockGetRunsBatch.mockResolvedValue(new Map());
+    mockGetStatsBudget.mockResolvedValue({ windows: [] });
     mockUpdateRun.mockResolvedValue({});
   });
 
@@ -155,10 +165,8 @@ describe("Gate Check", () => {
     });
 
     it("should block when daily budget is exceeded", async () => {
-      const run = makeRun({ id: "run-1", status: "completed" });
-      mockListRuns.mockResolvedValue({ runs: [run] });
-      mockGetRunsBatch.mockResolvedValue(
-        new Map([["run-1", { totalCostInUsdCents: "1500" }]])
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "1500" }])
       );
 
       const result = await runGateChecks(makeCampaign({
@@ -169,10 +177,8 @@ describe("Gate Check", () => {
     });
 
     it("should allow when budget is not exceeded", async () => {
-      const run = makeRun({ id: "run-1", status: "completed" });
-      mockListRuns.mockResolvedValue({ runs: [run] });
-      mockGetRunsBatch.mockResolvedValue(
-        new Map([["run-1", { totalCostInUsdCents: "500" }]])
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "500" }])
       );
 
       const result = await runGateChecks(makeCampaign({
@@ -182,10 +188,11 @@ describe("Gate Check", () => {
     });
 
     it("should auto-stop campaign when total budget is exceeded", async () => {
-      const run = makeRun({ id: "run-1", status: "completed" });
-      mockListRuns.mockResolvedValue({ runs: [run] });
-      mockGetRunsBatch.mockResolvedValue(
-        new Map([["run-1", { totalCostInUsdCents: "5500" }]])
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "daily", totalCostInUsdCents: "500" },
+          { label: "total", totalCostInUsdCents: "5500" },
+        ])
       );
 
       const result = await runGateChecks(makeCampaign({
@@ -197,6 +204,40 @@ describe("Gate Check", () => {
       expect(result.autoStopped).toBe(true);
       expect(mockDbUpdate).toHaveBeenCalled();
     });
+
+    it("should call getStatsBudget with correct windows", async () => {
+      await runGateChecks(makeCampaign({
+        maxBudgetDailyUsd: "10.00",
+        maxBudgetWeeklyUsd: "50.00",
+        maxBudgetTotalUsd: "100.00",
+      }));
+
+      expect(mockGetStatsBudget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clerkOrgId: "org-1",
+          appId: "mcpfactory",
+          campaignId: "campaign-1",
+          windows: expect.arrayContaining([
+            expect.objectContaining({ label: "daily" }),
+            expect.objectContaining({ label: "weekly" }),
+            expect.objectContaining({ label: "total" }),
+          ]),
+        })
+      );
+    });
+
+    it("should only include windows for configured budgets", async () => {
+      await runGateChecks(makeCampaign({
+        maxBudgetDailyUsd: "10.00",
+        maxBudgetWeeklyUsd: null,
+        maxBudgetMonthlyUsd: null,
+        maxBudgetTotalUsd: null,
+      }));
+
+      const call = mockGetStatsBudget.mock.calls[0][0];
+      expect(call.windows).toHaveLength(1);
+      expect(call.windows[0].label).toBe("daily");
+    });
   });
 
   describe("Volume check", () => {
@@ -207,7 +248,6 @@ describe("Gate Check", () => {
         makeRun({ id: "r3", status: "completed" }),
       ];
       mockListRuns.mockResolvedValue({ runs });
-      mockGetRunsBatch.mockResolvedValue(new Map());
 
       // Mock lead stats
       mockFetch.mockResolvedValueOnce({
@@ -224,7 +264,6 @@ describe("Gate Check", () => {
     it("should allow when maxLeads is not reached", async () => {
       const runs = [makeRun({ id: "r1", status: "completed" })];
       mockListRuns.mockResolvedValue({ runs });
-      mockGetRunsBatch.mockResolvedValue(new Map());
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -241,7 +280,6 @@ describe("Gate Check", () => {
         makeRun({ id: "r2", status: "completed" }),
       ];
       mockListRuns.mockResolvedValue({ runs });
-      mockGetRunsBatch.mockResolvedValue(new Map());
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -254,7 +292,6 @@ describe("Gate Check", () => {
 
     it("should block on non-404 lead-service error (fail-closed)", async () => {
       mockListRuns.mockResolvedValue({ runs: [] });
-      mockGetRunsBatch.mockResolvedValue(new Map());
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -275,7 +312,6 @@ describe("Gate Check", () => {
         makeRun({ id: "r3", status: "failed", startedAt: new Date(Date.now() - 3000).toISOString() }),
       ];
       mockListRuns.mockResolvedValue({ runs });
-      mockGetRunsBatch.mockResolvedValue(new Map());
 
       const result = await runGateChecks(makeCampaign());
       expect(result.allowed).toBe(false);
@@ -290,7 +326,6 @@ describe("Gate Check", () => {
         makeRun({ id: "r3", status: "failed", startedAt: new Date(Date.now() - 3000).toISOString() }),
       ];
       mockListRuns.mockResolvedValue({ runs });
-      mockGetRunsBatch.mockResolvedValue(new Map());
 
       const result = await runGateChecks(makeCampaign());
       expect(result.allowed).toBe(true);
@@ -302,7 +337,6 @@ describe("Gate Check", () => {
         makeRun({ id: "r2", status: "failed", startedAt: new Date(Date.now() - 2000).toISOString() }),
       ];
       mockListRuns.mockResolvedValue({ runs });
-      mockGetRunsBatch.mockResolvedValue(new Map());
 
       const result = await runGateChecks(makeCampaign());
       expect(result.allowed).toBe(true);

@@ -127,12 +127,6 @@ export const BatchBudgetUsageBody = z.object({
   campaignIds: z.array(z.string()).min(1, "campaignIds array is required"),
 }).openapi("BatchBudgetUsageBody");
 
-// --- Run status ---
-
-export const RunStatusUpdate = z.object({
-  status: z.enum(["completed", "failed"]),
-}).openapi("RunStatusUpdate");
-
 // --- Pipeline endpoints (called by DAG) ---
 
 export const GateCheckBody = z.object({

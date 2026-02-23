@@ -12,7 +12,6 @@ const __dirname = dirname(__filename);
 const openapiPath = join(__dirname, "..", "openapi.json");
 import healthRoutes from "./routes/health.js";
 import campaignsRoutes from "./routes/campaigns.js";
-import runsRoutes from "./routes/runs.js";
 import internalRoutes from "./routes/internal.js";
 import { deployWorkflows } from "./lib/workflows.js";
 const app = express();
@@ -34,7 +33,6 @@ app.use(express.json());
 // Routes
 app.use(healthRoutes);
 app.use(campaignsRoutes);
-app.use(runsRoutes);
 app.use(internalRoutes);
 
 // OpenAPI spec endpoint

@@ -1,4 +1,4 @@
-import { listRuns, updateRun, getRunsBatch, type Run } from "@mcpfactory/runs-client";
+import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow } from "@mcpfactory/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
@@ -31,7 +31,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     return { allowed: false, reason: "Campaign is not ongoing" };
   }
 
-  // Fetch all runs for this campaign
+  // Fetch all runs for this campaign (needed for stale cleanup, running check, consecutive failures)
   const { runs } = await listRuns({
     clerkOrgId: campaign.clerkOrgId,
     appId: campaign.appId,
@@ -64,56 +64,59 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     return { allowed: false, reason: "No budget defined (fail-closed)" };
   }
 
-  // Batch-fetch costs for completed/failed runs
-  const finishedRuns = runs.filter((r: Run) => r.status === "completed" || r.status === "failed");
-  const runsWithCosts = finishedRuns.length > 0
-    ? await getRunsBatch(finishedRuns.map((r: Run) => r.id)).catch(() => new Map())
-    : new Map();
+  // Build windows for configured budgets only
+  const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean }> = [];
+  const windows: BudgetWindow[] = [];
 
-  const budgetWindows: Array<{
-    limit: string | null;
-    since: Date | undefined;
-    label: string;
-    autoStop: boolean;
-  }> = [
-    { limit: campaign.maxBudgetDailyUsd, since: startOfToday(), label: "daily", autoStop: false },
-    { limit: campaign.maxBudgetWeeklyUsd, since: daysAgo(7), label: "weekly", autoStop: false },
-    { limit: campaign.maxBudgetMonthlyUsd, since: startOfMonth(), label: "monthly", autoStop: false },
-    { limit: campaign.maxBudgetTotalUsd, since: undefined, label: "total", autoStop: true },
-  ];
+  if (campaign.maxBudgetDailyUsd) {
+    windows.push({ label: "daily", since: startOfToday().toISOString() });
+    budgetLimits.push({ limit: campaign.maxBudgetDailyUsd, label: "daily", autoStop: false });
+  }
+  if (campaign.maxBudgetWeeklyUsd) {
+    windows.push({ label: "weekly", since: daysAgo(7).toISOString() });
+    budgetLimits.push({ limit: campaign.maxBudgetWeeklyUsd, label: "weekly", autoStop: false });
+  }
+  if (campaign.maxBudgetMonthlyUsd) {
+    windows.push({ label: "monthly", since: startOfMonth().toISOString() });
+    budgetLimits.push({ limit: campaign.maxBudgetMonthlyUsd, label: "monthly", autoStop: false });
+  }
+  if (campaign.maxBudgetTotalUsd) {
+    windows.push({ label: "total" });
+    budgetLimits.push({ limit: campaign.maxBudgetTotalUsd, label: "total", autoStop: true });
+  }
 
-  for (const window of budgetWindows) {
-    if (!window.limit) continue;
-    const limitCents = parseFloat(window.limit) * 100;
+  // Single call to runs-service for all budget windows
+  const budgetResult = await getStatsBudget({
+    clerkOrgId: campaign.clerkOrgId,
+    appId: campaign.appId,
+    campaignId: campaign.campaignId,
+    windows,
+  });
 
-    let totalCostCents = 0;
-    for (const run of finishedRuns) {
-      if (window.since && new Date(run.startedAt) < window.since) continue;
-      const runWithCosts = runsWithCosts.get(run.id);
-      if (runWithCosts) {
-        totalCostCents += parseFloat(runWithCosts.totalCostInUsdCents) || 0;
-      }
-    }
+  for (const budgetLimit of budgetLimits) {
+    const limitCents = parseFloat(budgetLimit.limit) * 100;
+    const windowResult = budgetResult.windows.find(w => w.label === budgetLimit.label);
+    const totalCostCents = windowResult ? parseFloat(windowResult.totalCostInUsdCents) || 0 : 0;
 
     if (totalCostCents >= limitCents) {
-      if (window.autoStop) {
+      if (budgetLimit.autoStop) {
         await autoStopCampaign(campaign.campaignId);
         return { allowed: false, reason: "Total budget exceeded", autoStopped: true };
       }
-      return { allowed: false, reason: `${window.label} budget exceeded` };
+      return { allowed: false, reason: `${budgetLimit.label} budget exceeded` };
     }
   }
 
   // 4. Volume check
   if (campaign.maxLeads != null) {
+    const completedRuns = runs.filter((r: Run) => r.status === "completed");
     let totalServed: number;
     try {
       const leadStats = await fetchLeadStats(campaign.clerkOrgId, campaign.campaignId, campaign.brandId, campaign.appId);
-      const completedCount = finishedRuns.filter((r: Run) => r.status === "completed").length;
-      totalServed = Math.max(leadStats.totalServed, completedCount);
+      totalServed = Math.max(leadStats.totalServed, completedRuns.length);
     } catch (err: unknown) {
       if (err instanceof Error && "status" in err && (err as { status: number }).status === 404) {
-        totalServed = finishedRuns.filter((r: Run) => r.status === "completed").length;
+        totalServed = completedRuns.length;
       } else {
         return { allowed: false, reason: "Lead stats unavailable (fail-closed)" };
       }
