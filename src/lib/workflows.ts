@@ -246,6 +246,7 @@ function buildColdEmailDag() {
           path: "/generate",
           body: {
             type: "cold-email",
+            includeAiDisclaimer: true,
           },
         },
         inputMapping: {
