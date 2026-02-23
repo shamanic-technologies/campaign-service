@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { buildColdEmailDag, COLD_EMAIL_PROMPT, COLD_EMAIL_VARIABLES, getConfirmedWorkflowName } from "../../src/lib/workflows.js";
+import { buildColdEmailDag, COLD_EMAIL_PROMPT, COLD_EMAIL_VARIABLES, getConfirmedWorkflowName, generateDisplayName, SIGNATURE_WORDS } from "../../src/lib/workflows.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -340,8 +340,32 @@ describe("Workflow module", () => {
     });
   });
 
+  describe("generateDisplayName", () => {
+    it("should return a word from SIGNATURE_WORDS", () => {
+      const dag = buildColdEmailDag();
+      const name = generateDisplayName(dag);
+      expect(SIGNATURE_WORDS).toContain(name);
+    });
+
+    it("should be deterministic (same DAG → same name)", () => {
+      const dag = buildColdEmailDag();
+      const name1 = generateDisplayName(dag);
+      const name2 = generateDisplayName(dag);
+      expect(name1).toBe(name2);
+    });
+
+    it("should change when the DAG changes", () => {
+      const dag1 = buildColdEmailDag();
+      const dag2 = { ...buildColdEmailDag(), extra: "modified" };
+      const name1 = generateDisplayName(dag1);
+      const name2 = generateDisplayName(dag2);
+      // Not guaranteed to differ for all inputs, but very likely for any meaningful change
+      expect(name1).not.toBe(name2);
+    });
+  });
+
   describe("deployWorkflows", () => {
-    it("should call PUT /workflows/deploy with correct payload", async () => {
+    it("should call PUT /workflows/deploy with correct payload including dimensions and displayName", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ workflows: [{ name: "cold-email-outreach", action: "created" }] }),
@@ -359,9 +383,15 @@ describe("Workflow module", () => {
       const body = JSON.parse(opts.body);
       expect(body.appId).toBe("mcpfactory");
       expect(body.workflows).toHaveLength(1);
-      expect(body.workflows[0].name).toBe("cold-email-outreach");
-      expect(body.workflows[0].dag.nodes).toHaveLength(9);
-      expect(body.workflows[0].dag.onError).toBe("end-run-error");
+
+      const wf = body.workflows[0];
+      expect(wf.name).toBe("cold-email-outreach");
+      expect(wf.category).toBe("sales");
+      expect(wf.channel).toBe("email");
+      expect(wf.audienceType).toBe("cold-outreach");
+      expect(SIGNATURE_WORDS).toContain(wf.displayName);
+      expect(wf.dag.nodes).toHaveLength(9);
+      expect(wf.dag.onError).toBe("end-run-error");
     });
 
     it("should not throw when workflow-service env vars are missing", async () => {

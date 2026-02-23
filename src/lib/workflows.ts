@@ -102,6 +102,34 @@ export const COLD_EMAIL_VARIABLES = [
 
 const DEFAULT_APP_ID = process.env.APP_ID || "mcpfactory";
 
+/** Evocative words used as human-readable workflow signature names. */
+export const SIGNATURE_WORDS = [
+  "Aurora", "Beacon", "Cascade", "Denali", "Eclipse",
+  "Falcon", "Glacier", "Horizon", "Ignite", "Jasper",
+  "Kinetic", "Lunar", "Meridian", "Nova", "Obsidian",
+  "Phoenix", "Quasar", "Radiant", "Sequoia", "Tempest",
+  "Utopia", "Vertex", "Wildfire", "Xenon", "Zenith",
+  "Alpine", "Blaze", "Cosmos", "Drift", "Ember",
+  "Forge", "Genesis", "Haven", "Impulse", "Jubilee",
+  "Kestrel", "Latitude", "Monarch", "Nebula", "Onyx",
+  "Prism", "Quest", "Riviera", "Solstice", "Titan",
+  "Umbra", "Vortex", "Whisper", "Zephyr", "Apex",
+];
+
+/**
+ * Generate a deterministic displayName from a DAG definition.
+ * Same DAG → same name; changed DAG → (likely) different name.
+ */
+export function generateDisplayName(dag: unknown): string {
+  const json = JSON.stringify(dag);
+  // djb2 hash
+  let hash = 5381;
+  for (let i = 0; i < json.length; i++) {
+    hash = ((hash << 5) + hash + json.charCodeAt(i)) | 0;
+  }
+  return SIGNATURE_WORDS[Math.abs(hash) % SIGNATURE_WORDS.length];
+}
+
 // Confirmed workflow names from workflow-service deploy response.
 // Workflow-service is the authority on names — we use its confirmed name
 // rather than assuming campaign.type = workflow name.
@@ -404,7 +432,11 @@ export async function deployWorkflows(): Promise<void> {
       workflows: [
         {
           name: "cold-email-outreach",
+          displayName: generateDisplayName(buildColdEmailDag()),
           description: "Cold email pipeline: gate checks → lead → generate → send → re-trigger (1 lead per run)",
+          category: "sales",
+          channel: "email",
+          audienceType: "cold-outreach",
           dag: buildColdEmailDag(),
         },
       ],
