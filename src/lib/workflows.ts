@@ -102,33 +102,9 @@ export const COLD_EMAIL_VARIABLES = [
 
 const DEFAULT_APP_ID = process.env.APP_ID || "mcpfactory";
 
-/** Evocative words used as human-readable workflow signature names. */
-export const SIGNATURE_WORDS = [
-  "Aurora", "Beacon", "Cascade", "Denali", "Eclipse",
-  "Falcon", "Glacier", "Horizon", "Ignite", "Jasper",
-  "Kinetic", "Lunar", "Meridian", "Nova", "Obsidian",
-  "Phoenix", "Quasar", "Radiant", "Sequoia", "Tempest",
-  "Utopia", "Vertex", "Wildfire", "Xenon", "Zenith",
-  "Alpine", "Blaze", "Cosmos", "Drift", "Ember",
-  "Forge", "Genesis", "Haven", "Impulse", "Jubilee",
-  "Kestrel", "Latitude", "Monarch", "Nebula", "Onyx",
-  "Prism", "Quest", "Riviera", "Solstice", "Titan",
-  "Umbra", "Vortex", "Whisper", "Zephyr", "Apex",
-];
-
-/**
- * Generate a deterministic displayName from a DAG definition.
- * Same DAG → same name; changed DAG → (likely) different name.
- */
-export function generateDisplayName(dag: unknown): string {
-  const json = JSON.stringify(dag);
-  // djb2 hash
-  let hash = 5381;
-  for (let i = 0; i < json.length; i++) {
-    hash = ((hash << 5) + hash + json.charCodeAt(i)) | 0;
-  }
-  return SIGNATURE_WORDS[Math.abs(hash) % SIGNATURE_WORDS.length];
-}
+// Campaign types in deploy order — used to map workflow-service response
+// back to campaign types (workflow-service generates the name from dimensions).
+const CAMPAIGN_TYPES = ["cold-email-outreach"] as const;
 
 // Confirmed workflow names from workflow-service deploy response.
 // Workflow-service is the authority on names — we use its confirmed name
@@ -431,8 +407,6 @@ export async function deployWorkflows(): Promise<void> {
       appId: DEFAULT_APP_ID,
       workflows: [
         {
-          name: "cold-email-outreach",
-          displayName: generateDisplayName(buildColdEmailDag()),
           description: "Cold email pipeline: gate checks → lead → generate → send → re-trigger (1 lead per run)",
           category: "sales",
           channel: "email",
@@ -451,10 +425,14 @@ export async function deployWorkflows(): Promise<void> {
 
   const data = await res.json() as { workflows?: Array<{ name: string; action: string }> };
 
-  // Store confirmed workflow names from workflow-service response
+  // Map workflow-service generated names back to campaign types.
+  // Deploy order matches CAMPAIGN_TYPES order.
   if (data.workflows) {
-    for (const w of data.workflows) {
-      deployedWorkflowNames.set(w.name, w.name);
+    for (let i = 0; i < data.workflows.length; i++) {
+      const campaignType = CAMPAIGN_TYPES[i];
+      if (campaignType) {
+        deployedWorkflowNames.set(campaignType, data.workflows[i].name);
+      }
     }
   }
 
@@ -475,7 +453,8 @@ export async function executeCampaignWorkflow(
     return;
   }
 
-  const executeUrl = `${url}/workflows/by-name/${type}/execute`;
+  const workflowName = getConfirmedWorkflowName(type);
+  const executeUrl = `${url}/workflows/by-name/${workflowName}/execute`;
   console.log(`[Workflow] POST ${executeUrl}`);
 
   const res = await fetch(executeUrl, {

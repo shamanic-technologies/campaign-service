@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { buildColdEmailDag, COLD_EMAIL_PROMPT, COLD_EMAIL_VARIABLES, getConfirmedWorkflowName, generateDisplayName, SIGNATURE_WORDS } from "../../src/lib/workflows.js";
+import { buildColdEmailDag, COLD_EMAIL_PROMPT, COLD_EMAIL_VARIABLES, getConfirmedWorkflowName } from "../../src/lib/workflows.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -340,35 +340,11 @@ describe("Workflow module", () => {
     });
   });
 
-  describe("generateDisplayName", () => {
-    it("should return a word from SIGNATURE_WORDS", () => {
-      const dag = buildColdEmailDag();
-      const name = generateDisplayName(dag);
-      expect(SIGNATURE_WORDS).toContain(name);
-    });
-
-    it("should be deterministic (same DAG → same name)", () => {
-      const dag = buildColdEmailDag();
-      const name1 = generateDisplayName(dag);
-      const name2 = generateDisplayName(dag);
-      expect(name1).toBe(name2);
-    });
-
-    it("should change when the DAG changes", () => {
-      const dag1 = buildColdEmailDag();
-      const dag2 = { ...buildColdEmailDag(), extra: "modified" };
-      const name1 = generateDisplayName(dag1);
-      const name2 = generateDisplayName(dag2);
-      // Not guaranteed to differ for all inputs, but very likely for any meaningful change
-      expect(name1).not.toBe(name2);
-    });
-  });
-
   describe("deployWorkflows", () => {
-    it("should call PUT /workflows/deploy with correct payload including dimensions and displayName", async () => {
+    it("should call PUT /workflows/deploy with dimensions (no name/displayName) and map response name to campaign type", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ workflows: [{ name: "cold-email-outreach", action: "created" }] }),
+        json: async () => ({ workflows: [{ name: "sales-email-cold-outreach-sequoia", action: "created" }] }),
       });
 
       const { deployWorkflows } = await import("../../src/lib/workflows.js");
@@ -385,13 +361,16 @@ describe("Workflow module", () => {
       expect(body.workflows).toHaveLength(1);
 
       const wf = body.workflows[0];
-      expect(wf.name).toBe("cold-email-outreach");
+      expect(wf.name).toBeUndefined();
+      expect(wf.displayName).toBeUndefined();
       expect(wf.category).toBe("sales");
       expect(wf.channel).toBe("email");
       expect(wf.audienceType).toBe("cold-outreach");
-      expect(SIGNATURE_WORDS).toContain(wf.displayName);
       expect(wf.dag.nodes).toHaveLength(9);
       expect(wf.dag.onError).toBe("end-run-error");
+
+      // Confirmed name should map campaign type → workflow-service generated name
+      expect(getConfirmedWorkflowName("cold-email-outreach")).toBe("sales-email-cold-outreach-sequoia");
     });
 
     it("should not throw when workflow-service env vars are missing", async () => {
@@ -424,21 +403,22 @@ describe("Workflow module", () => {
       );
     });
 
-    it("should return confirmed name after successful deploy", async () => {
+    it("should return workflow-service generated name after successful deploy", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ workflows: [{ name: "cold-email-outreach", action: "created" }] }),
+        json: async () => ({ workflows: [{ name: "sales-email-cold-outreach-sequoia", action: "created" }] }),
       });
 
       const { deployWorkflows } = await import("../../src/lib/workflows.js");
       await deployWorkflows();
 
-      expect(getConfirmedWorkflowName("cold-email-outreach")).toBe("cold-email-outreach");
+      expect(getConfirmedWorkflowName("cold-email-outreach")).toBe("sales-email-cold-outreach-sequoia");
     });
   });
 
   describe("executeCampaignWorkflow", () => {
-    it("should call POST /workflows/by-name/{type}/execute with type, campaignId, and clerkOrgId", async () => {
+    it("should use confirmed workflow name (not campaign type) in URL", async () => {
+      // Prior tests already deployed with name "sales-email-cold-outreach-sequoia"
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ id: "run-123", status: "queued" }),
@@ -453,7 +433,7 @@ describe("Workflow module", () => {
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe("https://workflow.test.local/workflows/by-name/cold-email-outreach/execute");
+      expect(url).toBe("https://workflow.test.local/workflows/by-name/sales-email-cold-outreach-sequoia/execute");
       expect(opts.method).toBe("POST");
 
       const body = JSON.parse(opts.body);
@@ -465,21 +445,15 @@ describe("Workflow module", () => {
       });
     });
 
-    it("should use type parameter in workflow URL", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ id: "run-456", status: "queued" }),
-      });
-
+    it("should throw for unconfirmed campaign type", async () => {
       const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
-      await executeCampaignWorkflow("journalist-pitch", {
-        campaignId: "campaign-2",
-        clerkOrgId: "org_test",
-        appId: "mcpfactory",
-      });
-
-      const [url] = mockFetch.mock.calls[0];
-      expect(url).toBe("https://workflow.test.local/workflows/by-name/journalist-pitch/execute");
+      await expect(
+        executeCampaignWorkflow("journalist-pitch", {
+          campaignId: "campaign-2",
+          clerkOrgId: "org_test",
+          appId: "mcpfactory",
+        })
+      ).rejects.toThrow('Workflow name "journalist-pitch" not confirmed by workflow-service');
     });
 
     it("should not throw when execution fails", async () => {
