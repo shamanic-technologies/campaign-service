@@ -20,9 +20,7 @@ vi.mock("@mcpfactory/runs-client", () => ({
   createRun: vi.fn().mockResolvedValue({ id: "mock-run-id" }),
   updateRun: vi.fn().mockResolvedValue({}),
   listRuns: vi.fn().mockResolvedValue({ runs: [] }),
-  getRun: vi.fn(),
-  getRunsBatch: vi.fn().mockResolvedValue(new Map()),
-  addCosts: vi.fn(),
+  getStatsBudget: vi.fn().mockResolvedValue({ windows: [] }),
 }));
 
 import app from "../../src/index.js";

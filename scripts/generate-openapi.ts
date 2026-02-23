@@ -10,7 +10,6 @@ import {
   StatsFilterBody,
   StatsResponse,
   BatchBudgetUsageBody,
-  RunStatusUpdate,
   ErrorResponse,
   GateCheckBody,
   GateCheckResponse,
@@ -136,76 +135,11 @@ registry.registerPath({
   path: "/campaigns/stats",
   tags: ["Campaigns"],
   summary: "Campaign stats from own DB",
-  description: "Returns campaign counts, status breakdown, and budget totals. Requires API key.",
+  description: "Returns campaign counts, status breakdown, and configured budget totals (not actual costs). Requires API key.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: StatsFilterBody } } } },
   responses: {
     200: { description: "Campaign stats", content: { "application/json": { schema: StatsResponse } } },
-    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-// === PUBLIC RUNS ===
-
-const RunSchema = z.object({
-  id: z.string().uuid(),
-  status: z.string(),
-  startedAt: z.string().nullable(),
-  completedAt: z.string().nullable(),
-  createdAt: z.string(),
-}).openapi("Run");
-
-registry.registerPath({
-  method: "get",
-  path: "/campaigns/{campaignId}/runs",
-  tags: ["Runs"],
-  summary: "List runs for a campaign",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: { params: z.object({ campaignId: z.string().uuid() }) },
-  responses: {
-    200: { description: "List of runs", content: { "application/json": { schema: z.object({ runs: z.array(RunSchema) }) } } },
-    404: { description: "Campaign not found", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/campaigns/{campaignId}/runs/{runId}",
-  tags: ["Runs"],
-  summary: "Get a specific run",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: { params: z.object({ campaignId: z.string().uuid(), runId: z.string().uuid() }) },
-  responses: {
-    200: { description: "Run details", content: { "application/json": { schema: z.object({ run: RunSchema }) } } },
-    404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/campaigns/{campaignId}/runs",
-  tags: ["Runs"],
-  summary: "Create a new run",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: { params: z.object({ campaignId: z.string().uuid() }) },
-  responses: {
-    201: { description: "Run created", content: { "application/json": { schema: z.object({ run: RunSchema }) } } },
-    404: { description: "Campaign not found", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-registry.registerPath({
-  method: "patch",
-  path: "/runs/{runId}",
-  tags: ["Runs"],
-  summary: "Update run status",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: {
-    params: z.object({ runId: z.string().uuid() }),
-    body: { content: { "application/json": { schema: RunStatusUpdate } } },
-  },
-  responses: {
-    200: { description: "Run updated", content: { "application/json": { schema: z.object({ run: RunSchema }) } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
@@ -224,24 +158,11 @@ registry.registerPath({
 });
 
 registry.registerPath({
-  method: "get",
-  path: "/campaigns/{campaignId}/runs/list",
-  tags: ["Scheduler"],
-  summary: "Get campaign runs (no org scoping)",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: { params: z.object({ campaignId: z.string().uuid() }) },
-  responses: {
-    200: { description: "List of runs", content: { "application/json": { schema: z.object({ runs: z.array(RunSchema) }) } } },
-    404: { description: "Campaign or org not found", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-registry.registerPath({
   method: "post",
   path: "/campaigns/batch-budget-usage",
   tags: ["Scheduler"],
-  summary: "Get cost and run data for multiple campaigns",
-  description: "Returns budget usage (totalCostInUsdCents) and run counts per campaign",
+  summary: "Get cost data for multiple campaigns",
+  description: "Returns budget usage (totalCostInUsdCents) per campaign via runs-service stats/budget endpoint",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: BatchBudgetUsageBody } } } },
   responses: {
@@ -254,12 +175,6 @@ registry.registerPath({
               status: z.string().optional(),
               maxLeads: z.number().nullable().optional(),
               maxBudgetTotalUsd: z.string().nullable().optional(),
-              runs: z.object({
-                total: z.number(),
-                completed: z.number(),
-                failed: z.number(),
-                running: z.number(),
-              }).optional(),
               totalCostInUsdCents: z.string().nullable().optional(),
               error: z.string().optional(),
             })),
@@ -278,7 +193,7 @@ registry.registerPath({
   path: "/gate-check",
   tags: ["Pipeline"],
   summary: "Check if a campaign can run a new iteration",
-  description: "Validates budget limits (daily/weekly/monthly/total), volume limits (maxLeads), campaign status, and consecutive failures. Auto-stops the campaign if total budget or maxLeads is exceeded. Called as the first DAG node.",
+  description: "Validates budget limits (daily/weekly/monthly/total) via runs-service stats/budget, volume limits (maxLeads), campaign status, and consecutive failures. Auto-stops the campaign if total budget or maxLeads is exceeded. Called as the first DAG node.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: GateCheckBody } } } },
   responses: {
@@ -322,7 +237,7 @@ const spec = generator.generateDocument({
   openapi: "3.0.0",
   info: {
     title: "Campaign Service",
-    description: "API for managing marketing campaigns and runs",
+    description: "API for managing marketing campaigns",
     version: "1.0.0",
   },
   servers: [{ url: process.env.SERVICE_URL || "http://localhost:3003" }],

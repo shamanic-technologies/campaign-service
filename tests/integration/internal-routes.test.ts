@@ -5,7 +5,6 @@ const {
   mockCreateRun,
   mockUpdateRun,
   mockListRuns,
-  mockGetRunsBatch,
   mockExecute,
   mockGateChecks,
   mockFetch,
@@ -13,7 +12,6 @@ const {
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
   mockListRuns: vi.fn(),
-  mockGetRunsBatch: vi.fn(),
   mockExecute: vi.fn(),
   mockGateChecks: vi.fn(),
   mockFetch: vi.fn(),
@@ -23,9 +21,7 @@ vi.mock("@mcpfactory/runs-client", () => ({
   createRun: mockCreateRun,
   updateRun: mockUpdateRun,
   listRuns: mockListRuns,
-  getRun: vi.fn(),
-  getRunsBatch: mockGetRunsBatch,
-  addCosts: vi.fn(),
+  getStatsBudget: vi.fn(),
 }));
 
 vi.mock("../../src/lib/workflows.js", () => ({
@@ -61,7 +57,6 @@ describe("Pipeline routes", () => {
     mockCreateRun.mockResolvedValue({ id: "run-123" });
     mockUpdateRun.mockResolvedValue({});
     mockListRuns.mockResolvedValue({ runs: [] });
-    mockGetRunsBatch.mockResolvedValue(new Map());
     mockGateChecks.mockResolvedValue({ allowed: true });
     mockExecute.mockResolvedValue(undefined);
     // Default: prompt registration succeeds (best-effort, only fetch call in start-run)

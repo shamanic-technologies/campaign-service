@@ -5,7 +5,7 @@ import { campaigns, orgs } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { normalizeUrl, extractDomain } from "../lib/domain.js";
-import { listRuns, getRunsBatch, type Run, type RunWithCosts } from "@mcpfactory/runs-client";
+import { getStatsBudget } from "@mcpfactory/runs-client";
 import { CreateCampaignBody, UpdateCampaignBody, StatsFilterBody, BatchBudgetUsageBody } from "../schemas.js";
 import { executeCampaignWorkflow } from "../lib/workflows.js";
 
@@ -89,35 +89,21 @@ router.post("/campaigns/batch-budget-usage", requireApiKey, validateBody(BatchBu
         }
 
         try {
-          const runResult = await listRuns({
+          const budgetResult = await getStatsBudget({
             clerkOrgId: row.clerkOrgId,
             appId: row.appId || "",
-            serviceName: "campaign-service",
-            taskName: campaignId,
+            campaignId,
+            windows: [{ label: "total" }],
           });
-          const runs = runResult.runs;
-          const runIds = runs.map((r: Run) => r.id);
 
-          const runsWithCosts = runIds.length > 0
-            ? await getRunsBatch(runIds).catch(() => new Map() as Map<string, RunWithCosts>)
-            : new Map() as Map<string, RunWithCosts>;
-
-          let totalCostInUsdCents = 0;
-          for (const run of runsWithCosts.values()) {
-            totalCostInUsdCents += parseFloat(run.totalCostInUsdCents) || 0;
-          }
+          const totalWindow = budgetResult.windows.find(w => w.label === "total");
+          const totalCostCents = totalWindow ? parseFloat(totalWindow.totalCostInUsdCents) || 0 : 0;
 
           results[campaignId] = {
             status: row.status,
             maxLeads: row.maxLeads,
             maxBudgetTotalUsd: row.maxBudgetTotalUsd,
-            runs: {
-              total: runs.length,
-              completed: runs.filter((r: Run) => r.status === "completed").length,
-              failed: runs.filter((r: Run) => r.status === "failed").length,
-              running: runs.filter((r: Run) => r.status === "running").length,
-            },
-            totalCostInUsdCents: totalCostInUsdCents > 0 ? String(totalCostInUsdCents) : null,
+            totalCostInUsdCents: totalCostCents > 0 ? String(totalCostCents) : null,
           };
         } catch (err) {
           console.warn(`[Campaign Service] Batch budget usage failed for campaign ${campaignId}:`, err);
