@@ -114,13 +114,11 @@ describe("Workflow module", () => {
       expect(startRun?.retries).toBeUndefined();
     });
 
-    it("should have validateResponse on gate-check to catch allowed: false", () => {
+    it("should have stopAfterIf on gate-check to stop flow cleanly when not allowed", () => {
       const dag = buildColdEmailDag();
       const gateCheck = dag.nodes.find((n) => n.id === "gate-check");
-      expect(gateCheck?.config.validateResponse).toEqual({
-        field: "allowed",
-        equals: true,
-      });
+      expect(gateCheck?.config.stopAfterIf).toBe("result.allowed == false");
+      expect(gateCheck?.config.validateResponse).toBeUndefined();
     });
 
     it("should have validateResponse on email-send to catch success: false", () => {
