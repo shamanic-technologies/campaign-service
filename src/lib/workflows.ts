@@ -164,7 +164,7 @@ function buildColdEmailDag() {
           service: "campaign",
           method: "POST",
           path: "/gate-check",
-          validateResponse: { field: "allowed", equals: true },
+          stopAfterIf: "result.allowed == false",
         },
         inputMapping: {
           "body.campaignId": "$ref:flow_input.campaignId",

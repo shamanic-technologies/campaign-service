@@ -58,8 +58,8 @@ async function ensurePromptRegistered(appId: string, clerkOrgId: string): Promis
  * and campaign status.
  *
  * Called as the first DAG node. Returns { allowed: true } to proceed
- * or { allowed: false, reason } to stop. Windmill uses validateResponse
- * to treat allowed=false as a node error → triggers onError handler.
+ * or { allowed: false, reason } to stop. The DAG uses stopAfterIf to
+ * end the flow cleanly without triggering onError.
  *
  * Returns:
  *   200 — gate check result (allowed or blocked)
