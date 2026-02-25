@@ -23,7 +23,7 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
         id: campaigns.id,
         orgId: campaigns.orgId,
         name: campaigns.name,
-        type: campaigns.type,
+        workflowName: campaigns.workflowName,
         status: campaigns.status,
         targetAudience: campaigns.targetAudience,
         targetOutcome: campaigns.targetOutcome,
@@ -228,7 +228,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
   try {
     const {
       name,
-      type,
+      workflowName,
       parentRunId,
       brandUrl,
       brandId,
@@ -236,10 +236,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       targetAudience,
       targetOutcome,
       valueForTarget,
-      urgency,
-      scarcity,
-      riskReversal,
-      socialProof,
       maxBudgetDailyUsd,
       maxBudgetWeeklyUsd,
       maxBudgetMonthlyUsd,
@@ -261,7 +257,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         orgId: req.orgId!,
         createdByUserId: req.userId ?? null,
         name,
-        type,
+        workflowName,
         parentRunId,
         appId,
         brandUrl: normalizedBrandUrl,
@@ -269,10 +265,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         targetAudience,
         targetOutcome,
         valueForTarget,
-        urgency,
-        scarcity,
-        riskReversal,
-        socialProof,
         maxBudgetDailyUsd,
         maxBudgetWeeklyUsd,
         maxBudgetMonthlyUsd,
@@ -288,8 +280,8 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       .returning();
 
     // Trigger first workflow execution (fire-and-forget)
-    console.log(`[Campaign Service] Campaign created: campaignId=${campaign.id}, type=${campaign.type}, triggering first workflow execution`);
-    executeCampaignWorkflow(campaign.type, {
+    console.log(`[Campaign Service] Campaign created: campaignId=${campaign.id}, workflowName=${campaign.workflowName}, triggering first workflow execution`);
+    executeCampaignWorkflow(campaign.workflowName, {
       campaignId: campaign.id,
       clerkOrgId: req.clerkOrgId!,
       appId: campaign.appId || "",
@@ -339,10 +331,10 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       .where(eq(campaigns.id, id))
       .returning();
 
-    // Trigger workflow on activation, routed by campaign type
+    // Trigger workflow on activation
     if (req.body.status === "activate") {
-      console.log(`[Campaign Service] Activation triggered: campaignId=${updated.id}, type=${updated.type}, clerkOrgId=${req.clerkOrgId}`);
-      executeCampaignWorkflow(updated.type, {
+      console.log(`[Campaign Service] Activation triggered: campaignId=${updated.id}, workflowName=${updated.workflowName}, clerkOrgId=${req.clerkOrgId}`);
+      executeCampaignWorkflow(updated.workflowName, {
         campaignId: updated.id,
         clerkOrgId: req.clerkOrgId!,
         appId: updated.appId || "",

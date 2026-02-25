@@ -7,9 +7,6 @@ const { mockExecuteCampaignWorkflow } = vi.hoisted(() => ({
 
 vi.mock("../../src/lib/workflows.js", () => ({
   executeCampaignWorkflow: mockExecuteCampaignWorkflow,
-  deployWorkflows: vi.fn(),
-  COLD_EMAIL_PROMPT: "test prompt",
-  COLD_EMAIL_VARIABLES: ["leadFirstName"],
 }));
 
 vi.mock("../../src/lib/gate-check.js", () => ({
@@ -30,7 +27,7 @@ const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
 const validBody = {
   name: "Activation Test Campaign",
-  type: "cold-email-outreach",
+  workflowName: "sales-email-cold-outreach",
   clerkOrgId: "org_activation_test",
   parentRunId: crypto.randomUUID(),
   brandUrl: "https://example.com",
@@ -70,10 +67,11 @@ describe("Workflow trigger", () => {
 
       expect(mockExecuteCampaignWorkflow).toHaveBeenCalledOnce();
       expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
-        "cold-email-outreach",
+        "sales-email-cold-outreach",
         {
           campaignId,
           clerkOrgId: "org_activation_test",
+          appId: "mcpfactory",
         },
       );
     });
@@ -131,10 +129,11 @@ describe("Workflow trigger", () => {
 
       expect(mockExecuteCampaignWorkflow).toHaveBeenCalledOnce();
       expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
-        "cold-email-outreach",
+        "sales-email-cold-outreach",
         {
           campaignId,
           clerkOrgId: "org_activation_test",
+          appId: "mcpfactory",
         },
       );
     });

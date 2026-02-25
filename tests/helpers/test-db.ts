@@ -43,7 +43,7 @@ export async function insertTestCampaign(
   orgId: string,
   data: {
     name?: string;
-    type?: string;
+    workflowName?: string;
     status?: string;
     parentRunId?: string;
     brandUrl?: string;
@@ -57,10 +57,6 @@ export async function insertTestCampaign(
     targetAudience?: string;
     targetOutcome?: string;
     valueForTarget?: string;
-    urgency?: string;
-    scarcity?: string;
-    riskReversal?: string;
-    socialProof?: string;
   } = {}
 ) {
   const [campaign] = await db
@@ -68,7 +64,7 @@ export async function insertTestCampaign(
     .values({
       orgId,
       name: data.name || `Test Campaign ${Date.now()}`,
-      type: data.type || "cold-email-outreach",
+      workflowName: data.workflowName || "sales-email-cold-outreach",
       status: data.status || "ongoing",
       parentRunId: data.parentRunId || null,
       brandUrl: data.brandUrl || null,
@@ -82,10 +78,6 @@ export async function insertTestCampaign(
       targetAudience: data.targetAudience || null,
       targetOutcome: data.targetOutcome || null,
       valueForTarget: data.valueForTarget || null,
-      urgency: data.urgency || null,
-      scarcity: data.scarcity || null,
-      riskReversal: data.riskReversal || null,
-      socialProof: data.socialProof || null,
     })
     .returning();
   return campaign;
