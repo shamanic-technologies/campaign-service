@@ -120,6 +120,13 @@
       "when": 1771496413644,
       "tag": "0016_stiff_wind_dancer",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1771600000000,
+      "tag": "0017_replace_type_with_workflow_name",
+      "breakpoints": true
     }
   ]
 }

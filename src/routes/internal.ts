@@ -6,49 +6,11 @@ import { requireApiKey } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun } from "@mcpfactory/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
-import { executeCampaignWorkflow, getConfirmedWorkflowName } from "../lib/workflows.js";
+import { executeCampaignWorkflow } from "../lib/workflows.js";
 import { extractDomain } from "../lib/domain.js";
 import { GateCheckBody, StartRunBody, EndRunBody } from "../schemas.js";
 
 const router = Router();
-
-// In-memory cache: skip prompt registration if already done for this org+app
-const promptRegisteredKeys = new Set<string>();
-
-async function ensurePromptRegistered(appId: string, clerkOrgId: string): Promise<void> {
-  const cacheKey = `${appId}:${clerkOrgId}`;
-  if (promptRegisteredKeys.has(cacheKey)) return;
-
-  const url = process.env.CONTENT_GENERATION_SERVICE_URL;
-  const apiKey = process.env.CONTENT_GENERATION_SERVICE_API_KEY;
-  if (!url || !apiKey) return;
-
-  try {
-    const { COLD_EMAIL_PROMPT, COLD_EMAIL_VARIABLES } = await import("../lib/workflows.js");
-    const res = await fetch(`${url}/prompts`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "x-clerk-org-id": clerkOrgId,
-      },
-      body: JSON.stringify({
-        appId,
-        type: "cold-email",
-        prompt: COLD_EMAIL_PROMPT,
-        variables: COLD_EMAIL_VARIABLES,
-      }),
-    });
-
-    if (res.ok) {
-      promptRegisteredKeys.add(cacheKey);
-    } else {
-      console.warn(`[Start Run] Prompt registration failed (${res.status})`);
-    }
-  } catch (err) {
-    console.warn("[Start Run] Prompt registration error (best-effort):", err);
-  }
-}
 
 /**
  * POST /gate-check
@@ -152,7 +114,7 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       console.warn(`[Start Run] Campaign not found: ${campaignId} (orgId=${org.id})`);
       return res.status(404).json({ error: "Campaign not found" });
     }
-    console.log(`[Start Run] Campaign found: name=${campaign.name}, type=${campaign.type}, status=${campaign.status}, brandUrl=${campaign.brandUrl}`);
+    console.log(`[Start Run] Campaign found: name=${campaign.name}, workflowName=${campaign.workflowName}, status=${campaign.status}, brandUrl=${campaign.brandUrl}`);
     if (!campaign.brandUrl) {
       console.warn(`[Start Run] Campaign ${campaignId} has no brandUrl`);
       return res.status(400).json({ error: "Campaign has no brandUrl" });
@@ -162,11 +124,7 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       return res.status(400).json({ error: "Campaign has no brandId" });
     }
 
-    // Register prompt template (best-effort, cached per app+org)
     const appId = campaign.appId || "";
-    const cacheKey = `${appId}:${clerkOrgId}`;
-    console.log(`[Start Run] Ensuring prompt registered for app=${appId} org=${clerkOrgId} (cached=${promptRegisteredKeys.has(cacheKey)})`);
-    await ensurePromptRegistered(appId, clerkOrgId);
 
     // Create run in runs-service (parentRunId links to api-service's parent run)
     console.log(`[Start Run] Creating run in runs-service for campaign ${campaignId} (parentRunId=${campaign.parentRunId || "none"})...`);
@@ -179,7 +137,7 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       brandId: campaign.brandId,
       clerkUserId: campaign.createdByUserId || undefined,
       parentRunId: campaign.parentRunId || undefined,
-      workflowName: getConfirmedWorkflowName(campaign.type),
+      workflowName: campaign.workflowName,
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);
 
@@ -198,8 +156,6 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
 
     console.log(`[Start Run] SUCCESS — runId=${run.id}, brandDomain=${brandDomain}, searchParams=${searchParams ? "yes" : "none"}`);
 
-    const workflowName = getConfirmedWorkflowName(campaign.type);
-
     // Return campaign data for downstream DAG nodes
     res.json({
       runId: run.id,
@@ -209,14 +165,10 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       brandUrl: campaign.brandUrl,
       brandDomain,
       appId,
-      workflowName,
+      workflowName: campaign.workflowName,
       clerkUserId: campaign.createdByUserId,
       targetOutcome: campaign.targetOutcome,
       valueForTarget: campaign.valueForTarget,
-      urgency: campaign.urgency,
-      scarcity: campaign.scarcity,
-      riskReversal: campaign.riskReversal,
-      socialProof: campaign.socialProof,
       searchParams,
       keySource: campaign.keySource,
     });
@@ -306,15 +258,15 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
       const freshCampaign = await db.query.campaigns.findFirst({
         where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, org.id)),
       });
-      console.log(`[End Run] Campaign status for re-trigger: ${freshCampaign?.status || "NOT FOUND"}, type=${freshCampaign?.type || "N/A"}`);
+      console.log(`[End Run] Campaign status for re-trigger: ${freshCampaign?.status || "NOT FOUND"}, workflowName=${freshCampaign?.workflowName || "N/A"}`);
       if (freshCampaign?.status !== "ongoing") {
         console.log(`[End Run] Campaign ${campaignId} is not ongoing — skipping re-trigger`);
         return;
       }
 
       // Fire-and-forget: gate-check in the next workflow execution will validate limits
-      console.log(`[End Run] Re-triggering workflow type=${freshCampaign.type} for campaign ${campaignId}`);
-      executeCampaignWorkflow(freshCampaign.type, { campaignId, clerkOrgId, appId }).catch((err) => {
+      console.log(`[End Run] Re-triggering workflow=${freshCampaign.workflowName} for campaign ${campaignId}`);
+      executeCampaignWorkflow(freshCampaign.workflowName, { campaignId, clerkOrgId, appId }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });
     } catch (err) {

@@ -7,14 +7,12 @@ const {
   mockListRuns,
   mockExecute,
   mockGateChecks,
-  mockFetch,
 } = vi.hoisted(() => ({
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
   mockListRuns: vi.fn(),
   mockExecute: vi.fn(),
   mockGateChecks: vi.fn(),
-  mockFetch: vi.fn(),
 }));
 
 vi.mock("@mcpfactory/runs-client", () => ({
@@ -26,17 +24,11 @@ vi.mock("@mcpfactory/runs-client", () => ({
 
 vi.mock("../../src/lib/workflows.js", () => ({
   executeCampaignWorkflow: mockExecute,
-  deployWorkflows: vi.fn(),
-  COLD_EMAIL_PROMPT: "test prompt {{leadFirstName}}",
-  COLD_EMAIL_VARIABLES: ["leadFirstName"],
 }));
 
 vi.mock("../../src/lib/gate-check.js", () => ({
   runGateChecks: mockGateChecks,
 }));
-
-// Mock fetch for prompt registration (ensurePromptRegistered calls fetch)
-vi.stubGlobal("fetch", mockFetch);
 
 import app from "../../src/index.js";
 import { cleanTestData, closeDb, insertTestOrg, insertTestCampaign } from "../helpers/test-db.js";
@@ -59,8 +51,6 @@ describe("Pipeline routes", () => {
     mockListRuns.mockResolvedValue({ runs: [] });
     mockGateChecks.mockResolvedValue({ allowed: true });
     mockExecute.mockResolvedValue(undefined);
-    // Default: prompt registration succeeds (best-effort, only fetch call in start-run)
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
   });
 
   afterAll(async () => {
@@ -276,8 +266,27 @@ describe("Pipeline routes", () => {
       expect(res.body.brandUrl).toBe("https://example.com");
       expect(res.body.brandDomain).toBe("example.com");
       expect(res.body.appId).toBe("mcpfactory");
+      expect(res.body.workflowName).toBe("sales-email-cold-outreach");
       expect(res.body.targetOutcome).toBe("Book demos");
       expect(res.body.valueForTarget).toBe("Analytics platform");
+    });
+
+    it("should not return sales-specific fields", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .expect(200);
+
+      expect(res.body).not.toHaveProperty("urgency");
+      expect(res.body).not.toHaveProperty("scarcity");
+      expect(res.body).not.toHaveProperty("riskReversal");
+      expect(res.body).not.toHaveProperty("socialProof");
     });
 
     it("should pass all user context as unstructured searchParams", async () => {
@@ -369,44 +378,22 @@ describe("Pipeline routes", () => {
       );
     });
 
-    it("should return sales persuasion fields in start-run response", async () => {
+    it("should pass workflowName to createRun", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",
         brandId,
-        urgency: "Offer expires in 7 days",
-        scarcity: "Only 5 spots left",
-        riskReversal: "30-day money-back guarantee",
-        socialProof: "Trusted by 500+ companies",
+        workflowName: "pr-email-cold-outreach",
       });
 
-      const res = await request(app)
+      await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
         .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
         .expect(200);
 
-      expect(res.body.urgency).toBe("Offer expires in 7 days");
-      expect(res.body.scarcity).toBe("Only 5 spots left");
-      expect(res.body.riskReversal).toBe("30-day money-back guarantee");
-      expect(res.body.socialProof).toBe("Trusted by 500+ companies");
-    });
-
-    it("should return null sales fields when not set", async () => {
-      const campaign = await insertTestCampaign(org.id, {
-        brandUrl: "https://example.com",
-        brandId,
-      });
-
-      const res = await request(app)
-        .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
-        .expect(200);
-
-      expect(res.body.urgency).toBeNull();
-      expect(res.body.scarcity).toBeNull();
-      expect(res.body.riskReversal).toBeNull();
-      expect(res.body.socialProof).toBeNull();
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowName: "pr-email-cold-outreach" }),
+      );
     });
 
     it("should NOT call gate checks (gate check is a separate DAG node)", async () => {
@@ -510,11 +497,12 @@ describe("Pipeline routes", () => {
       expect(mockUpdateRun).not.toHaveBeenCalled();
     });
 
-    it("should re-trigger workflow if campaign is still ongoing", async () => {
+    it("should re-trigger workflow using workflowName if campaign is still ongoing", async () => {
       const campaign = await insertTestCampaign(org.id, {
         brandUrl: "https://example.com",
         brandId,
         status: "ongoing",
+        workflowName: "sales-email-cold-outreach",
       });
 
       await request(app)
@@ -531,10 +519,11 @@ describe("Pipeline routes", () => {
       await new Promise((r) => setTimeout(r, 100));
 
       expect(mockExecute).toHaveBeenCalledWith(
-        "cold-email-outreach",
+        "sales-email-cold-outreach",
         {
           campaignId: campaign.id,
           clerkOrgId: org.clerkOrgId,
+          appId: "",
         },
       );
     });
@@ -623,11 +612,11 @@ describe("Pipeline routes", () => {
       await new Promise((r) => setTimeout(r, 100));
 
       expect(mockExecute).toHaveBeenCalledWith(
-        "cold-email-outreach",
-        {
+        "sales-email-cold-outreach",
+        expect.objectContaining({
           campaignId: campaign.id,
           clerkOrgId: org.clerkOrgId,
-        },
+        }),
       );
     });
   });

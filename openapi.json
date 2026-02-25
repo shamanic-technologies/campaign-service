@@ -39,7 +39,7 @@
           "name": {
             "type": "string"
           },
-          "type": {
+          "workflowName": {
             "type": "string"
           },
           "brandUrl": {
@@ -69,22 +69,6 @@
             "nullable": true
           },
           "valueForTarget": {
-            "type": "string",
-            "nullable": true
-          },
-          "urgency": {
-            "type": "string",
-            "nullable": true
-          },
-          "scarcity": {
-            "type": "string",
-            "nullable": true
-          },
-          "riskReversal": {
-            "type": "string",
-            "nullable": true
-          },
-          "socialProof": {
             "type": "string",
             "nullable": true
           },
@@ -150,7 +134,7 @@
           "orgId",
           "createdByUserId",
           "name",
-          "type",
+          "workflowName",
           "brandUrl",
           "brandId",
           "parentRunId",
@@ -158,10 +142,6 @@
           "targetAudience",
           "targetOutcome",
           "valueForTarget",
-          "urgency",
-          "scarcity",
-          "riskReversal",
-          "socialProof",
           "maxBudgetDailyUsd",
           "maxBudgetWeeklyUsd",
           "maxBudgetMonthlyUsd",
@@ -197,7 +177,7 @@
             "type": "string",
             "minLength": 1
           },
-          "type": {
+          "workflowName": {
             "type": "string",
             "minLength": 1
           },
@@ -231,18 +211,6 @@
           "valueForTarget": {
             "type": "string",
             "minLength": 1
-          },
-          "urgency": {
-            "type": "string"
-          },
-          "scarcity": {
-            "type": "string"
-          },
-          "riskReversal": {
-            "type": "string"
-          },
-          "socialProof": {
-            "type": "string"
           },
           "maxBudgetDailyUsd": {
             "type": "string"
@@ -285,7 +253,7 @@
         },
         "required": [
           "name",
-          "type",
+          "workflowName",
           "clerkOrgId",
           "parentRunId",
           "brandUrl",
@@ -323,18 +291,6 @@
           "valueForTarget": {
             "type": "string",
             "minLength": 1
-          },
-          "urgency": {
-            "type": "string"
-          },
-          "scarcity": {
-            "type": "string"
-          },
-          "riskReversal": {
-            "type": "string"
-          },
-          "socialProof": {
-            "type": "string"
           },
           "maxBudgetDailyUsd": {
             "type": "string"
@@ -529,22 +485,6 @@
             "type": "string",
             "nullable": true
           },
-          "urgency": {
-            "type": "string",
-            "nullable": true
-          },
-          "scarcity": {
-            "type": "string",
-            "nullable": true
-          },
-          "riskReversal": {
-            "type": "string",
-            "nullable": true
-          },
-          "socialProof": {
-            "type": "string",
-            "nullable": true
-          },
           "searchParams": {
             "type": "object",
             "nullable": true,
@@ -572,10 +512,6 @@
           "clerkUserId",
           "targetOutcome",
           "valueForTarget",
-          "urgency",
-          "scarcity",
-          "riskReversal",
-          "socialProof",
           "searchParams",
           "keySource"
         ]
