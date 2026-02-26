@@ -31,6 +31,9 @@ vi.mock("../../src/lib/gate-check.js", () => ({
 }));
 
 import app from "../../src/index.js";
+import { db } from "../../src/db/index.js";
+import { campaigns } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestOrg, insertTestCampaign } from "../helpers/test-db.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
@@ -154,6 +157,60 @@ describe("Pipeline routes", () => {
 
       expect(res.body.allowed).toBe(false);
       expect(res.body.autoStopped).toBe(true);
+    });
+
+    it("should save toResumeAt to DB when gate-check returns it", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(0, 0, 0, 0);
+
+      mockGateChecks.mockResolvedValue({
+        allowed: false,
+        reason: "daily budget exceeded",
+        toResumeAt: tomorrow,
+      });
+
+      await request(app)
+        .post("/gate-check")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
+        .expect(200);
+
+      // Verify toResumeAt was saved to the DB
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      expect(updated!.toResumeAt).not.toBeNull();
+      expect(new Date(updated!.toResumeAt!).getTime()).toBe(tomorrow.getTime());
+    });
+
+    it("should NOT save toResumeAt when gate-check does not return it", async () => {
+      const campaign = await insertTestCampaign(org.id, {
+        brandUrl: "https://example.com",
+        brandId,
+      });
+
+      mockGateChecks.mockResolvedValue({
+        allowed: false,
+        reason: "Total budget exceeded",
+        autoStopped: true,
+      });
+
+      await request(app)
+        .post("/gate-check")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
+        .expect(200);
+
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      expect(updated!.toResumeAt).toBeNull();
     });
 
     it("should pass campaign data to runGateChecks", async () => {

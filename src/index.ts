@@ -13,6 +13,7 @@ const openapiPath = join(__dirname, "..", "openapi.json");
 import healthRoutes from "./routes/health.js";
 import campaignsRoutes from "./routes/campaigns.js";
 import internalRoutes from "./routes/internal.js";
+import { startScheduler } from "./lib/scheduler.js";
 const app = express();
 const PORT = process.env.PORT || 3003;
 
@@ -62,6 +63,7 @@ if (process.env.NODE_ENV !== "test") {
   migrate(db, { migrationsFolder: "./drizzle" })
     .then(() => {
       console.log("[Campaign Service] Migrations complete");
+      startScheduler();
       app.listen(Number(PORT), "::", () => {
         console.log(`[Campaign Service] Running on port ${PORT}`);
       });

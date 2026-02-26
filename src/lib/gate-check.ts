@@ -23,6 +23,7 @@ export interface GateCheckResult {
   allowed: boolean;
   reason?: string;
   autoStopped?: boolean;
+  toResumeAt?: Date;
 }
 
 export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheckResult> {
@@ -65,20 +66,20 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   }
 
   // Build windows for configured budgets only
-  const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean }> = [];
+  const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean; resumeAt?: Date }> = [];
   const windows: BudgetWindow[] = [];
 
   if (campaign.maxBudgetDailyUsd) {
     windows.push({ label: "daily", since: startOfToday().toISOString() });
-    budgetLimits.push({ limit: campaign.maxBudgetDailyUsd, label: "daily", autoStop: false });
+    budgetLimits.push({ limit: campaign.maxBudgetDailyUsd, label: "daily", autoStop: false, resumeAt: nextDayStart() });
   }
   if (campaign.maxBudgetWeeklyUsd) {
     windows.push({ label: "weekly", since: daysAgo(7).toISOString() });
-    budgetLimits.push({ limit: campaign.maxBudgetWeeklyUsd, label: "weekly", autoStop: false });
+    budgetLimits.push({ limit: campaign.maxBudgetWeeklyUsd, label: "weekly", autoStop: false, resumeAt: nextWeekStart() });
   }
   if (campaign.maxBudgetMonthlyUsd) {
     windows.push({ label: "monthly", since: startOfMonth().toISOString() });
-    budgetLimits.push({ limit: campaign.maxBudgetMonthlyUsd, label: "monthly", autoStop: false });
+    budgetLimits.push({ limit: campaign.maxBudgetMonthlyUsd, label: "monthly", autoStop: false, resumeAt: nextMonthStart() });
   }
   if (campaign.maxBudgetTotalUsd) {
     windows.push({ label: "total" });
@@ -103,7 +104,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         await autoStopCampaign(campaign.campaignId);
         return { allowed: false, reason: "Total budget exceeded", autoStopped: true };
       }
-      return { allowed: false, reason: `${budgetLimit.label} budget exceeded` };
+      return { allowed: false, reason: `${budgetLimit.label} budget exceeded`, toResumeAt: budgetLimit.resumeAt };
     }
   }
 
@@ -193,6 +194,30 @@ function daysAgo(n: number): Date {
 
 function startOfMonth(): Date {
   const d = new Date();
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+export function nextDayStart(): Date {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+export function nextWeekStart(): Date {
+  const d = new Date();
+  const dayOfWeek = d.getDay(); // 0=Sun, 1=Mon...
+  const daysUntilMonday = dayOfWeek === 0 ? 1 : 8 - dayOfWeek;
+  d.setDate(d.getDate() + daysUntilMonday);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+export function nextMonthStart(): Date {
+  const d = new Date();
+  d.setMonth(d.getMonth() + 1);
   d.setDate(1);
   d.setHours(0, 0, 0, 0);
   return d;

@@ -65,6 +65,14 @@ router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (re
 
     if (!result.allowed) {
       console.warn(`[Gate Check] BLOCKED: reason=${result.reason}, autoStopped=${result.autoStopped}`);
+
+      // Save toResumeAt so the scheduler can re-trigger when the budget window resets
+      if (result.toResumeAt) {
+        await db.update(campaigns)
+          .set({ toResumeAt: result.toResumeAt, updatedAt: new Date() })
+          .where(eq(campaigns.id, campaignId));
+        console.log(`[Gate Check] Set toResumeAt=${result.toResumeAt.toISOString()} for campaign ${campaignId}`);
+      }
     } else {
       console.log(`[Gate Check] PASSED for campaign ${campaignId}`);
     }

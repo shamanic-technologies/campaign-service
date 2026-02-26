@@ -41,7 +41,7 @@ vi.mock("drizzle-orm", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { runGateChecks, type GateCheckInput } from "../../src/lib/gate-check.js";
+import { runGateChecks, nextDayStart, nextWeekStart, nextMonthStart, type GateCheckInput } from "../../src/lib/gate-check.js";
 
 function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
   return {
@@ -340,6 +340,111 @@ describe("Gate Check", () => {
 
       const result = await runGateChecks(makeCampaign());
       expect(result.allowed).toBe(true);
+    });
+  });
+
+  describe("toResumeAt on temporal budget exceeded", () => {
+    it("should return toResumeAt when daily budget is exceeded", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "1500" }])
+      );
+
+      const result = await runGateChecks(makeCampaign({ maxBudgetDailyUsd: "10.00" }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("daily budget exceeded");
+      expect(result.toResumeAt).toBeInstanceOf(Date);
+      // Should be tomorrow at midnight
+      const expected = nextDayStart();
+      expect(result.toResumeAt!.getTime()).toBe(expected.getTime());
+    });
+
+    it("should return toResumeAt when weekly budget is exceeded", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "weekly", totalCostInUsdCents: "6000" }])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        maxBudgetDailyUsd: null,
+        maxBudgetWeeklyUsd: "50.00",
+      }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("weekly budget exceeded");
+      expect(result.toResumeAt).toBeInstanceOf(Date);
+      const expected = nextWeekStart();
+      expect(result.toResumeAt!.getTime()).toBe(expected.getTime());
+    });
+
+    it("should return toResumeAt when monthly budget is exceeded", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "monthly", totalCostInUsdCents: "11000" }])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        maxBudgetDailyUsd: null,
+        maxBudgetMonthlyUsd: "100.00",
+      }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("monthly budget exceeded");
+      expect(result.toResumeAt).toBeInstanceOf(Date);
+      const expected = nextMonthStart();
+      expect(result.toResumeAt!.getTime()).toBe(expected.getTime());
+    });
+
+    it("should NOT return toResumeAt when total budget is exceeded (auto-stop instead)", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "total", totalCostInUsdCents: "5500" }])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        maxBudgetDailyUsd: null,
+        maxBudgetTotalUsd: "50.00",
+      }));
+      expect(result.allowed).toBe(false);
+      expect(result.autoStopped).toBe(true);
+      expect(result.toResumeAt).toBeUndefined();
+    });
+
+    it("should return earliest toResumeAt when daily exceeds before weekly", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "daily", totalCostInUsdCents: "1500" },
+          { label: "weekly", totalCostInUsdCents: "1500" },
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        maxBudgetDailyUsd: "10.00",
+        maxBudgetWeeklyUsd: "50.00",
+      }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("daily budget exceeded");
+      // Daily is checked first, so toResumeAt should be next day
+      const expected = nextDayStart();
+      expect(result.toResumeAt!.getTime()).toBe(expected.getTime());
+    });
+  });
+
+  describe("nextDayStart / nextWeekStart / nextMonthStart helpers", () => {
+    it("nextDayStart returns tomorrow at midnight", () => {
+      const result = nextDayStart();
+      expect(result.getHours()).toBe(0);
+      expect(result.getMinutes()).toBe(0);
+      expect(result.getSeconds()).toBe(0);
+      expect(result.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it("nextWeekStart returns next Monday at midnight", () => {
+      const result = nextWeekStart();
+      expect(result.getDay()).toBe(1); // Monday
+      expect(result.getHours()).toBe(0);
+      expect(result.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it("nextMonthStart returns 1st of next month at midnight", () => {
+      const result = nextMonthStart();
+      expect(result.getDate()).toBe(1);
+      expect(result.getHours()).toBe(0);
+      expect(result.getTime()).toBeGreaterThan(Date.now());
     });
   });
 });
