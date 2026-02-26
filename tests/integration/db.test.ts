@@ -16,15 +16,15 @@ describe("Campaign Service Database", () => {
 
   describe("orgs table", () => {
     it("should create and query an org", async () => {
-      const org = await insertTestOrg({ clerkOrgId: "org_test123" });
+      const org = await insertTestOrg({ externalOrgId: "org_test123" });
 
       expect(org.id).toBeDefined();
-      expect(org.clerkOrgId).toBe("org_test123");
+      expect(org.externalOrgId).toBe("org_test123");
 
       const found = await db.query.orgs.findFirst({
         where: eq(orgs.id, org.id),
       });
-      expect(found?.clerkOrgId).toBe("org_test123");
+      expect(found?.externalOrgId).toBe("org_test123");
     });
   });
 

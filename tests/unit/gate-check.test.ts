@@ -46,7 +46,7 @@ import { runGateChecks, type GateCheckInput } from "../../src/lib/gate-check.js"
 function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
   return {
     campaignId: "campaign-1",
-    clerkOrgId: "org-1",
+    orgId: "org-1",
     appId: "mcpfactory",
     brandId: "brand-1",
     status: "ongoing",
@@ -214,7 +214,7 @@ describe("Gate Check", () => {
 
       expect(mockGetStatsBudget).toHaveBeenCalledWith(
         expect.objectContaining({
-          clerkOrgId: "org-1",
+          orgId: "org-1",
           appId: "mcpfactory",
           campaignId: "campaign-1",
           windows: expect.arrayContaining([

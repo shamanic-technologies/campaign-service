@@ -10,7 +10,7 @@ describe("Campaign model", () => {
   it("should define campaign interface", () => {
     const campaign = {
       id: "camp_123",
-      clerkOrgId: "org_456",
+      orgId: "org_456",
       name: "Q1 Outreach",
       status: "active",
       dailyBudgetUsd: 10,

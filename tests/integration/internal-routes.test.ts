@@ -36,14 +36,14 @@ import { cleanTestData, closeDb, insertTestOrg, insertTestCampaign } from "../he
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
 describe("Pipeline routes", () => {
-  let org: { id: string; clerkOrgId: string };
+  let org: { id: string; externalOrgId: string };
   const brandId = crypto.randomUUID();
 
   beforeEach(async () => {
     await cleanTestData();
     vi.clearAllMocks();
 
-    org = await insertTestOrg({ clerkOrgId: "org_internal_test" });
+    org = await insertTestOrg({ externalOrgId: "org_internal_test" });
 
     // Default mock behaviors
     mockCreateRun.mockResolvedValue({ id: "run-123" });
@@ -65,11 +65,11 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ clerkOrgId: "some-org" })
+        .send({ orgId: "some-org" })
         .expect(400);
     });
 
-    it("should return 400 if clerkOrgId is missing", async () => {
+    it("should return 400 if orgId is missing", async () => {
       await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
@@ -81,7 +81,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: crypto.randomUUID(), clerkOrgId: "nonexistent-org" })
+        .send({ campaignId: crypto.randomUUID(), orgId: "nonexistent-org" })
         .expect(404);
 
       expect(res.body.error).toBe("Organization not found");
@@ -91,7 +91,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: crypto.randomUUID(), clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: crypto.randomUUID(), orgId: org.externalOrgId })
         .expect(404);
 
       expect(res.body.error).toBe("Campaign not found");
@@ -106,7 +106,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(res.body.allowed).toBe(true);
@@ -127,7 +127,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(res.body.allowed).toBe(false);
@@ -149,7 +149,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(res.body.allowed).toBe(false);
@@ -167,13 +167,13 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(mockGateChecks).toHaveBeenCalledWith(
         expect.objectContaining({
           campaignId: campaign.id,
-          clerkOrgId: org.clerkOrgId,
+          orgId: org.externalOrgId,
           brandId,
           status: "ongoing",
           maxBudgetDailyUsd: "50.00",
@@ -190,7 +190,7 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ clerkOrgId: "some-org" })
+        .send({ orgId: "some-org" })
         .expect(400);
     });
 
@@ -198,7 +198,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: crypto.randomUUID(), clerkOrgId: "nonexistent-org" })
+        .send({ campaignId: crypto.randomUUID(), orgId: "nonexistent-org" })
         .expect(404);
 
       expect(res.body.error).toBe("Organization not found");
@@ -208,7 +208,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: crypto.randomUUID(), clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: crypto.randomUUID(), orgId: org.externalOrgId })
         .expect(404);
 
       expect(res.body.error).toBe("Campaign not found");
@@ -223,7 +223,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(400);
 
       expect(res.body.error).toBe("Campaign has no brandUrl");
@@ -238,7 +238,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(400);
 
       expect(res.body.error).toBe("Campaign has no brandId");
@@ -256,12 +256,12 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(res.body.runId).toBe("run-123");
       expect(res.body.campaignId).toBe(campaign.id);
-      expect(res.body.clerkOrgId).toBe(org.clerkOrgId);
+      expect(res.body.orgId).toBe(org.externalOrgId);
       expect(res.body.brandId).toBe(brandId);
       expect(res.body.brandUrl).toBe("https://example.com");
       expect(res.body.brandDomain).toBe("example.com");
@@ -280,7 +280,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(res.body).not.toHaveProperty("urgency");
@@ -301,7 +301,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(res.body.searchParams).toEqual({
@@ -320,7 +320,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(res.body.searchParams).toBeNull();
@@ -335,7 +335,7 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(res.body.brandDomain).toBe("example.com");
@@ -353,7 +353,7 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -370,7 +370,7 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -388,7 +388,7 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -405,7 +405,7 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, clerkOrgId: org.clerkOrgId })
+        .send({ campaignId: campaign.id, orgId: org.externalOrgId })
         .expect(200);
 
       expect(mockGateChecks).not.toHaveBeenCalled();
@@ -419,7 +419,7 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: crypto.randomUUID(), clerkOrgId: "org-1" })
+        .send({ campaignId: crypto.randomUUID(), orgId: "org-1" })
         .expect(400);
     });
 
@@ -440,7 +440,7 @@ describe("Pipeline routes", () => {
         .set("x-api-key", API_KEY)
         .send({
           campaignId: campaign.id,
-          clerkOrgId: org.clerkOrgId,
+          orgId: org.externalOrgId,
           success: true,
         })
         .expect(200);
@@ -466,7 +466,7 @@ describe("Pipeline routes", () => {
         .set("x-api-key", API_KEY)
         .send({
           campaignId: campaign.id,
-          clerkOrgId: org.clerkOrgId,
+          orgId: org.externalOrgId,
           success: false,
         })
         .expect(200);
@@ -488,7 +488,7 @@ describe("Pipeline routes", () => {
         .set("x-api-key", API_KEY)
         .send({
           campaignId: campaign.id,
-          clerkOrgId: org.clerkOrgId,
+          orgId: org.externalOrgId,
           success: false,
         })
         .expect(200);
@@ -510,7 +510,7 @@ describe("Pipeline routes", () => {
         .set("x-api-key", API_KEY)
         .send({
           campaignId: campaign.id,
-          clerkOrgId: org.clerkOrgId,
+          orgId: org.externalOrgId,
           success: true,
         })
         .expect(200);
@@ -522,7 +522,7 @@ describe("Pipeline routes", () => {
         "sales-email-cold-outreach",
         {
           campaignId: campaign.id,
-          clerkOrgId: org.clerkOrgId,
+          orgId: org.externalOrgId,
           appId: "",
         },
       );
@@ -540,7 +540,7 @@ describe("Pipeline routes", () => {
         .set("x-api-key", API_KEY)
         .send({
           campaignId: campaign.id,
-          clerkOrgId: org.clerkOrgId,
+          orgId: org.externalOrgId,
           success: true,
         })
         .expect(200);
@@ -568,7 +568,7 @@ describe("Pipeline routes", () => {
         .set("x-api-key", API_KEY)
         .send({
           campaignId: campaign.id,
-          clerkOrgId: org.clerkOrgId,
+          orgId: org.externalOrgId,
           success: true,
           leadFound: false,
         })
@@ -602,7 +602,7 @@ describe("Pipeline routes", () => {
         .set("x-api-key", API_KEY)
         .send({
           campaignId: campaign.id,
-          clerkOrgId: org.clerkOrgId,
+          orgId: org.externalOrgId,
           success: true,
           leadFound: true,
         })
@@ -615,7 +615,7 @@ describe("Pipeline routes", () => {
         "sales-email-cold-outreach",
         expect.objectContaining({
           campaignId: campaign.id,
-          clerkOrgId: org.clerkOrgId,
+          orgId: org.externalOrgId,
         }),
       );
     });

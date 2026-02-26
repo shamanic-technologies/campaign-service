@@ -28,7 +28,7 @@ const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const validBody = {
   name: "Activation Test Campaign",
   workflowName: "sales-email-cold-outreach",
-  clerkOrgId: "org_activation_test",
+  orgId: "org_activation_test",
   parentRunId: crypto.randomUUID(),
   brandUrl: "https://example.com",
   brandId: crypto.randomUUID(),
@@ -56,7 +56,7 @@ describe("Workflow trigger", () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send(validBody)
         .expect(201);
 
@@ -70,7 +70,7 @@ describe("Workflow trigger", () => {
         "sales-email-cold-outreach",
         {
           campaignId,
-          clerkOrgId: "org_activation_test",
+          orgId: "org_activation_test",
           appId: "mcpfactory",
         },
       );
@@ -82,7 +82,7 @@ describe("Workflow trigger", () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send(validBody)
         .expect(201);
 
@@ -97,7 +97,7 @@ describe("Workflow trigger", () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send(validBody)
         .expect(201);
 
@@ -107,7 +107,7 @@ describe("Workflow trigger", () => {
       await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send({ status: "stop" })
         .expect(200);
 
@@ -118,7 +118,7 @@ describe("Workflow trigger", () => {
       const activateRes = await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send({ status: "activate", parentRunId: crypto.randomUUID() })
         .expect(200);
 
@@ -132,7 +132,7 @@ describe("Workflow trigger", () => {
         "sales-email-cold-outreach",
         {
           campaignId,
-          clerkOrgId: "org_activation_test",
+          orgId: "org_activation_test",
           appId: "mcpfactory",
         },
       );
@@ -142,7 +142,7 @@ describe("Workflow trigger", () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send(validBody)
         .expect(201);
 
@@ -156,7 +156,7 @@ describe("Workflow trigger", () => {
       await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send({ status: "stop" })
         .expect(200);
 
@@ -169,7 +169,7 @@ describe("Workflow trigger", () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send(validBody)
         .expect(201);
 
@@ -183,7 +183,7 @@ describe("Workflow trigger", () => {
       await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send({ name: "Updated Name" })
         .expect(200);
 
@@ -196,7 +196,7 @@ describe("Workflow trigger", () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send(validBody)
         .expect(201);
 
@@ -206,7 +206,7 @@ describe("Workflow trigger", () => {
       await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send({ status: "stop" })
         .expect(200);
 
@@ -215,7 +215,7 @@ describe("Workflow trigger", () => {
       const activateRes = await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_activation_test")
+        .set("x-org-id", "org_activation_test")
         .send({ status: "activate", parentRunId: crypto.randomUUID() })
         .expect(200);
 

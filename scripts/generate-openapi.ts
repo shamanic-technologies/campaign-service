@@ -153,7 +153,7 @@ registry.registerPath({
   summary: "List all campaigns across all orgs",
   security: [{ [apiKeyAuth.name]: [] }],
   responses: {
-    200: { description: "All campaigns with org info", content: { "application/json": { schema: z.object({ campaigns: z.array(CampaignSchema.extend({ clerkOrgId: z.string(), brandDomain: z.string().nullable(), brandName: z.string().nullable() })) }) } } },
+    200: { description: "All campaigns with org info", content: { "application/json": { schema: z.object({ campaigns: z.array(CampaignSchema.extend({ externalOrgId: z.string(), brandDomain: z.string().nullable(), brandName: z.string().nullable() })) }) } } },
   },
 });
 

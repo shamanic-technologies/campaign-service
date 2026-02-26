@@ -9,14 +9,14 @@ export { users };
 export interface AuthenticatedRequest extends Request {
   userId?: string;
   orgId?: string;
-  clerkUserId?: string;
-  clerkOrgId?: string;
+  externalUserId?: string;
+  externalOrgId?: string;
 }
 
 /**
  * Service-to-service auth for internal calls (Railway private network)
- * Uses x-clerk-org-id header to identify org
- * Optionally uses x-clerk-user-id header to identify user
+ * Uses x-org-id header to identify org (client-service UUID)
+ * Optionally uses x-user-id header to identify user (client-service UUID)
  */
 export async function serviceAuth(
   req: AuthenticatedRequest,
@@ -24,45 +24,45 @@ export async function serviceAuth(
   next: NextFunction
 ) {
   try {
-    const clerkOrgId = req.headers["x-clerk-org-id"] as string;
-    const clerkUserId = req.headers["x-clerk-user-id"] as string | undefined;
+    const externalOrgId = req.headers["x-org-id"] as string;
+    const externalUserId = req.headers["x-user-id"] as string | undefined;
 
-    if (!clerkOrgId) {
-      return res.status(400).json({ error: "x-clerk-org-id header required" });
+    if (!externalOrgId) {
+      return res.status(400).json({ error: "x-org-id header required" });
     }
 
     // Find or create org
     let org = await db.query.orgs.findFirst({
-      where: eq(orgs.clerkOrgId, clerkOrgId),
+      where: eq(orgs.externalOrgId, externalOrgId),
     });
 
     if (!org) {
       const [newOrg] = await db
         .insert(orgs)
-        .values({ clerkOrgId })
+        .values({ externalOrgId })
         .returning();
       org = newOrg;
     }
 
     req.orgId = org.id;
-    req.clerkOrgId = clerkOrgId;
+    req.externalOrgId = externalOrgId;
 
     // Handle optional user context
-    if (clerkUserId) {
+    if (externalUserId) {
       let user = await db.query.users.findFirst({
-        where: eq(users.clerkUserId, clerkUserId),
+        where: eq(users.externalUserId, externalUserId),
       });
 
       if (!user) {
         const [newUser] = await db
           .insert(users)
-          .values({ clerkUserId })
+          .values({ externalUserId })
           .returning();
         user = newUser;
       }
 
       req.userId = user.id;
-      req.clerkUserId = clerkUserId;
+      req.externalUserId = externalUserId;
     }
 
     next();

@@ -44,7 +44,7 @@ export const CampaignSchema = z.object({
 export const CreateCampaignBody = z.object({
   name: z.string().min(1, "Campaign name is required"),
   workflowName: z.string().min(1, "workflowName is required"),
-  clerkOrgId: z.string().min(1, "clerkOrgId is required"),
+  orgId: z.string().min(1, "orgId is required"),
   parentRunId: z.string().uuid("parentRunId must be a valid UUID"),
   brandUrl: z.string().min(1, "brandUrl is required"),
   brandId: z.string().uuid("brandId must be a valid UUID"),
@@ -91,13 +91,13 @@ export const UpdateCampaignBody = z.object({
 // --- Stats ---
 
 export const StatsFilterBody = z.object({
-  clerkOrgId: z.string().optional(),
+  orgId: z.string().optional(),
   appId: z.string().optional(),
   brandId: z.string().optional(),
   campaignId: z.string().optional(),
 }).refine(
-  (data) => data.clerkOrgId || data.appId || data.brandId || data.campaignId,
-  { message: "At least one filter required: clerkOrgId, appId, brandId, or campaignId" }
+  (data) => data.orgId || data.appId || data.brandId || data.campaignId,
+  { message: "At least one filter required: orgId, appId, brandId, or campaignId" }
 ).openapi("StatsFilterBody");
 
 export const StatsResponse = z.object({
@@ -119,7 +119,7 @@ export const BatchBudgetUsageBody = z.object({
 
 export const GateCheckBody = z.object({
   campaignId: z.string().uuid("campaignId must be a valid UUID"),
-  clerkOrgId: z.string().min(1, "clerkOrgId is required"),
+  orgId: z.string().min(1, "orgId is required"),
 }).openapi("GateCheckBody");
 
 export const GateCheckResponse = z.object({
@@ -130,19 +130,19 @@ export const GateCheckResponse = z.object({
 
 export const StartRunBody = z.object({
   campaignId: z.string().uuid("campaignId must be a valid UUID"),
-  clerkOrgId: z.string().min(1, "clerkOrgId is required"),
+  orgId: z.string().min(1, "orgId is required"),
 }).openapi("StartRunBody");
 
 export const StartRunResponse = z.object({
   runId: z.string().uuid(),
   campaignId: z.string().uuid(),
-  clerkOrgId: z.string(),
+  orgId: z.string(),
   brandId: z.string().uuid(),
   brandUrl: z.string(),
   brandDomain: z.string(),
   appId: z.string(),
   workflowName: z.string(),
-  clerkUserId: z.string().nullable(),
+  userId: z.string().nullable(),
   targetOutcome: z.string().nullable(),
   valueForTarget: z.string().nullable(),
   searchParams: z.record(z.string(), z.unknown()).nullable(),
@@ -151,7 +151,7 @@ export const StartRunResponse = z.object({
 
 export const EndRunBody = z.object({
   campaignId: z.string().uuid("campaignId must be a valid UUID"),
-  clerkOrgId: z.string().min(1, "clerkOrgId is required"),
+  orgId: z.string().min(1, "orgId is required"),
   success: z.boolean(),
   leadFound: z.boolean().optional(),
 }).openapi("EndRunBody");

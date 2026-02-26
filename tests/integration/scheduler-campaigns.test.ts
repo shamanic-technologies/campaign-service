@@ -31,8 +31,8 @@ describe("Scheduler Endpoints", () => {
 
   describe("GET /campaigns/list", () => {
     it("should return all campaigns across all orgs", async () => {
-      const org1 = await insertTestOrg({ clerkOrgId: "org_1" });
-      const org2 = await insertTestOrg({ clerkOrgId: "org_2" });
+      const org1 = await insertTestOrg({ externalOrgId: "org_1" });
+      const org2 = await insertTestOrg({ externalOrgId: "org_2" });
 
       await insertTestCampaign(org1.id, { name: "Org1 Campaign", status: "ongoing" });
       await insertTestCampaign(org2.id, { name: "Org2 Campaign", status: "ongoing" });
@@ -43,11 +43,11 @@ describe("Scheduler Endpoints", () => {
         .expect(200);
 
       expect(res.body.campaigns).toHaveLength(2);
-      expect(res.body.campaigns[0].clerkOrgId).toBeDefined();
+      expect(res.body.campaigns[0].externalOrgId).toBeDefined();
     });
 
-    it("should include clerkOrgId for downstream service calls", async () => {
-      const org = await insertTestOrg({ clerkOrgId: "org_test_clerk" });
+    it("should include externalOrgId for downstream service calls", async () => {
+      const org = await insertTestOrg({ externalOrgId: "org_test_ext" });
       await insertTestCampaign(org.id, { name: "Test", status: "ongoing" });
 
       const res = await request(app)
@@ -55,7 +55,7 @@ describe("Scheduler Endpoints", () => {
         .set("x-api-key", API_KEY)
         .expect(200);
 
-      expect(res.body.campaigns[0].clerkOrgId).toBe("org_test_clerk");
+      expect(res.body.campaigns[0].externalOrgId).toBe("org_test_ext");
     });
 
     it("should return empty array when no campaigns", async () => {
@@ -70,7 +70,7 @@ describe("Scheduler Endpoints", () => {
 
   describe("POST /campaigns/batch-budget-usage", () => {
     it("should return cost total from getStatsBudget for each campaign", async () => {
-      const org = await insertTestOrg({ clerkOrgId: "org_batch" });
+      const org = await insertTestOrg({ externalOrgId: "org_batch" });
       const campaign = await insertTestCampaign(org.id, {
         status: "ongoing",
         maxBudgetTotalUsd: "50.00",
@@ -96,7 +96,7 @@ describe("Scheduler Endpoints", () => {
     });
 
     it("should call getStatsBudget with correct params", async () => {
-      const org = await insertTestOrg({ clerkOrgId: "org_batch_params" });
+      const org = await insertTestOrg({ externalOrgId: "org_batch_params" });
       const campaign = await insertTestCampaign(org.id, { appId: "mcpfactory" });
 
       mockGetStatsBudget.mockResolvedValue({ windows: [] });
@@ -108,7 +108,7 @@ describe("Scheduler Endpoints", () => {
         .expect(200);
 
       expect(mockGetStatsBudget).toHaveBeenCalledWith({
-        clerkOrgId: "org_batch_params",
+        orgId: "org_batch_params",
         appId: "mcpfactory",
         campaignId: campaign.id,
         windows: [{ label: "total" }],
@@ -128,7 +128,7 @@ describe("Scheduler Endpoints", () => {
     });
 
     it("should handle getStatsBudget failure gracefully", async () => {
-      const org = await insertTestOrg({ clerkOrgId: "org_batch_err" });
+      const org = await insertTestOrg({ externalOrgId: "org_batch_err" });
       const campaign = await insertTestCampaign(org.id, { appId: "mcpfactory" });
 
       mockGetStatsBudget.mockRejectedValue(new Error("runs-service down"));
@@ -143,7 +143,7 @@ describe("Scheduler Endpoints", () => {
     });
 
     it("should return null totalCostInUsdCents when no windows returned", async () => {
-      const org = await insertTestOrg({ clerkOrgId: "org_batch_empty" });
+      const org = await insertTestOrg({ externalOrgId: "org_batch_empty" });
       const campaign = await insertTestCampaign(org.id, { appId: "mcpfactory" });
 
       mockGetStatsBudget.mockResolvedValue({ windows: [] });
@@ -158,7 +158,7 @@ describe("Scheduler Endpoints", () => {
     });
 
     it("should handle multiple campaigns in batch", async () => {
-      const org = await insertTestOrg({ clerkOrgId: "org_multi" });
+      const org = await insertTestOrg({ externalOrgId: "org_multi" });
       const c1 = await insertTestCampaign(org.id, { appId: "mcpfactory", status: "ongoing" });
       const c2 = await insertTestCampaign(org.id, { appId: "mcpfactory", status: "stopped" });
 

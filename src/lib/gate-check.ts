@@ -8,7 +8,7 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 
 export interface GateCheckInput {
   campaignId: string;
-  clerkOrgId: string;
+  orgId: string;
   appId: string;
   brandId: string;
   status: string;
@@ -33,7 +33,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
 
   // Fetch all runs for this campaign (needed for stale cleanup, running check, consecutive failures)
   const { runs } = await listRuns({
-    clerkOrgId: campaign.clerkOrgId,
+    orgId: campaign.orgId,
     appId: campaign.appId,
     serviceName: "campaign-service",
     taskName: campaign.campaignId,
@@ -87,7 +87,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
 
   // Single call to runs-service for all budget windows
   const budgetResult = await getStatsBudget({
-    clerkOrgId: campaign.clerkOrgId,
+    orgId: campaign.orgId,
     appId: campaign.appId,
     campaignId: campaign.campaignId,
     windows,
@@ -112,7 +112,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     const completedRuns = runs.filter((r: Run) => r.status === "completed");
     let totalServed: number;
     try {
-      const leadStats = await fetchLeadStats(campaign.clerkOrgId, campaign.campaignId, campaign.brandId, campaign.appId);
+      const leadStats = await fetchLeadStats(campaign.orgId, campaign.campaignId, campaign.brandId, campaign.appId);
       totalServed = Math.max(leadStats.totalServed, completedRuns.length);
     } catch (err: unknown) {
       if (err instanceof Error && "status" in err && (err as { status: number }).status === 404) {
@@ -153,7 +153,7 @@ async function autoStopCampaign(campaignId: string): Promise<void> {
 }
 
 async function fetchLeadStats(
-  clerkOrgId: string,
+  orgId: string,
   campaignId: string,
   brandId: string,
   appId: string,
@@ -167,7 +167,7 @@ async function fetchLeadStats(
     headers: {
       "x-api-key": apiKey,
       "x-app-id": appId,
-      "x-org-id": clerkOrgId,
+      "x-org-id": orgId,
     },
   });
 

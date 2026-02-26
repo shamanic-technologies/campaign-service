@@ -26,11 +26,11 @@ export interface Run {
 }
 
 export interface CreateRunParams {
-  clerkOrgId: string;
+  orgId: string;
   appId: string;
   serviceName: string;
   taskName: string;
-  clerkUserId?: string;
+  userId?: string;
   brandId?: string;
   campaignId?: string;
   parentRunId?: string;
@@ -38,8 +38,8 @@ export interface CreateRunParams {
 }
 
 export interface ListRunsParams {
-  clerkOrgId: string;
-  clerkUserId?: string;
+  orgId: string;
+  userId?: string;
   appId?: string;
   brandId?: string;
   campaignId?: string;
@@ -66,7 +66,7 @@ export interface BudgetWindowResult {
 }
 
 export interface StatsBudgetParams {
-  clerkOrgId: string;
+  orgId: string;
   appId: string;
   campaignId?: string;
   brandId?: string;
@@ -137,8 +137,8 @@ export async function listRuns(
   params: ListRunsParams
 ): Promise<{ runs: Run[]; limit: number; offset: number }> {
   const searchParams = new URLSearchParams();
-  searchParams.set("clerkOrgId", params.clerkOrgId);
-  if (params.clerkUserId) searchParams.set("clerkUserId", params.clerkUserId);
+  searchParams.set("orgId", params.orgId);
+  if (params.userId) searchParams.set("userId", params.userId);
   if (params.appId) searchParams.set("appId", params.appId);
   if (params.brandId) searchParams.set("brandId", params.brandId);
   if (params.campaignId) searchParams.set("campaignId", params.campaignId);

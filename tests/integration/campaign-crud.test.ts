@@ -18,7 +18,7 @@ describe("Campaign CRUD", () => {
   const validBody = {
     name: "Test Campaign",
     workflowName: "sales-email-cold-outreach",
-    clerkOrgId: "org_test_crud",
+    orgId: "org_test_crud",
     parentRunId: crypto.randomUUID(),
     brandUrl: "https://example.com",
     brandId: crypto.randomUUID(),
@@ -33,7 +33,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(validBody)
         .expect(201);
 
@@ -50,7 +50,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(body)
         .expect(400);
 
@@ -61,7 +61,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(validBody)
         .expect(201);
 
@@ -74,7 +74,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(body)
         .expect(400);
 
@@ -85,7 +85,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ ...validBody, parentRunId: "not-a-uuid" })
         .expect(400);
 
@@ -98,7 +98,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(body)
         .expect(400);
 
@@ -111,20 +111,20 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(body)
         .expect(400);
 
       expect(res.body.error).toBeDefined();
     });
 
-    it("should reject when clerkOrgId is missing from body", async () => {
-      const { clerkOrgId, ...body } = validBody;
+    it("should reject when orgId is missing from body", async () => {
+      const { orgId, ...body } = validBody;
 
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(body)
         .expect(400);
 
@@ -135,7 +135,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ ...validBody, brandId: "not-a-uuid" })
         .expect(400);
 
@@ -147,7 +147,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ ...validBody, targetAudience: audience })
         .expect(201);
 
@@ -158,7 +158,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(validBody)
         .expect(201);
 
@@ -169,7 +169,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(validBody)
         .expect(201);
 
@@ -183,7 +183,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(body)
         .expect(400);
 
@@ -196,7 +196,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(body)
         .expect(400);
 
@@ -207,7 +207,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ ...validBody, targetOutcome: "" })
         .expect(400);
 
@@ -218,7 +218,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ ...validBody, valueForTarget: "" })
         .expect(400);
 
@@ -229,7 +229,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ ...validBody, personTitles: ["CEO"] });
 
       // Zod strips unknown fields by default, so it should still succeed
@@ -242,7 +242,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(validBody)
         .expect(201);
 
@@ -259,7 +259,7 @@ describe("Campaign CRUD", () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(validBody)
         .expect(201);
 
@@ -269,7 +269,7 @@ describe("Campaign CRUD", () => {
       await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ status: "stop" })
         .expect(200);
 
@@ -277,7 +277,7 @@ describe("Campaign CRUD", () => {
       const res = await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ status: "activate" })
         .expect(400);
 
@@ -288,7 +288,7 @@ describe("Campaign CRUD", () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(validBody)
         .expect(201);
 
@@ -298,7 +298,7 @@ describe("Campaign CRUD", () => {
       await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ status: "stop" })
         .expect(200);
 
@@ -307,7 +307,7 @@ describe("Campaign CRUD", () => {
       const activateRes = await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ status: "activate", parentRunId: newParentRunId })
         .expect(200);
 
@@ -320,7 +320,7 @@ describe("Campaign CRUD", () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(validBody)
         .expect(201);
 
@@ -330,7 +330,7 @@ describe("Campaign CRUD", () => {
       const updateRes = await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({ targetAudience: newAudience })
         .expect(200);
 
@@ -341,7 +341,7 @@ describe("Campaign CRUD", () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send(validBody)
         .expect(201);
 
@@ -350,7 +350,7 @@ describe("Campaign CRUD", () => {
       const updateRes = await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
-        .set("x-clerk-org-id", "org_test_crud")
+        .set("x-org-id", "org_test_crud")
         .send({
           targetOutcome: "Recruit community ambassadors",
           valueForTarget: "Early access to beta features",

@@ -13,11 +13,11 @@ export async function cleanTestData() {
 /**
  * Insert a test org
  */
-export async function insertTestOrg(data: { clerkOrgId?: string } = {}) {
+export async function insertTestOrg(data: { externalOrgId?: string } = {}) {
   const [org] = await db
     .insert(orgs)
     .values({
-      clerkOrgId: data.clerkOrgId || `test-org-${Date.now()}`,
+      externalOrgId: data.externalOrgId || `test-org-${Date.now()}`,
     })
     .returning();
   return org;
@@ -26,11 +26,11 @@ export async function insertTestOrg(data: { clerkOrgId?: string } = {}) {
 /**
  * Insert a test user
  */
-export async function insertTestUser(data: { clerkUserId?: string } = {}) {
+export async function insertTestUser(data: { externalUserId?: string } = {}) {
   const [user] = await db
     .insert(users)
     .values({
-      clerkUserId: data.clerkUserId || `test-user-${Date.now()}`,
+      externalUserId: data.externalUserId || `test-user-${Date.now()}`,
     })
     .returning();
   return user;
