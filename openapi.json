@@ -181,7 +181,7 @@
             "type": "string",
             "minLength": 1
           },
-          "clerkOrgId": {
+          "orgId": {
             "type": "string",
             "minLength": 1
           },
@@ -254,7 +254,7 @@
         "required": [
           "name",
           "workflowName",
-          "clerkOrgId",
+          "orgId",
           "parentRunId",
           "brandUrl",
           "brandId",
@@ -380,7 +380,7 @@
       "StatsFilterBody": {
         "type": "object",
         "properties": {
-          "clerkOrgId": {
+          "orgId": {
             "type": "string"
           },
           "appId": {
@@ -433,14 +433,14 @@
             "type": "string",
             "format": "uuid"
           },
-          "clerkOrgId": {
+          "orgId": {
             "type": "string",
             "minLength": 1
           }
         },
         "required": [
           "campaignId",
-          "clerkOrgId"
+          "orgId"
         ]
       },
       "StartRunResponse": {
@@ -454,7 +454,7 @@
             "type": "string",
             "format": "uuid"
           },
-          "clerkOrgId": {
+          "orgId": {
             "type": "string"
           },
           "brandId": {
@@ -473,7 +473,7 @@
           "workflowName": {
             "type": "string"
           },
-          "clerkUserId": {
+          "userId": {
             "type": "string",
             "nullable": true
           },
@@ -503,13 +503,13 @@
         "required": [
           "runId",
           "campaignId",
-          "clerkOrgId",
+          "orgId",
           "brandId",
           "brandUrl",
           "brandDomain",
           "appId",
           "workflowName",
-          "clerkUserId",
+          "userId",
           "targetOutcome",
           "valueForTarget",
           "searchParams",
@@ -523,14 +523,14 @@
             "type": "string",
             "format": "uuid"
           },
-          "clerkOrgId": {
+          "orgId": {
             "type": "string",
             "minLength": 1
           }
         },
         "required": [
           "campaignId",
-          "clerkOrgId"
+          "orgId"
         ]
       },
       "EndRunResponse": {
@@ -551,7 +551,7 @@
             "type": "string",
             "format": "uuid"
           },
-          "clerkOrgId": {
+          "orgId": {
             "type": "string",
             "minLength": 1
           },
@@ -564,7 +564,7 @@
         },
         "required": [
           "campaignId",
-          "clerkOrgId",
+          "orgId",
           "success"
         ]
       }
@@ -983,7 +983,7 @@
                           {
                             "type": "object",
                             "properties": {
-                              "clerkOrgId": {
+                              "externalOrgId": {
                                 "type": "string"
                               },
                               "brandDomain": {
@@ -996,7 +996,7 @@
                               }
                             },
                             "required": [
-                              "clerkOrgId",
+                              "externalOrgId",
                               "brandDomain",
                               "brandName"
                             ]

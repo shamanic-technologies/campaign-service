@@ -22,7 +22,7 @@ describe("Workflow module", () => {
       const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
       await executeCampaignWorkflow("sales-email-cold-outreach", {
         campaignId: "campaign-1",
-        clerkOrgId: "org_test",
+        orgId: "org_test",
         appId: "mcpfactory",
       });
 
@@ -36,7 +36,7 @@ describe("Workflow module", () => {
       expect(body.orgId).toBe("org_test");
       expect(body.inputs).toEqual({
         campaignId: "campaign-1",
-        clerkOrgId: "org_test",
+        orgId: "org_test",
       });
     });
 
@@ -51,7 +51,7 @@ describe("Workflow module", () => {
       await expect(
         executeCampaignWorkflow("sales-email-cold-outreach", {
           campaignId: "campaign-1",
-          clerkOrgId: "org_test",
+          orgId: "org_test",
           appId: "mcpfactory",
         })
       ).resolves.not.toThrow();
@@ -65,7 +65,7 @@ describe("Workflow module", () => {
       await expect(
         executeCampaignWorkflow("any-workflow", {
           campaignId: "campaign-1",
-          clerkOrgId: "org_test",
+          orgId: "org_test",
           appId: "mcpfactory",
         })
       ).resolves.not.toThrow();
