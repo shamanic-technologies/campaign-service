@@ -57,6 +57,7 @@ export async function insertTestCampaign(
     targetAudience?: string;
     targetOutcome?: string;
     valueForTarget?: string;
+    toResumeAt?: Date | null;
   } = {}
 ) {
   const [campaign] = await db
@@ -78,6 +79,7 @@ export async function insertTestCampaign(
       targetAudience: data.targetAudience || null,
       targetOutcome: data.targetOutcome || null,
       valueForTarget: data.valueForTarget || null,
+      toResumeAt: data.toResumeAt ?? null,
     })
     .returning();
   return campaign;
