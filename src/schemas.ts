@@ -59,7 +59,7 @@ export const CreateCampaignBody = z.object({
   maxLeads: z.number().int().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
-  keySource: z.enum(["byok", "app"], { error: "keySource is required and must be \"byok\" or \"app\"" }).openapi({ description: "How downstream services resolve API keys. \"byok\" = org's own keys via key-service, \"app\" = platform keys." }),
+  keySource: z.enum(["platform", "app", "byok"], { error: "keySource is required and must be \"platform\", \"app\", or \"byok\"" }).openapi({ description: "How downstream services resolve API keys. \"platform\" = platform-owned keys (no appId needed), \"app\" = client app keys (per appId), \"byok\" = end user's own keys." }),
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
@@ -81,7 +81,7 @@ export const UpdateCampaignBody = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   status: z.enum(["activate", "stop"]).optional(),
-  keySource: z.enum(["byok", "app"]).optional(),
+  keySource: z.enum(["platform", "app", "byok"]).optional(),
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
@@ -146,7 +146,7 @@ export const StartRunResponse = z.object({
   targetOutcome: z.string().nullable(),
   valueForTarget: z.string().nullable(),
   searchParams: z.record(z.string(), z.unknown()).nullable(),
-  keySource: z.enum(["byok", "app"]),
+  keySource: z.enum(["platform", "app", "byok"]),
 }).openapi("StartRunResponse");
 
 export const EndRunBody = z.object({
