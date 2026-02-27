@@ -236,10 +236,11 @@
           "keySource": {
             "type": "string",
             "enum": [
-              "byok",
-              "app"
+              "platform",
+              "app",
+              "byok"
             ],
-            "description": "How downstream services resolve API keys. \"byok\" = org's own keys via key-service, \"app\" = platform keys."
+            "description": "How downstream services resolve API keys. \"platform\" = platform-owned keys (no appId needed), \"app\" = client app keys (per appId), \"byok\" = end user's own keys."
           },
           "notifyFrequency": {
             "type": "string"
@@ -323,8 +324,9 @@
           "keySource": {
             "type": "string",
             "enum": [
-              "byok",
-              "app"
+              "platform",
+              "app",
+              "byok"
             ]
           },
           "notifyFrequency": {
@@ -495,8 +497,9 @@
           "keySource": {
             "type": "string",
             "enum": [
-              "byok",
-              "app"
+              "platform",
+              "app",
+              "byok"
             ]
           }
         },

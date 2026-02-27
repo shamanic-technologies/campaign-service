@@ -225,6 +225,28 @@ describe("Campaign CRUD", () => {
       expect(res.body.error).toBeDefined();
     });
 
+    it("should create a campaign with keySource 'platform'", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({ ...validBody, keySource: "platform" })
+        .expect(201);
+
+      expect(res.body.campaign.keySource).toBe("platform");
+    });
+
+    it("should reject an invalid keySource value", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({ ...validBody, keySource: "invalid" })
+        .expect(400);
+
+      expect(res.body.error).toBeDefined();
+    });
+
     it("should reject Apollo fields that no longer exist", async () => {
       const res = await request(app)
         .post("/campaigns")
