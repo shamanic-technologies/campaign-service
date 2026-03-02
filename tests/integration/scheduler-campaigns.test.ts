@@ -13,7 +13,7 @@ vi.mock("@mcpfactory/runs-client", () => ({
 }));
 
 import app from "../../src/index.js";
-import { cleanTestData, closeDb, insertTestOrg, insertTestCampaign } from "../helpers/test-db.js";
+import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
@@ -31,11 +31,8 @@ describe("Scheduler Endpoints", () => {
 
   describe("GET /campaigns/list", () => {
     it("should return all campaigns across all orgs", async () => {
-      const org1 = await insertTestOrg({ externalOrgId: "org_1" });
-      const org2 = await insertTestOrg({ externalOrgId: "org_2" });
-
-      await insertTestCampaign(org1.id, { name: "Org1 Campaign", status: "ongoing" });
-      await insertTestCampaign(org2.id, { name: "Org2 Campaign", status: "ongoing" });
+      await insertTestCampaign("org_1", { name: "Org1 Campaign", status: "ongoing" });
+      await insertTestCampaign("org_2", { name: "Org2 Campaign", status: "ongoing" });
 
       const res = await request(app)
         .get("/campaigns/list")
@@ -43,19 +40,17 @@ describe("Scheduler Endpoints", () => {
         .expect(200);
 
       expect(res.body.campaigns).toHaveLength(2);
-      expect(res.body.campaigns[0].externalOrgId).toBeDefined();
     });
 
-    it("should include externalOrgId for downstream service calls", async () => {
-      const org = await insertTestOrg({ externalOrgId: "org_test_ext" });
-      await insertTestCampaign(org.id, { name: "Test", status: "ongoing" });
+    it("should include orgId for downstream service calls", async () => {
+      await insertTestCampaign("org_test_ext", { name: "Test", status: "ongoing" });
 
       const res = await request(app)
         .get("/campaigns/list")
         .set("x-api-key", API_KEY)
         .expect(200);
 
-      expect(res.body.campaigns[0].externalOrgId).toBe("org_test_ext");
+      expect(res.body.campaigns[0].orgId).toBe("org_test_ext");
     });
 
     it("should return empty array when no campaigns", async () => {
@@ -70,12 +65,10 @@ describe("Scheduler Endpoints", () => {
 
   describe("POST /campaigns/batch-budget-usage", () => {
     it("should return cost total from getStatsBudget for each campaign", async () => {
-      const org = await insertTestOrg({ externalOrgId: "org_batch" });
-      const campaign = await insertTestCampaign(org.id, {
+      const campaign = await insertTestCampaign("org_batch", {
         status: "ongoing",
         maxBudgetTotalUsd: "50.00",
         maxLeads: 100,
-        appId: "mcpfactory",
       });
 
       mockGetStatsBudget.mockResolvedValue({
@@ -96,8 +89,7 @@ describe("Scheduler Endpoints", () => {
     });
 
     it("should call getStatsBudget with correct params", async () => {
-      const org = await insertTestOrg({ externalOrgId: "org_batch_params" });
-      const campaign = await insertTestCampaign(org.id, { appId: "mcpfactory" });
+      const campaign = await insertTestCampaign("org_batch_params", {});
 
       mockGetStatsBudget.mockResolvedValue({ windows: [] });
 
@@ -109,7 +101,6 @@ describe("Scheduler Endpoints", () => {
 
       expect(mockGetStatsBudget).toHaveBeenCalledWith({
         orgId: "org_batch_params",
-        appId: "mcpfactory",
         campaignId: campaign.id,
         windows: [{ label: "total" }],
       });
@@ -128,8 +119,7 @@ describe("Scheduler Endpoints", () => {
     });
 
     it("should handle getStatsBudget failure gracefully", async () => {
-      const org = await insertTestOrg({ externalOrgId: "org_batch_err" });
-      const campaign = await insertTestCampaign(org.id, { appId: "mcpfactory" });
+      const campaign = await insertTestCampaign("org_batch_err", {});
 
       mockGetStatsBudget.mockRejectedValue(new Error("runs-service down"));
 
@@ -143,8 +133,7 @@ describe("Scheduler Endpoints", () => {
     });
 
     it("should return null totalCostInUsdCents when no windows returned", async () => {
-      const org = await insertTestOrg({ externalOrgId: "org_batch_empty" });
-      const campaign = await insertTestCampaign(org.id, { appId: "mcpfactory" });
+      const campaign = await insertTestCampaign("org_batch_empty", {});
 
       mockGetStatsBudget.mockResolvedValue({ windows: [] });
 
@@ -158,9 +147,8 @@ describe("Scheduler Endpoints", () => {
     });
 
     it("should handle multiple campaigns in batch", async () => {
-      const org = await insertTestOrg({ externalOrgId: "org_multi" });
-      const c1 = await insertTestCampaign(org.id, { appId: "mcpfactory", status: "ongoing" });
-      const c2 = await insertTestCampaign(org.id, { appId: "mcpfactory", status: "stopped" });
+      const c1 = await insertTestCampaign("org_multi", { status: "ongoing" });
+      const c2 = await insertTestCampaign("org_multi", { status: "stopped" });
 
       mockGetStatsBudget
         .mockResolvedValueOnce({

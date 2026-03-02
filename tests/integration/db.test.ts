@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
-import { orgs, campaigns } from "../../src/db/schema.js";
-import { cleanTestData, closeDb, insertTestOrg, insertTestCampaign } from "../helpers/test-db.js";
+import { campaigns } from "../../src/db/schema.js";
+import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 
 describe("Campaign Service Database", () => {
   beforeEach(async () => {
@@ -14,84 +14,35 @@ describe("Campaign Service Database", () => {
     await closeDb();
   });
 
-  describe("orgs table", () => {
-    it("should create and query an org", async () => {
-      const org = await insertTestOrg({ externalOrgId: "org_test123" });
-
-      expect(org.id).toBeDefined();
-      expect(org.externalOrgId).toBe("org_test123");
-
-      const found = await db.query.orgs.findFirst({
-        where: eq(orgs.id, org.id),
-      });
-      expect(found?.externalOrgId).toBe("org_test123");
-    });
-  });
-
   describe("campaigns table", () => {
-    it("should create a campaign linked to org", async () => {
-      const org = await insertTestOrg();
-      const campaign = await insertTestCampaign(org.id, {
+    it("should create a campaign with orgId stored directly", async () => {
+      const campaign = await insertTestCampaign("org_test_123", {
         name: "Test Campaign",
-        status: "active",
+        status: "ongoing",
       });
 
       expect(campaign.id).toBeDefined();
       expect(campaign.name).toBe("Test Campaign");
-      expect(campaign.status).toBe("active");
+      expect(campaign.status).toBe("ongoing");
+      expect(campaign.orgId).toBe("org_test_123");
     });
 
-    it("should create a campaign with appId", async () => {
-      const org = await insertTestOrg();
-      const appId = crypto.randomUUID();
-      const campaign = await insertTestCampaign(org.id, {
-        name: "App Campaign",
-        appId,
-      });
-
-      expect(campaign.appId).toBe(appId);
-    });
-
-    it("should store null appId when not provided", async () => {
-      const org = await insertTestOrg();
-      const campaign = await insertTestCampaign(org.id, {
-        name: "No App Campaign",
-      });
-
-      expect(campaign.appId).toBeNull();
-    });
-
-    it("should query campaign and return appId column", async () => {
-      const org = await insertTestOrg();
-      const appId = crypto.randomUUID();
-      await insertTestCampaign(org.id, { name: "Queryable", appId });
-
-      const found = await db.query.campaigns.findFirst({
-        where: eq(campaigns.orgId, org.id),
-      });
-
-      expect(found).toBeDefined();
-      expect(found!.appId).toBe(appId);
-    });
-
-    it("should select all campaigns with appId column present", async () => {
-      const org = await insertTestOrg();
-      const appId = crypto.randomUUID();
-      await insertTestCampaign(org.id, { name: "Select Test", appId });
+    it("should query campaigns by orgId", async () => {
+      await insertTestCampaign("org_1", { name: "Org1 Campaign" });
+      await insertTestCampaign("org_2", { name: "Org2 Campaign" });
 
       const results = await db
         .select()
         .from(campaigns)
-        .where(eq(campaigns.orgId, org.id));
+        .where(eq(campaigns.orgId, "org_1"));
 
       expect(results).toHaveLength(1);
-      expect(results[0].appId).toBe(appId);
+      expect(results[0].name).toBe("Org1 Campaign");
     });
 
     it("should create a campaign with brandId", async () => {
-      const org = await insertTestOrg();
       const brandId = crypto.randomUUID();
-      const campaign = await insertTestCampaign(org.id, {
+      const campaign = await insertTestCampaign("org_1", {
         name: "Brand Campaign",
         brandId,
       });
@@ -100,8 +51,7 @@ describe("Campaign Service Database", () => {
     });
 
     it("should store null brandId when not provided", async () => {
-      const org = await insertTestOrg();
-      const campaign = await insertTestCampaign(org.id, {
+      const campaign = await insertTestCampaign("org_1", {
         name: "No Brand Campaign",
       });
 
@@ -109,10 +59,9 @@ describe("Campaign Service Database", () => {
     });
 
     it("should query campaigns by brandId", async () => {
-      const org = await insertTestOrg();
       const brandId = crypto.randomUUID();
-      await insertTestCampaign(org.id, { name: "With Brand", brandId });
-      await insertTestCampaign(org.id, { name: "Without Brand" });
+      await insertTestCampaign("org_1", { name: "With Brand", brandId });
+      await insertTestCampaign("org_1", { name: "Without Brand" });
 
       const results = await db
         .select()
@@ -124,16 +73,13 @@ describe("Campaign Service Database", () => {
       expect(results[0].brandId).toBe(brandId);
     });
 
-    it("should cascade delete when org is deleted", async () => {
-      const org = await insertTestOrg();
-      const campaign = await insertTestCampaign(org.id);
-
-      await db.delete(orgs).where(eq(orgs.id, org.id));
-
-      const found = await db.query.campaigns.findFirst({
-        where: eq(campaigns.id, campaign.id),
+    it("should not have appId or keySource columns", async () => {
+      const campaign = await insertTestCampaign("org_1", {
+        name: "No Legacy Fields",
       });
-      expect(found).toBeUndefined();
+
+      expect(campaign).not.toHaveProperty("appId");
+      expect(campaign).not.toHaveProperty("keySource");
     });
   });
 });

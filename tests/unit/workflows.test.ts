@@ -23,7 +23,6 @@ describe("Workflow module", () => {
       await executeCampaignWorkflow("sales-email-cold-outreach", {
         campaignId: "campaign-1",
         orgId: "org_test",
-        appId: "mcpfactory",
       });
 
       expect(mockFetch).toHaveBeenCalledOnce();
@@ -32,7 +31,7 @@ describe("Workflow module", () => {
       expect(opts.method).toBe("POST");
 
       const body = JSON.parse(opts.body);
-      expect(body.appId).toBe("mcpfactory");
+      expect(body).not.toHaveProperty("appId");
       expect(body.orgId).toBe("org_test");
       expect(body.inputs).toEqual({
         campaignId: "campaign-1",
@@ -52,7 +51,6 @@ describe("Workflow module", () => {
         executeCampaignWorkflow("sales-email-cold-outreach", {
           campaignId: "campaign-1",
           orgId: "org_test",
-          appId: "mcpfactory",
         })
       ).resolves.not.toThrow();
     });
@@ -66,7 +64,6 @@ describe("Workflow module", () => {
         executeCampaignWorkflow("any-workflow", {
           campaignId: "campaign-1",
           orgId: "org_test",
-          appId: "mcpfactory",
         })
       ).resolves.not.toThrow();
       expect(mockFetch).not.toHaveBeenCalled();

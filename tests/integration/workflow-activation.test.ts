@@ -32,11 +32,9 @@ const validBody = {
   parentRunId: crypto.randomUUID(),
   brandUrl: "https://example.com",
   brandId: crypto.randomUUID(),
-  appId: "mcpfactory",
   targetOutcome: "Book sales demos",
   valueForTarget: "Enterprise analytics at startup pricing",
   targetAudience: "CTOs at SaaS companies",
-  keySource: "byok" as const,
 };
 
 describe("Workflow trigger", () => {
@@ -71,7 +69,6 @@ describe("Workflow trigger", () => {
         {
           campaignId,
           orgId: "org_activation_test",
-          appId: "mcpfactory",
         },
       );
     });
@@ -133,7 +130,6 @@ describe("Workflow trigger", () => {
         {
           campaignId,
           orgId: "org_activation_test",
-          appId: "mcpfactory",
         },
       );
     });

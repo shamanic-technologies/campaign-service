@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaigns, orgs, users } from "../db/schema.js";
+import { campaigns } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun } from "@mcpfactory/runs-client";
@@ -25,7 +25,7 @@ const router = Router();
  *
  * Returns:
  *   200 — gate check result (allowed or blocked)
- *   404 — campaign/org not found
+ *   404 — campaign not found
  *   500 — internal error
  */
 router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (req, res) => {
@@ -33,16 +33,8 @@ router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (re
     const { campaignId, orgId } = req.body;
     console.log(`[Gate Check] Received request: campaignId=${campaignId}, orgId=${orgId}`);
 
-    const org = await db.query.orgs.findFirst({
-      where: eq(orgs.externalOrgId, orgId),
-    });
-    if (!org) {
-      console.warn(`[Gate Check] Org not found: ${orgId}`);
-      return res.status(404).json({ error: "Organization not found" });
-    }
-
     const campaign = await db.query.campaigns.findFirst({
-      where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, org.id)),
+      where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
     });
     if (!campaign) {
       console.warn(`[Gate Check] Campaign not found: ${campaignId}`);
@@ -53,7 +45,6 @@ router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (re
     const result = await runGateChecks({
       campaignId,
       orgId,
-      appId: campaign.appId || "",
       brandId: campaign.brandId || "",
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
@@ -99,7 +90,7 @@ router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (re
  * Returns:
  *   200 — run started, campaign data returned
  *   400 — bad request (missing brandUrl/brandId)
- *   404 — campaign/org not found
+ *   404 — campaign not found
  *   500 — internal error
  */
 router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req, res) => {
@@ -107,19 +98,11 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
     const { campaignId, orgId } = req.body;
     console.log(`[Start Run] Received request: campaignId=${campaignId}, orgId=${orgId}`);
 
-    const org = await db.query.orgs.findFirst({
-      where: eq(orgs.externalOrgId, orgId),
-    });
-    if (!org) {
-      console.warn(`[Start Run] Org not found: ${orgId}`);
-      return res.status(404).json({ error: "Organization not found" });
-    }
-
     const campaign = await db.query.campaigns.findFirst({
-      where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, org.id)),
+      where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
     });
     if (!campaign) {
-      console.warn(`[Start Run] Campaign not found: ${campaignId} (orgId=${org.id})`);
+      console.warn(`[Start Run] Campaign not found: ${campaignId} (orgId=${orgId})`);
       return res.status(404).json({ error: "Campaign not found" });
     }
     console.log(`[Start Run] Campaign found: name=${campaign.name}, workflowName=${campaign.workflowName}, status=${campaign.status}, brandUrl=${campaign.brandUrl}`);
@@ -132,28 +115,15 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       return res.status(400).json({ error: "Campaign has no brandId" });
     }
 
-    const appId = campaign.appId || "";
-
-    // Look up user's external ID if campaign has a createdByUserId
-    let externalUserId: string | undefined;
-    if (campaign.createdByUserId) {
-      const user = await db.query.users.findFirst({
-        where: eq(users.id, campaign.createdByUserId),
-        columns: { externalUserId: true },
-      });
-      externalUserId = user?.externalUserId;
-    }
-
     // Create run in runs-service (parentRunId links to api-service's parent run)
     console.log(`[Start Run] Creating run in runs-service for campaign ${campaignId} (parentRunId=${campaign.parentRunId || "none"})...`);
     const run = await createRun({
       orgId,
-      appId,
       serviceName: "campaign-service",
       taskName: campaignId,
       campaignId,
       brandId: campaign.brandId,
-      userId: externalUserId,
+      userId: campaign.createdByUserId || undefined,
       parentRunId: campaign.parentRunId || undefined,
       workflowName: campaign.workflowName,
     });
@@ -182,13 +152,11 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       brandId: campaign.brandId,
       brandUrl: campaign.brandUrl,
       brandDomain,
-      appId,
       workflowName: campaign.workflowName,
-      userId: externalUserId ?? null,
+      userId: campaign.createdByUserId ?? null,
       targetOutcome: campaign.targetOutcome,
       valueForTarget: campaign.valueForTarget,
       searchParams,
-      keySource: campaign.keySource,
     });
   } catch (error) {
     console.error("[Start Run] Unhandled error:", error);
@@ -214,22 +182,10 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
 
     const status = success === true ? "completed" : "failed";
 
-    // Fetch campaign to get appId
-    const org = await db.query.orgs.findFirst({
-      where: eq(orgs.externalOrgId, orgId),
-    });
-    const campaign = org
-      ? await db.query.campaigns.findFirst({
-          where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, org.id)),
-        })
-      : undefined;
-    const appId = campaign?.appId || "";
-
     // Find and update running runs for this campaign
     try {
       const { runs } = await listRuns({
         orgId,
-        appId,
         serviceName: "campaign-service",
         taskName: campaignId,
       });
@@ -253,12 +209,10 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
     // No leads found → auto-stop campaign, no re-trigger
     if (success === true && leadFound === false) {
       try {
-        if (org) {
-          await db.update(campaigns)
-            .set({ status: "stopped" })
-            .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, org.id)));
-          console.log(`[End Run] No leads found — auto-stopped campaign ${campaignId}`);
-        }
+        await db.update(campaigns)
+          .set({ status: "stopped" })
+          .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)));
+        console.log(`[End Run] No leads found — auto-stopped campaign ${campaignId}`);
       } catch (err) {
         console.error(`[End Run] Failed to auto-stop campaign:`, err);
       }
@@ -267,14 +221,9 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
 
     // Re-trigger if campaign is still ongoing
     try {
-      if (!org) {
-        console.warn(`[End Run] Org not found for re-trigger: ${orgId}`);
-        return;
-      }
-
       // Re-fetch campaign for fresh status (may have been auto-stopped by gate-check)
       const freshCampaign = await db.query.campaigns.findFirst({
-        where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, org.id)),
+        where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
       });
       console.log(`[End Run] Campaign status for re-trigger: ${freshCampaign?.status || "NOT FOUND"}, workflowName=${freshCampaign?.workflowName || "N/A"}`);
       if (freshCampaign?.status !== "ongoing") {
@@ -284,7 +233,7 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
 
       // Fire-and-forget: gate-check in the next workflow execution will validate limits
       console.log(`[End Run] Re-triggering workflow=${freshCampaign.workflowName} for campaign ${campaignId}`);
-      executeCampaignWorkflow(freshCampaign.workflowName, { campaignId, orgId, appId }).catch((err) => {
+      executeCampaignWorkflow(freshCampaign.workflowName, { campaignId, orgId }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });
     } catch (err) {

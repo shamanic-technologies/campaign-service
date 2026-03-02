@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaigns, orgs } from "../db/schema.js";
+import { campaigns } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { normalizeUrl, extractDomain } from "../lib/domain.js";
@@ -34,11 +34,9 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
         maxBudgetTotalUsd: campaigns.maxBudgetTotalUsd,
         maxLeads: campaigns.maxLeads,
         createdAt: campaigns.createdAt,
-        externalOrgId: orgs.externalOrgId,
         brandUrl: campaigns.brandUrl,
       })
       .from(campaigns)
-      .innerJoin(orgs, eq(campaigns.orgId, orgs.id))
       .orderBy(campaigns.createdAt);
 
     const enrichedCampaigns = allCampaigns.map(c => ({
@@ -64,14 +62,12 @@ router.post("/campaigns/batch-budget-usage", requireApiKey, validateBody(BatchBu
     const campaignRows = await db
       .select({
         id: campaigns.id,
-        appId: campaigns.appId,
+        orgId: campaigns.orgId,
         status: campaigns.status,
         maxLeads: campaigns.maxLeads,
         maxBudgetTotalUsd: campaigns.maxBudgetTotalUsd,
-        externalOrgId: orgs.externalOrgId,
       })
       .from(campaigns)
-      .innerJoin(orgs, eq(campaigns.orgId, orgs.id))
       .where(inArray(campaigns.id, campaignIds));
 
     const campaignMap = new Map(
@@ -90,8 +86,7 @@ router.post("/campaigns/batch-budget-usage", requireApiKey, validateBody(BatchBu
 
         try {
           const budgetResult = await getStatsBudget({
-            orgId: row.externalOrgId,
-            appId: row.appId || "",
+            orgId: row.orgId,
             campaignId,
             windows: [{ label: "total" }],
           });
@@ -124,18 +119,10 @@ router.post("/campaigns/batch-budget-usage", requireApiKey, validateBody(BatchBu
  */
 router.post("/campaigns/stats", requireApiKey, validateBody(StatsFilterBody), async (req, res) => {
   try {
-    const { orgId, appId, brandId, campaignId } = req.body;
+    const { orgId, brandId, campaignId } = req.body;
 
     const conditions = [];
-    if (orgId) {
-      const org = await db.query.orgs.findFirst({
-        where: eq(orgs.externalOrgId, orgId),
-        columns: { id: true },
-      });
-      if (org) conditions.push(eq(campaigns.orgId, org.id));
-      else return res.json({ stats: { totalCampaigns: 0, byStatus: {}, budgetTotalUsd: null, maxLeadsTotal: null } });
-    }
-    if (appId) conditions.push(eq(campaigns.appId, appId));
+    if (orgId) conditions.push(eq(campaigns.orgId, orgId));
     if (brandId) conditions.push(eq(campaigns.brandId, brandId));
     if (campaignId) conditions.push(eq(campaigns.id, campaignId));
 
@@ -232,7 +219,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       parentRunId,
       brandUrl,
       brandId,
-      appId,
       targetAudience,
       targetOutcome,
       valueForTarget,
@@ -243,7 +229,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       maxLeads,
       startDate,
       endDate,
-      keySource,
       notifyFrequency,
       notifyChannel,
       notifyDestination,
@@ -260,7 +245,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         name,
         workflowName,
         parentRunId,
-        appId,
         brandUrl: normalizedBrandUrl,
         brandId,
         targetAudience,
@@ -273,7 +257,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         maxLeads,
         startDate,
         endDate,
-        keySource,
         notifyFrequency,
         notifyChannel,
         notifyDestination,
@@ -285,8 +268,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     console.log(`[Campaign Service] Campaign created: campaignId=${campaign.id}, workflowName=${campaign.workflowName}, triggering first workflow execution`);
     executeCampaignWorkflow(campaign.workflowName, {
       campaignId: campaign.id,
-      orgId: req.externalOrgId!,
-      appId: campaign.appId || "",
+      orgId: req.orgId!,
     }).catch((err) => {
       console.error(`[Campaign Service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
@@ -335,11 +317,10 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     // Trigger workflow on activation
     if (req.body.status === "activate") {
-      console.log(`[Campaign Service] Activation triggered: campaignId=${updated.id}, workflowName=${updated.workflowName}, orgId=${req.externalOrgId}`);
+      console.log(`[Campaign Service] Activation triggered: campaignId=${updated.id}, workflowName=${updated.workflowName}, orgId=${req.orgId}`);
       executeCampaignWorkflow(updated.workflowName, {
         campaignId: updated.id,
-        orgId: req.externalOrgId!,
-        appId: updated.appId || "",
+        orgId: req.orgId!,
       }).catch((err) => {
         console.error(`[Campaign Service] Failed to trigger workflow for campaign ${id}:`, err);
       });

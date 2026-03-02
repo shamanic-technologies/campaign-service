@@ -47,7 +47,6 @@ function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
   return {
     campaignId: "campaign-1",
     orgId: "org-1",
-    appId: "mcpfactory",
     brandId: "brand-1",
     status: "ongoing",
     maxBudgetDailyUsd: "10.00",
@@ -67,7 +66,6 @@ function makeRun(overrides: Partial<{ id: string; status: string; startedAt: str
     parentRunId: null,
     organizationId: "org-1",
     userId: null,
-    appId: "mcpfactory",
     brandId: null,
     campaignId: "campaign-1",
     serviceName: "campaign-service",
@@ -205,7 +203,7 @@ describe("Gate Check", () => {
       expect(mockDbUpdate).toHaveBeenCalled();
     });
 
-    it("should call getStatsBudget with correct windows", async () => {
+    it("should call getStatsBudget with correct windows (no appId)", async () => {
       await runGateChecks(makeCampaign({
         maxBudgetDailyUsd: "10.00",
         maxBudgetWeeklyUsd: "50.00",
@@ -215,7 +213,6 @@ describe("Gate Check", () => {
       expect(mockGetStatsBudget).toHaveBeenCalledWith(
         expect.objectContaining({
           orgId: "org-1",
-          appId: "mcpfactory",
           campaignId: "campaign-1",
           windows: expect.arrayContaining([
             expect.objectContaining({ label: "daily" }),
@@ -224,6 +221,10 @@ describe("Gate Check", () => {
           ]),
         })
       );
+
+      // Should NOT include appId
+      const callArgs = mockGetStatsBudget.mock.calls[0][0];
+      expect(callArgs).not.toHaveProperty("appId");
     });
 
     it("should only include windows for configured budgets", async () => {
