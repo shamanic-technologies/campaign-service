@@ -28,13 +28,11 @@
             "format": "uuid"
           },
           "orgId": {
-            "type": "string",
-            "format": "uuid"
+            "type": "string"
           },
           "createdByUserId": {
             "type": "string",
-            "nullable": true,
-            "format": "uuid"
+            "nullable": true
           },
           "name": {
             "type": "string"
@@ -55,10 +53,6 @@
             "type": "string",
             "nullable": true,
             "format": "uuid"
-          },
-          "appId": {
-            "type": "string",
-            "nullable": true
           },
           "targetAudience": {
             "type": "string",
@@ -100,9 +94,6 @@
             "type": "string",
             "nullable": true
           },
-          "keySource": {
-            "type": "string"
-          },
           "status": {
             "type": "string"
           },
@@ -138,7 +129,6 @@
           "brandUrl",
           "brandId",
           "parentRunId",
-          "appId",
           "targetAudience",
           "targetOutcome",
           "valueForTarget",
@@ -149,7 +139,6 @@
           "maxLeads",
           "startDate",
           "endDate",
-          "keySource",
           "status",
           "toResumeAt",
           "notifyFrequency",
@@ -197,10 +186,6 @@
             "type": "string",
             "format": "uuid"
           },
-          "appId": {
-            "type": "string",
-            "minLength": 1
-          },
           "targetAudience": {
             "type": "string"
           },
@@ -233,15 +218,6 @@
           "endDate": {
             "type": "string"
           },
-          "keySource": {
-            "type": "string",
-            "enum": [
-              "platform",
-              "app",
-              "byok"
-            ],
-            "description": "How downstream services resolve API keys. \"platform\" = platform-owned keys (no appId needed), \"app\" = client app keys (per appId), \"byok\" = end user's own keys."
-          },
           "notifyFrequency": {
             "type": "string"
           },
@@ -259,10 +235,8 @@
           "parentRunId",
           "brandUrl",
           "brandId",
-          "appId",
           "targetOutcome",
-          "valueForTarget",
-          "keySource"
+          "valueForTarget"
         ]
       },
       "UpdateCampaignBody": {
@@ -321,14 +295,6 @@
               "stop"
             ]
           },
-          "keySource": {
-            "type": "string",
-            "enum": [
-              "platform",
-              "app",
-              "byok"
-            ]
-          },
           "notifyFrequency": {
             "type": "string"
           },
@@ -336,9 +302,6 @@
             "type": "string"
           },
           "notifyDestination": {
-            "type": "string"
-          },
-          "appId": {
             "type": "string"
           }
         }
@@ -383,9 +346,6 @@
         "type": "object",
         "properties": {
           "orgId": {
-            "type": "string"
-          },
-          "appId": {
             "type": "string"
           },
           "brandId": {
@@ -469,9 +429,6 @@
           "brandDomain": {
             "type": "string"
           },
-          "appId": {
-            "type": "string"
-          },
           "workflowName": {
             "type": "string"
           },
@@ -493,14 +450,6 @@
             "additionalProperties": {
               "nullable": true
             }
-          },
-          "keySource": {
-            "type": "string",
-            "enum": [
-              "platform",
-              "app",
-              "byok"
-            ]
           }
         },
         "required": [
@@ -510,13 +459,11 @@
           "brandId",
           "brandUrl",
           "brandDomain",
-          "appId",
           "workflowName",
           "userId",
           "targetOutcome",
           "valueForTarget",
-          "searchParams",
-          "keySource"
+          "searchParams"
         ]
       },
       "StartRunBody": {

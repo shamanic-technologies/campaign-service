@@ -7,12 +7,12 @@
  */
 export async function executeCampaignWorkflow(
   workflowName: string,
-  inputs: { campaignId: string; orgId: string; appId: string },
+  inputs: { campaignId: string; orgId: string },
 ): Promise<void> {
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
 
-  console.log(`[Workflow] executeCampaignWorkflow called: workflowName=${workflowName}, campaignId=${inputs.campaignId}, orgId=${inputs.orgId}, appId=${inputs.appId}`);
+  console.log(`[Workflow] executeCampaignWorkflow called: workflowName=${workflowName}, campaignId=${inputs.campaignId}, orgId=${inputs.orgId}`);
 
   if (!url || !apiKey) {
     console.warn("[Workflow] WORKFLOW_SERVICE_URL or WORKFLOW_SERVICE_API_KEY not set, skipping workflow execution");
@@ -29,7 +29,6 @@ export async function executeCampaignWorkflow(
       "x-api-key": apiKey,
     },
     body: JSON.stringify({
-      appId: inputs.appId,
       orgId: inputs.orgId,
       inputs: {
         campaignId: inputs.campaignId,

@@ -11,14 +11,13 @@ export const ErrorResponse = z.object({
 
 export const CampaignSchema = z.object({
   id: z.string().uuid(),
-  orgId: z.string().uuid(),
-  createdByUserId: z.string().uuid().nullable(),
+  orgId: z.string(),
+  createdByUserId: z.string().nullable(),
   name: z.string(),
   workflowName: z.string(),
   brandUrl: z.string().nullable(),
   brandId: z.string().uuid().nullable(),
   parentRunId: z.string().uuid().nullable(),
-  appId: z.string().nullable(),
   targetAudience: z.string().nullable(),
   targetOutcome: z.string().nullable(),
   valueForTarget: z.string().nullable(),
@@ -29,7 +28,6 @@ export const CampaignSchema = z.object({
   maxLeads: z.number().int().nullable(),
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),
-  keySource: z.string(),
   status: z.string(),
   toResumeAt: z.string().nullable(),
   notifyFrequency: z.string().nullable(),
@@ -48,7 +46,6 @@ export const CreateCampaignBody = z.object({
   parentRunId: z.string().uuid("parentRunId must be a valid UUID"),
   brandUrl: z.string().min(1, "brandUrl is required"),
   brandId: z.string().uuid("brandId must be a valid UUID"),
-  appId: z.string().min(1, "appId is required"),
   targetAudience: z.string().optional(),
   targetOutcome: z.string().min(1, "targetOutcome is required"),
   valueForTarget: z.string().min(1, "valueForTarget is required"),
@@ -59,7 +56,6 @@ export const CreateCampaignBody = z.object({
   maxLeads: z.number().int().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
-  keySource: z.enum(["platform", "app", "byok"], { error: "keySource is required and must be \"platform\", \"app\", or \"byok\"" }).openapi({ description: "How downstream services resolve API keys. \"platform\" = platform-owned keys (no appId needed), \"app\" = client app keys (per appId), \"byok\" = end user's own keys." }),
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
@@ -81,23 +77,20 @@ export const UpdateCampaignBody = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   status: z.enum(["activate", "stop"]).optional(),
-  keySource: z.enum(["platform", "app", "byok"]).optional(),
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
-  appId: z.string().optional(),
 }).openapi("UpdateCampaignBody");
 
 // --- Stats ---
 
 export const StatsFilterBody = z.object({
   orgId: z.string().optional(),
-  appId: z.string().optional(),
   brandId: z.string().optional(),
   campaignId: z.string().optional(),
 }).refine(
-  (data) => data.orgId || data.appId || data.brandId || data.campaignId,
-  { message: "At least one filter required: orgId, appId, brandId, or campaignId" }
+  (data) => data.orgId || data.brandId || data.campaignId,
+  { message: "At least one filter required: orgId, brandId, or campaignId" }
 ).openapi("StatsFilterBody");
 
 export const StatsResponse = z.object({
@@ -140,13 +133,11 @@ export const StartRunResponse = z.object({
   brandId: z.string().uuid(),
   brandUrl: z.string(),
   brandDomain: z.string(),
-  appId: z.string(),
   workflowName: z.string(),
   userId: z.string().nullable(),
   targetOutcome: z.string().nullable(),
   valueForTarget: z.string().nullable(),
   searchParams: z.record(z.string(), z.unknown()).nullable(),
-  keySource: z.enum(["platform", "app", "byok"]),
 }).openapi("StartRunResponse");
 
 export const EndRunBody = z.object({

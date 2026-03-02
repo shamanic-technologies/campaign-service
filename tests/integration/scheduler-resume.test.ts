@@ -16,17 +16,16 @@ vi.mock("@mcpfactory/runs-client", () => ({
 import { db } from "../../src/db/index.js";
 import { campaigns } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
-import { cleanTestData, closeDb, insertTestOrg, insertTestCampaign } from "../helpers/test-db.js";
+import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { resumeDueCampaigns } from "../../src/lib/scheduler.js";
 
-describe("Scheduler - resumeDueCampaigns (integration)", () => {
-  let org: { id: string; externalOrgId: string };
+const orgId = "scheduler-test-org";
 
+describe("Scheduler - resumeDueCampaigns (integration)", () => {
   beforeEach(async () => {
     await cleanTestData();
     vi.clearAllMocks();
     mockExecute.mockResolvedValue(undefined);
-    org = await insertTestOrg({ externalOrgId: "scheduler-test-org" });
   });
 
   afterAll(async () => {
@@ -35,9 +34,8 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
   });
 
   it("should not trigger anything when no campaigns are due", async () => {
-    await insertTestCampaign(org.id, {
+    await insertTestCampaign(orgId, {
       status: "ongoing",
-      appId: "mcpfactory",
     });
 
     const count = await resumeDueCampaigns();
@@ -47,9 +45,8 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
 
   it("should resume campaign whose toResumeAt is in the past", async () => {
     const pastDate = new Date(Date.now() - 60_000); // 1 minute ago
-    const campaign = await insertTestCampaign(org.id, {
+    const campaign = await insertTestCampaign(orgId, {
       status: "ongoing",
-      appId: "mcpfactory",
       toResumeAt: pastDate,
     });
 
@@ -67,17 +64,15 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
       "sales-email-cold-outreach",
       {
         campaignId: campaign.id,
-        orgId: org.externalOrgId,
-        appId: "mcpfactory",
+        orgId,
       },
     );
   });
 
   it("should NOT resume campaign whose toResumeAt is in the future", async () => {
     const futureDate = new Date(Date.now() + 3_600_000); // 1 hour from now
-    await insertTestCampaign(org.id, {
+    await insertTestCampaign(orgId, {
       status: "ongoing",
-      appId: "mcpfactory",
       toResumeAt: futureDate,
     });
 
@@ -88,9 +83,8 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
 
   it("should NOT resume stopped campaigns even with past toResumeAt", async () => {
     const pastDate = new Date(Date.now() - 60_000);
-    await insertTestCampaign(org.id, {
+    await insertTestCampaign(orgId, {
       status: "stopped",
-      appId: "mcpfactory",
       toResumeAt: pastDate,
     });
 
@@ -102,37 +96,19 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
   it("should resume multiple due campaigns", async () => {
     const pastDate = new Date(Date.now() - 60_000);
 
-    await insertTestCampaign(org.id, {
+    await insertTestCampaign(orgId, {
       name: "Campaign A",
       status: "ongoing",
-      appId: "mcpfactory",
       toResumeAt: pastDate,
     });
-    await insertTestCampaign(org.id, {
+    await insertTestCampaign(orgId, {
       name: "Campaign B",
       status: "ongoing",
-      appId: "mcpfactory",
       toResumeAt: pastDate,
     });
 
     const count = await resumeDueCampaigns();
     expect(count).toBe(2);
     expect(mockExecute).toHaveBeenCalledTimes(2);
-  });
-
-  it("should use empty string for appId when campaign has no appId", async () => {
-    const pastDate = new Date(Date.now() - 60_000);
-    await insertTestCampaign(org.id, {
-      status: "ongoing",
-      appId: undefined,
-      toResumeAt: pastDate,
-    });
-
-    await resumeDueCampaigns();
-
-    expect(mockExecute).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ appId: "" }),
-    );
   });
 });

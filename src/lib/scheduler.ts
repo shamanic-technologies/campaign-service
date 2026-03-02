@@ -1,5 +1,5 @@
 import { db } from "../db/index.js";
-import { campaigns, orgs } from "../db/schema.js";
+import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
 
@@ -15,12 +15,10 @@ export async function resumeDueCampaigns(): Promise<number> {
   const dueCampaigns = await db
     .select({
       id: campaigns.id,
+      orgId: campaigns.orgId,
       workflowName: campaigns.workflowName,
-      appId: campaigns.appId,
-      externalOrgId: orgs.externalOrgId,
     })
     .from(campaigns)
-    .innerJoin(orgs, eq(campaigns.orgId, orgs.id))
     .where(
       and(
         eq(campaigns.status, "ongoing"),
@@ -43,8 +41,7 @@ export async function resumeDueCampaigns(): Promise<number> {
       console.log(`[Scheduler] Re-triggering campaign ${campaign.id} (workflow=${campaign.workflowName})`);
       executeCampaignWorkflow(campaign.workflowName, {
         campaignId: campaign.id,
-        orgId: campaign.externalOrgId,
-        appId: campaign.appId || "",
+        orgId: campaign.orgId,
       }).catch((err) => {
         console.error(`[Scheduler] Failed to re-trigger campaign ${campaign.id}:`, err);
       });

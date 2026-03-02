@@ -12,9 +12,8 @@ const {
   const mockDbUpdate = vi.fn().mockReturnValue({ set: mockSet });
   const mockDbValues: Array<{
     id: string;
+    orgId: string;
     workflowName: string;
-    appId: string | null;
-    externalOrgId: string;
   }> = [];
 
   return {
@@ -34,9 +33,7 @@ vi.mock("../../src/db/index.js", () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
-        innerJoin: vi.fn().mockReturnValue({
-          where: vi.fn().mockImplementation(() => mockDbValues),
-        }),
+        where: vi.fn().mockImplementation(() => mockDbValues),
       }),
     }),
     update: mockDbUpdate,
@@ -49,13 +46,8 @@ vi.mock("../../src/db/schema.js", () => ({
     status: "status",
     toResumeAt: "to_resume_at",
     workflowName: "workflow_name",
-    appId: "app_id",
     orgId: "org_id",
     updatedAt: "updated_at",
-  },
-  orgs: {
-    id: "id",
-    externalOrgId: "org_id",
   },
 }));
 
@@ -84,9 +76,8 @@ describe("Scheduler - resumeDueCampaigns", () => {
   it("should re-trigger due campaigns and clear toResumeAt", async () => {
     mockDbValues.push({
       id: "campaign-1",
+      orgId: "org-ext-1",
       workflowName: "sales-email-cold-outreach",
-      appId: "mcpfactory",
-      externalOrgId: "org-ext-1",
     });
 
     const count = await resumeDueCampaigns();
@@ -101,7 +92,6 @@ describe("Scheduler - resumeDueCampaigns", () => {
       {
         campaignId: "campaign-1",
         orgId: "org-ext-1",
-        appId: "mcpfactory",
       },
     );
   });
@@ -110,15 +100,13 @@ describe("Scheduler - resumeDueCampaigns", () => {
     mockDbValues.push(
       {
         id: "campaign-1",
+        orgId: "org-ext-1",
         workflowName: "sales-email-cold-outreach",
-        appId: "mcpfactory",
-        externalOrgId: "org-ext-1",
       },
       {
         id: "campaign-2",
+        orgId: "org-ext-2",
         workflowName: "pr-email-cold-outreach",
-        appId: "mcpfactory",
-        externalOrgId: "org-ext-2",
       },
     );
 
@@ -128,35 +116,17 @@ describe("Scheduler - resumeDueCampaigns", () => {
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(2);
   });
 
-  it("should use empty string when appId is null", async () => {
-    mockDbValues.push({
-      id: "campaign-1",
-      workflowName: "sales-email-cold-outreach",
-      appId: null,
-      externalOrgId: "org-ext-1",
-    });
-
-    await resumeDueCampaigns();
-
-    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
-      "sales-email-cold-outreach",
-      expect.objectContaining({ appId: "" }),
-    );
-  });
-
   it("should continue processing other campaigns if one fails", async () => {
     mockDbValues.push(
       {
         id: "campaign-1",
+        orgId: "org-ext-1",
         workflowName: "sales-email-cold-outreach",
-        appId: "mcpfactory",
-        externalOrgId: "org-ext-1",
       },
       {
         id: "campaign-2",
+        orgId: "org-ext-2",
         workflowName: "pr-email-cold-outreach",
-        appId: "mcpfactory",
-        externalOrgId: "org-ext-2",
       },
     );
 

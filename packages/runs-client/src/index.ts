@@ -13,7 +13,6 @@ export interface Run {
   parentRunId: string | null;
   organizationId: string;
   userId: string | null;
-  appId: string;
   brandId: string | null;
   campaignId: string | null;
   serviceName: string;
@@ -27,7 +26,6 @@ export interface Run {
 
 export interface CreateRunParams {
   orgId: string;
-  appId: string;
   serviceName: string;
   taskName: string;
   userId?: string;
@@ -40,7 +38,6 @@ export interface CreateRunParams {
 export interface ListRunsParams {
   orgId: string;
   userId?: string;
-  appId?: string;
   brandId?: string;
   campaignId?: string;
   serviceName?: string;
@@ -67,7 +64,6 @@ export interface BudgetWindowResult {
 
 export interface StatsBudgetParams {
   orgId: string;
-  appId: string;
   campaignId?: string;
   brandId?: string;
   workflowName?: string;
@@ -139,7 +135,6 @@ export async function listRuns(
   const searchParams = new URLSearchParams();
   searchParams.set("orgId", params.orgId);
   if (params.userId) searchParams.set("userId", params.userId);
-  if (params.appId) searchParams.set("appId", params.appId);
   if (params.brandId) searchParams.set("brandId", params.brandId);
   if (params.campaignId) searchParams.set("campaignId", params.campaignId);
   if (params.serviceName) searchParams.set("serviceName", params.serviceName);

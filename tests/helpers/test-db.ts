@@ -1,43 +1,16 @@
 import { db, sql } from "../../src/db/index.js";
-import { orgs, users, campaigns } from "../../src/db/schema.js";
+import { campaigns } from "../../src/db/schema.js";
 
 /**
  * Clean all test data from the database
  */
 export async function cleanTestData() {
   await db.delete(campaigns);
-  await db.delete(users);
-  await db.delete(orgs);
 }
 
 /**
- * Insert a test org
- */
-export async function insertTestOrg(data: { externalOrgId?: string } = {}) {
-  const [org] = await db
-    .insert(orgs)
-    .values({
-      externalOrgId: data.externalOrgId || `test-org-${Date.now()}`,
-    })
-    .returning();
-  return org;
-}
-
-/**
- * Insert a test user
- */
-export async function insertTestUser(data: { externalUserId?: string } = {}) {
-  const [user] = await db
-    .insert(users)
-    .values({
-      externalUserId: data.externalUserId || `test-user-${Date.now()}`,
-    })
-    .returning();
-  return user;
-}
-
-/**
- * Insert a test campaign
+ * Insert a test campaign.
+ * orgId is now the external org ID (client-service UUID) stored directly.
  */
 export async function insertTestCampaign(
   orgId: string,
@@ -48,7 +21,6 @@ export async function insertTestCampaign(
     parentRunId?: string;
     brandUrl?: string;
     brandId?: string;
-    appId?: string;
     maxBudgetDailyUsd?: string;
     maxBudgetWeeklyUsd?: string;
     maxBudgetMonthlyUsd?: string;
@@ -58,6 +30,7 @@ export async function insertTestCampaign(
     targetOutcome?: string;
     valueForTarget?: string;
     toResumeAt?: Date | null;
+    createdByUserId?: string;
   } = {}
 ) {
   const [campaign] = await db
@@ -70,7 +43,6 @@ export async function insertTestCampaign(
       parentRunId: data.parentRunId || null,
       brandUrl: data.brandUrl || null,
       brandId: data.brandId || null,
-      appId: data.appId || null,
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",
       maxBudgetWeeklyUsd: data.maxBudgetWeeklyUsd || null,
       maxBudgetMonthlyUsd: data.maxBudgetMonthlyUsd || null,
@@ -80,6 +52,7 @@ export async function insertTestCampaign(
       targetOutcome: data.targetOutcome || null,
       valueForTarget: data.valueForTarget || null,
       toResumeAt: data.toResumeAt ?? null,
+      createdByUserId: data.createdByUserId || null,
     })
     .returning();
   return campaign;

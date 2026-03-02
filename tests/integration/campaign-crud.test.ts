@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import request from "supertest";
 import app from "../../src/index.js";
-import { cleanTestData, closeDb, insertTestOrg } from "../helpers/test-db.js";
+import { cleanTestData, closeDb } from "../helpers/test-db.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
@@ -22,10 +22,8 @@ describe("Campaign CRUD", () => {
     parentRunId: crypto.randomUUID(),
     brandUrl: "https://example.com",
     brandId: crypto.randomUUID(),
-    appId: "mcpfactory",
     targetOutcome: "Book sales demos",
     valueForTarget: "Access to enterprise analytics at startup pricing",
-    keySource: "byok" as const,
   };
 
   describe("POST /campaigns", () => {
@@ -41,7 +39,6 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign.name).toBe("Test Campaign");
       expect(res.body.campaign.workflowName).toBe("sales-email-cold-outreach");
       expect(res.body.campaign.brandId).toBe(validBody.brandId);
-      expect(res.body.campaign.appId).toBe("mcpfactory");
     });
 
     it("should reject when workflowName is missing", async () => {
@@ -94,19 +91,6 @@ describe("Campaign CRUD", () => {
 
     it("should reject when brandId is missing", async () => {
       const { brandId, ...body } = validBody;
-
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(body)
-        .expect(400);
-
-      expect(res.body.error).toBeDefined();
-    });
-
-    it("should reject when appId is missing", async () => {
-      const { appId, ...body } = validBody;
 
       const res = await request(app)
         .post("/campaigns")
@@ -225,28 +209,6 @@ describe("Campaign CRUD", () => {
       expect(res.body.error).toBeDefined();
     });
 
-    it("should create a campaign with keySource 'platform'", async () => {
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send({ ...validBody, keySource: "platform" })
-        .expect(201);
-
-      expect(res.body.campaign.keySource).toBe("platform");
-    });
-
-    it("should reject an invalid keySource value", async () => {
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send({ ...validBody, keySource: "invalid" })
-        .expect(400);
-
-      expect(res.body.error).toBeDefined();
-    });
-
     it("should reject Apollo fields that no longer exist", async () => {
       const res = await request(app)
         .post("/campaigns")
@@ -260,7 +222,7 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign).not.toHaveProperty("personTitles");
     });
 
-    it("should not have sales-specific fields on campaign", async () => {
+    it("should not have legacy fields on campaign", async () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
@@ -273,6 +235,8 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign).not.toHaveProperty("riskReversal");
       expect(res.body.campaign).not.toHaveProperty("socialProof");
       expect(res.body.campaign).not.toHaveProperty("type");
+      expect(res.body.campaign).not.toHaveProperty("appId");
+      expect(res.body.campaign).not.toHaveProperty("keySource");
     });
   });
 
@@ -338,7 +302,6 @@ describe("Campaign CRUD", () => {
     });
 
     it("should update targetAudience", async () => {
-      // Create campaign first
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
