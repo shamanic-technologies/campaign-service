@@ -20,9 +20,6 @@ export const campaigns = pgTable(
     // Nullable initially, populated when brand is created/found in brand-service
     brandId: text("brand_id"),
 
-    // Parent run ID from api-service — root of the cost tree for this campaign's runs
-    parentRunId: text("parent_run_id"),
-
     // Free-text target audience description (e.g. "CEOs at SaaS startups in the US")
     targetAudience: text("target_audience"),
 

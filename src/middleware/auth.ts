@@ -3,6 +3,7 @@ import { Request, Response, NextFunction } from "express";
 export interface AuthenticatedRequest extends Request {
   userId?: string;
   orgId?: string;
+  runId?: string;
 }
 
 /**
@@ -17,6 +18,7 @@ export function serviceAuth(
 ) {
   const orgId = req.headers["x-org-id"] as string;
   const userId = req.headers["x-user-id"] as string | undefined;
+  const runId = req.headers["x-run-id"] as string | undefined;
 
   if (!orgId) {
     return res.status(400).json({ error: "x-org-id header required" });
@@ -25,6 +27,9 @@ export function serviceAuth(
   req.orgId = orgId;
   if (userId) {
     req.userId = userId;
+  }
+  if (runId) {
+    req.runId = runId;
   }
 
   next();
