@@ -49,11 +49,6 @@
             "nullable": true,
             "format": "uuid"
           },
-          "parentRunId": {
-            "type": "string",
-            "nullable": true,
-            "format": "uuid"
-          },
           "targetAudience": {
             "type": "string",
             "nullable": true
@@ -128,7 +123,6 @@
           "workflowName",
           "brandUrl",
           "brandId",
-          "parentRunId",
           "targetAudience",
           "targetOutcome",
           "valueForTarget",
@@ -173,10 +167,6 @@
           "orgId": {
             "type": "string",
             "minLength": 1
-          },
-          "parentRunId": {
-            "type": "string",
-            "format": "uuid"
           },
           "brandUrl": {
             "type": "string",
@@ -232,7 +222,6 @@
           "name",
           "workflowName",
           "orgId",
-          "parentRunId",
           "brandUrl",
           "brandId",
           "targetOutcome",
@@ -244,10 +233,6 @@
         "properties": {
           "name": {
             "type": "string"
-          },
-          "parentRunId": {
-            "type": "string",
-            "format": "uuid"
           },
           "brandUrl": {
             "type": "string"

@@ -19,7 +19,6 @@ describe("Campaign CRUD", () => {
     name: "Test Campaign",
     workflowName: "sales-email-cold-outreach",
     orgId: "org_test_crud",
-    parentRunId: crypto.randomUUID(),
     brandUrl: "https://example.com",
     brandId: crypto.randomUUID(),
     targetOutcome: "Book sales demos",
@@ -49,41 +48,6 @@ describe("Campaign CRUD", () => {
         .set("x-api-key", API_KEY)
         .set("x-org-id", "org_test_crud")
         .send(body)
-        .expect(400);
-
-      expect(res.body.error).toBeDefined();
-    });
-
-    it("should store parentRunId on the campaign", async () => {
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(validBody)
-        .expect(201);
-
-      expect(res.body.campaign.parentRunId).toBe(validBody.parentRunId);
-    });
-
-    it("should reject when parentRunId is missing", async () => {
-      const { parentRunId, ...body } = validBody;
-
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(body)
-        .expect(400);
-
-      expect(res.body.error).toBeDefined();
-    });
-
-    it("should reject when parentRunId is not a valid UUID", async () => {
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send({ ...validBody, parentRunId: "not-a-uuid" })
         .expect(400);
 
       expect(res.body.error).toBeDefined();
@@ -241,7 +205,7 @@ describe("Campaign CRUD", () => {
   });
 
   describe("PATCH /campaigns/:id", () => {
-    it("should reject activate without parentRunId", async () => {
+    it("should accept activate", async () => {
       const createRes = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
@@ -259,45 +223,14 @@ describe("Campaign CRUD", () => {
         .send({ status: "stop" })
         .expect(200);
 
-      // Activate without parentRunId → 400
-      const res = await request(app)
-        .patch(`/campaigns/${campaignId}`)
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send({ status: "activate" })
-        .expect(400);
-
-      expect(res.body.error).toBe("parentRunId is required when activating a campaign");
-    });
-
-    it("should accept activate with parentRunId and update stored value", async () => {
-      const createRes = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(validBody)
-        .expect(201);
-
-      const campaignId = createRes.body.campaign.id;
-
-      // Stop first
-      await request(app)
-        .patch(`/campaigns/${campaignId}`)
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send({ status: "stop" })
-        .expect(200);
-
-      // Activate with new parentRunId
-      const newParentRunId = crypto.randomUUID();
+      // Activate
       const activateRes = await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
         .set("x-org-id", "org_test_crud")
-        .send({ status: "activate", parentRunId: newParentRunId })
+        .send({ status: "activate" })
         .expect(200);
 
-      expect(activateRes.body.campaign.parentRunId).toBe(newParentRunId);
       expect(activateRes.body.campaign.status).toBe("ongoing");
     });
 

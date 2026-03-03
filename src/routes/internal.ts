@@ -115,8 +115,9 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       return res.status(400).json({ error: "Campaign has no brandId" });
     }
 
-    // Create run in runs-service (parentRunId links to api-service's parent run)
-    console.log(`[Start Run] Creating run in runs-service for campaign ${campaignId} (parentRunId=${campaign.parentRunId || "none"})...`);
+    // Create run in runs-service (x-run-id from caller becomes parentRunId)
+    const parentRunId = req.headers["x-run-id"] as string | undefined;
+    console.log(`[Start Run] Creating run in runs-service for campaign ${campaignId} (parentRunId=${parentRunId || "none"})...`);
     const run = await createRun({
       orgId,
       serviceName: "campaign-service",
@@ -124,7 +125,7 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
       campaignId,
       brandId: campaign.brandId,
       userId: campaign.createdByUserId || undefined,
-      parentRunId: campaign.parentRunId || undefined,
+      parentRunId: parentRunId || undefined,
       workflowName: campaign.workflowName,
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);

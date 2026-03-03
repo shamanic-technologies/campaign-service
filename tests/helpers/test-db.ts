@@ -18,7 +18,6 @@ export async function insertTestCampaign(
     name?: string;
     workflowName?: string;
     status?: string;
-    parentRunId?: string;
     brandUrl?: string;
     brandId?: string;
     maxBudgetDailyUsd?: string;
@@ -40,7 +39,6 @@ export async function insertTestCampaign(
       name: data.name || `Test Campaign ${Date.now()}`,
       workflowName: data.workflowName || "sales-email-cold-outreach",
       status: data.status || "ongoing",
-      parentRunId: data.parentRunId || null,
       brandUrl: data.brandUrl || null,
       brandId: data.brandId || null,
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",

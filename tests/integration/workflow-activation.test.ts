@@ -29,7 +29,6 @@ const validBody = {
   name: "Activation Test Campaign",
   workflowName: "sales-email-cold-outreach",
   orgId: "org_activation_test",
-  parentRunId: crypto.randomUUID(),
   brandUrl: "https://example.com",
   brandId: crypto.randomUUID(),
   targetOutcome: "Book sales demos",
@@ -116,7 +115,7 @@ describe("Workflow trigger", () => {
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
         .set("x-org-id", "org_activation_test")
-        .send({ status: "activate", parentRunId: crypto.randomUUID() })
+        .send({ status: "activate" })
         .expect(200);
 
       expect(activateRes.body.campaign.status).toBe("ongoing");
@@ -212,7 +211,7 @@ describe("Workflow trigger", () => {
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
         .set("x-org-id", "org_activation_test")
-        .send({ status: "activate", parentRunId: crypto.randomUUID() })
+        .send({ status: "activate" })
         .expect(200);
 
       expect(activateRes.body.campaign.status).toBe("ongoing");

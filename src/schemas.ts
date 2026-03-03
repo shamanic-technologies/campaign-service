@@ -17,7 +17,6 @@ export const CampaignSchema = z.object({
   workflowName: z.string(),
   brandUrl: z.string().nullable(),
   brandId: z.string().uuid().nullable(),
-  parentRunId: z.string().uuid().nullable(),
   targetAudience: z.string().nullable(),
   targetOutcome: z.string().nullable(),
   valueForTarget: z.string().nullable(),
@@ -43,7 +42,6 @@ export const CreateCampaignBody = z.object({
   name: z.string().min(1, "Campaign name is required"),
   workflowName: z.string().min(1, "workflowName is required"),
   orgId: z.string().min(1, "orgId is required"),
-  parentRunId: z.string().uuid("parentRunId must be a valid UUID"),
   brandUrl: z.string().min(1, "brandUrl is required"),
   brandId: z.string().uuid("brandId must be a valid UUID"),
   targetAudience: z.string().optional(),
@@ -63,7 +61,6 @@ export const CreateCampaignBody = z.object({
 
 export const UpdateCampaignBody = z.object({
   name: z.string().optional(),
-  parentRunId: z.string().uuid("parentRunId must be a valid UUID").optional(),
   brandUrl: z.string().optional(),
   brandId: z.string().uuid().optional(),
   targetAudience: z.string().optional(),

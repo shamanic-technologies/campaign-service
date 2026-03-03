@@ -377,17 +377,17 @@ describe("Pipeline routes", () => {
       expect(res.body.brandUrl).toBe("https://www.example.com/path");
     });
 
-    it("should pass parentRunId to createRun when campaign has one", async () => {
+    it("should pass x-run-id header as parentRunId to createRun", async () => {
       const parentRunId = crypto.randomUUID();
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
         brandId,
-        parentRunId,
       });
 
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
+        .set("x-run-id", parentRunId)
         .send({ campaignId: campaign.id, orgId })
         .expect(200);
 
@@ -396,7 +396,7 @@ describe("Pipeline routes", () => {
       );
     });
 
-    it("should NOT pass parentRunId to createRun when campaign has none", async () => {
+    it("should NOT pass parentRunId to createRun when x-run-id header is absent", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
         brandId,
