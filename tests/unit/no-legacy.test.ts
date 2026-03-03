@@ -84,8 +84,28 @@ describe('No Legacy Patterns - CRITICAL', () => {
   it('should have brandId column in schema', () => {
     const schemaFile = path.join(srcDir, 'db/schema.ts');
     const content = fs.readFileSync(schemaFile, 'utf-8');
-    
+
     expect(content).toContain('brandId');
     expect(content).toContain('brand_id');
+  });
+
+  it('should NOT define orgs or users tables in schema', () => {
+    const schemaFile = path.join(srcDir, 'db/schema.ts');
+    const content = fs.readFileSync(schemaFile, 'utf-8');
+
+    expect(content).not.toMatch(/export\s+const\s+orgs\b/);
+    expect(content).not.toMatch(/export\s+const\s+users\b/);
+    expect(content).not.toMatch(/pgTable\(\s*["']orgs["']/);
+    expect(content).not.toMatch(/pgTable\(\s*["']users["']/);
+  });
+
+  it('should NOT have appId or keySource columns in schema', () => {
+    const schemaFile = path.join(srcDir, 'db/schema.ts');
+    const content = fs.readFileSync(schemaFile, 'utf-8');
+
+    expect(content).not.toMatch(/appId\s*:/);
+    expect(content).not.toMatch(/["']app_id["']/);
+    expect(content).not.toMatch(/keySource\s*:/);
+    expect(content).not.toMatch(/["']key_source["']/);
   });
 });
