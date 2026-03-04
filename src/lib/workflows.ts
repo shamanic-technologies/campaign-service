@@ -7,7 +7,7 @@
  */
 export async function executeCampaignWorkflow(
   workflowName: string,
-  inputs: { campaignId: string; orgId: string },
+  inputs: { campaignId: string; orgId: string; userId?: string; runId?: string },
 ): Promise<void> {
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -22,12 +22,17 @@ export async function executeCampaignWorkflow(
   const executeUrl = `${url}/workflows/by-name/${workflowName}/execute`;
   console.log(`[Workflow] POST ${executeUrl}`);
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-api-key": apiKey,
+    "x-org-id": inputs.orgId,
+  };
+  if (inputs.userId) headers["x-user-id"] = inputs.userId;
+  if (inputs.runId) headers["x-run-id"] = inputs.runId;
+
   const res = await fetch(executeUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-    },
+    headers,
     body: JSON.stringify({
       orgId: inputs.orgId,
       inputs: {

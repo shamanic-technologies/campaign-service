@@ -117,7 +117,7 @@ describe("Gate Check", () => {
 
       await runGateChecks(makeCampaign());
 
-      expect(mockUpdateRun).toHaveBeenCalledWith("stale-run-1", "failed");
+      expect(mockUpdateRun).toHaveBeenCalledWith("stale-run-1", "failed", expect.objectContaining({ orgId: "org-1" }));
     });
 
     it("should NOT mark recent running runs as stale", async () => {
