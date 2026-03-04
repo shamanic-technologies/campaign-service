@@ -267,6 +267,8 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     executeCampaignWorkflow(campaign.workflowName, {
       campaignId: campaign.id,
       orgId: req.orgId!,
+      userId: req.userId,
+      runId: req.runId,
     }).catch((err) => {
       console.error(`[Campaign Service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
@@ -314,6 +316,8 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       executeCampaignWorkflow(updated.workflowName, {
         campaignId: updated.id,
         orgId: req.orgId!,
+        userId: req.userId,
+        runId: req.runId,
       }).catch((err) => {
         console.error(`[Campaign Service] Failed to trigger workflow for campaign ${id}:`, err);
       });

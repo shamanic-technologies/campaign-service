@@ -1,4 +1,4 @@
-import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow } from "@mcpfactory/runs-client";
+import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type IdentityHeaders } from "@mcpfactory/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
@@ -9,6 +9,8 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 export interface GateCheckInput {
   campaignId: string;
   orgId: string;
+  userId?: string;
+  runId?: string;
   brandId: string;
   status: string;
   maxBudgetDailyUsd: string | null;
@@ -31,6 +33,12 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     return { allowed: false, reason: "Campaign is not ongoing" };
   }
 
+  const identity: IdentityHeaders = {
+    orgId: campaign.orgId,
+    userId: campaign.userId,
+    runId: campaign.runId,
+  };
+
   // Fetch all runs for this campaign (needed for stale cleanup, running check, consecutive failures)
   const { runs } = await listRuns({
     orgId: campaign.orgId,
@@ -43,7 +51,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   for (const run of runs) {
     if (run.status === "running" && (now - new Date(run.startedAt).getTime()) > STALE_THRESHOLD_MS) {
       try {
-        await updateRun(run.id, "failed");
+        await updateRun(run.id, "failed", identity);
         run.status = "failed"; // update in-memory
       } catch (err) {
         console.error(`[Gate Check] Failed to clean stale run ${run.id}:`, err);
@@ -110,7 +118,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     const completedRuns = runs.filter((r: Run) => r.status === "completed");
     let totalServed: number;
     try {
-      const leadStats = await fetchLeadStats(campaign.orgId, campaign.campaignId, campaign.brandId);
+      const leadStats = await fetchLeadStats(campaign.orgId, campaign.campaignId, campaign.brandId, identity);
       totalServed = Math.max(leadStats.totalServed, completedRuns.length);
     } catch (err: unknown) {
       if (err instanceof Error && "status" in err && (err as { status: number }).status === 404) {
@@ -154,18 +162,21 @@ async function fetchLeadStats(
   orgId: string,
   campaignId: string,
   brandId: string,
+  identity: IdentityHeaders,
 ): Promise<{ totalServed: number }> {
   const url = process.env.LEAD_SERVICE_URL;
   const apiKey = process.env.LEAD_SERVICE_API_KEY;
   if (!url || !apiKey) throw new Error("Lead service not configured");
 
+  const headers: Record<string, string> = {
+    "x-api-key": apiKey,
+    "x-org-id": identity.orgId,
+  };
+  if (identity.userId) headers["x-user-id"] = identity.userId;
+  if (identity.runId) headers["x-run-id"] = identity.runId;
+
   const params = new URLSearchParams({ brandId, campaignId });
-  const res = await fetch(`${url}/stats?${params}`, {
-    headers: {
-      "x-api-key": apiKey,
-      "x-org-id": orgId,
-    },
-  });
+  const res = await fetch(`${url}/stats?${params}`, { headers });
 
   if (!res.ok) {
     const err = new Error(`Lead stats failed: ${res.status}`) as Error & { status: number };

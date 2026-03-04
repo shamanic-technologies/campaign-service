@@ -24,6 +24,13 @@ export interface Run {
   updatedAt: string;
 }
 
+/** Identity headers forwarded to runs-service on every request. */
+export interface IdentityHeaders {
+  orgId: string;
+  userId?: string;
+  runId?: string;
+}
+
 export interface CreateRunParams {
   orgId: string;
   serviceName: string;
@@ -76,15 +83,24 @@ export interface StatsBudgetResponse {
 
 // ─── HTTP helpers ────────────────────────────────────────────────────────────
 
+function buildIdentityHeaders(identity?: IdentityHeaders): Record<string, string> {
+  const h: Record<string, string> = {};
+  if (identity?.orgId) h["x-org-id"] = identity.orgId;
+  if (identity?.userId) h["x-user-id"] = identity.userId;
+  if (identity?.runId) h["x-run-id"] = identity.runId;
+  return h;
+}
+
 async function runsRequest<T>(
   path: string,
-  options: { method?: string; body?: unknown } = {}
+  options: { method?: string; body?: unknown; identity?: IdentityHeaders } = {}
 ): Promise<T> {
-  const { method = "GET", body } = options;
+  const { method = "GET", body, identity } = options;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "X-API-Key": RUNS_SERVICE_API_KEY,
+    ...buildIdentityHeaders(identity),
   };
 
   const response = await fetch(`${RUNS_SERVICE_URL}${path}`, {
@@ -105,11 +121,15 @@ async function runsRequest<T>(
 
 /**
  * Create a new run in runs-service.
+ * orgId/userId are sent as x-org-id/x-user-id headers.
+ * parentRunId is sent as x-run-id header.
  */
 export async function createRun(params: CreateRunParams): Promise<Run> {
+  const { orgId, userId, parentRunId, ...body } = params;
   return runsRequest<Run>("/v1/runs", {
     method: "POST",
-    body: params,
+    body,
+    identity: { orgId, userId, runId: parentRunId },
   });
 }
 
@@ -118,46 +138,53 @@ export async function createRun(params: CreateRunParams): Promise<Run> {
  */
 export async function updateRun(
   runId: string,
-  status: "completed" | "failed"
+  status: "completed" | "failed",
+  identity?: IdentityHeaders,
 ): Promise<Run> {
   return runsRequest<Run>(`/v1/runs/${runId}`, {
     method: "PATCH",
     body: { status },
+    identity,
   });
 }
 
 /**
  * List runs with filters.
+ * orgId is sent as x-org-id header (not query param).
  */
 export async function listRuns(
   params: ListRunsParams
 ): Promise<{ runs: Run[]; limit: number; offset: number }> {
+  const { orgId, ...rest } = params;
   const searchParams = new URLSearchParams();
-  searchParams.set("orgId", params.orgId);
-  if (params.userId) searchParams.set("userId", params.userId);
-  if (params.brandId) searchParams.set("brandId", params.brandId);
-  if (params.campaignId) searchParams.set("campaignId", params.campaignId);
-  if (params.serviceName) searchParams.set("serviceName", params.serviceName);
-  if (params.taskName) searchParams.set("taskName", params.taskName);
-  if (params.status) searchParams.set("status", params.status);
-  if (params.parentRunId) searchParams.set("parentRunId", params.parentRunId);
-  if (params.startedAfter) searchParams.set("startedAfter", params.startedAfter);
-  if (params.startedBefore) searchParams.set("startedBefore", params.startedBefore);
-  if (params.limit) searchParams.set("limit", String(params.limit));
-  if (params.offset) searchParams.set("offset", String(params.offset));
+  if (rest.userId) searchParams.set("userId", rest.userId);
+  if (rest.brandId) searchParams.set("brandId", rest.brandId);
+  if (rest.campaignId) searchParams.set("campaignId", rest.campaignId);
+  if (rest.serviceName) searchParams.set("serviceName", rest.serviceName);
+  if (rest.taskName) searchParams.set("taskName", rest.taskName);
+  if (rest.status) searchParams.set("status", rest.status);
+  if (rest.parentRunId) searchParams.set("parentRunId", rest.parentRunId);
+  if (rest.startedAfter) searchParams.set("startedAfter", rest.startedAfter);
+  if (rest.startedBefore) searchParams.set("startedBefore", rest.startedBefore);
+  if (rest.limit) searchParams.set("limit", String(rest.limit));
+  if (rest.offset) searchParams.set("offset", String(rest.offset));
 
+  const qs = searchParams.toString();
   return runsRequest<{ runs: Run[]; limit: number; offset: number }>(
-    `/v1/runs?${searchParams.toString()}`
+    qs ? `/v1/runs?${qs}` : "/v1/runs",
+    { identity: { orgId } },
   );
 }
 
 /**
  * Get aggregated costs across temporal windows.
- * Used for budget checks — returns actual + provisioned costs per window.
+ * orgId is sent as x-org-id header (not in body).
  */
 export async function getStatsBudget(params: StatsBudgetParams): Promise<StatsBudgetResponse> {
+  const { orgId, ...body } = params;
   return runsRequest<StatsBudgetResponse>("/v1/stats/budget", {
     method: "POST",
-    body: params,
+    body,
+    identity: { orgId },
   });
 }

@@ -497,7 +497,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(res.body.status).toBe("completed");
-      expect(mockUpdateRun).toHaveBeenCalledWith("run-123", "completed");
+      expect(mockUpdateRun).toHaveBeenCalledWith("run-123", "completed", expect.objectContaining({ orgId }));
     });
 
     it("should find and mark running run as failed when success is false", async () => {
@@ -523,7 +523,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(res.body.status).toBe("failed");
-      expect(mockUpdateRun).toHaveBeenCalledWith("run-456", "failed");
+      expect(mockUpdateRun).toHaveBeenCalledWith("run-456", "failed", expect.objectContaining({ orgId }));
     });
 
     it("should skip run update when no running runs exist (gate-check blocked)", async () => {
@@ -625,7 +625,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(res.body.status).toBe("completed");
-      expect(mockUpdateRun).toHaveBeenCalledWith("run-789", "completed");
+      expect(mockUpdateRun).toHaveBeenCalledWith("run-789", "completed", expect.objectContaining({ orgId }));
 
       // Wait for async auto-stop
       await new Promise((r) => setTimeout(r, 100));

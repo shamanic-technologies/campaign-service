@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
-import { createRun, listRuns, updateRun } from "@mcpfactory/runs-client";
+import { createRun, listRuns, updateRun, type IdentityHeaders } from "@mcpfactory/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
 import { executeCampaignWorkflow } from "../lib/workflows.js";
 import { extractDomain } from "../lib/domain.js";
@@ -45,6 +45,8 @@ router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (re
     const result = await runGateChecks({
       campaignId,
       orgId,
+      userId: req.headers["x-user-id"] as string | undefined,
+      runId: req.headers["x-run-id"] as string | undefined,
       brandId: campaign.brandId || "",
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
@@ -182,6 +184,11 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
     console.log(`[End Run] Received request: campaignId=${campaignId}, orgId=${orgId}, success=${success}, leadFound=${leadFound}`);
 
     const status = success === true ? "completed" : "failed";
+    const identity: IdentityHeaders = {
+      orgId: (req.headers["x-org-id"] as string) || orgId,
+      userId: req.headers["x-user-id"] as string | undefined,
+      runId: req.headers["x-run-id"] as string | undefined,
+    };
 
     // Find and update running runs for this campaign
     try {
@@ -195,7 +202,7 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
       if (runningRuns.length > 0) {
         for (const run of runningRuns) {
           console.log(`[End Run] Updating run ${run.id} to status=${status}`);
-          await updateRun(run.id, status);
+          await updateRun(run.id, status, identity);
         }
       } else {
         console.log(`[End Run] No running runs found for campaign ${campaignId} — skipping run update`);
@@ -234,7 +241,11 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
 
       // Fire-and-forget: gate-check in the next workflow execution will validate limits
       console.log(`[End Run] Re-triggering workflow=${freshCampaign.workflowName} for campaign ${campaignId}`);
-      executeCampaignWorkflow(freshCampaign.workflowName, { campaignId, orgId }).catch((err) => {
+      executeCampaignWorkflow(freshCampaign.workflowName, {
+        campaignId,
+        orgId,
+        userId: identity.userId,
+      }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });
     } catch (err) {
