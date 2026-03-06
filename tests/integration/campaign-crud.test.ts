@@ -202,6 +202,42 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign).not.toHaveProperty("appId");
       expect(res.body.campaign).not.toHaveProperty("keySource");
     });
+
+    it("should reject duplicate campaign name within same org with 409", async () => {
+      await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(201);
+
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(409);
+
+      expect(res.body.error).toBe("A campaign with this name already exists in your organization");
+    });
+
+    it("should allow same campaign name in different orgs", async () => {
+      await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(201);
+
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_other")
+        .send({ ...validBody, orgId: "org_other" })
+        .expect(201);
+
+      expect(res.body.campaign.name).toBe(validBody.name);
+    });
   });
 
   describe("PATCH /campaigns/:id", () => {
@@ -277,6 +313,31 @@ describe("Campaign CRUD", () => {
 
       expect(updateRes.body.campaign.targetOutcome).toBe("Recruit community ambassadors");
       expect(updateRes.body.campaign.valueForTarget).toBe("Early access to beta features");
+    });
+
+    it("should reject renaming to a name that already exists in the same org", async () => {
+      const res1 = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(201);
+
+      const res2 = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({ ...validBody, name: "Other Campaign" })
+        .expect(201);
+
+      const renameRes = await request(app)
+        .patch(`/campaigns/${res2.body.campaign.id}`)
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({ name: validBody.name })
+        .expect(409);
+
+      expect(renameRes.body.error).toBe("A campaign with this name already exists in your organization");
     });
   });
 });

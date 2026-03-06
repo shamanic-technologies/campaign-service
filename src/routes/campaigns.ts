@@ -274,7 +274,10 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     });
 
     res.status(201).json({ campaign });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === "23505" && error?.constraint === "uniq_campaigns_org_name") {
+      return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
+    }
     console.error("[Campaign Service] Create campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
@@ -324,7 +327,10 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     }
 
     res.json({ campaign: updated });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === "23505" && error?.constraint === "uniq_campaigns_org_name") {
+      return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
+    }
     console.error("[Campaign Service] Update campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }

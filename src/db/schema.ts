@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, index, date, decimal, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer } from "drizzle-orm/pg-core";
 
 // Campaigns table
 export const campaigns = pgTable(
@@ -56,6 +56,7 @@ export const campaigns = pgTable(
   },
   (table) => [
     index("idx_campaigns_org").on(table.orgId),
+    uniqueIndex("uniq_campaigns_org_name").on(table.orgId, table.name),
   ]
 );
 
