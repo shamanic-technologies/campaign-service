@@ -34,7 +34,6 @@ export async function executeCampaignWorkflow(
     method: "POST",
     headers,
     body: JSON.stringify({
-      orgId: inputs.orgId,
       inputs: {
         campaignId: inputs.campaignId,
         orgId: inputs.orgId,
