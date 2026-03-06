@@ -32,7 +32,7 @@ describe("Workflow module", () => {
 
       const body = JSON.parse(opts.body);
       expect(body).not.toHaveProperty("appId");
-      expect(body.orgId).toBe("org_test");
+      expect(body).not.toHaveProperty("orgId");
       expect(body.inputs).toEqual({
         campaignId: "campaign-1",
         orgId: "org_test",
