@@ -245,6 +245,7 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
         campaignId,
         orgId,
         userId: identity.userId,
+        runId: identity.runId,
       }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });

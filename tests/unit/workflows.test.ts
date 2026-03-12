@@ -39,6 +39,27 @@ describe("Workflow module", () => {
       });
     });
 
+    it("should set x-run-id header when runId is provided", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "run-123", status: "queued" }),
+      });
+
+      const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
+      await executeCampaignWorkflow("sales-email-cold-outreach", {
+        campaignId: "campaign-1",
+        orgId: "org_test",
+        userId: "user_test",
+        runId: "run-parent-456",
+      });
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, opts] = mockFetch.mock.calls[0];
+      expect(opts.headers["x-org-id"]).toBe("org_test");
+      expect(opts.headers["x-user-id"]).toBe("user_test");
+      expect(opts.headers["x-run-id"]).toBe("run-parent-456");
+    });
+
     it("should not throw when execution fails", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,

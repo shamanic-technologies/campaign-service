@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const {
   mockExecuteCampaignWorkflow,
+  mockCreateRun,
   mockDbValues,
   mockDbUpdate,
   mockSet,
@@ -18,6 +19,7 @@ const {
 
   return {
     mockExecuteCampaignWorkflow: vi.fn(),
+    mockCreateRun: vi.fn(),
     mockDbValues,
     mockDbUpdate,
     mockSet,
@@ -27,6 +29,10 @@ const {
 
 vi.mock("../../src/lib/workflows.js", () => ({
   executeCampaignWorkflow: mockExecuteCampaignWorkflow,
+}));
+
+vi.mock("@mcpfactory/runs-client", () => ({
+  createRun: mockCreateRun,
 }));
 
 vi.mock("../../src/db/index.js", () => ({
@@ -65,6 +71,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
     vi.clearAllMocks();
     mockDbValues.length = 0;
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
+    mockCreateRun.mockResolvedValue({ id: "scheduler-run-123" });
   });
 
   it("should return 0 when no campaigns are due", async () => {
@@ -87,11 +94,20 @@ describe("Scheduler - resumeDueCampaigns", () => {
     expect(mockSet).toHaveBeenCalledWith(
       expect.objectContaining({ toResumeAt: null }),
     );
+    expect(mockCreateRun).toHaveBeenCalledWith({
+      orgId: "org-ext-1",
+      serviceName: "campaign-service",
+      taskName: "scheduler-resume",
+      userId: undefined,
+      campaignId: "campaign-1",
+    });
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
       "sales-email-cold-outreach",
       {
         campaignId: "campaign-1",
         orgId: "org-ext-1",
+        userId: undefined,
+        runId: "scheduler-run-123",
       },
     );
   });
