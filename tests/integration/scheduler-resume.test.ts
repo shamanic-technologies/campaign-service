@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 
-const mockExecute = vi.hoisted(() => vi.fn());
+const { mockExecute, mockCreateRun } = vi.hoisted(() => ({
+  mockExecute: vi.fn(),
+  mockCreateRun: vi.fn(),
+}));
 
 vi.mock("../../src/lib/workflows.js", () => ({
   executeCampaignWorkflow: mockExecute,
@@ -8,7 +11,7 @@ vi.mock("../../src/lib/workflows.js", () => ({
 
 vi.mock("@mcpfactory/runs-client", () => ({
   listRuns: vi.fn().mockResolvedValue({ runs: [] }),
-  createRun: vi.fn(),
+  createRun: mockCreateRun,
   updateRun: vi.fn(),
   getStatsBudget: vi.fn(),
 }));
@@ -26,6 +29,7 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
     await cleanTestData();
     vi.clearAllMocks();
     mockExecute.mockResolvedValue(undefined);
+    mockCreateRun.mockResolvedValue({ id: "scheduler-run-123" });
   });
 
   afterAll(async () => {
@@ -59,13 +63,24 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
     });
     expect(updated!.toResumeAt).toBeNull();
 
-    // Should have triggered workflow
+    // Should have created a run for the scheduler
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgId,
+        serviceName: "campaign-service",
+        taskName: "scheduler-resume",
+        campaignId: campaign.id,
+      }),
+    );
+
+    // Should have triggered workflow with the scheduler run ID
     expect(mockExecute).toHaveBeenCalledWith(
       "sales-email-cold-outreach",
-      {
+      expect.objectContaining({
         campaignId: campaign.id,
         orgId,
-      },
+        runId: "scheduler-run-123",
+      }),
     );
   });
 

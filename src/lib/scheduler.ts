@@ -2,6 +2,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
+import { createRun } from "@mcpfactory/runs-client";
 
 const SCHEDULER_INTERVAL_MS = 60_000; // 1 minute
 
@@ -40,10 +41,18 @@ export async function resumeDueCampaigns(): Promise<number> {
         .where(eq(campaigns.id, campaign.id));
 
       console.log(`[Scheduler] Re-triggering campaign ${campaign.id} (workflow=${campaign.workflowName})`);
+      const run = await createRun({
+        orgId: campaign.orgId,
+        serviceName: "campaign-service",
+        taskName: "scheduler-resume",
+        userId: campaign.createdByUserId ?? undefined,
+        campaignId: campaign.id,
+      });
       executeCampaignWorkflow(campaign.workflowName, {
         campaignId: campaign.id,
         orgId: campaign.orgId,
         userId: campaign.createdByUserId ?? undefined,
+        runId: run.id,
       }).catch((err) => {
         console.error(`[Scheduler] Failed to re-trigger campaign ${campaign.id}:`, err);
       });

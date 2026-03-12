@@ -556,9 +556,11 @@ describe("Pipeline routes", () => {
         workflowName: "sales-email-cold-outreach",
       });
 
+      const runId = crypto.randomUUID();
       await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
+        .set("x-run-id", runId)
         .send({
           campaignId: campaign.id,
           orgId,
@@ -571,10 +573,40 @@ describe("Pipeline routes", () => {
 
       expect(mockExecute).toHaveBeenCalledWith(
         "sales-email-cold-outreach",
-        {
+        expect.objectContaining({
           campaignId: campaign.id,
           orgId,
-        },
+          runId,
+        }),
+      );
+    });
+
+    it("should forward x-run-id header to re-triggered workflow", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandUrl: "https://example.com",
+        brandId,
+        status: "ongoing",
+        workflowName: "sales-email-cold-outreach",
+      });
+
+      const parentRunId = crypto.randomUUID();
+      await request(app)
+        .post("/end-run")
+        .set("x-api-key", API_KEY)
+        .set("x-run-id", parentRunId)
+        .send({
+          campaignId: campaign.id,
+          orgId,
+          success: false,
+        })
+        .expect(200);
+
+      // Wait for async re-trigger
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        "sales-email-cold-outreach",
+        expect.objectContaining({ runId: parentRunId }),
       );
     });
 
