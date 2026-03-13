@@ -45,6 +45,7 @@ export const campaigns = pgTable(
     // Status: 'ongoing' or 'stopped'
     status: text("status").notNull().default("ongoing"),
     toResumeAt: timestamp("to_resume_at", { withTimezone: true }),
+    lastTriggeredAt: timestamp("last_triggered_at", { withTimezone: true }),
 
     // Notifications (legacy - to be replaced by reportingFrequency)
     notifyFrequency: text("notify_frequency"),  // 'daily', 'weekly', 'per_reply'

@@ -29,6 +29,7 @@ export async function insertTestCampaign(
     targetOutcome?: string;
     valueForTarget?: string;
     toResumeAt?: Date | null;
+    lastTriggeredAt?: Date | null;
     createdByUserId?: string;
   } = {}
 ) {
@@ -50,6 +51,7 @@ export async function insertTestCampaign(
       targetOutcome: data.targetOutcome || null,
       valueForTarget: data.valueForTarget || null,
       toResumeAt: data.toResumeAt ?? null,
+      lastTriggeredAt: data.lastTriggeredAt ?? null,
       createdByUserId: data.createdByUserId || null,
     })
     .returning();
