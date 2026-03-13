@@ -259,7 +259,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         notifyChannel,
         notifyDestination,
         status: "ongoing",
-        lastTriggeredAt: new Date(),
       })
       .returning();
 
@@ -316,9 +315,6 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     // Trigger workflow on activation
     if (req.body.status === "activate") {
-      await db.update(campaigns)
-        .set({ lastTriggeredAt: new Date() })
-        .where(eq(campaigns.id, id));
       console.log(`[Campaign Service] Activation triggered: campaignId=${updated.id}, workflowName=${updated.workflowName}, orgId=${req.orgId}`);
       executeCampaignWorkflow(updated.workflowName, {
         campaignId: updated.id,

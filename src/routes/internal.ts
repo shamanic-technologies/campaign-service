@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, or, isNull, lte } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
@@ -227,32 +227,21 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
       return;
     }
 
-    // Re-trigger if campaign is still ongoing.
-    // Atomic guard: only one concurrent end-run can claim the re-trigger.
-    // Uses lastTriggeredAt with a 10-second dedup window to prevent the
-    // infinite loop where concurrent workflows each re-trigger a new pair.
-    const RE_TRIGGER_DEDUP_MS = 10_000;
+    // Re-trigger if campaign is still ongoing
     try {
-      const [claimed] = await db.update(campaigns)
-        .set({ lastTriggeredAt: new Date(), updatedAt: new Date() })
-        .where(and(
-          eq(campaigns.id, campaignId),
-          eq(campaigns.orgId, orgId),
-          eq(campaigns.status, "ongoing"),
-          or(
-            isNull(campaigns.lastTriggeredAt),
-            lte(campaigns.lastTriggeredAt, new Date(Date.now() - RE_TRIGGER_DEDUP_MS)),
-          ),
-        ))
-        .returning();
-
-      if (!claimed) {
-        console.log(`[End Run] Campaign ${campaignId} — skipping re-trigger (already triggered recently or not ongoing)`);
+      // Re-fetch campaign for fresh status (may have been auto-stopped by gate-check)
+      const freshCampaign = await db.query.campaigns.findFirst({
+        where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
+      });
+      console.log(`[End Run] Campaign status for re-trigger: ${freshCampaign?.status || "NOT FOUND"}, workflowName=${freshCampaign?.workflowName || "N/A"}`);
+      if (freshCampaign?.status !== "ongoing") {
+        console.log(`[End Run] Campaign ${campaignId} is not ongoing — skipping re-trigger`);
         return;
       }
 
-      console.log(`[End Run] Re-triggering workflow=${claimed.workflowName} for campaign ${campaignId}`);
-      executeCampaignWorkflow(claimed.workflowName, {
+      // Fire-and-forget: gate-check in the next workflow execution will validate limits
+      console.log(`[End Run] Re-triggering workflow=${freshCampaign.workflowName} for campaign ${campaignId}`);
+      executeCampaignWorkflow(freshCampaign.workflowName, {
         campaignId,
         orgId,
         userId: identity.userId,

@@ -8,7 +8,7 @@
 export async function executeCampaignWorkflow(
   workflowName: string,
   inputs: { campaignId: string; orgId: string; userId?: string; runId?: string },
-): Promise<string | null> {
+): Promise<void> {
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
 
@@ -16,7 +16,7 @@ export async function executeCampaignWorkflow(
 
   if (!url || !apiKey) {
     console.warn("[Workflow] WORKFLOW_SERVICE_URL or WORKFLOW_SERVICE_API_KEY not set, skipping workflow execution");
-    return null;
+    return;
   }
 
   const executeUrl = `${url}/workflows/by-name/${workflowName}/execute`;
@@ -44,10 +44,9 @@ export async function executeCampaignWorkflow(
   if (!res.ok) {
     const body = await res.text();
     console.error(`[Workflow] Execution failed (${res.status}): ${body}`);
-    return null;
+    return;
   }
 
   const data = await res.json() as { id?: string; status?: string };
   console.log(`[Workflow] ${workflowName} started successfully: workflowRunId=${data.id}, status=${data.status}`);
-  return data.id ?? null;
 }
