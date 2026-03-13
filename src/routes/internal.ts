@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
-import { requireApiKey } from "../middleware/auth.js";
+import { requireApiKey, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@mcpfactory/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
@@ -28,7 +28,7 @@ const router = Router();
  *   404 — campaign not found
  *   500 — internal error
  */
-router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (req, res) => {
+router.post("/gate-check", requireApiKey, trackingHeaders, validateBody(GateCheckBody), async (req: AuthenticatedRequest, res) => {
   try {
     const { campaignId, orgId } = req.body;
     console.log(`[Gate Check] Received request: campaignId=${campaignId}, orgId=${orgId}`);
@@ -47,7 +47,8 @@ router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (re
       orgId,
       userId: req.headers["x-user-id"] as string | undefined,
       runId: req.headers["x-run-id"] as string | undefined,
-      brandId: campaign.brandId || "",
+      brandId: req.brandId || campaign.brandId || "",
+      workflowName: req.workflowName || campaign.workflowName,
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
       maxBudgetWeeklyUsd: campaign.maxBudgetWeeklyUsd,
@@ -95,7 +96,7 @@ router.post("/gate-check", requireApiKey, validateBody(GateCheckBody), async (re
  *   404 — campaign not found
  *   500 — internal error
  */
-router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req, res) => {
+router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunBody), async (req: AuthenticatedRequest, res) => {
   try {
     const { campaignId, orgId } = req.body;
     console.log(`[Start Run] Received request: campaignId=${campaignId}, orgId=${orgId}`);
@@ -178,7 +179,7 @@ router.post("/start-run", requireApiKey, validateBody(StartRunBody), async (req,
  * the error path (onError → end-run-error) including cases where
  * no run was created (gate-check blocked).
  */
-router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res) => {
+router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody), async (req: AuthenticatedRequest, res) => {
   try {
     const { campaignId, orgId, success, leadFound } = req.body;
     console.log(`[End Run] Received request: campaignId=${campaignId}, orgId=${orgId}, success=${success}, leadFound=${leadFound}`);
@@ -188,6 +189,9 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
       orgId: (req.headers["x-org-id"] as string) || orgId,
       userId: req.headers["x-user-id"] as string | undefined,
       runId: req.headers["x-run-id"] as string | undefined,
+      campaignId: req.campaignId,
+      brandId: req.brandId,
+      workflowName: req.workflowName,
     };
 
     // Find and update running runs for this campaign
@@ -246,6 +250,7 @@ router.post("/end-run", requireApiKey, validateBody(EndRunBody), async (req, res
         orgId,
         userId: identity.userId,
         runId: identity.runId,
+        brandId: req.brandId || freshCampaign.brandId || undefined,
       }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });

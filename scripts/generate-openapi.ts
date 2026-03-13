@@ -188,6 +188,12 @@ registry.registerPath({
 
 // === PIPELINE (called by DAG via workflow-service) ===
 
+const TrackingHeaders = z.object({
+  "x-campaign-id": z.string().uuid().optional().openapi({ description: "Campaign ID (injected by workflow-service)" }),
+  "x-brand-id": z.string().uuid().optional().openapi({ description: "Brand ID (injected by workflow-service)" }),
+  "x-workflow-name": z.string().optional().openapi({ description: "Workflow name (injected by workflow-service)" }),
+}).openapi("TrackingHeaders");
+
 registry.registerPath({
   method: "post",
   path: "/gate-check",
@@ -195,7 +201,10 @@ registry.registerPath({
   summary: "Check if a campaign can run a new iteration",
   description: "Validates budget limits (daily/weekly/monthly/total) via runs-service stats/budget, volume limits (maxLeads), campaign status, and consecutive failures. Auto-stops the campaign if total budget or maxLeads is exceeded. Called as the first DAG node.",
   security: [{ [apiKeyAuth.name]: [] }],
-  request: { body: { content: { "application/json": { schema: GateCheckBody } } } },
+  request: {
+    headers: TrackingHeaders,
+    body: { content: { "application/json": { schema: GateCheckBody } } },
+  },
   responses: {
     200: { description: "Gate check result", content: { "application/json": { schema: GateCheckResponse } } },
     404: { description: "Campaign or org not found", content: { "application/json": { schema: ErrorResponse } } },
@@ -209,7 +218,10 @@ registry.registerPath({
   summary: "Create a run and return campaign data for downstream nodes",
   description: "Creates a new run in runs-service and returns all campaign data needed by downstream DAG nodes (brand-profile, fetch-lead, email-generate, etc.).",
   security: [{ [apiKeyAuth.name]: [] }],
-  request: { body: { content: { "application/json": { schema: StartRunBody } } } },
+  request: {
+    headers: TrackingHeaders,
+    body: { content: { "application/json": { schema: StartRunBody } } },
+  },
   responses: {
     200: { description: "Run created, campaign data returned", content: { "application/json": { schema: StartRunResponse } } },
     400: { description: "Missing brandUrl or brandId", content: { "application/json": { schema: ErrorResponse } } },
@@ -224,7 +236,10 @@ registry.registerPath({
   summary: "Finalize run and re-trigger workflow if campaign is ongoing",
   description: "Finds any running runs for the campaign and marks them as completed or failed. Then re-triggers the workflow if the campaign is still ongoing. Does not require runId — finds running runs via runs-service.",
   security: [{ [apiKeyAuth.name]: [] }],
-  request: { body: { content: { "application/json": { schema: EndRunBody } } } },
+  request: {
+    headers: TrackingHeaders,
+    body: { content: { "application/json": { schema: EndRunBody } } },
+  },
   responses: {
     200: { description: "Run finalized", content: { "application/json": { schema: EndRunResponse } } },
   },

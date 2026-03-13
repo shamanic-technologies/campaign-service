@@ -60,6 +60,45 @@ describe("Workflow module", () => {
       expect(opts.headers["x-run-id"]).toBe("run-parent-456");
     });
 
+    it("should set tracking headers (x-campaign-id, x-brand-id, x-workflow-name) when provided", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "run-123", status: "queued" }),
+      });
+
+      const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
+      await executeCampaignWorkflow("sales-email-cold-outreach", {
+        campaignId: "campaign-1",
+        orgId: "org_test",
+        brandId: "brand-abc",
+      });
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, opts] = mockFetch.mock.calls[0];
+      expect(opts.headers["x-campaign-id"]).toBe("campaign-1");
+      expect(opts.headers["x-brand-id"]).toBe("brand-abc");
+      expect(opts.headers["x-workflow-name"]).toBe("sales-email-cold-outreach");
+    });
+
+    it("should always set x-workflow-name even without brandId", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "run-123", status: "queued" }),
+      });
+
+      const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
+      await executeCampaignWorkflow("pr-outreach", {
+        campaignId: "campaign-2",
+        orgId: "org_test",
+      });
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, opts] = mockFetch.mock.calls[0];
+      expect(opts.headers["x-campaign-id"]).toBe("campaign-2");
+      expect(opts.headers["x-brand-id"]).toBeUndefined();
+      expect(opts.headers["x-workflow-name"]).toBe("pr-outreach");
+    });
+
     it("should not throw when execution fails", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,

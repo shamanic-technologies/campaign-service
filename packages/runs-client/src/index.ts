@@ -29,6 +29,9 @@ export interface IdentityHeaders {
   orgId: string;
   userId?: string;
   runId?: string;
+  campaignId?: string;
+  brandId?: string;
+  workflowName?: string;
 }
 
 export interface CreateRunParams {
@@ -88,6 +91,9 @@ function buildIdentityHeaders(identity?: IdentityHeaders): Record<string, string
   if (identity?.orgId) h["x-org-id"] = identity.orgId;
   if (identity?.userId) h["x-user-id"] = identity.userId;
   if (identity?.runId) h["x-run-id"] = identity.runId;
+  if (identity?.campaignId) h["x-campaign-id"] = identity.campaignId;
+  if (identity?.brandId) h["x-brand-id"] = identity.brandId;
+  if (identity?.workflowName) h["x-workflow-name"] = identity.workflowName;
   return h;
 }
 
