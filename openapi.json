@@ -889,6 +889,144 @@
         }
       }
     },
+    "/stats": {
+      "get": {
+        "tags": [
+          "Stats"
+        ],
+        "summary": "Campaign stats from own DB (query params)",
+        "description": "Returns campaign counts, status breakdown, and configured budget totals. New canonical path for POST /campaigns/stats. Requires API key.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "orgId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "campaignId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Campaign stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stats/batch-budget": {
+      "post": {
+        "tags": [
+          "Stats"
+        ],
+        "summary": "Get cost data for multiple campaigns",
+        "description": "Returns budget usage (totalCostInUsdCents) per campaign via runs-service. New canonical path for POST /campaigns/batch-budget-usage.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchBudgetUsageBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stats per campaign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "string"
+                          },
+                          "maxLeads": {
+                            "type": "number",
+                            "nullable": true
+                          },
+                          "maxBudgetTotalUsd": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "totalCostInUsdCents": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "results"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/campaigns/list": {
       "get": {
         "tags": [

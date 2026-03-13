@@ -90,6 +90,15 @@ export const StatsFilterBody = z.object({
   { message: "At least one filter required: orgId, brandId, or campaignId" }
 ).openapi("StatsFilterBody");
 
+export const StatsFilterQuery = z.object({
+  orgId: z.string().optional(),
+  brandId: z.string().optional(),
+  campaignId: z.string().optional(),
+}).refine(
+  (data) => data.orgId || data.brandId || data.campaignId,
+  { message: "At least one filter required: orgId, brandId, or campaignId" }
+).openapi("StatsFilterQuery");
+
 export const StatsResponse = z.object({
   stats: z.object({
     totalCampaigns: z.number(),

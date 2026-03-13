@@ -8,6 +8,7 @@ import {
   CreateCampaignBody,
   UpdateCampaignBody,
   StatsFilterBody,
+  StatsFilterQuery,
   StatsResponse,
   BatchBudgetUsageBody,
   ErrorResponse,
@@ -140,6 +141,51 @@ registry.registerPath({
   request: { body: { content: { "application/json": { schema: StatsFilterBody } } } },
   responses: {
     200: { description: "Campaign stats", content: { "application/json": { schema: StatsResponse } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+// === STATS (new canonical paths) ===
+
+registry.registerPath({
+  method: "get",
+  path: "/stats",
+  tags: ["Stats"],
+  summary: "Campaign stats from own DB (query params)",
+  description: "Returns campaign counts, status breakdown, and configured budget totals. New canonical path for POST /campaigns/stats. Requires API key.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { query: StatsFilterQuery },
+  responses: {
+    200: { description: "Campaign stats", content: { "application/json": { schema: StatsResponse } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/stats/batch-budget",
+  tags: ["Stats"],
+  summary: "Get cost data for multiple campaigns",
+  description: "Returns budget usage (totalCostInUsdCents) per campaign via runs-service. New canonical path for POST /campaigns/batch-budget-usage.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: BatchBudgetUsageBody } } } },
+  responses: {
+    200: {
+      description: "Stats per campaign",
+      content: {
+        "application/json": {
+          schema: z.object({
+            results: z.record(z.string(), z.object({
+              status: z.string().optional(),
+              maxLeads: z.number().nullable().optional(),
+              maxBudgetTotalUsd: z.string().nullable().optional(),
+              totalCostInUsdCents: z.string().nullable().optional(),
+              error: z.string().optional(),
+            })),
+          }),
+        },
+      },
+    },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
