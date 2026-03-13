@@ -19,6 +19,7 @@ export async function resumeDueCampaigns(): Promise<number> {
       orgId: campaigns.orgId,
       createdByUserId: campaigns.createdByUserId,
       workflowName: campaigns.workflowName,
+      brandId: campaigns.brandId,
     })
     .from(campaigns)
     .where(
@@ -53,6 +54,7 @@ export async function resumeDueCampaigns(): Promise<number> {
         orgId: campaign.orgId,
         userId: campaign.createdByUserId ?? undefined,
         runId: run.id,
+        brandId: campaign.brandId ?? undefined,
       }).catch((err) => {
         console.error(`[Scheduler] Failed to re-trigger campaign ${campaign.id}:`, err);
       });

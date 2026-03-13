@@ -7,7 +7,7 @@
  */
 export async function executeCampaignWorkflow(
   workflowName: string,
-  inputs: { campaignId: string; orgId: string; userId?: string; runId?: string },
+  inputs: { campaignId: string; orgId: string; userId?: string; runId?: string; brandId?: string },
 ): Promise<void> {
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -29,6 +29,9 @@ export async function executeCampaignWorkflow(
   };
   if (inputs.userId) headers["x-user-id"] = inputs.userId;
   if (inputs.runId) headers["x-run-id"] = inputs.runId;
+  if (inputs.campaignId) headers["x-campaign-id"] = inputs.campaignId;
+  if (inputs.brandId) headers["x-brand-id"] = inputs.brandId;
+  headers["x-workflow-name"] = workflowName;
 
   const res = await fetch(executeUrl, {
     method: "POST",

@@ -4,6 +4,9 @@ export interface AuthenticatedRequest extends Request {
   userId?: string;
   orgId?: string;
   runId?: string;
+  campaignId?: string;
+  brandId?: string;
+  workflowName?: string;
 }
 
 /**
@@ -46,6 +49,26 @@ export function requireOrg(
   if (!req.orgId) {
     return res.status(400).json({ error: "Organization context required" });
   }
+  next();
+}
+
+/**
+ * Reads optional tracking headers injected by workflow-service:
+ * x-campaign-id, x-brand-id, x-workflow-name
+ */
+export function trackingHeaders(
+  req: AuthenticatedRequest,
+  _res: Response,
+  next: NextFunction
+) {
+  const campaignId = req.headers["x-campaign-id"] as string | undefined;
+  const brandId = req.headers["x-brand-id"] as string | undefined;
+  const workflowName = req.headers["x-workflow-name"] as string | undefined;
+
+  if (campaignId) req.campaignId = campaignId;
+  if (brandId) req.brandId = brandId;
+  if (workflowName) req.workflowName = workflowName;
+
   next();
 }
 

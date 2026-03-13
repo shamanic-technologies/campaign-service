@@ -65,10 +65,11 @@ describe("Workflow trigger", () => {
       expect(mockExecuteCampaignWorkflow).toHaveBeenCalledOnce();
       expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
         "sales-email-cold-outreach",
-        {
+        expect.objectContaining({
           campaignId,
           orgId: "org_activation_test",
-        },
+          brandId: validBody.brandId,
+        }),
       );
     });
 
@@ -126,10 +127,10 @@ describe("Workflow trigger", () => {
       expect(mockExecuteCampaignWorkflow).toHaveBeenCalledOnce();
       expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
         "sales-email-cold-outreach",
-        {
+        expect.objectContaining({
           campaignId,
           orgId: "org_activation_test",
-        },
+        }),
       );
     });
 
