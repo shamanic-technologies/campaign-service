@@ -81,15 +81,6 @@ export const UpdateCampaignBody = z.object({
 
 // --- Stats ---
 
-export const StatsFilterBody = z.object({
-  orgId: z.string().optional(),
-  brandId: z.string().optional(),
-  campaignId: z.string().optional(),
-}).refine(
-  (data) => data.orgId || data.brandId || data.campaignId,
-  { message: "At least one filter required: orgId, brandId, or campaignId" }
-).openapi("StatsFilterBody");
-
 export const StatsFilterQuery = z.object({
   orgId: z.string().optional(),
   brandId: z.string().optional(),

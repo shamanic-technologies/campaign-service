@@ -7,7 +7,6 @@ import {
   CampaignSchema,
   CreateCampaignBody,
   UpdateCampaignBody,
-  StatsFilterBody,
   StatsFilterQuery,
   StatsResponse,
   BatchBudgetUsageBody,
@@ -131,28 +130,14 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
-  method: "post",
-  path: "/campaigns/stats",
-  tags: ["Campaigns"],
-  summary: "Campaign stats from own DB",
-  description: "Returns campaign counts, status breakdown, and configured budget totals (not actual costs). Requires API key.",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: { body: { content: { "application/json": { schema: StatsFilterBody } } } },
-  responses: {
-    200: { description: "Campaign stats", content: { "application/json": { schema: StatsResponse } } },
-    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-// === STATS (new canonical paths) ===
+// === STATS ===
 
 registry.registerPath({
   method: "get",
   path: "/stats",
   tags: ["Stats"],
   summary: "Campaign stats from own DB (query params)",
-  description: "Returns campaign counts, status breakdown, and configured budget totals. New canonical path for POST /campaigns/stats. Requires API key.",
+  description: "Returns campaign counts, status breakdown, and configured budget totals. Requires API key.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { query: StatsFilterQuery },
   responses: {
@@ -166,7 +151,7 @@ registry.registerPath({
   path: "/stats/batch-budget",
   tags: ["Stats"],
   summary: "Get cost data for multiple campaigns",
-  description: "Returns budget usage (totalCostInUsdCents) per campaign via runs-service. New canonical path for POST /campaigns/batch-budget-usage.",
+  description: "Returns budget usage (totalCostInUsdCents) per campaign via runs-service.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: BatchBudgetUsageBody } } } },
   responses: {
@@ -200,35 +185,6 @@ registry.registerPath({
   security: [{ [apiKeyAuth.name]: [] }],
   responses: {
     200: { description: "All campaigns with org info", content: { "application/json": { schema: z.object({ campaigns: z.array(CampaignSchema.extend({ externalOrgId: z.string(), brandDomain: z.string().nullable(), brandName: z.string().nullable() })) }) } } },
-  },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/campaigns/batch-budget-usage",
-  tags: ["Scheduler"],
-  summary: "Get cost data for multiple campaigns",
-  description: "Returns budget usage (totalCostInUsdCents) per campaign via runs-service stats/budget endpoint",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: { body: { content: { "application/json": { schema: BatchBudgetUsageBody } } } },
-  responses: {
-    200: {
-      description: "Stats per campaign",
-      content: {
-        "application/json": {
-          schema: z.object({
-            results: z.record(z.string(), z.object({
-              status: z.string().optional(),
-              maxLeads: z.number().nullable().optional(),
-              maxBudgetTotalUsd: z.string().nullable().optional(),
-              totalCostInUsdCents: z.string().nullable().optional(),
-              error: z.string().optional(),
-            })),
-          }),
-        },
-      },
-    },
-    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 
