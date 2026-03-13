@@ -259,12 +259,11 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         notifyChannel,
         notifyDestination,
         status: "ongoing",
-        lastTriggeredAt: new Date(),
       })
       .returning();
 
     // Trigger first workflow execution (fire-and-forget)
-    console.log(`[Campaign Service] Campaign created: campaignId=${campaign.id}, workflowName=${campaign.workflowName}, triggering first workflow execution`);
+    console.log(`[Campaign Service] Launching workflow run from CAMPAIGN CREATION — workflow=${campaign.workflowName}, campaignId=${campaign.id}`);
     executeCampaignWorkflow(campaign.workflowName, {
       campaignId: campaign.id,
       orgId: req.orgId!,
@@ -316,10 +315,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     // Trigger workflow on activation
     if (req.body.status === "activate") {
-      await db.update(campaigns)
-        .set({ lastTriggeredAt: new Date() })
-        .where(eq(campaigns.id, id));
-      console.log(`[Campaign Service] Activation triggered: campaignId=${updated.id}, workflowName=${updated.workflowName}, orgId=${req.orgId}`);
+      console.log(`[Campaign Service] Launching workflow run from CAMPAIGN ACTIVATION — workflow=${updated.workflowName}, campaignId=${updated.id}`);
       executeCampaignWorkflow(updated.workflowName, {
         campaignId: updated.id,
         orgId: req.orgId!,

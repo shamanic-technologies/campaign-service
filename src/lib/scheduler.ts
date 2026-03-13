@@ -35,12 +35,12 @@ export async function resumeDueCampaigns(): Promise<number> {
 
   for (const campaign of dueCampaigns) {
     try {
-      // Clear toResumeAt and set lastTriggeredAt before re-triggering (prevent double-fire)
+      // Clear toResumeAt before re-triggering (prevent double-fire)
       await db.update(campaigns)
-        .set({ toResumeAt: null, lastTriggeredAt: new Date(), updatedAt: new Date() })
+        .set({ toResumeAt: null, updatedAt: new Date() })
         .where(eq(campaigns.id, campaign.id));
 
-      console.log(`[Scheduler] Re-triggering campaign ${campaign.id} (workflow=${campaign.workflowName})`);
+      console.log(`[Campaign Service] Launching workflow run from SCHEDULER RESUME — workflow=${campaign.workflowName}, campaignId=${campaign.id}`);
       const run = await createRun({
         orgId: campaign.orgId,
         serviceName: "campaign-service",
