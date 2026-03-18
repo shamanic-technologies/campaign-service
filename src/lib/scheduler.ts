@@ -36,6 +36,11 @@ export async function resumeDueCampaigns(): Promise<number> {
 
   for (const campaign of dueCampaigns) {
     try {
+      if (!campaign.brandId) {
+        console.warn(`[Scheduler] Campaign ${campaign.id} has no brandId — skipping resume`);
+        continue;
+      }
+
       // Clear toResumeAt before re-triggering (prevent double-fire)
       await db.update(campaigns)
         .set({ toResumeAt: null, updatedAt: new Date() })
@@ -52,9 +57,9 @@ export async function resumeDueCampaigns(): Promise<number> {
       executeCampaignWorkflow(campaign.workflowName, {
         campaignId: campaign.id,
         orgId: campaign.orgId,
+        brandId: campaign.brandId,
         userId: campaign.createdByUserId ?? undefined,
         runId: run.id,
-        brandId: campaign.brandId ?? undefined,
       }).catch((err) => {
         console.error(`[Scheduler] Failed to re-trigger campaign ${campaign.id}:`, err);
       });

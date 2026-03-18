@@ -23,6 +23,7 @@ describe("Workflow module", () => {
       await executeCampaignWorkflow("sales-email-cold-outreach", {
         campaignId: "campaign-1",
         orgId: "org_test",
+        brandId: "brand-abc",
       });
 
       expect(mockFetch).toHaveBeenCalledOnce();
@@ -49,6 +50,7 @@ describe("Workflow module", () => {
       await executeCampaignWorkflow("sales-email-cold-outreach", {
         campaignId: "campaign-1",
         orgId: "org_test",
+        brandId: "brand-abc",
         userId: "user_test",
         runId: "run-parent-456",
       });
@@ -80,7 +82,7 @@ describe("Workflow module", () => {
       expect(opts.headers["x-workflow-name"]).toBe("sales-email-cold-outreach");
     });
 
-    it("should always set x-workflow-name even without brandId", async () => {
+    it("should always set x-brand-id header (required)", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ id: "run-123", status: "queued" }),
@@ -90,12 +92,13 @@ describe("Workflow module", () => {
       await executeCampaignWorkflow("pr-outreach", {
         campaignId: "campaign-2",
         orgId: "org_test",
+        brandId: "brand-xyz",
       });
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const [, opts] = mockFetch.mock.calls[0];
       expect(opts.headers["x-campaign-id"]).toBe("campaign-2");
-      expect(opts.headers["x-brand-id"]).toBeUndefined();
+      expect(opts.headers["x-brand-id"]).toBe("brand-xyz");
       expect(opts.headers["x-workflow-name"]).toBe("pr-outreach");
     });
 
@@ -111,6 +114,7 @@ describe("Workflow module", () => {
         executeCampaignWorkflow("sales-email-cold-outreach", {
           campaignId: "campaign-1",
           orgId: "org_test",
+          brandId: "brand-abc",
         })
       ).resolves.not.toThrow();
     });
@@ -124,6 +128,7 @@ describe("Workflow module", () => {
         executeCampaignWorkflow("any-workflow", {
           campaignId: "campaign-1",
           orgId: "org_test",
+          brandId: "brand-abc",
         })
       ).resolves.not.toThrow();
       expect(mockFetch).not.toHaveBeenCalled();

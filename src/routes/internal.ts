@@ -243,14 +243,20 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
         return;
       }
 
+      const resolvedBrandId = req.brandId || freshCampaign.brandId;
+      if (!resolvedBrandId) {
+        console.warn(`[End Run] Campaign ${campaignId} has no brandId — skipping re-trigger`);
+        return;
+      }
+
       // Fire-and-forget: gate-check in the next workflow execution will validate limits
       console.log(`[Campaign Service] Launching workflow run from END-RUN handler — workflow=${freshCampaign.workflowName}, campaignId=${campaignId}, previousRunSuccess=${success}`);
       executeCampaignWorkflow(freshCampaign.workflowName, {
         campaignId,
         orgId,
+        brandId: resolvedBrandId,
         userId: identity.userId,
         runId: identity.runId,
-        brandId: req.brandId || freshCampaign.brandId || undefined,
       }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });
