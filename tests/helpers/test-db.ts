@@ -40,7 +40,7 @@ export async function insertTestCampaign(
       workflowName: data.workflowName || "sales-email-cold-outreach",
       status: data.status || "ongoing",
       brandUrl: data.brandUrl || null,
-      brandId: data.brandId || null,
+      brandId: "brandId" in data ? (data.brandId || null) : crypto.randomUUID(),
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",
       maxBudgetWeeklyUsd: data.maxBudgetWeeklyUsd || null,
       maxBudgetMonthlyUsd: data.maxBudgetMonthlyUsd || null,

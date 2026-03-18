@@ -15,6 +15,7 @@ const {
     id: string;
     orgId: string;
     workflowName: string;
+    brandId?: string | null;
   }> = [];
 
   return {
@@ -85,6 +86,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       id: "campaign-1",
       orgId: "org-ext-1",
       workflowName: "sales-email-cold-outreach",
+      brandId: "brand-123",
     });
 
     const count = await resumeDueCampaigns();
@@ -106,10 +108,26 @@ describe("Scheduler - resumeDueCampaigns", () => {
       {
         campaignId: "campaign-1",
         orgId: "org-ext-1",
+        brandId: "brand-123",
         userId: undefined,
         runId: "scheduler-run-123",
       },
     );
+  });
+
+  it("should skip campaigns without brandId", async () => {
+    mockDbValues.push({
+      id: "campaign-no-brand",
+      orgId: "org-ext-1",
+      workflowName: "sales-email-cold-outreach",
+      brandId: null,
+    });
+
+    const count = await resumeDueCampaigns();
+
+    expect(count).toBe(1);
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+    expect(mockCreateRun).not.toHaveBeenCalled();
   });
 
   it("should handle multiple due campaigns", async () => {
@@ -118,11 +136,13 @@ describe("Scheduler - resumeDueCampaigns", () => {
         id: "campaign-1",
         orgId: "org-ext-1",
         workflowName: "sales-email-cold-outreach",
+        brandId: "brand-1",
       },
       {
         id: "campaign-2",
         orgId: "org-ext-2",
         workflowName: "pr-email-cold-outreach",
+        brandId: "brand-2",
       },
     );
 
@@ -138,11 +158,13 @@ describe("Scheduler - resumeDueCampaigns", () => {
         id: "campaign-1",
         orgId: "org-ext-1",
         workflowName: "sales-email-cold-outreach",
+        brandId: "brand-1",
       },
       {
         id: "campaign-2",
         orgId: "org-ext-2",
         workflowName: "pr-email-cold-outreach",
+        brandId: "brand-2",
       },
     );
 

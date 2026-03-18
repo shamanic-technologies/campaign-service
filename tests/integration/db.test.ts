@@ -50,9 +50,10 @@ describe("Campaign Service Database", () => {
       expect(campaign.brandId).toBe(brandId);
     });
 
-    it("should store null brandId when not provided", async () => {
+    it("should store null brandId when explicitly set to undefined", async () => {
       const campaign = await insertTestCampaign("org_1", {
         name: "No Brand Campaign",
+        brandId: undefined,
       });
 
       expect(campaign.brandId).toBeNull();
@@ -61,7 +62,7 @@ describe("Campaign Service Database", () => {
     it("should query campaigns by brandId", async () => {
       const brandId = crypto.randomUUID();
       await insertTestCampaign("org_1", { name: "With Brand", brandId });
-      await insertTestCampaign("org_1", { name: "Without Brand" });
+      await insertTestCampaign("org_1", { name: "Without Brand", brandId: undefined });
 
       const results = await db
         .select()
