@@ -131,11 +131,11 @@ async function runsRequest<T>(
  * parentRunId is sent as x-run-id header.
  */
 export async function createRun(params: CreateRunParams): Promise<Run> {
-  const { orgId, userId, parentRunId, ...body } = params;
+  const { orgId, userId, parentRunId, brandId, campaignId, workflowName, ...body } = params;
   return runsRequest<Run>("/v1/runs", {
     method: "POST",
     body,
-    identity: { orgId, userId, runId: parentRunId },
+    identity: { orgId, userId, runId: parentRunId, brandId, campaignId, workflowName },
   });
 }
 

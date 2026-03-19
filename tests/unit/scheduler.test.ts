@@ -102,6 +102,8 @@ describe("Scheduler - resumeDueCampaigns", () => {
       taskName: "scheduler-resume",
       userId: undefined,
       campaignId: "campaign-1",
+      brandId: "brand-123",
+      workflowName: "sales-email-cold-outreach",
     });
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
       "sales-email-cold-outreach",

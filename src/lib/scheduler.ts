@@ -53,6 +53,8 @@ export async function resumeDueCampaigns(): Promise<number> {
         taskName: "scheduler-resume",
         userId: campaign.createdByUserId ?? undefined,
         campaignId: campaign.id,
+        brandId: campaign.brandId ?? undefined,
+        workflowName: campaign.workflowName,
       });
       executeCampaignWorkflow(campaign.workflowName, {
         campaignId: campaign.id,
