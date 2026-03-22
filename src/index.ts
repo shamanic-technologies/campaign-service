@@ -14,6 +14,7 @@ import healthRoutes from "./routes/health.js";
 import campaignsRoutes from "./routes/campaigns.js";
 import statsRoutes from "./routes/stats.js";
 import internalRoutes from "./routes/internal.js";
+import discoveryRoutes from "./routes/discovery.js";
 import { startScheduler } from "./lib/scheduler.js";
 const app = express();
 const PORT = process.env.PORT || 3003;
@@ -36,6 +37,7 @@ app.use(healthRoutes);
 app.use(campaignsRoutes);
 app.use(statsRoutes);
 app.use(internalRoutes);
+app.use(discoveryRoutes);
 
 // OpenAPI spec endpoint
 app.get("/openapi.json", (_req, res) => {
