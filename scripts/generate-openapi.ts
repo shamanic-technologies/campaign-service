@@ -17,11 +17,6 @@ import {
   StartRunResponse,
   EndRunBody,
   EndRunResponse,
-  DiscoveredOutletSchema,
-  DiscoveredJournalistSchema,
-  CreateDiscoveredOutletsBody,
-  CreateDiscoveredJournalistsBody,
-  PaginationQuery,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -249,111 +244,6 @@ registry.registerPath({
   },
   responses: {
     200: { description: "Run finalized", content: { "application/json": { schema: EndRunResponse } } },
-  },
-});
-
-// === DISCOVERY ===
-
-const PaginationParams = z.object({
-  limit: z.number().int().optional().openapi({ description: "Max results per page (1-200, default 50)" }),
-  offset: z.number().int().optional().openapi({ description: "Number of results to skip (default 0)" }),
-}).openapi("PaginationParams");
-
-const PaginationMeta = z.object({
-  total: z.number().int(),
-  limit: z.number().int(),
-  offset: z.number().int(),
-}).openapi("PaginationMeta");
-
-registry.registerPath({
-  method: "get",
-  path: "/campaigns/{id}/discovered-outlets",
-  tags: ["Discovery"],
-  summary: "List discovered outlets for a campaign",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: {
-    params: z.object({ id: z.string().uuid() }),
-    query: PaginationParams,
-  },
-  responses: {
-    200: {
-      description: "Paginated list of discovered outlets",
-      content: {
-        "application/json": {
-          schema: z.object({
-            outlets: z.array(DiscoveredOutletSchema),
-            pagination: PaginationMeta,
-          }),
-        },
-      },
-    },
-    404: { description: "Campaign not found", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/campaigns/{id}/discovered-outlets",
-  tags: ["Discovery"],
-  summary: "Store discovered outlets for a campaign",
-  description: "Called by workflow-service to persist outlet discovery results.",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: {
-    params: z.object({ id: z.string().uuid() }),
-    body: { content: { "application/json": { schema: CreateDiscoveredOutletsBody } } },
-  },
-  responses: {
-    201: {
-      description: "Outlets created",
-      content: { "application/json": { schema: z.object({ outlets: z.array(DiscoveredOutletSchema) }) } },
-    },
-    404: { description: "Campaign not found", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/campaigns/{id}/discovered-journalists",
-  tags: ["Discovery"],
-  summary: "List discovered journalists for a campaign",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: {
-    params: z.object({ id: z.string().uuid() }),
-    query: PaginationParams,
-  },
-  responses: {
-    200: {
-      description: "Paginated list of discovered journalists",
-      content: {
-        "application/json": {
-          schema: z.object({
-            journalists: z.array(DiscoveredJournalistSchema),
-            pagination: PaginationMeta,
-          }),
-        },
-      },
-    },
-    404: { description: "Campaign not found", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/campaigns/{id}/discovered-journalists",
-  tags: ["Discovery"],
-  summary: "Store discovered journalists for a campaign",
-  description: "Called by workflow-service to persist journalist discovery results.",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: {
-    params: z.object({ id: z.string().uuid() }),
-    body: { content: { "application/json": { schema: CreateDiscoveredJournalistsBody } } },
-  },
-  responses: {
-    201: {
-      description: "Journalists created",
-      content: { "application/json": { schema: z.object({ journalists: z.array(DiscoveredJournalistSchema) }) } },
-    },
-    404: { description: "Campaign not found", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 
