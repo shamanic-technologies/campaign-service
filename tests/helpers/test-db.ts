@@ -1,12 +1,10 @@
 import { db, sql } from "../../src/db/index.js";
-import { campaigns, discoveredOutlets, discoveredJournalists } from "../../src/db/schema.js";
+import { campaigns } from "../../src/db/schema.js";
 
 /**
  * Clean all test data from the database
  */
 export async function cleanTestData() {
-  await db.delete(discoveredOutlets);
-  await db.delete(discoveredJournalists);
   await db.delete(campaigns);
 }
 
