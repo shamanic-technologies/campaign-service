@@ -125,6 +125,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       notifyFrequency,
       notifyChannel,
       notifyDestination,
+      searchParams,
     } = req.body;
 
     const normalizedBrandUrl = normalizeUrl(brandUrl);
@@ -152,6 +153,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         notifyFrequency,
         notifyChannel,
         notifyDestination,
+        searchParams: searchParams ?? null,
         status: "ongoing",
       })
       .returning();

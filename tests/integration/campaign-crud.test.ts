@@ -125,30 +125,18 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign.valueForTarget).toBe("Access to enterprise analytics at startup pricing");
     });
 
-    it("should reject when targetOutcome is missing", async () => {
-      const { targetOutcome, ...body } = validBody;
+    it("should create a campaign without targetOutcome (discovery campaign)", async () => {
+      const { targetOutcome, valueForTarget, ...body } = validBody;
 
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
         .set("x-org-id", "org_test_crud")
         .send(body)
-        .expect(400);
+        .expect(201);
 
-      expect(res.body.error).toBeDefined();
-    });
-
-    it("should reject when valueForTarget is missing", async () => {
-      const { valueForTarget, ...body } = validBody;
-
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(body)
-        .expect(400);
-
-      expect(res.body.error).toBeDefined();
+      expect(res.body.campaign.targetOutcome).toBeNull();
+      expect(res.body.campaign.valueForTarget).toBeNull();
     });
 
     it("should reject when targetOutcome is empty string", async () => {
@@ -171,6 +159,37 @@ describe("Campaign CRUD", () => {
         .expect(400);
 
       expect(res.body.error).toBeDefined();
+    });
+
+    it("should create a discovery campaign with searchParams", async () => {
+      const { targetOutcome, valueForTarget, ...body } = validBody;
+      const searchParams = {
+        industry: "SaaS",
+        angles: ["fundraising", "product launch"],
+        targetGeo: "US",
+      };
+
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({ ...body, searchParams })
+        .expect(201);
+
+      expect(res.body.campaign.searchParams).toEqual(searchParams);
+      expect(res.body.campaign.targetOutcome).toBeNull();
+      expect(res.body.campaign.valueForTarget).toBeNull();
+    });
+
+    it("should create a campaign without searchParams (outreach campaign)", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(201);
+
+      expect(res.body.campaign.searchParams).toBeNull();
     });
 
     it("should reject Apollo fields that no longer exist", async () => {

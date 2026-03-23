@@ -28,6 +28,7 @@ export async function insertTestCampaign(
     targetAudience?: string;
     targetOutcome?: string;
     valueForTarget?: string;
+    searchParams?: Record<string, unknown>;
     toResumeAt?: Date | null;
     createdByUserId?: string;
   } = {}
@@ -49,6 +50,7 @@ export async function insertTestCampaign(
       targetAudience: data.targetAudience || null,
       targetOutcome: data.targetOutcome || null,
       valueForTarget: data.valueForTarget || null,
+      searchParams: data.searchParams ?? null,
       toResumeAt: data.toResumeAt ?? null,
       createdByUserId: data.createdByUserId || null,
     })
