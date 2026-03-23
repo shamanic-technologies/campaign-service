@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer } from "drizzle-orm/pg-core";
 
 // Campaigns table
 export const campaigns = pgTable(
@@ -28,9 +28,6 @@ export const campaigns = pgTable(
 
     // What the target audience gains from responding (e.g. "Access to enterprise analytics at startup pricing")
     valueForTarget: text("value_for_target"),
-
-    // Discovery search parameters (industry, angles, targetGeo) — used by discovery campaigns
-    searchParams: jsonb("search_params"),
 
     // Budget limits per campaign (at least one required)
     maxBudgetDailyUsd: decimal("max_budget_daily_usd", { precision: 10, scale: 2 }),

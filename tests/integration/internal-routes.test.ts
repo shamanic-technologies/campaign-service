@@ -349,47 +349,6 @@ describe("Pipeline routes", () => {
       expect(res.body.targetAudience).toBe("VPs of Sales at B2B SaaS companies");
     });
 
-    it("should return DB searchParams for discovery campaigns", async () => {
-      const discoveryParams = {
-        industry: "SaaS",
-        angles: ["fundraising", "product launch"],
-        targetGeo: "US",
-      };
-      const campaign = await insertTestCampaign(orgId, {
-        brandUrl: "https://example.com",
-        brandId,
-        searchParams: discoveryParams,
-      });
-
-      const res = await request(app)
-        .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
-        .expect(200);
-
-      expect(res.body.searchParams).toEqual(discoveryParams);
-    });
-
-    it("should prefer DB searchParams over computed outreach searchParams", async () => {
-      const discoveryParams = { industry: "Fintech" };
-      const campaign = await insertTestCampaign(orgId, {
-        brandUrl: "https://example.com",
-        brandId,
-        targetAudience: "VPs of Sales",
-        targetOutcome: "Book demos",
-        valueForTarget: "Analytics platform",
-        searchParams: discoveryParams,
-      });
-
-      const res = await request(app)
-        .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
-        .expect(200);
-
-      expect(res.body.searchParams).toEqual(discoveryParams);
-    });
-
     it("should have null searchParams when no user context is set", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
