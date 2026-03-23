@@ -407,6 +407,10 @@
             "type": "string",
             "nullable": true
           },
+          "targetAudience": {
+            "type": "string",
+            "nullable": true
+          },
           "targetOutcome": {
             "type": "string",
             "nullable": true
@@ -432,6 +436,7 @@
           "brandDomain",
           "workflowName",
           "userId",
+          "targetAudience",
           "targetOutcome",
           "valueForTarget",
           "searchParams"
