@@ -61,13 +61,6 @@
             "type": "string",
             "nullable": true
           },
-          "searchParams": {
-            "type": "object",
-            "nullable": true,
-            "additionalProperties": {
-              "nullable": true
-            }
-          },
           "maxBudgetDailyUsd": {
             "type": "string",
             "nullable": true
@@ -133,7 +126,6 @@
           "targetAudience",
           "targetOutcome",
           "valueForTarget",
-          "searchParams",
           "maxBudgetDailyUsd",
           "maxBudgetWeeklyUsd",
           "maxBudgetMonthlyUsd",
@@ -195,12 +187,6 @@
             "type": "string",
             "minLength": 1
           },
-          "searchParams": {
-            "type": "object",
-            "additionalProperties": {
-              "nullable": true
-            }
-          },
           "maxBudgetDailyUsd": {
             "type": "string"
           },
@@ -237,7 +223,9 @@
           "workflowName",
           "orgId",
           "brandUrl",
-          "brandId"
+          "brandId",
+          "targetOutcome",
+          "valueForTarget"
         ]
       },
       "UpdateCampaignBody": {
@@ -263,12 +251,6 @@
           "valueForTarget": {
             "type": "string",
             "minLength": 1
-          },
-          "searchParams": {
-            "type": "object",
-            "additionalProperties": {
-              "nullable": true
-            }
           },
           "maxBudgetDailyUsd": {
             "type": "string"

@@ -133,18 +133,16 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);
 
-    // Use DB searchParams if set (discovery campaigns), otherwise build from outreach fields
-    const dbSearchParams = campaign.searchParams as Record<string, unknown> | null;
+    // Pass all user context as unstructured searchParams so lead-service's
+    // LLM can transform them into structured Apollo search params.
     const hasSearchContext = campaign.targetAudience || campaign.targetOutcome || campaign.valueForTarget;
-    const searchParams = dbSearchParams
-      ? dbSearchParams
-      : hasSearchContext
-        ? {
-            targetAudience: campaign.targetAudience,
-            targetOutcome: campaign.targetOutcome,
-            valueForTarget: campaign.valueForTarget,
-          }
-        : null;
+    const searchParams = hasSearchContext
+      ? {
+          targetAudience: campaign.targetAudience,
+          targetOutcome: campaign.targetOutcome,
+          valueForTarget: campaign.valueForTarget,
+        }
+      : null;
 
     const brandDomain = extractDomain(campaign.brandUrl);
 
