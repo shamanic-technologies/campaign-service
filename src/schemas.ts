@@ -132,6 +132,7 @@ export const StartRunResponse = z.object({
   brandDomain: z.string(),
   workflowName: z.string(),
   userId: z.string().nullable(),
+  targetAudience: z.string().nullable(),
   targetOutcome: z.string().nullable(),
   valueForTarget: z.string().nullable(),
   searchParams: z.record(z.string(), z.unknown()).nullable(),

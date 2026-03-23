@@ -158,6 +158,7 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       brandDomain,
       workflowName: campaign.workflowName,
       userId: campaign.createdByUserId ?? null,
+      targetAudience: campaign.targetAudience ?? null,
       targetOutcome: campaign.targetOutcome,
       valueForTarget: campaign.valueForTarget,
       searchParams,

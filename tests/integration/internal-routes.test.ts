@@ -300,6 +300,7 @@ describe("Pipeline routes", () => {
       expect(res.body.brandUrl).toBe("https://example.com");
       expect(res.body.brandDomain).toBe("example.com");
       expect(res.body.workflowName).toBe("sales-email-cold-outreach");
+      expect(res.body.targetAudience).toBeNull();
       expect(res.body.targetOutcome).toBe("Book demos");
       expect(res.body.valueForTarget).toBe("Analytics platform");
       expect(res.body).not.toHaveProperty("appId");
@@ -344,6 +345,8 @@ describe("Pipeline routes", () => {
         targetOutcome: "Book demo meetings",
         valueForTarget: "Reduce outbound prospecting time by 80%",
       });
+      // targetAudience must also be a top-level field (used by discovery workflows)
+      expect(res.body.targetAudience).toBe("VPs of Sales at B2B SaaS companies");
     });
 
     it("should have null searchParams when no user context is set", async () => {
