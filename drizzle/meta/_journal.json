@@ -169,6 +169,13 @@
       "when": 1774333106520,
       "tag": "0023_slim_iron_patriot",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1774600000000,
+      "tag": "0024_backfill_feature_slug",
+      "breakpoints": true
     }
   ]
 }
