@@ -173,6 +173,38 @@ describe("Campaign CRUD", () => {
       expect(res.body.error).toBeDefined();
     });
 
+    it("should create a campaign with featureSlug and featureInputs", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({
+          ...validBody,
+          name: "Feature Campaign",
+          featureSlug: "sales-cold-email-v1",
+          featureInputs: { targetAudience: "CTOs", targetOutcome: "Book demos" },
+        })
+        .expect(201);
+
+      expect(res.body.campaign.featureSlug).toBe("sales-cold-email-v1");
+      expect(res.body.campaign.featureInputs).toEqual({
+        targetAudience: "CTOs",
+        targetOutcome: "Book demos",
+      });
+    });
+
+    it("should create a campaign without featureSlug (backward compat)", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send(validBody)
+        .expect(201);
+
+      expect(res.body.campaign.featureSlug).toBeNull();
+      expect(res.body.campaign.featureInputs).toBeNull();
+    });
+
     it("should reject Apollo fields that no longer exist", async () => {
       const res = await request(app)
         .post("/campaigns")
@@ -313,6 +345,33 @@ describe("Campaign CRUD", () => {
 
       expect(updateRes.body.campaign.targetOutcome).toBe("Recruit community ambassadors");
       expect(updateRes.body.campaign.valueForTarget).toBe("Early access to beta features");
+    });
+
+    it("should update featureInputs", async () => {
+      const createRes = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({
+          ...validBody,
+          featureSlug: "sales-cold-email-v1",
+          featureInputs: { targetAudience: "CTOs" },
+        })
+        .expect(201);
+
+      const campaignId = createRes.body.campaign.id;
+
+      const updateRes = await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({ featureInputs: { targetAudience: "VPs of Sales", vertical: "fintech" } })
+        .expect(200);
+
+      expect(updateRes.body.campaign.featureInputs).toEqual({
+        targetAudience: "VPs of Sales",
+        vertical: "fintech",
+      });
     });
 
     it("should reject renaming to a name that already exists in the same org", async () => {

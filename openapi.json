@@ -49,6 +49,17 @@
             "nullable": true,
             "format": "uuid"
           },
+          "featureSlug": {
+            "type": "string",
+            "nullable": true
+          },
+          "featureInputs": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
           "targetAudience": {
             "type": "string",
             "nullable": true
@@ -123,6 +134,8 @@
           "workflowName",
           "brandUrl",
           "brandId",
+          "featureSlug",
+          "featureInputs",
           "targetAudience",
           "targetOutcome",
           "valueForTarget",
@@ -175,6 +188,16 @@
           "brandId": {
             "type": "string",
             "format": "uuid"
+          },
+          "featureSlug": {
+            "type": "string",
+            "minLength": 1
+          },
+          "featureInputs": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
           },
           "targetAudience": {
             "type": "string"
@@ -240,6 +263,16 @@
           "brandId": {
             "type": "string",
             "format": "uuid"
+          },
+          "featureSlug": {
+            "type": "string",
+            "minLength": 1
+          },
+          "featureInputs": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
           },
           "targetAudience": {
             "type": "string"
@@ -407,6 +440,17 @@
             "type": "string",
             "nullable": true
           },
+          "featureSlug": {
+            "type": "string",
+            "nullable": true
+          },
+          "featureInputs": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
           "targetAudience": {
             "type": "string",
             "nullable": true
@@ -436,6 +480,8 @@
           "brandDomain",
           "workflowName",
           "userId",
+          "featureSlug",
+          "featureInputs",
           "targetAudience",
           "targetOutcome",
           "valueForTarget",

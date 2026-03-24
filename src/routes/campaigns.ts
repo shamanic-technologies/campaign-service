@@ -34,6 +34,7 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
         maxLeads: campaigns.maxLeads,
         createdAt: campaigns.createdAt,
         brandUrl: campaigns.brandUrl,
+        featureSlug: campaigns.featureSlug,
       })
       .from(campaigns)
       .orderBy(campaigns.createdAt);
@@ -112,6 +113,8 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       workflowName,
       brandUrl,
       brandId,
+      featureSlug,
+      featureInputs,
       targetAudience,
       targetOutcome,
       valueForTarget,
@@ -139,6 +142,8 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         workflowName,
         brandUrl: normalizedBrandUrl,
         brandId,
+        featureSlug,
+        featureInputs,
         targetAudience,
         targetOutcome,
         valueForTarget,
