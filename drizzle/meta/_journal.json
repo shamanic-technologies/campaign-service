@@ -162,6 +162,13 @@
       "when": 1774317662276,
       "tag": "0022_youthful_living_lightning",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1774333106520,
+      "tag": "0023_slim_iron_patriot",
+      "breakpoints": true
     }
   ]
 }

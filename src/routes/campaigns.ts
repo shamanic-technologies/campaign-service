@@ -24,9 +24,6 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
         name: campaigns.name,
         workflowName: campaigns.workflowName,
         status: campaigns.status,
-        targetAudience: campaigns.targetAudience,
-        targetOutcome: campaigns.targetOutcome,
-        valueForTarget: campaigns.valueForTarget,
         maxBudgetDailyUsd: campaigns.maxBudgetDailyUsd,
         maxBudgetWeeklyUsd: campaigns.maxBudgetWeeklyUsd,
         maxBudgetMonthlyUsd: campaigns.maxBudgetMonthlyUsd,
@@ -115,9 +112,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       brandId,
       featureSlug,
       featureInputs,
-      targetAudience,
-      targetOutcome,
-      valueForTarget,
       maxBudgetDailyUsd,
       maxBudgetWeeklyUsd,
       maxBudgetMonthlyUsd,
@@ -144,9 +138,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         brandId,
         featureSlug,
         featureInputs,
-        targetAudience,
-        targetOutcome,
-        valueForTarget,
         maxBudgetDailyUsd,
         maxBudgetWeeklyUsd,
         maxBudgetMonthlyUsd,
@@ -176,7 +167,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
 
     res.status(201).json({ campaign });
   } catch (error: any) {
-    if (error?.code === "23505" && error?.constraint === "uniq_campaigns_org_name") {
+    if (error?.code === "23505" && (error?.constraint === "uniq_campaigns_org_name" || error?.constraint_name === "uniq_campaigns_org_name")) {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
     }
     console.error("[Campaign Service] Create campaign error:", error);
@@ -234,7 +225,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     res.json({ campaign: updated });
   } catch (error: any) {
-    if (error?.code === "23505" && error?.constraint === "uniq_campaigns_org_name") {
+    if (error?.code === "23505" && (error?.constraint === "uniq_campaigns_org_name" || error?.constraint_name === "uniq_campaigns_org_name")) {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
     }
     console.error("[Campaign Service] Update campaign error:", error);

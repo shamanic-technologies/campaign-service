@@ -137,21 +137,9 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);
 
-    // Build searchParams from featureInputs (preferred) or legacy columns
+    // Build searchParams from featureInputs
     const featureInputs = campaign.featureInputs as Record<string, unknown> | null;
-    let searchParams: Record<string, unknown> | null = null;
-    if (featureInputs && Object.keys(featureInputs).length > 0) {
-      searchParams = featureInputs;
-    } else {
-      const hasSearchContext = campaign.targetAudience || campaign.targetOutcome || campaign.valueForTarget;
-      searchParams = hasSearchContext
-        ? {
-            targetAudience: campaign.targetAudience,
-            targetOutcome: campaign.targetOutcome,
-            valueForTarget: campaign.valueForTarget,
-          }
-        : null;
-    }
+    const searchParams = (featureInputs && Object.keys(featureInputs).length > 0) ? featureInputs : null;
 
     const brandDomain = extractDomain(campaign.brandUrl);
 
@@ -169,9 +157,6 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       userId: campaign.createdByUserId ?? null,
       featureSlug: campaign.featureSlug ?? null,
       featureInputs: featureInputs ?? null,
-      targetAudience: campaign.targetAudience ?? null,
-      targetOutcome: campaign.targetOutcome,
-      valueForTarget: campaign.valueForTarget,
       searchParams,
     });
   } catch (error) {
