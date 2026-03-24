@@ -25,9 +25,6 @@ export async function insertTestCampaign(
     maxBudgetMonthlyUsd?: string;
     maxBudgetTotalUsd?: string;
     maxLeads?: number;
-    targetAudience?: string;
-    targetOutcome?: string;
-    valueForTarget?: string;
     featureSlug?: string;
     featureInputs?: Record<string, unknown>;
     toResumeAt?: Date | null;
@@ -50,9 +47,6 @@ export async function insertTestCampaign(
       maxBudgetMonthlyUsd: data.maxBudgetMonthlyUsd || null,
       maxBudgetTotalUsd: data.maxBudgetTotalUsd || null,
       maxLeads: data.maxLeads || null,
-      targetAudience: data.targetAudience || null,
-      targetOutcome: data.targetOutcome || null,
-      valueForTarget: data.valueForTarget || null,
       toResumeAt: data.toResumeAt ?? null,
       createdByUserId: data.createdByUserId || null,
     })

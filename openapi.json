@@ -60,18 +60,6 @@
               "nullable": true
             }
           },
-          "targetAudience": {
-            "type": "string",
-            "nullable": true
-          },
-          "targetOutcome": {
-            "type": "string",
-            "nullable": true
-          },
-          "valueForTarget": {
-            "type": "string",
-            "nullable": true
-          },
           "maxBudgetDailyUsd": {
             "type": "string",
             "nullable": true
@@ -136,9 +124,6 @@
           "brandId",
           "featureSlug",
           "featureInputs",
-          "targetAudience",
-          "targetOutcome",
-          "valueForTarget",
           "maxBudgetDailyUsd",
           "maxBudgetWeeklyUsd",
           "maxBudgetMonthlyUsd",
@@ -199,17 +184,6 @@
               "nullable": true
             }
           },
-          "targetAudience": {
-            "type": "string"
-          },
-          "targetOutcome": {
-            "type": "string",
-            "minLength": 1
-          },
-          "valueForTarget": {
-            "type": "string",
-            "minLength": 1
-          },
           "maxBudgetDailyUsd": {
             "type": "string"
           },
@@ -246,9 +220,7 @@
           "workflowName",
           "orgId",
           "brandUrl",
-          "brandId",
-          "targetOutcome",
-          "valueForTarget"
+          "brandId"
         ]
       },
       "UpdateCampaignBody": {
@@ -273,17 +245,6 @@
             "additionalProperties": {
               "nullable": true
             }
-          },
-          "targetAudience": {
-            "type": "string"
-          },
-          "targetOutcome": {
-            "type": "string",
-            "minLength": 1
-          },
-          "valueForTarget": {
-            "type": "string",
-            "minLength": 1
           },
           "maxBudgetDailyUsd": {
             "type": "string"
@@ -451,18 +412,6 @@
               "nullable": true
             }
           },
-          "targetAudience": {
-            "type": "string",
-            "nullable": true
-          },
-          "targetOutcome": {
-            "type": "string",
-            "nullable": true
-          },
-          "valueForTarget": {
-            "type": "string",
-            "nullable": true
-          },
           "searchParams": {
             "type": "object",
             "nullable": true,
@@ -482,9 +431,6 @@
           "userId",
           "featureSlug",
           "featureInputs",
-          "targetAudience",
-          "targetOutcome",
-          "valueForTarget",
           "searchParams"
         ]
       },

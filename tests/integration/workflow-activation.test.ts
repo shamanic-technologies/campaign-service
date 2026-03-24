@@ -31,9 +31,6 @@ const validBody = {
   orgId: "org_activation_test",
   brandUrl: "https://example.com",
   brandId: crypto.randomUUID(),
-  targetOutcome: "Book sales demos",
-  valueForTarget: "Enterprise analytics at startup pricing",
-  targetAudience: "CTOs at SaaS companies",
 };
 
 describe("Workflow trigger", () => {

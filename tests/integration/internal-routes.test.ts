@@ -283,8 +283,6 @@ describe("Pipeline routes", () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
         brandId,
-        targetOutcome: "Book demos",
-        valueForTarget: "Analytics platform",
       });
 
       const res = await request(app)
@@ -300,9 +298,6 @@ describe("Pipeline routes", () => {
       expect(res.body.brandUrl).toBe("https://example.com");
       expect(res.body.brandDomain).toBe("example.com");
       expect(res.body.workflowName).toBe("sales-email-cold-outreach");
-      expect(res.body.targetAudience).toBeNull();
-      expect(res.body.targetOutcome).toBe("Book demos");
-      expect(res.body.valueForTarget).toBe("Analytics platform");
       expect(res.body).not.toHaveProperty("appId");
       expect(res.body).not.toHaveProperty("keySource");
     });
@@ -325,31 +320,7 @@ describe("Pipeline routes", () => {
       expect(res.body).not.toHaveProperty("socialProof");
     });
 
-    it("should pass all user context as unstructured searchParams", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandUrl: "https://example.com",
-        brandId,
-        targetAudience: "VPs of Sales at B2B SaaS companies",
-        targetOutcome: "Book demo meetings",
-        valueForTarget: "Reduce outbound prospecting time by 80%",
-      });
-
-      const res = await request(app)
-        .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
-        .expect(200);
-
-      expect(res.body.searchParams).toEqual({
-        targetAudience: "VPs of Sales at B2B SaaS companies",
-        targetOutcome: "Book demo meetings",
-        valueForTarget: "Reduce outbound prospecting time by 80%",
-      });
-      // targetAudience must also be a top-level field (used by discovery workflows)
-      expect(res.body.targetAudience).toBe("VPs of Sales at B2B SaaS companies");
-    });
-
-    it("should have null searchParams when no user context is set", async () => {
+    it("should have null searchParams when no featureInputs", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
         brandId,
@@ -494,7 +465,6 @@ describe("Pipeline routes", () => {
         brandUrl: "https://example.com",
         brandId,
         featureInputs: { mediaType: "podcast", region: "US" },
-        targetAudience: "should be ignored when featureInputs present",
       });
 
       const res = await request(app)
@@ -504,28 +474,6 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(res.body.searchParams).toEqual({ mediaType: "podcast", region: "US" });
-    });
-
-    it("should fall back to legacy columns for searchParams when no featureInputs", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandUrl: "https://example.com",
-        brandId,
-        targetAudience: "VPs of Sales",
-        targetOutcome: "Book demos",
-        valueForTarget: "Save time",
-      });
-
-      const res = await request(app)
-        .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
-        .expect(200);
-
-      expect(res.body.searchParams).toEqual({
-        targetAudience: "VPs of Sales",
-        targetOutcome: "Book demos",
-        valueForTarget: "Save time",
-      });
     });
 
     it("should NOT call gate checks (gate check is a separate DAG node)", async () => {
