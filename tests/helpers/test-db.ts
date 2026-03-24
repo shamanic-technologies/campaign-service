@@ -28,6 +28,8 @@ export async function insertTestCampaign(
     targetAudience?: string;
     targetOutcome?: string;
     valueForTarget?: string;
+    featureSlug?: string;
+    featureInputs?: Record<string, unknown>;
     toResumeAt?: Date | null;
     createdByUserId?: string;
   } = {}
@@ -41,6 +43,8 @@ export async function insertTestCampaign(
       status: data.status || "ongoing",
       brandUrl: data.brandUrl || null,
       brandId: "brandId" in data ? (data.brandId || null) : crypto.randomUUID(),
+      featureSlug: data.featureSlug || null,
+      featureInputs: data.featureInputs || null,
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",
       maxBudgetWeeklyUsd: data.maxBudgetWeeklyUsd || null,
       maxBudgetMonthlyUsd: data.maxBudgetMonthlyUsd || null,

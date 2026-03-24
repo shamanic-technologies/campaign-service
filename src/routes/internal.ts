@@ -133,16 +133,21 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);
 
-    // Pass all user context as unstructured searchParams so lead-service's
-    // LLM can transform them into structured Apollo search params.
-    const hasSearchContext = campaign.targetAudience || campaign.targetOutcome || campaign.valueForTarget;
-    const searchParams = hasSearchContext
-      ? {
-          targetAudience: campaign.targetAudience,
-          targetOutcome: campaign.targetOutcome,
-          valueForTarget: campaign.valueForTarget,
-        }
-      : null;
+    // Build searchParams from featureInputs (preferred) or legacy columns
+    const featureInputs = campaign.featureInputs as Record<string, unknown> | null;
+    let searchParams: Record<string, unknown> | null = null;
+    if (featureInputs && Object.keys(featureInputs).length > 0) {
+      searchParams = featureInputs;
+    } else {
+      const hasSearchContext = campaign.targetAudience || campaign.targetOutcome || campaign.valueForTarget;
+      searchParams = hasSearchContext
+        ? {
+            targetAudience: campaign.targetAudience,
+            targetOutcome: campaign.targetOutcome,
+            valueForTarget: campaign.valueForTarget,
+          }
+        : null;
+    }
 
     const brandDomain = extractDomain(campaign.brandUrl);
 
@@ -158,6 +163,8 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       brandDomain,
       workflowName: campaign.workflowName,
       userId: campaign.createdByUserId ?? null,
+      featureSlug: campaign.featureSlug ?? null,
+      featureInputs: featureInputs ?? null,
       targetAudience: campaign.targetAudience ?? null,
       targetOutcome: campaign.targetOutcome,
       valueForTarget: campaign.valueForTarget,

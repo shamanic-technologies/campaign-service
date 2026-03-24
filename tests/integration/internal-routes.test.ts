@@ -434,6 +434,63 @@ describe("Pipeline routes", () => {
       );
     });
 
+    it("should return featureSlug and featureInputs when set", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandUrl: "https://example.com",
+        brandId,
+        featureSlug: "pr-media-pitch-v1",
+        featureInputs: { mediaType: "podcast", region: "US" },
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, orgId })
+        .expect(200);
+
+      expect(res.body.featureSlug).toBe("pr-media-pitch-v1");
+      expect(res.body.featureInputs).toEqual({ mediaType: "podcast", region: "US" });
+    });
+
+    it("should use featureInputs as searchParams when available", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandUrl: "https://example.com",
+        brandId,
+        featureInputs: { mediaType: "podcast", region: "US" },
+        targetAudience: "should be ignored when featureInputs present",
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, orgId })
+        .expect(200);
+
+      expect(res.body.searchParams).toEqual({ mediaType: "podcast", region: "US" });
+    });
+
+    it("should fall back to legacy columns for searchParams when no featureInputs", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandUrl: "https://example.com",
+        brandId,
+        targetAudience: "VPs of Sales",
+        targetOutcome: "Book demos",
+        valueForTarget: "Save time",
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, orgId })
+        .expect(200);
+
+      expect(res.body.searchParams).toEqual({
+        targetAudience: "VPs of Sales",
+        targetOutcome: "Book demos",
+        valueForTarget: "Save time",
+      });
+    });
+
     it("should NOT call gate checks (gate check is a separate DAG node)", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",

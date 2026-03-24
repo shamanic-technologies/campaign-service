@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb } from "drizzle-orm/pg-core";
 
 // Campaigns table
 export const campaigns = pgTable(
@@ -19,6 +19,12 @@ export const campaigns = pgTable(
     // Brand ID from brand-service (set by worker after brand-upsert)
     // Nullable initially, populated when brand is created/found in brand-service
     brandId: text("brand_id"),
+
+    // Feature slug — references features-service catalogue (e.g. "sales-cold-email-v1")
+    featureSlug: text("feature_slug"),
+
+    // Feature inputs — dynamic key/value inputs declared by the feature
+    featureInputs: jsonb("feature_inputs"),
 
     // Free-text target audience description (e.g. "CEOs at SaaS startups in the US")
     targetAudience: text("target_audience"),
