@@ -7,6 +7,7 @@ export interface AuthenticatedRequest extends Request {
   campaignId?: string;
   brandId?: string;
   workflowName?: string;
+  featureSlug?: string;
 }
 
 /**
@@ -64,10 +65,12 @@ export function trackingHeaders(
   const campaignId = req.headers["x-campaign-id"] as string | undefined;
   const brandId = req.headers["x-brand-id"] as string | undefined;
   const workflowName = req.headers["x-workflow-name"] as string | undefined;
+  const featureSlug = req.headers["x-feature-slug"] as string | undefined;
 
   if (campaignId) req.campaignId = campaignId;
   if (brandId) req.brandId = brandId;
   if (workflowName) req.workflowName = workflowName;
+  if (featureSlug) req.featureSlug = featureSlug;
 
   next();
 }

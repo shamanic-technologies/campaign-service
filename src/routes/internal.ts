@@ -118,9 +118,12 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       return res.status(400).json({ error: "Campaign has no brandId" });
     }
 
+    // Resolve featureSlug from header (workflow context) or campaign record
+    const featureSlug = req.featureSlug || campaign.featureSlug || undefined;
+
     // Create run in runs-service (x-run-id from caller becomes parentRunId)
     const parentRunId = req.headers["x-run-id"] as string | undefined;
-    console.log(`[Start Run] Creating run in runs-service for campaign ${campaignId} (parentRunId=${parentRunId || "none"})...`);
+    console.log(`[Start Run] Creating run in runs-service for campaign ${campaignId} (parentRunId=${parentRunId || "none"}, featureSlug=${featureSlug || "none"})...`);
     const run = await createRun({
       orgId,
       serviceName: "campaign-service",
@@ -130,6 +133,7 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       userId: campaign.createdByUserId || undefined,
       parentRunId: parentRunId || undefined,
       workflowName: campaign.workflowName,
+      featureSlug,
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);
 
@@ -200,6 +204,7 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
       campaignId: req.campaignId,
       brandId: req.brandId,
       workflowName: req.workflowName,
+      featureSlug: req.featureSlug,
     };
 
     // Find and update running runs for this campaign
@@ -265,6 +270,7 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
         brandId: resolvedBrandId,
         userId: identity.userId,
         runId: identity.runId,
+        featureSlug: identity.featureSlug || freshCampaign.featureSlug || undefined,
       }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });

@@ -25,6 +25,18 @@ describe("trackingHeaders middleware", () => {
     expect(nextCalled).toBe(true);
   });
 
+  it("should read x-feature-slug from headers", () => {
+    const req = createMockReq({
+      "x-feature-slug": "sales-cold-email-v1",
+      "x-campaign-id": "camp-123",
+    });
+
+    trackingHeaders(req, {} as Response, (() => {}) as NextFunction);
+
+    expect(req.featureSlug).toBe("sales-cold-email-v1");
+    expect(req.campaignId).toBe("camp-123");
+  });
+
   it("should not set properties when headers are absent", () => {
     const req = createMockReq({});
 
@@ -34,6 +46,7 @@ describe("trackingHeaders middleware", () => {
     expect(req.campaignId).toBeUndefined();
     expect(req.brandId).toBeUndefined();
     expect(req.workflowName).toBeUndefined();
+    expect(req.featureSlug).toBeUndefined();
     expect(nextCalled).toBe(true);
   });
 
