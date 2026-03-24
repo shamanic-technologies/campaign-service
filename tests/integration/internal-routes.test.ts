@@ -434,6 +434,43 @@ describe("Pipeline routes", () => {
       );
     });
 
+    it("should pass featureSlug to createRun", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandUrl: "https://example.com",
+        brandId,
+        featureSlug: "sales-cold-email-v1",
+      });
+
+      await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .send({ campaignId: campaign.id, orgId })
+        .expect(200);
+
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ featureSlug: "sales-cold-email-v1" }),
+      );
+    });
+
+    it("should prefer x-feature-slug header over campaign.featureSlug", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandUrl: "https://example.com",
+        brandId,
+        featureSlug: "old-slug",
+      });
+
+      await request(app)
+        .post("/start-run")
+        .set("x-api-key", API_KEY)
+        .set("x-feature-slug", "header-slug")
+        .send({ campaignId: campaign.id, orgId })
+        .expect(200);
+
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ featureSlug: "header-slug" }),
+      );
+    });
+
     it("should return featureSlug and featureInputs when set", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
