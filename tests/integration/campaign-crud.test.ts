@@ -21,7 +21,6 @@ describe("Campaign CRUD", () => {
     orgId: "org_test_crud",
     brandUrl: "https://example.com",
     brandId: crypto.randomUUID(),
-    featureSlug: "sales-cold-email-v1",
   };
 
   /** Helper: create a campaign with all required headers */
@@ -32,6 +31,7 @@ describe("Campaign CRUD", () => {
       .set("x-org-id", orgId)
       .set("x-user-id", "user_test_crud")
       .set("x-run-id", crypto.randomUUID())
+      .set("x-feature-slug", "sales-cold-email-v1")
       .send(body);
   }
 
@@ -86,11 +86,18 @@ describe("Campaign CRUD", () => {
       });
     });
 
-    it("should reject campaign creation without featureSlug (required for workflow)", async () => {
-      const { featureSlug, ...bodyWithoutSlug } = validBody;
+    it("should reject campaign creation without x-feature-slug header", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .set("x-user-id", "user_test_crud")
+        .set("x-run-id", crypto.randomUUID())
+        // no x-feature-slug header
+        .send(validBody)
+        .expect(400);
 
-      const res = await createCampaign(bodyWithoutSlug).expect(400);
-      expect(res.body.error).toContain("featureSlug");
+      expect(res.body.error).toContain("x-feature-slug");
     });
 
     it("should reject campaign creation without x-user-id header", async () => {
@@ -173,6 +180,7 @@ describe("Campaign CRUD", () => {
         .set("x-org-id", "org_test_crud")
         .set("x-user-id", "user_test_crud")
         .set("x-run-id", crypto.randomUUID())
+        .set("x-feature-slug", "sales-cold-email-v1")
         .send({ status: "activate" })
         .expect(200);
 

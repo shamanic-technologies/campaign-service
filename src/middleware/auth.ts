@@ -23,18 +23,16 @@ export function serviceAuth(
   const orgId = req.headers["x-org-id"] as string;
   const userId = req.headers["x-user-id"] as string | undefined;
   const runId = req.headers["x-run-id"] as string | undefined;
+  const featureSlug = req.headers["x-feature-slug"] as string | undefined;
 
   if (!orgId) {
     return res.status(400).json({ error: "x-org-id header required" });
   }
 
   req.orgId = orgId;
-  if (userId) {
-    req.userId = userId;
-  }
-  if (runId) {
-    req.runId = runId;
-  }
+  if (userId) req.userId = userId;
+  if (runId) req.runId = runId;
+  if (featureSlug) req.featureSlug = featureSlug;
 
   next();
 }

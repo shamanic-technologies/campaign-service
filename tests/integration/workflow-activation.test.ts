@@ -35,7 +35,6 @@ const validBody = {
   orgId: "org_activation_test",
   brandUrl: "https://example.com",
   brandId: crypto.randomUUID(),
-  featureSlug: "sales-cold-email-v1",
 };
 
 /** Helper: create a campaign with all required headers */
@@ -46,6 +45,7 @@ function createCampaign(body: Record<string, unknown> = validBody) {
     .set("x-org-id", "org_activation_test")
     .set("x-user-id", "user_activation_test")
     .set("x-run-id", crypto.randomUUID())
+    .set("x-feature-slug", "sales-cold-email-v1")
     .send(body);
 }
 
@@ -117,6 +117,7 @@ describe("Workflow trigger", () => {
         .set("x-org-id", "org_activation_test")
         .set("x-user-id", "user_activation_test")
         .set("x-run-id", crypto.randomUUID())
+        .set("x-feature-slug", "sales-cold-email-v1")
         .send({ status: "activate" })
         .expect(200);
 
@@ -197,6 +198,7 @@ describe("Workflow trigger", () => {
         .set("x-org-id", "org_activation_test")
         .set("x-user-id", "user_activation_test")
         .set("x-run-id", crypto.randomUUID())
+        .set("x-feature-slug", "sales-cold-email-v1")
         .send({ status: "activate" })
         .expect(200);
 
