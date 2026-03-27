@@ -413,12 +413,12 @@ describe("Pipeline routes", () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
         brandId,
-        featureSlug: "sales-cold-email-v1",
       });
 
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
+        .set("x-feature-slug", "sales-cold-email-v1")
         .send({ campaignId: campaign.id, orgId })
         .expect(200);
 

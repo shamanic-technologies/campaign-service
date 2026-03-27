@@ -127,8 +127,8 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     const normalizedBrandUrl = normalizeUrl(brandUrl);
     console.log(`[Campaign Service] Creating campaign with brandUrl: ${normalizedBrandUrl}`);
 
-    // Resolve featureSlug: prefer header, fallback to body
-    const resolvedFeatureSlug = req.featureSlug || featureSlug || "";
+    // featureSlug comes exclusively from x-feature-slug header
+    const resolvedFeatureSlug = req.featureSlug || "";
 
     // Validate all required workflow fields BEFORE creating the campaign
     const preCheckInputs = {
@@ -162,7 +162,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         workflowName,
         brandUrl: normalizedBrandUrl,
         brandId,
-        featureSlug: resolvedFeatureSlug || featureSlug,
+        featureSlug: resolvedFeatureSlug,
         featureInputs,
         maxBudgetDailyUsd,
         maxBudgetWeeklyUsd,
@@ -228,7 +228,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         brandId: existing.brandId || "",
         userId: req.userId || "",
         runId: req.runId || "",
-        featureSlug: req.featureSlug || existing.featureSlug || "",
+        featureSlug: req.featureSlug || "",
       };
       const missingActivate = validateWorkflowInputs(preActivateInputs);
       if (missingActivate.length > 0) {
@@ -263,7 +263,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         brandId: updated.brandId!,
         userId: req.userId!,
         runId: req.runId!,
-        featureSlug: req.featureSlug || updated.featureSlug!,
+        featureSlug: req.featureSlug!,
       };
       console.log(`[Campaign Service] Launching workflow run from CAMPAIGN ACTIVATION — workflow=${updated.workflowName}, campaignId=${updated.id}`);
       executeCampaignWorkflow(updated.workflowName, activateInputs).catch((err) => {
