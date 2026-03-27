@@ -22,9 +22,13 @@ vi.mock("@mcpfactory/runs-client", () => ({
   getStatsBudget: vi.fn(),
 }));
 
-vi.mock("../../src/lib/workflows.js", () => ({
-  executeCampaignWorkflow: mockExecute,
-}));
+vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
+  return {
+    ...original,
+    executeCampaignWorkflow: mockExecute,
+  };
+});
 
 vi.mock("../../src/lib/gate-check.js", () => ({
   runGateChecks: mockGateChecks,
@@ -599,13 +603,19 @@ describe("Pipeline routes", () => {
         brandId,
         status: "ongoing",
         workflowName: "sales-email-cold-outreach",
+        featureSlug: "sales-cold-email-v1",
       });
 
       const runId = crypto.randomUUID();
       await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
+        .set("x-org-id", orgId)
         .set("x-run-id", runId)
+        .set("x-user-id", "user_test")
+        .set("x-brand-id", brandId)
+        .set("x-campaign-id", campaign.id)
+        .set("x-feature-slug", "sales-cold-email-v1")
         .send({
           campaignId: campaign.id,
           orgId,
@@ -632,13 +642,19 @@ describe("Pipeline routes", () => {
         brandId,
         status: "ongoing",
         workflowName: "sales-email-cold-outreach",
+        featureSlug: "sales-cold-email-v1",
       });
 
       const parentRunId = crypto.randomUUID();
       await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
+        .set("x-org-id", orgId)
         .set("x-run-id", parentRunId)
+        .set("x-user-id", "user_test")
+        .set("x-brand-id", brandId)
+        .set("x-campaign-id", campaign.id)
+        .set("x-feature-slug", "sales-cold-email-v1")
         .send({
           campaignId: campaign.id,
           orgId,
@@ -716,6 +732,7 @@ describe("Pipeline routes", () => {
         brandUrl: "https://example.com",
         brandId,
         status: "ongoing",
+        featureSlug: "sales-cold-email-v1",
       });
 
       mockListRuns.mockResolvedValue({
@@ -727,6 +744,12 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
+        .set("x-org-id", orgId)
+        .set("x-user-id", "user_test")
+        .set("x-run-id", crypto.randomUUID())
+        .set("x-brand-id", brandId)
+        .set("x-campaign-id", campaign.id)
+        .set("x-feature-slug", "sales-cold-email-v1")
         .send({
           campaignId: campaign.id,
           orgId,

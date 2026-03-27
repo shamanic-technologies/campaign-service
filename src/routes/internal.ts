@@ -6,7 +6,7 @@ import { requireApiKey, trackingHeaders, type AuthenticatedRequest } from "../mi
 import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@mcpfactory/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
-import { executeCampaignWorkflow } from "../lib/workflows.js";
+import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
 import { extractDomain } from "../lib/domain.js";
 import { GateCheckBody, StartRunBody, EndRunBody } from "../schemas.js";
 
@@ -241,22 +241,26 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
         return;
       }
 
-      const resolvedBrandId = req.brandId || freshCampaign.brandId;
-      if (!resolvedBrandId) {
-        console.warn(`[End Run] Campaign ${campaignId} has no brandId — skipping re-trigger`);
+      const resolvedBrandId = req.brandId || freshCampaign.brandId || "";
+      const resolvedFeatureSlug = identity.featureSlug || freshCampaign.featureSlug || "";
+
+      const retriggerInputs = {
+        campaignId,
+        orgId,
+        brandId: resolvedBrandId,
+        userId: identity.userId || "",
+        runId: identity.runId || "",
+        featureSlug: resolvedFeatureSlug,
+      };
+      const missingRetrigger = validateWorkflowInputs(retriggerInputs);
+      if (missingRetrigger.length > 0) {
+        console.warn(`[End Run] Cannot re-trigger campaign ${campaignId} — missing required fields: ${missingRetrigger.join(", ")}`);
         return;
       }
 
       // Fire-and-forget: gate-check in the next workflow execution will validate limits
       console.log(`[Campaign Service] Launching workflow run from END-RUN handler — workflow=${freshCampaign.workflowName}, campaignId=${campaignId}, previousRunSuccess=${success}`);
-      executeCampaignWorkflow(freshCampaign.workflowName, {
-        campaignId,
-        orgId,
-        brandId: resolvedBrandId,
-        userId: identity.userId,
-        runId: identity.runId,
-        featureSlug: identity.featureSlug || freshCampaign.featureSlug || undefined,
-      }).catch((err) => {
+      executeCampaignWorkflow(freshCampaign.workflowName, retriggerInputs).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });
     } catch (err) {

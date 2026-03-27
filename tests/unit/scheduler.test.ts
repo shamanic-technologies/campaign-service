@@ -16,6 +16,8 @@ const {
     orgId: string;
     workflowName: string;
     brandId?: string | null;
+    createdByUserId?: string | null;
+    featureSlug?: string | null;
   }> = [];
 
   return {
@@ -87,6 +89,8 @@ describe("Scheduler - resumeDueCampaigns", () => {
       orgId: "org-ext-1",
       workflowName: "sales-email-cold-outreach",
       brandId: "brand-123",
+      createdByUserId: "user-1",
+      featureSlug: "sales-cold-email-v1",
     });
 
     const count = await resumeDueCampaigns();
@@ -100,10 +104,11 @@ describe("Scheduler - resumeDueCampaigns", () => {
       orgId: "org-ext-1",
       serviceName: "campaign-service",
       taskName: "scheduler-resume",
-      userId: undefined,
+      userId: "user-1",
       campaignId: "campaign-1",
       brandId: "brand-123",
       workflowName: "sales-email-cold-outreach",
+      featureSlug: "sales-cold-email-v1",
     });
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
       "sales-email-cold-outreach",
@@ -111,8 +116,9 @@ describe("Scheduler - resumeDueCampaigns", () => {
         campaignId: "campaign-1",
         orgId: "org-ext-1",
         brandId: "brand-123",
-        userId: undefined,
+        userId: "user-1",
         runId: "scheduler-run-123",
+        featureSlug: "sales-cold-email-v1",
       },
     );
   });
@@ -123,6 +129,25 @@ describe("Scheduler - resumeDueCampaigns", () => {
       orgId: "org-ext-1",
       workflowName: "sales-email-cold-outreach",
       brandId: null,
+      createdByUserId: "user-1",
+      featureSlug: "sales-cold-email-v1",
+    });
+
+    const count = await resumeDueCampaigns();
+
+    expect(count).toBe(1);
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+    expect(mockCreateRun).not.toHaveBeenCalled();
+  });
+
+  it("should skip campaigns without createdByUserId or featureSlug", async () => {
+    mockDbValues.push({
+      id: "campaign-no-user",
+      orgId: "org-ext-1",
+      workflowName: "sales-email-cold-outreach",
+      brandId: "brand-1",
+      createdByUserId: null,
+      featureSlug: null,
     });
 
     const count = await resumeDueCampaigns();
@@ -139,12 +164,16 @@ describe("Scheduler - resumeDueCampaigns", () => {
         orgId: "org-ext-1",
         workflowName: "sales-email-cold-outreach",
         brandId: "brand-1",
+        createdByUserId: "user-1",
+        featureSlug: "sales-cold-email-v1",
       },
       {
         id: "campaign-2",
         orgId: "org-ext-2",
         workflowName: "pr-email-cold-outreach",
         brandId: "brand-2",
+        createdByUserId: "user-2",
+        featureSlug: "pr-media-pitch-v1",
       },
     );
 
@@ -161,12 +190,16 @@ describe("Scheduler - resumeDueCampaigns", () => {
         orgId: "org-ext-1",
         workflowName: "sales-email-cold-outreach",
         brandId: "brand-1",
+        createdByUserId: "user-1",
+        featureSlug: "sales-cold-email-v1",
       },
       {
         id: "campaign-2",
         orgId: "org-ext-2",
         workflowName: "pr-email-cold-outreach",
         brandId: "brand-2",
+        createdByUserId: "user-2",
+        featureSlug: "pr-media-pitch-v1",
       },
     );
 

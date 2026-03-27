@@ -5,9 +5,13 @@ const { mockExecuteCampaignWorkflow } = vi.hoisted(() => ({
   mockExecuteCampaignWorkflow: vi.fn(),
 }));
 
-vi.mock("../../src/lib/workflows.js", () => ({
-  executeCampaignWorkflow: mockExecuteCampaignWorkflow,
-}));
+vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
+  return {
+    ...original,
+    executeCampaignWorkflow: mockExecuteCampaignWorkflow,
+  };
+});
 
 vi.mock("../../src/lib/gate-check.js", () => ({
   runGateChecks: vi.fn().mockResolvedValue({ allowed: true }),
@@ -31,7 +35,19 @@ const validBody = {
   orgId: "org_activation_test",
   brandUrl: "https://example.com",
   brandId: crypto.randomUUID(),
+  featureSlug: "sales-cold-email-v1",
 };
+
+/** Helper: create a campaign with all required headers */
+function createCampaign(body: Record<string, unknown> = validBody) {
+  return request(app)
+    .post("/campaigns")
+    .set("x-api-key", API_KEY)
+    .set("x-org-id", "org_activation_test")
+    .set("x-user-id", "user_activation_test")
+    .set("x-run-id", crypto.randomUUID())
+    .send(body);
+}
 
 describe("Workflow trigger", () => {
   beforeEach(async () => {
@@ -47,12 +63,7 @@ describe("Workflow trigger", () => {
 
   describe("on campaign creation", () => {
     it("should trigger workflow immediately when campaign is created", async () => {
-      const createRes = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_activation_test")
-        .send(validBody)
-        .expect(201);
+      const createRes = await createCampaign().expect(201);
 
       const campaignId = createRes.body.campaign.id;
 
@@ -66,6 +77,8 @@ describe("Workflow trigger", () => {
           campaignId,
           orgId: "org_activation_test",
           brandId: validBody.brandId,
+          userId: "user_activation_test",
+          featureSlug: "sales-cold-email-v1",
         }),
       );
     });
@@ -73,12 +86,7 @@ describe("Workflow trigger", () => {
     it("should still return 201 even if initial workflow execution fails", async () => {
       mockExecuteCampaignWorkflow.mockRejectedValue(new Error("Windmill down"));
 
-      const createRes = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_activation_test")
-        .send(validBody)
-        .expect(201);
+      const createRes = await createCampaign().expect(201);
 
       expect(createRes.body.campaign).toBeDefined();
       expect(createRes.body.campaign.status).toBe("ongoing");
@@ -88,13 +96,7 @@ describe("Workflow trigger", () => {
   describe("on PATCH activate", () => {
     it("should trigger workflow when status is set to activate", async () => {
       // Create campaign (triggers workflow once)
-      const createRes = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_activation_test")
-        .send(validBody)
-        .expect(201);
-
+      const createRes = await createCampaign().expect(201);
       const campaignId = createRes.body.campaign.id;
 
       // Stop it first so we can activate
@@ -108,11 +110,13 @@ describe("Workflow trigger", () => {
       vi.clearAllMocks();
       mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
 
-      // Activate (requires parentRunId)
+      // Activate (requires tracking headers)
       const activateRes = await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
         .set("x-org-id", "org_activation_test")
+        .set("x-user-id", "user_activation_test")
+        .set("x-run-id", crypto.randomUUID())
         .send({ status: "activate" })
         .expect(200);
 
@@ -132,13 +136,7 @@ describe("Workflow trigger", () => {
     });
 
     it("should NOT trigger workflow on stop (only creation trigger)", async () => {
-      const createRes = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_activation_test")
-        .send(validBody)
-        .expect(201);
-
+      const createRes = await createCampaign().expect(201);
       const campaignId = createRes.body.campaign.id;
 
       // Clear mocks after creation trigger
@@ -159,13 +157,7 @@ describe("Workflow trigger", () => {
     });
 
     it("should NOT trigger workflow when updating non-status fields", async () => {
-      const createRes = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_activation_test")
-        .send(validBody)
-        .expect(201);
-
+      const createRes = await createCampaign().expect(201);
       const campaignId = createRes.body.campaign.id;
 
       // Clear mocks after creation trigger
@@ -186,13 +178,7 @@ describe("Workflow trigger", () => {
     });
 
     it("should still return 200 even if workflow execution fails on activate", async () => {
-      const createRes = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_activation_test")
-        .send(validBody)
-        .expect(201);
-
+      const createRes = await createCampaign().expect(201);
       const campaignId = createRes.body.campaign.id;
 
       // Stop then activate with failing mock
@@ -209,6 +195,8 @@ describe("Workflow trigger", () => {
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
         .set("x-org-id", "org_activation_test")
+        .set("x-user-id", "user_activation_test")
+        .set("x-run-id", crypto.randomUUID())
         .send({ status: "activate" })
         .expect(200);
 

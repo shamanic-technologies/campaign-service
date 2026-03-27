@@ -20,6 +20,7 @@ export async function resumeDueCampaigns(): Promise<number> {
       createdByUserId: campaigns.createdByUserId,
       workflowName: campaigns.workflowName,
       brandId: campaigns.brandId,
+      featureSlug: campaigns.featureSlug,
     })
     .from(campaigns)
     .where(
@@ -36,8 +37,12 @@ export async function resumeDueCampaigns(): Promise<number> {
 
   for (const campaign of dueCampaigns) {
     try {
-      if (!campaign.brandId) {
-        console.warn(`[Scheduler] Campaign ${campaign.id} has no brandId — skipping resume`);
+      const missingFields: string[] = [];
+      if (!campaign.brandId) missingFields.push("brandId");
+      if (!campaign.createdByUserId) missingFields.push("createdByUserId");
+      if (!campaign.featureSlug) missingFields.push("featureSlug");
+      if (missingFields.length > 0) {
+        console.warn(`[Scheduler] Campaign ${campaign.id} missing required fields for workflow execution: ${missingFields.join(", ")} — skipping resume`);
         continue;
       }
 
@@ -47,21 +52,28 @@ export async function resumeDueCampaigns(): Promise<number> {
         .where(eq(campaigns.id, campaign.id));
 
       console.log(`[Campaign Service] Launching workflow run from SCHEDULER RESUME — workflow=${campaign.workflowName}, campaignId=${campaign.id}`);
+      // All three fields are validated non-null above
+      const brandId = campaign.brandId!;
+      const userId = campaign.createdByUserId!;
+      const featureSlug = campaign.featureSlug!;
+
       const run = await createRun({
         orgId: campaign.orgId,
         serviceName: "campaign-service",
         taskName: "scheduler-resume",
-        userId: campaign.createdByUserId ?? undefined,
+        userId,
         campaignId: campaign.id,
-        brandId: campaign.brandId ?? undefined,
+        brandId,
         workflowName: campaign.workflowName,
+        featureSlug,
       });
       executeCampaignWorkflow(campaign.workflowName, {
         campaignId: campaign.id,
         orgId: campaign.orgId,
-        brandId: campaign.brandId,
-        userId: campaign.createdByUserId ?? undefined,
+        brandId,
+        userId,
         runId: run.id,
+        featureSlug,
       }).catch((err) => {
         console.error(`[Scheduler] Failed to re-trigger campaign ${campaign.id}:`, err);
       });

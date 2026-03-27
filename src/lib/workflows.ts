@@ -1,13 +1,40 @@
+export interface WorkflowExecutionInputs {
+  campaignId: string;
+  orgId: string;
+  brandId: string;
+  userId: string;
+  runId: string;
+  featureSlug: string;
+}
+
+const REQUIRED_FIELDS: (keyof WorkflowExecutionInputs)[] = [
+  "campaignId", "orgId", "brandId", "userId", "runId", "featureSlug",
+];
+
+/**
+ * Validate that all required fields are present for workflow execution.
+ * Returns the list of missing field names, or an empty array if all present.
+ */
+export function validateWorkflowInputs(
+  inputs: Partial<WorkflowExecutionInputs>,
+): string[] {
+  return REQUIRED_FIELDS.filter((k) => !inputs[k]);
+}
+
 /**
  * Execute a campaign's workflow by name.
  *
  * Campaign-service no longer defines or deploys DAGs — workflow-service
  * owns workflow definitions. Campaign-service receives a workflowName
  * at campaign creation and uses it to trigger execution.
+ *
+ * All inputs are required — workflow-service rejects calls missing any
+ * of the 7 tracking headers (x-org-id, x-user-id, x-run-id, x-brand-id,
+ * x-campaign-id, x-workflow-name, x-feature-slug).
  */
 export async function executeCampaignWorkflow(
   workflowName: string,
-  inputs: { campaignId: string; orgId: string; brandId: string; userId?: string; runId?: string; featureSlug?: string },
+  inputs: WorkflowExecutionInputs,
 ): Promise<void> {
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -19,6 +46,12 @@ export async function executeCampaignWorkflow(
     return;
   }
 
+  // Defense-in-depth: validate all required fields even though callers should check first
+  const missing = validateWorkflowInputs(inputs);
+  if (missing.length > 0) {
+    throw new Error(`[Workflow] Cannot execute workflow — missing required fields: ${missing.join(", ")}`);
+  }
+
   const executeUrl = `${url}/workflows/by-name/${workflowName}/execute`;
   console.log(`[Workflow] POST ${executeUrl}`);
 
@@ -26,13 +59,13 @@ export async function executeCampaignWorkflow(
     "Content-Type": "application/json",
     "x-api-key": apiKey,
     "x-org-id": inputs.orgId,
+    "x-user-id": inputs.userId,
+    "x-run-id": inputs.runId,
+    "x-brand-id": inputs.brandId,
+    "x-campaign-id": inputs.campaignId,
+    "x-feature-slug": inputs.featureSlug,
+    "x-workflow-name": workflowName,
   };
-  headers["x-brand-id"] = inputs.brandId;
-  if (inputs.userId) headers["x-user-id"] = inputs.userId;
-  if (inputs.runId) headers["x-run-id"] = inputs.runId;
-  if (inputs.campaignId) headers["x-campaign-id"] = inputs.campaignId;
-  if (inputs.featureSlug) headers["x-feature-slug"] = inputs.featureSlug;
-  headers["x-workflow-name"] = workflowName;
 
   const res = await fetch(executeUrl, {
     method: "POST",

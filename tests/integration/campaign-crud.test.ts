@@ -21,16 +21,23 @@ describe("Campaign CRUD", () => {
     orgId: "org_test_crud",
     brandUrl: "https://example.com",
     brandId: crypto.randomUUID(),
+    featureSlug: "sales-cold-email-v1",
   };
+
+  /** Helper: create a campaign with all required headers */
+  function createCampaign(body: Record<string, unknown> = validBody, orgId = "org_test_crud") {
+    return request(app)
+      .post("/campaigns")
+      .set("x-api-key", API_KEY)
+      .set("x-org-id", orgId)
+      .set("x-user-id", "user_test_crud")
+      .set("x-run-id", crypto.randomUUID())
+      .send(body);
+  }
 
   describe("POST /campaigns", () => {
     it("should create a campaign with all required fields", async () => {
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(validBody)
-        .expect(201);
+      const res = await createCampaign().expect(201);
 
       expect(res.body.campaign).toBeDefined();
       expect(res.body.campaign.name).toBe("Test Campaign");
@@ -41,65 +48,36 @@ describe("Campaign CRUD", () => {
     it("should reject when workflowName is missing", async () => {
       const { workflowName, ...body } = validBody;
 
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(body)
-        .expect(400);
-
+      const res = await createCampaign(body).expect(400);
       expect(res.body.error).toBeDefined();
     });
 
     it("should reject when brandId is missing", async () => {
       const { brandId, ...body } = validBody;
 
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(body)
-        .expect(400);
-
+      const res = await createCampaign(body).expect(400);
       expect(res.body.error).toBeDefined();
     });
 
     it("should reject when orgId is missing from body", async () => {
       const { orgId, ...body } = validBody;
 
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(body)
-        .expect(400);
-
+      const res = await createCampaign(body).expect(400);
       expect(res.body.error).toBeDefined();
     });
 
     it("should reject when brandId is not a valid UUID", async () => {
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send({ ...validBody, brandId: "not-a-uuid" })
-        .expect(400);
-
+      const res = await createCampaign({ ...validBody, brandId: "not-a-uuid" }).expect(400);
       expect(res.body.error).toBeDefined();
     });
 
     it("should create a campaign with featureSlug and featureInputs", async () => {
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send({
-          ...validBody,
-          name: "Feature Campaign",
-          featureSlug: "sales-cold-email-v1",
-          featureInputs: { targetAudience: "CTOs", targetOutcome: "Book demos" },
-        })
-        .expect(201);
+      const res = await createCampaign({
+        ...validBody,
+        name: "Feature Campaign",
+        featureSlug: "sales-cold-email-v1",
+        featureInputs: { targetAudience: "CTOs", targetOutcome: "Book demos" },
+      }).expect(201);
 
       expect(res.body.campaign.featureSlug).toBe("sales-cold-email-v1");
       expect(res.body.campaign.featureInputs).toEqual({
@@ -108,24 +86,39 @@ describe("Campaign CRUD", () => {
       });
     });
 
-    it("should create a campaign without featureSlug (backward compat)", async () => {
+    it("should reject campaign creation without featureSlug (required for workflow)", async () => {
+      const { featureSlug, ...bodyWithoutSlug } = validBody;
+
+      const res = await createCampaign(bodyWithoutSlug).expect(400);
+      expect(res.body.error).toContain("featureSlug");
+    });
+
+    it("should reject campaign creation without x-user-id header", async () => {
       const res = await request(app)
         .post("/campaigns")
         .set("x-api-key", API_KEY)
         .set("x-org-id", "org_test_crud")
+        .set("x-run-id", crypto.randomUUID())
         .send(validBody)
-        .expect(201);
+        .expect(400);
 
-      expect(res.body.campaign.featureSlug).toBeNull();
-      expect(res.body.campaign.featureInputs).toBeNull();
+      expect(res.body.error).toContain("x-user-id");
+    });
+
+    it("should reject campaign creation without x-run-id header", async () => {
+      const res = await request(app)
+        .post("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .set("x-user-id", "user_test")
+        .send(validBody)
+        .expect(400);
+
+      expect(res.body.error).toContain("x-run-id");
     });
 
     it("should reject Apollo fields that no longer exist", async () => {
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send({ ...validBody, personTitles: ["CEO"] });
+      const res = await createCampaign({ ...validBody, personTitles: ["CEO"] });
 
       // Zod strips unknown fields by default, so it should still succeed
       // but the field should not appear in the response
@@ -134,12 +127,7 @@ describe("Campaign CRUD", () => {
     });
 
     it("should not have legacy fields on campaign", async () => {
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(validBody)
-        .expect(201);
+      const res = await createCampaign().expect(201);
 
       expect(res.body.campaign).not.toHaveProperty("urgency");
       expect(res.body.campaign).not.toHaveProperty("scarcity");
@@ -151,51 +139,23 @@ describe("Campaign CRUD", () => {
     });
 
     it("should reject duplicate campaign name within same org with 409", async () => {
-      await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(validBody)
-        .expect(201);
+      await createCampaign().expect(201);
 
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(validBody)
-        .expect(409);
-
+      const res = await createCampaign().expect(409);
       expect(res.body.error).toBe("A campaign with this name already exists in your organization");
     });
 
     it("should allow same campaign name in different orgs", async () => {
-      await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(validBody)
-        .expect(201);
+      await createCampaign().expect(201);
 
-      const res = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_other")
-        .send({ ...validBody, orgId: "org_other" })
-        .expect(201);
-
+      const res = await createCampaign({ ...validBody, orgId: "org_other" }, "org_other").expect(201);
       expect(res.body.campaign.name).toBe(validBody.name);
     });
   });
 
   describe("PATCH /campaigns/:id", () => {
     it("should accept activate", async () => {
-      const createRes = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(validBody)
-        .expect(201);
-
+      const createRes = await createCampaign().expect(201);
       const campaignId = createRes.body.campaign.id;
 
       // Stop first
@@ -206,11 +166,13 @@ describe("Campaign CRUD", () => {
         .send({ status: "stop" })
         .expect(200);
 
-      // Activate
+      // Activate — requires tracking headers
       const activateRes = await request(app)
         .patch(`/campaigns/${campaignId}`)
         .set("x-api-key", API_KEY)
         .set("x-org-id", "org_test_crud")
+        .set("x-user-id", "user_test_crud")
+        .set("x-run-id", crypto.randomUUID())
         .send({ status: "activate" })
         .expect(200);
 
@@ -218,16 +180,11 @@ describe("Campaign CRUD", () => {
     });
 
     it("should update featureInputs", async () => {
-      const createRes = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send({
-          ...validBody,
-          featureSlug: "sales-cold-email-v1",
-          featureInputs: { targetAudience: "CTOs" },
-        })
-        .expect(201);
+      const createRes = await createCampaign({
+        ...validBody,
+        featureSlug: "sales-cold-email-v1",
+        featureInputs: { targetAudience: "CTOs" },
+      }).expect(201);
 
       const campaignId = createRes.body.campaign.id;
 
@@ -245,19 +202,9 @@ describe("Campaign CRUD", () => {
     });
 
     it("should reject renaming to a name that already exists in the same org", async () => {
-      const res1 = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send(validBody)
-        .expect(201);
+      await createCampaign().expect(201);
 
-      const res2 = await request(app)
-        .post("/campaigns")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org_test_crud")
-        .send({ ...validBody, name: "Other Campaign" })
-        .expect(201);
+      const res2 = await createCampaign({ ...validBody, name: "Other Campaign" }).expect(201);
 
       const renameRes = await request(app)
         .patch(`/campaigns/${res2.body.campaign.id}`)
