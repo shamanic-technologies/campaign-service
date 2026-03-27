@@ -118,8 +118,8 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       return res.status(400).json({ error: "Campaign has no brandId" });
     }
 
-    // Resolve featureSlug from header (workflow context) or campaign record
-    const featureSlug = req.featureSlug || campaign.featureSlug || undefined;
+    // featureSlug comes exclusively from x-feature-slug header
+    const featureSlug = req.featureSlug || undefined;
 
     // Create run in runs-service (x-run-id from caller becomes parentRunId)
     const parentRunId = req.headers["x-run-id"] as string | undefined;
@@ -242,7 +242,7 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
       }
 
       const resolvedBrandId = req.brandId || freshCampaign.brandId || "";
-      const resolvedFeatureSlug = identity.featureSlug || freshCampaign.featureSlug || "";
+      const resolvedFeatureSlug = identity.featureSlug || "";
 
       const retriggerInputs = {
         campaignId,
