@@ -6,7 +6,7 @@ import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/
 import { validateBody } from "../middleware/validate.js";
 import { normalizeUrl, extractDomain } from "../lib/domain.js";
 import { CreateCampaignBody, UpdateCampaignBody } from "../schemas.js";
-import { executeCampaignWorkflow } from "../lib/workflows.js";
+import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
 
 const router = Router();
 
@@ -127,6 +127,29 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     const normalizedBrandUrl = normalizeUrl(brandUrl);
     console.log(`[Campaign Service] Creating campaign with brandUrl: ${normalizedBrandUrl}`);
 
+    // Validate all required workflow fields BEFORE creating the campaign
+    const preCheckInputs = {
+      campaignId: "pending",  // will be assigned after insert
+      orgId: req.orgId!,
+      brandId: brandId || "",
+      userId: req.userId || "",
+      runId: req.runId || "",
+      featureSlug: featureSlug || "",
+    };
+    const missing = validateWorkflowInputs(preCheckInputs);
+    // campaignId is always "pending" here — exclude it from the check
+    const actualMissing = missing.filter((f) => f !== "campaignId");
+    if (actualMissing.length > 0) {
+      const headerMap: Record<string, string> = {
+        userId: "x-user-id", runId: "x-run-id", brandId: "brandId (body)",
+        featureSlug: "featureSlug (body)", orgId: "x-org-id",
+      };
+      const missingHeaders = actualMissing.map((f) => headerMap[f] || f);
+      return res.status(400).json({
+        error: `Cannot create campaign — missing required fields for workflow execution: ${missingHeaders.join(", ")}`,
+      });
+    }
+
     const [campaign] = await db
       .insert(campaigns)
       .values({
@@ -153,15 +176,16 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       .returning();
 
     // Trigger first workflow execution (fire-and-forget)
-    console.log(`[Campaign Service] Launching workflow run from CAMPAIGN CREATION — workflow=${campaign.workflowName}, campaignId=${campaign.id}`);
-    executeCampaignWorkflow(campaign.workflowName, {
+    const workflowInputs = {
       campaignId: campaign.id,
       orgId: req.orgId!,
       brandId: campaign.brandId!,
-      userId: req.userId,
-      runId: req.runId,
-      featureSlug: campaign.featureSlug || undefined,
-    }).catch((err) => {
+      userId: req.userId!,
+      runId: req.runId!,
+      featureSlug: campaign.featureSlug!,
+    };
+    console.log(`[Campaign Service] Launching workflow run from CAMPAIGN CREATION — workflow=${campaign.workflowName}, campaignId=${campaign.id}`);
+    executeCampaignWorkflow(campaign.workflowName, workflowInputs).catch((err) => {
       console.error(`[Campaign Service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
 
@@ -193,6 +217,29 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       return res.status(404).json({ error: "Campaign not found" });
     }
 
+    // Validate required workflow fields BEFORE activating
+    if (req.body.status === "activate") {
+      const preActivateInputs = {
+        campaignId: id,
+        orgId: req.orgId!,
+        brandId: existing.brandId || "",
+        userId: req.userId || "",
+        runId: req.runId || "",
+        featureSlug: existing.featureSlug || "",
+      };
+      const missingActivate = validateWorkflowInputs(preActivateInputs);
+      if (missingActivate.length > 0) {
+        const headerMap: Record<string, string> = {
+          userId: "x-user-id", runId: "x-run-id", brandId: "brandId",
+          featureSlug: "featureSlug", orgId: "x-org-id", campaignId: "campaignId",
+        };
+        const missingHeaders = missingActivate.map((f) => headerMap[f] || f);
+        return res.status(400).json({
+          error: `Cannot activate campaign — missing required fields for workflow execution: ${missingHeaders.join(", ")}`,
+        });
+      }
+    }
+
     const statusMap: Record<string, string> = { activate: "ongoing", stop: "stopped" };
     const updates = { ...req.body, updatedAt: new Date() };
     if (updates.status) {
@@ -207,18 +254,16 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     // Trigger workflow on activation
     if (req.body.status === "activate") {
-      if (!updated.brandId) {
-        return res.status(400).json({ error: "Cannot activate campaign without brandId" });
-      }
-      console.log(`[Campaign Service] Launching workflow run from CAMPAIGN ACTIVATION — workflow=${updated.workflowName}, campaignId=${updated.id}`);
-      executeCampaignWorkflow(updated.workflowName, {
+      const activateInputs = {
         campaignId: updated.id,
         orgId: req.orgId!,
-        brandId: updated.brandId,
-        userId: req.userId,
-        runId: req.runId,
-        featureSlug: updated.featureSlug || undefined,
-      }).catch((err) => {
+        brandId: updated.brandId!,
+        userId: req.userId!,
+        runId: req.runId!,
+        featureSlug: updated.featureSlug!,
+      };
+      console.log(`[Campaign Service] Launching workflow run from CAMPAIGN ACTIVATION — workflow=${updated.workflowName}, campaignId=${updated.id}`);
+      executeCampaignWorkflow(updated.workflowName, activateInputs).catch((err) => {
         console.error(`[Campaign Service] Failed to trigger workflow for campaign ${id}:`, err);
       });
     }

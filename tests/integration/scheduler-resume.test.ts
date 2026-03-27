@@ -5,9 +5,13 @@ const { mockExecute, mockCreateRun } = vi.hoisted(() => ({
   mockCreateRun: vi.fn(),
 }));
 
-vi.mock("../../src/lib/workflows.js", () => ({
-  executeCampaignWorkflow: mockExecute,
-}));
+vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
+  return {
+    ...original,
+    executeCampaignWorkflow: mockExecute,
+  };
+});
 
 vi.mock("@mcpfactory/runs-client", () => ({
   listRuns: vi.fn().mockResolvedValue({ runs: [] }),
@@ -52,6 +56,8 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
     const campaign = await insertTestCampaign(orgId, {
       status: "ongoing",
       toResumeAt: pastDate,
+      featureSlug: "sales-cold-email-v1",
+      createdByUserId: "user_scheduler_test",
     });
 
     const count = await resumeDueCampaigns();
@@ -115,11 +121,15 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
       name: "Campaign A",
       status: "ongoing",
       toResumeAt: pastDate,
+      featureSlug: "sales-cold-email-v1",
+      createdByUserId: "user_scheduler_test",
     });
     await insertTestCampaign(orgId, {
       name: "Campaign B",
       status: "ongoing",
       toResumeAt: pastDate,
+      featureSlug: "sales-cold-email-v1",
+      createdByUserId: "user_scheduler_test",
     });
 
     const count = await resumeDueCampaigns();
