@@ -127,6 +127,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     const normalizedBrandUrl = normalizeUrl(brandUrl);
     console.log(`[Campaign Service] Creating campaign with brandUrl: ${normalizedBrandUrl}`);
 
+    // Resolve featureSlug: prefer header, fallback to body
+    const resolvedFeatureSlug = req.featureSlug || featureSlug || "";
+
     // Validate all required workflow fields BEFORE creating the campaign
     const preCheckInputs = {
       campaignId: "pending",  // will be assigned after insert
@@ -134,19 +137,19 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       brandId: brandId || "",
       userId: req.userId || "",
       runId: req.runId || "",
-      featureSlug: featureSlug || "",
+      featureSlug: resolvedFeatureSlug,
     };
     const missing = validateWorkflowInputs(preCheckInputs);
     // campaignId is always "pending" here — exclude it from the check
     const actualMissing = missing.filter((f) => f !== "campaignId");
     if (actualMissing.length > 0) {
       const headerMap: Record<string, string> = {
-        userId: "x-user-id", runId: "x-run-id", brandId: "brandId (body)",
-        featureSlug: "featureSlug (body)", orgId: "x-org-id",
+        userId: "x-user-id", runId: "x-run-id", brandId: "x-brand-id",
+        featureSlug: "x-feature-slug", orgId: "x-org-id",
       };
       const missingHeaders = actualMissing.map((f) => headerMap[f] || f);
       return res.status(400).json({
-        error: `Cannot create campaign — missing required fields for workflow execution: ${missingHeaders.join(", ")}`,
+        error: `Cannot create campaign — missing required headers for workflow execution: ${missingHeaders.join(", ")}`,
       });
     }
 
@@ -159,7 +162,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         workflowName,
         brandUrl: normalizedBrandUrl,
         brandId,
-        featureSlug,
+        featureSlug: resolvedFeatureSlug || featureSlug,
         featureInputs,
         maxBudgetDailyUsd,
         maxBudgetWeeklyUsd,
@@ -225,17 +228,17 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         brandId: existing.brandId || "",
         userId: req.userId || "",
         runId: req.runId || "",
-        featureSlug: existing.featureSlug || "",
+        featureSlug: req.featureSlug || existing.featureSlug || "",
       };
       const missingActivate = validateWorkflowInputs(preActivateInputs);
       if (missingActivate.length > 0) {
         const headerMap: Record<string, string> = {
-          userId: "x-user-id", runId: "x-run-id", brandId: "brandId",
-          featureSlug: "featureSlug", orgId: "x-org-id", campaignId: "campaignId",
+          userId: "x-user-id", runId: "x-run-id", brandId: "x-brand-id",
+          featureSlug: "x-feature-slug", orgId: "x-org-id", campaignId: "campaignId",
         };
         const missingHeaders = missingActivate.map((f) => headerMap[f] || f);
         return res.status(400).json({
-          error: `Cannot activate campaign — missing required fields for workflow execution: ${missingHeaders.join(", ")}`,
+          error: `Cannot activate campaign — missing required headers for workflow execution: ${missingHeaders.join(", ")}`,
         });
       }
     }
@@ -260,7 +263,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         brandId: updated.brandId!,
         userId: req.userId!,
         runId: req.runId!,
-        featureSlug: updated.featureSlug!,
+        featureSlug: req.featureSlug || updated.featureSlug!,
       };
       console.log(`[Campaign Service] Launching workflow run from CAMPAIGN ACTIVATION — workflow=${updated.workflowName}, campaignId=${updated.id}`);
       executeCampaignWorkflow(updated.workflowName, activateInputs).catch((err) => {
