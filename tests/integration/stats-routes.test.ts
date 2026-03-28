@@ -12,6 +12,20 @@ vi.mock("@mcpfactory/runs-client", () => ({
   getStatsBudget: mockGetStatsBudget,
 }));
 
+const { mockResolveWorkflow, mockResolveFeature, mockWorkflowMap, mockFeatureMap } = vi.hoisted(() => ({
+  mockResolveWorkflow: vi.fn(),
+  mockResolveFeature: vi.fn(),
+  mockWorkflowMap: vi.fn(),
+  mockFeatureMap: vi.fn(),
+}));
+
+vi.mock("../../src/lib/dynasty-client.js", () => ({
+  resolveWorkflowDynastySlugs: mockResolveWorkflow,
+  resolveFeatureDynastySlugs: mockResolveFeature,
+  getWorkflowDynastyMap: mockWorkflowMap,
+  getFeatureDynastyMap: mockFeatureMap,
+}));
+
 import app from "../../src/index.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 
@@ -218,6 +232,210 @@ describe("Stats Routes", () => {
 
       expect(res.body.stats.totalCampaigns).toBe(0);
       expect(res.body.stats.byStatus).toEqual({});
+    });
+
+    // --- workflowSlug filter ---
+
+    it("should filter by workflowSlug", async () => {
+      await insertTestCampaign("org_wf_filter", { workflowSlug: "cold-email", status: "ongoing" });
+      await insertTestCampaign("org_wf_filter", { workflowSlug: "warm-intro", status: "ongoing" });
+
+      const res = await request(app)
+        .get("/stats?orgId=org_wf_filter&workflowSlug=cold-email")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.stats.totalCampaigns).toBe(1);
+    });
+
+    // --- featureSlug filter ---
+
+    it("should filter by featureSlug", async () => {
+      await insertTestCampaign("org_fs_filter", { featureSlug: "feat-alpha", status: "ongoing" });
+      await insertTestCampaign("org_fs_filter", { featureSlug: "feat-beta", status: "ongoing" });
+
+      const res = await request(app)
+        .get("/stats?orgId=org_fs_filter&featureSlug=feat-alpha")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.stats.totalCampaigns).toBe(1);
+    });
+
+    // --- workflowDynastySlug filter ---
+
+    it("should filter by workflowDynastySlug (resolved to versioned slugs)", async () => {
+      await insertTestCampaign("org_wds", { workflowSlug: "cold-email", status: "ongoing" });
+      await insertTestCampaign("org_wds", { workflowSlug: "cold-email-v2", status: "ongoing" });
+      await insertTestCampaign("org_wds", { workflowSlug: "warm-intro", status: "ongoing" });
+
+      mockResolveWorkflow.mockResolvedValueOnce(["cold-email", "cold-email-v2"]);
+
+      const res = await request(app)
+        .get("/stats?orgId=org_wds&workflowDynastySlug=cold-email")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.stats.totalCampaigns).toBe(2);
+    });
+
+    // --- featureDynastySlug filter ---
+
+    it("should filter by featureDynastySlug (resolved to versioned slugs)", async () => {
+      await insertTestCampaign("org_fds", { featureSlug: "feat-alpha", status: "ongoing" });
+      await insertTestCampaign("org_fds", { featureSlug: "feat-alpha-v2", status: "ongoing" });
+      await insertTestCampaign("org_fds", { featureSlug: "feat-beta", status: "stopped" });
+
+      mockResolveFeature.mockResolvedValueOnce(["feat-alpha", "feat-alpha-v2"]);
+
+      const res = await request(app)
+        .get("/stats?orgId=org_fds&featureDynastySlug=feat-alpha")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.stats.totalCampaigns).toBe(2);
+    });
+
+    // --- combined dynasty + other filters ---
+
+    it("should combine workflowDynastySlug with orgId filter", async () => {
+      await insertTestCampaign("org_combo", { workflowSlug: "cold-email", status: "ongoing" });
+      await insertTestCampaign("org_combo", { workflowSlug: "cold-email-v2", status: "stopped" });
+      await insertTestCampaign("org_other_combo", { workflowSlug: "cold-email", status: "ongoing" });
+
+      mockResolveWorkflow.mockResolvedValueOnce(["cold-email", "cold-email-v2"]);
+
+      const res = await request(app)
+        .get("/stats?orgId=org_combo&workflowDynastySlug=cold-email")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.stats.totalCampaigns).toBe(2);
+    });
+
+    // --- empty dynasty resolution → zero stats ---
+
+    it("should return zero stats when dynasty resolves to empty list", async () => {
+      await insertTestCampaign("org_empty_dyn", { status: "ongoing" });
+
+      mockResolveWorkflow.mockResolvedValueOnce([]);
+
+      const res = await request(app)
+        .get("/stats?orgId=org_empty_dyn&workflowDynastySlug=nonexistent")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.stats.totalCampaigns).toBe(0);
+      expect(res.body.stats.byStatus).toEqual({});
+    });
+
+    it("should return empty groupedStats when dynasty resolves to empty list with groupBy", async () => {
+      await insertTestCampaign("org_empty_grp", { status: "ongoing" });
+
+      mockResolveFeature.mockResolvedValueOnce([]);
+
+      const res = await request(app)
+        .get("/stats?orgId=org_empty_grp&featureDynastySlug=nonexistent&groupBy=featureDynastySlug")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.groupedStats).toEqual({});
+    });
+
+    // --- groupBy: workflowSlug ---
+
+    it("should group by workflowSlug", async () => {
+      await insertTestCampaign("org_gb_ws", { workflowSlug: "cold-email", status: "ongoing" });
+      await insertTestCampaign("org_gb_ws", { workflowSlug: "cold-email", status: "stopped" });
+      await insertTestCampaign("org_gb_ws", { workflowSlug: "warm-intro", status: "ongoing" });
+
+      const res = await request(app)
+        .get("/stats?orgId=org_gb_ws&groupBy=workflowSlug")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.groupedStats["cold-email"].totalCampaigns).toBe(2);
+      expect(res.body.groupedStats["cold-email"].byStatus).toEqual({ ongoing: 1, stopped: 1 });
+      expect(res.body.groupedStats["warm-intro"].totalCampaigns).toBe(1);
+    });
+
+    // --- groupBy: featureSlug ---
+
+    it("should group by featureSlug", async () => {
+      await insertTestCampaign("org_gb_fs", { featureSlug: "feat-alpha", status: "ongoing" });
+      await insertTestCampaign("org_gb_fs", { featureSlug: "feat-alpha", status: "stopped" });
+      await insertTestCampaign("org_gb_fs", { featureSlug: "feat-beta", status: "ongoing" });
+
+      const res = await request(app)
+        .get("/stats?orgId=org_gb_fs&groupBy=featureSlug")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.groupedStats["feat-alpha"].totalCampaigns).toBe(2);
+      expect(res.body.groupedStats["feat-beta"].totalCampaigns).toBe(1);
+    });
+
+    // --- groupBy: workflowDynastySlug ---
+
+    it("should group by workflowDynastySlug", async () => {
+      await insertTestCampaign("org_gb_wds", { workflowSlug: "cold-email", status: "ongoing" });
+      await insertTestCampaign("org_gb_wds", { workflowSlug: "cold-email-v2", status: "ongoing" });
+      await insertTestCampaign("org_gb_wds", { workflowSlug: "warm-intro", status: "stopped" });
+
+      mockWorkflowMap.mockResolvedValueOnce(new Map([
+        ["cold-email", "cold-email"],
+        ["cold-email-v2", "cold-email"],
+        ["warm-intro", "warm-intro"],
+      ]));
+
+      const res = await request(app)
+        .get("/stats?orgId=org_gb_wds&groupBy=workflowDynastySlug")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.groupedStats["cold-email"].totalCampaigns).toBe(2);
+      expect(res.body.groupedStats["warm-intro"].totalCampaigns).toBe(1);
+    });
+
+    // --- groupBy: featureDynastySlug ---
+
+    it("should group by featureDynastySlug", async () => {
+      await insertTestCampaign("org_gb_fds", { featureSlug: "feat-alpha", status: "ongoing" });
+      await insertTestCampaign("org_gb_fds", { featureSlug: "feat-alpha-v2", status: "ongoing" });
+      await insertTestCampaign("org_gb_fds", { featureSlug: "feat-beta", status: "stopped" });
+
+      mockFeatureMap.mockResolvedValueOnce(new Map([
+        ["feat-alpha", "feat-alpha"],
+        ["feat-alpha-v2", "feat-alpha"],
+        ["feat-beta", "feat-beta"],
+      ]));
+
+      const res = await request(app)
+        .get("/stats?orgId=org_gb_fds&groupBy=featureDynastySlug")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.groupedStats["feat-alpha"].totalCampaigns).toBe(2);
+      expect(res.body.groupedStats["feat-beta"].totalCampaigns).toBe(1);
+    });
+
+    // --- orphan slugs fallback ---
+
+    it("should fallback orphan slugs to raw value when grouping by dynasty", async () => {
+      await insertTestCampaign("org_gb_orphan", { workflowSlug: "cold-email", status: "ongoing" });
+      await insertTestCampaign("org_gb_orphan", { workflowSlug: "orphan-wf", status: "ongoing" });
+
+      mockWorkflowMap.mockResolvedValueOnce(new Map([
+        ["cold-email", "cold-email"],
+      ]));
+
+      const res = await request(app)
+        .get("/stats?orgId=org_gb_orphan&groupBy=workflowDynastySlug")
+        .set("x-api-key", API_KEY)
+        .expect(200);
+
+      expect(res.body.groupedStats["cold-email"].totalCampaigns).toBe(1);
+      expect(res.body.groupedStats["orphan-wf"].totalCampaigns).toBe(1);
     });
   });
 });

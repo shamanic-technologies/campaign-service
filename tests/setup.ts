@@ -10,6 +10,8 @@ process.env.WORKFLOW_SERVICE_URL = "https://workflow.test.local";
 process.env.WORKFLOW_SERVICE_API_KEY = "test-workflow-key";
 process.env.LEAD_SERVICE_URL = "https://lead.test.local";
 process.env.LEAD_SERVICE_API_KEY = "test-lead-key";
+process.env.FEATURES_SERVICE_URL = "https://features.test.local";
+process.env.FEATURES_SERVICE_API_KEY = "test-features-key";
 
 beforeAll(() => console.log("Test suite starting..."));
 afterAll(() => console.log("Test suite complete."));

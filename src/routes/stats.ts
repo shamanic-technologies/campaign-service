@@ -1,11 +1,17 @@
 import { Router } from "express";
 import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaigns } from "../db/schema.js";
+import { campaigns, type Campaign } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { getStatsBudget } from "@mcpfactory/runs-client";
 import { BatchBudgetUsageBody, StatsFilterQuery } from "../schemas.js";
+import {
+  resolveWorkflowDynastySlugs,
+  resolveFeatureDynastySlugs,
+  getWorkflowDynastyMap,
+  getFeatureDynastyMap,
+} from "../lib/dynasty-client.js";
 
 const router = Router();
 
@@ -73,50 +79,140 @@ router.post("/stats/batch-budget", requireApiKey, validateBody(BatchBudgetUsageB
   }
 });
 
+function computeStats(rows: Campaign[]) {
+  const byStatus: Record<string, number> = {};
+  let budgetTotalUsd = 0;
+  let maxLeadsTotal = 0;
+
+  for (const c of rows) {
+    byStatus[c.status] = (byStatus[c.status] || 0) + 1;
+    if (c.maxBudgetTotalUsd) budgetTotalUsd += parseFloat(c.maxBudgetTotalUsd);
+    if (c.maxLeads) maxLeadsTotal += c.maxLeads;
+  }
+
+  return {
+    totalCampaigns: rows.length,
+    byStatus,
+    budgetTotalUsd: budgetTotalUsd > 0 ? budgetTotalUsd : null,
+    maxLeadsTotal: maxLeadsTotal > 0 ? maxLeadsTotal : null,
+  };
+}
+
 /**
  * GET /stats - Campaign stats from own DB (query-param filters)
  *
- * New canonical path for POST /campaigns/stats.
- * Accepts orgId, brandId, campaignId as query params.
+ * Accepts orgId, brandId, campaignId, workflowSlug, featureSlug,
+ * workflowDynastySlug, featureDynastySlug, groupBy as query params.
  */
 router.get("/stats", requireApiKey, validateQuery(StatsFilterQuery), async (req, res) => {
   try {
-    const { orgId, brandId, campaignId } = req.query as {
+    const {
+      orgId, brandId, campaignId,
+      workflowSlug, featureSlug,
+      workflowDynastySlug, featureDynastySlug,
+      groupBy,
+    } = req.query as {
       orgId?: string;
       brandId?: string;
       campaignId?: string;
+      workflowSlug?: string;
+      featureSlug?: string;
+      workflowDynastySlug?: string;
+      featureDynastySlug?: string;
+      groupBy?: string;
     };
 
+    // Resolve dynasty slugs into versioned slug lists
+    let resolvedWorkflowSlugs: string[] | undefined;
+    let resolvedFeatureSlugs: string[] | undefined;
+
+    if (workflowDynastySlug) {
+      resolvedWorkflowSlugs = await resolveWorkflowDynastySlugs(workflowDynastySlug);
+      if (resolvedWorkflowSlugs.length === 0) {
+        if (groupBy) {
+          return res.json({ groupedStats: {} });
+        }
+        return res.json({ stats: computeStats([]) });
+      }
+    }
+
+    if (featureDynastySlug) {
+      resolvedFeatureSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      if (resolvedFeatureSlugs.length === 0) {
+        if (groupBy) {
+          return res.json({ groupedStats: {} });
+        }
+        return res.json({ stats: computeStats([]) });
+      }
+    }
+
+    // Build conditions
     const conditions = [];
     if (orgId) conditions.push(eq(campaigns.orgId, orgId));
     if (brandId) conditions.push(eq(campaigns.brandId, brandId));
     if (campaignId) conditions.push(eq(campaigns.id, campaignId));
 
-    const where = conditions.length === 1 ? conditions[0] : and(...conditions);
+    // Dynasty slugs take priority over exact slugs
+    if (resolvedWorkflowSlugs && resolvedWorkflowSlugs.length > 0) {
+      conditions.push(inArray(campaigns.workflowSlug, resolvedWorkflowSlugs));
+    } else if (workflowSlug) {
+      conditions.push(eq(campaigns.workflowSlug, workflowSlug));
+    }
+
+    if (resolvedFeatureSlugs && resolvedFeatureSlugs.length > 0) {
+      conditions.push(inArray(campaigns.featureSlug, resolvedFeatureSlugs));
+    } else if (featureSlug) {
+      conditions.push(eq(campaigns.featureSlug, featureSlug));
+    }
+
+    const where = conditions.length === 1 ? conditions[0] : conditions.length > 1 ? and(...conditions) : undefined;
 
     const matching = await db
       .select()
       .from(campaigns)
       .where(where);
 
-    const byStatus: Record<string, number> = {};
-    let budgetTotalUsd = 0;
-    let maxLeadsTotal = 0;
-
-    for (const c of matching) {
-      byStatus[c.status] = (byStatus[c.status] || 0) + 1;
-      if (c.maxBudgetTotalUsd) budgetTotalUsd += parseFloat(c.maxBudgetTotalUsd);
-      if (c.maxLeads) maxLeadsTotal += c.maxLeads;
+    // If no groupBy, return flat stats
+    if (!groupBy) {
+      return res.json({ stats: computeStats(matching) });
     }
 
-    res.json({
-      stats: {
-        totalCampaigns: matching.length,
-        byStatus,
-        budgetTotalUsd: budgetTotalUsd > 0 ? budgetTotalUsd : null,
-        maxLeadsTotal: maxLeadsTotal > 0 ? maxLeadsTotal : null,
-      },
-    });
+    // GroupBy logic
+    let dynastyMap: Map<string, string> | undefined;
+
+    if (groupBy === "workflowDynastySlug") {
+      dynastyMap = await getWorkflowDynastyMap();
+    } else if (groupBy === "featureDynastySlug") {
+      dynastyMap = await getFeatureDynastyMap();
+    }
+
+    const groups = new Map<string, Campaign[]>();
+
+    for (const c of matching) {
+      let key: string;
+
+      if (groupBy === "workflowSlug") {
+        key = c.workflowSlug;
+      } else if (groupBy === "featureSlug") {
+        key = c.featureSlug || "__null__";
+      } else if (groupBy === "workflowDynastySlug") {
+        key = dynastyMap!.get(c.workflowSlug) || c.workflowSlug;
+      } else {
+        // featureDynastySlug
+        key = c.featureSlug ? (dynastyMap!.get(c.featureSlug) || c.featureSlug) : "__null__";
+      }
+
+      const list = groups.get(key) || [];
+      list.push(c);
+      groups.set(key, list);
+    }
+
+    const groupedStats: Record<string, ReturnType<typeof computeStats>> = {};
+    for (const [key, rows] of groups) {
+      groupedStats[key] = computeStats(rows);
+    }
+
+    return res.json({ groupedStats });
   } catch (error) {
     console.error("[Campaign Service] Stats error:", error);
     res.status(500).json({ error: "Internal server error" });
