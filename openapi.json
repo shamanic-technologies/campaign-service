@@ -289,36 +289,62 @@
         "type": "object",
         "properties": {
           "stats": {
-            "type": "object",
-            "properties": {
-              "totalCampaigns": {
-                "type": "number"
-              },
-              "byStatus": {
-                "type": "object",
-                "additionalProperties": {
-                  "type": "number"
-                }
-              },
-              "budgetTotalUsd": {
-                "type": "number",
-                "nullable": true
-              },
-              "maxLeadsTotal": {
-                "type": "number",
-                "nullable": true
-              }
-            },
-            "required": [
-              "totalCampaigns",
-              "byStatus",
-              "budgetTotalUsd",
-              "maxLeadsTotal"
-            ]
+            "$ref": "#/components/schemas/StatsEntry"
           }
         },
         "required": [
           "stats"
+        ]
+      },
+      "StatsEntry": {
+        "type": "object",
+        "properties": {
+          "totalCampaigns": {
+            "type": "number"
+          },
+          "byStatus": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "budgetTotalUsd": {
+            "type": "number",
+            "nullable": true
+          },
+          "maxLeadsTotal": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "totalCampaigns",
+          "byStatus",
+          "budgetTotalUsd",
+          "maxLeadsTotal"
+        ]
+      },
+      "GroupedStatsResponse": {
+        "type": "object",
+        "properties": {
+          "groupedStats": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StatsEntry"
+            }
+          }
+        },
+        "required": [
+          "groupedStats"
+        ]
+      },
+      "StatsGroupByEnum": {
+        "type": "string",
+        "enum": [
+          "workflowSlug",
+          "featureSlug",
+          "workflowDynastySlug",
+          "featureDynastySlug"
         ]
       },
       "BatchBudgetUsageBody": {
@@ -833,7 +859,7 @@
           "Stats"
         ],
         "summary": "Campaign stats from own DB (query params)",
-        "description": "Returns campaign counts, status breakdown, and configured budget totals. Requires API key.",
+        "description": "Returns campaign counts, status breakdown, and configured budget totals. Supports filtering by workflowSlug, featureSlug, workflowDynastySlug, featureDynastySlug, and groupBy for aggregation by slug or dynasty slug. When groupBy is set, returns groupedStats keyed by the group value. Requires API key.",
         "security": [
           {
             "apiKeyAuth": []
@@ -863,15 +889,62 @@
             "required": false,
             "name": "campaignId",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "workflowSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "workflowDynastySlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "featureDynastySlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/StatsGroupByEnum"
+            },
+            "required": false,
+            "name": "groupBy",
+            "in": "query"
           }
         ],
         "responses": {
           "200": {
-            "description": "Campaign stats",
+            "description": "Campaign stats (flat or grouped)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StatsResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/StatsResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GroupedStatsResponse"
+                    }
+                  ]
                 }
               }
             }

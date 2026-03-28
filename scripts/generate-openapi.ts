@@ -9,6 +9,7 @@ import {
   UpdateCampaignBody,
   StatsFilterQuery,
   StatsResponse,
+  GroupedStatsResponse,
   BatchBudgetUsageBody,
   ErrorResponse,
   GateCheckBody,
@@ -137,11 +138,18 @@ registry.registerPath({
   path: "/stats",
   tags: ["Stats"],
   summary: "Campaign stats from own DB (query params)",
-  description: "Returns campaign counts, status breakdown, and configured budget totals. Requires API key.",
+  description: "Returns campaign counts, status breakdown, and configured budget totals. Supports filtering by workflowSlug, featureSlug, workflowDynastySlug, featureDynastySlug, and groupBy for aggregation by slug or dynasty slug. When groupBy is set, returns groupedStats keyed by the group value. Requires API key.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { query: StatsFilterQuery },
   responses: {
-    200: { description: "Campaign stats", content: { "application/json": { schema: StatsResponse } } },
+    200: {
+      description: "Campaign stats (flat or grouped)",
+      content: {
+        "application/json": {
+          schema: z.union([StatsResponse, GroupedStatsResponse]),
+        },
+      },
+    },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });

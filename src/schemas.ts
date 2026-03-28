@@ -78,23 +78,41 @@ export const UpdateCampaignBody = z.object({
 
 // --- Stats ---
 
+export const StatsGroupByEnum = z.enum([
+  "workflowSlug",
+  "featureSlug",
+  "workflowDynastySlug",
+  "featureDynastySlug",
+]).openapi("StatsGroupByEnum");
+
 export const StatsFilterQuery = z.object({
   orgId: z.string().optional(),
   brandId: z.string().optional(),
   campaignId: z.string().optional(),
+  workflowSlug: z.string().optional(),
+  featureSlug: z.string().optional(),
+  workflowDynastySlug: z.string().optional(),
+  featureDynastySlug: z.string().optional(),
+  groupBy: StatsGroupByEnum.optional(),
 }).refine(
   (data) => data.orgId || data.brandId || data.campaignId,
   { message: "At least one filter required: orgId, brandId, or campaignId" }
 ).openapi("StatsFilterQuery");
 
+export const StatsEntry = z.object({
+  totalCampaigns: z.number(),
+  byStatus: z.record(z.string(), z.number()),
+  budgetTotalUsd: z.number().nullable(),
+  maxLeadsTotal: z.number().nullable(),
+}).openapi("StatsEntry");
+
 export const StatsResponse = z.object({
-  stats: z.object({
-    totalCampaigns: z.number(),
-    byStatus: z.record(z.string(), z.number()),
-    budgetTotalUsd: z.number().nullable(),
-    maxLeadsTotal: z.number().nullable(),
-  }),
+  stats: StatsEntry,
 }).openapi("StatsResponse");
+
+export const GroupedStatsResponse = z.object({
+  groupedStats: z.record(z.string(), StatsEntry),
+}).openapi("GroupedStatsResponse");
 
 // --- Batch budget usage ---
 
