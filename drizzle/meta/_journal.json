@@ -176,6 +176,13 @@
       "when": 1774600000000,
       "tag": "0024_backfill_feature_slug",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1774900000000,
+      "tag": "0025_rename_workflow_name_to_slug",
+      "breakpoints": true
     }
   ]
 }

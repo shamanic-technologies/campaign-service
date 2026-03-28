@@ -12,7 +12,7 @@ export interface GateCheckInput {
   userId?: string;
   runId?: string;
   brandId: string;
-  workflowName?: string;
+  workflowSlug?: string;
   status: string;
   maxBudgetDailyUsd: string | null;
   maxBudgetWeeklyUsd: string | null;
@@ -40,7 +40,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     runId: campaign.runId,
     campaignId: campaign.campaignId,
     brandId: campaign.brandId || undefined,
-    workflowName: campaign.workflowName,
+    workflowSlug: campaign.workflowSlug,
   };
 
   // Fetch all runs for this campaign (needed for stale cleanup, running check, consecutive failures)
@@ -180,7 +180,7 @@ async function fetchLeadStats(
   if (identity.runId) headers["x-run-id"] = identity.runId;
   if (identity.campaignId) headers["x-campaign-id"] = identity.campaignId;
   if (identity.brandId) headers["x-brand-id"] = identity.brandId;
-  if (identity.workflowName) headers["x-workflow-name"] = identity.workflowName;
+  if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
 
   const params = new URLSearchParams({ brandId, campaignId });
   const res = await fetch(`${url}/stats?${params}`, { headers });

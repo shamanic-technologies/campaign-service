@@ -9,11 +9,11 @@ function createMockReq(headers: Record<string, string> = {}): AuthenticatedReque
 }
 
 describe("trackingHeaders middleware", () => {
-  it("should read x-campaign-id, x-brand-id, x-workflow-name from headers", () => {
+  it("should read x-campaign-id, x-brand-id, x-workflow-slug from headers", () => {
     const req = createMockReq({
       "x-campaign-id": "camp-123",
       "x-brand-id": "brand-456",
-      "x-workflow-name": "sales-email-cold-outreach",
+      "x-workflow-slug": "sales-email-cold-outreach",
     });
 
     let nextCalled = false;
@@ -21,7 +21,7 @@ describe("trackingHeaders middleware", () => {
 
     expect(req.campaignId).toBe("camp-123");
     expect(req.brandId).toBe("brand-456");
-    expect(req.workflowName).toBe("sales-email-cold-outreach");
+    expect(req.workflowSlug).toBe("sales-email-cold-outreach");
     expect(nextCalled).toBe(true);
   });
 
@@ -45,7 +45,7 @@ describe("trackingHeaders middleware", () => {
 
     expect(req.campaignId).toBeUndefined();
     expect(req.brandId).toBeUndefined();
-    expect(req.workflowName).toBeUndefined();
+    expect(req.workflowSlug).toBeUndefined();
     expect(req.featureSlug).toBeUndefined();
     expect(nextCalled).toBe(true);
   });
@@ -59,6 +59,6 @@ describe("trackingHeaders middleware", () => {
 
     expect(req.campaignId).toBe("camp-789");
     expect(req.brandId).toBeUndefined();
-    expect(req.workflowName).toBeUndefined();
+    expect(req.workflowSlug).toBeUndefined();
   });
 });

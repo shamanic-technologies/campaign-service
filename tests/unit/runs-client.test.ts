@@ -14,7 +14,7 @@ describe("runs-client createRun", () => {
     });
   });
 
-  it("should send brandId, campaignId, workflowName as headers, not in body", async () => {
+  it("should send brandId, campaignId, workflowSlug as headers, not in body", async () => {
     await createRun({
       orgId: "org-1",
       userId: "user-1",
@@ -22,7 +22,7 @@ describe("runs-client createRun", () => {
       taskName: "test-task",
       brandId: "brand-1",
       campaignId: "campaign-1",
-      workflowName: "sales-email-cold-outreach",
+      workflowSlug: "sales-email-cold-outreach",
       parentRunId: "parent-run-1",
     });
 
@@ -38,7 +38,7 @@ describe("runs-client createRun", () => {
     expect(options.headers["x-run-id"]).toBe("parent-run-1");
     expect(options.headers["x-brand-id"]).toBe("brand-1");
     expect(options.headers["x-campaign-id"]).toBe("campaign-1");
-    expect(options.headers["x-workflow-name"]).toBe("sales-email-cold-outreach");
+    expect(options.headers["x-workflow-slug"]).toBe("sales-email-cold-outreach");
 
     // Body should only contain serviceName and taskName
     const body = JSON.parse(options.body);
@@ -48,7 +48,7 @@ describe("runs-client createRun", () => {
     });
     expect(body).not.toHaveProperty("brandId");
     expect(body).not.toHaveProperty("campaignId");
-    expect(body).not.toHaveProperty("workflowName");
+    expect(body).not.toHaveProperty("workflowSlug");
   });
 
   it("should omit undefined tracking headers", async () => {
@@ -62,7 +62,7 @@ describe("runs-client createRun", () => {
 
     expect(options.headers).not.toHaveProperty("x-brand-id");
     expect(options.headers).not.toHaveProperty("x-campaign-id");
-    expect(options.headers).not.toHaveProperty("x-workflow-name");
+    expect(options.headers).not.toHaveProperty("x-workflow-slug");
     expect(options.headers).not.toHaveProperty("x-user-id");
     expect(options.headers).not.toHaveProperty("x-run-id");
   });

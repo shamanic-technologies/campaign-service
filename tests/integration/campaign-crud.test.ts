@@ -17,7 +17,7 @@ describe("Campaign CRUD", () => {
 
   const validBody = {
     name: "Test Campaign",
-    workflowName: "sales-email-cold-outreach",
+    workflowSlug: "sales-email-cold-outreach",
     orgId: "org_test_crud",
     brandUrl: "https://example.com",
     brandId: crypto.randomUUID(),
@@ -41,12 +41,12 @@ describe("Campaign CRUD", () => {
 
       expect(res.body.campaign).toBeDefined();
       expect(res.body.campaign.name).toBe("Test Campaign");
-      expect(res.body.campaign.workflowName).toBe("sales-email-cold-outreach");
+      expect(res.body.campaign.workflowSlug).toBe("sales-email-cold-outreach");
       expect(res.body.campaign.brandId).toBe(validBody.brandId);
     });
 
-    it("should reject when workflowName is missing", async () => {
-      const { workflowName, ...body } = validBody;
+    it("should reject when workflowSlug is missing", async () => {
+      const { workflowSlug, ...body } = validBody;
 
       const res = await createCampaign(body).expect(400);
       expect(res.body.error).toBeDefined();

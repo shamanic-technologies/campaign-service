@@ -301,7 +301,7 @@ describe("Pipeline routes", () => {
       expect(res.body.brandId).toBe(brandId);
       expect(res.body.brandUrl).toBe("https://example.com");
       expect(res.body.brandDomain).toBe("example.com");
-      expect(res.body.workflowName).toBe("sales-email-cold-outreach");
+      expect(res.body.workflowSlug).toBe("sales-email-cold-outreach");
       expect(res.body).not.toHaveProperty("appId");
       expect(res.body).not.toHaveProperty("keySource");
     });
@@ -391,11 +391,11 @@ describe("Pipeline routes", () => {
       );
     });
 
-    it("should pass workflowName to createRun", async () => {
+    it("should pass workflowSlug to createRun", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
         brandId,
-        workflowName: "pr-email-cold-outreach",
+        workflowSlug: "pr-email-cold-outreach",
       });
 
       await request(app)
@@ -405,7 +405,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
-        expect.objectContaining({ workflowName: "pr-email-cold-outreach" }),
+        expect.objectContaining({ workflowSlug: "pr-email-cold-outreach" }),
       );
     });
 
@@ -597,12 +597,12 @@ describe("Pipeline routes", () => {
       expect(mockUpdateRun).not.toHaveBeenCalled();
     });
 
-    it("should re-trigger workflow using workflowName if campaign is still ongoing", async () => {
+    it("should re-trigger workflow using workflowSlug if campaign is still ongoing", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
         brandId,
         status: "ongoing",
-        workflowName: "sales-email-cold-outreach",
+        workflowSlug: "sales-email-cold-outreach",
         featureSlug: "sales-cold-email-v1",
       });
 
@@ -641,7 +641,7 @@ describe("Pipeline routes", () => {
         brandUrl: "https://example.com",
         brandId,
         status: "ongoing",
-        workflowName: "sales-email-cold-outreach",
+        workflowSlug: "sales-email-cold-outreach",
         featureSlug: "sales-cold-email-v1",
       });
 

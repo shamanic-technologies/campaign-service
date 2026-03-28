@@ -18,7 +18,7 @@ export async function resumeDueCampaigns(): Promise<number> {
       id: campaigns.id,
       orgId: campaigns.orgId,
       createdByUserId: campaigns.createdByUserId,
-      workflowName: campaigns.workflowName,
+      workflowSlug: campaigns.workflowSlug,
       brandId: campaigns.brandId,
       featureSlug: campaigns.featureSlug,
     })
@@ -51,7 +51,7 @@ export async function resumeDueCampaigns(): Promise<number> {
         .set({ toResumeAt: null, updatedAt: new Date() })
         .where(eq(campaigns.id, campaign.id));
 
-      console.log(`[Campaign Service] Launching workflow run from SCHEDULER RESUME — workflow=${campaign.workflowName}, campaignId=${campaign.id}`);
+      console.log(`[Campaign Service] Launching workflow run from SCHEDULER RESUME — workflow=${campaign.workflowSlug}, campaignId=${campaign.id}`);
       // All three fields are validated non-null above
       const brandId = campaign.brandId!;
       const userId = campaign.createdByUserId!;
@@ -64,10 +64,10 @@ export async function resumeDueCampaigns(): Promise<number> {
         userId,
         campaignId: campaign.id,
         brandId,
-        workflowName: campaign.workflowName,
+        workflowSlug: campaign.workflowSlug,
         featureSlug,
       });
-      executeCampaignWorkflow(campaign.workflowName, {
+      executeCampaignWorkflow(campaign.workflowSlug, {
         campaignId: campaign.id,
         orgId: campaign.orgId,
         brandId,

@@ -48,7 +48,7 @@ router.post("/gate-check", requireApiKey, trackingHeaders, validateBody(GateChec
       userId: req.headers["x-user-id"] as string | undefined,
       runId: req.headers["x-run-id"] as string | undefined,
       brandId: req.brandId || campaign.brandId || "",
-      workflowName: req.workflowName || campaign.workflowName,
+      workflowSlug: req.workflowSlug || campaign.workflowSlug,
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
       maxBudgetWeeklyUsd: campaign.maxBudgetWeeklyUsd,
@@ -108,7 +108,7 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       console.warn(`[Start Run] Campaign not found: ${campaignId} (orgId=${orgId})`);
       return res.status(404).json({ error: "Campaign not found" });
     }
-    console.log(`[Start Run] Campaign found: name=${campaign.name}, workflowName=${campaign.workflowName}, status=${campaign.status}, brandUrl=${campaign.brandUrl}`);
+    console.log(`[Start Run] Campaign found: name=${campaign.name}, workflowSlug=${campaign.workflowSlug}, status=${campaign.status}, brandUrl=${campaign.brandUrl}`);
     if (!campaign.brandUrl) {
       console.warn(`[Start Run] Campaign ${campaignId} has no brandUrl`);
       return res.status(400).json({ error: "Campaign has no brandUrl" });
@@ -132,7 +132,7 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       brandId: campaign.brandId,
       userId: campaign.createdByUserId || undefined,
       parentRunId: parentRunId || undefined,
-      workflowName: campaign.workflowName,
+      workflowSlug: campaign.workflowSlug,
       featureSlug,
     });
     console.log(`[Start Run] Run created: runId=${run.id}`);
@@ -153,7 +153,7 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       brandId: campaign.brandId,
       brandUrl: campaign.brandUrl,
       brandDomain,
-      workflowName: campaign.workflowName,
+      workflowSlug: campaign.workflowSlug,
       userId: campaign.createdByUserId ?? null,
       featureSlug: campaign.featureSlug ?? null,
       featureInputs: featureInputs ?? null,
@@ -188,7 +188,7 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
       runId: req.headers["x-run-id"] as string | undefined,
       campaignId: req.campaignId,
       brandId: req.brandId,
-      workflowName: req.workflowName,
+      workflowSlug: req.workflowSlug,
       featureSlug: req.featureSlug,
     };
 
@@ -235,7 +235,7 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
       const freshCampaign = await db.query.campaigns.findFirst({
         where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
       });
-      console.log(`[End Run] Campaign status for re-trigger: ${freshCampaign?.status || "NOT FOUND"}, workflowName=${freshCampaign?.workflowName || "N/A"}`);
+      console.log(`[End Run] Campaign status for re-trigger: ${freshCampaign?.status || "NOT FOUND"}, workflowSlug=${freshCampaign?.workflowSlug || "N/A"}`);
       if (freshCampaign?.status !== "ongoing") {
         console.log(`[End Run] Campaign ${campaignId} is not ongoing — skipping re-trigger`);
         return;
@@ -259,8 +259,8 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
       }
 
       // Fire-and-forget: gate-check in the next workflow execution will validate limits
-      console.log(`[Campaign Service] Launching workflow run from END-RUN handler — workflow=${freshCampaign.workflowName}, campaignId=${campaignId}, previousRunSuccess=${success}`);
-      executeCampaignWorkflow(freshCampaign.workflowName, retriggerInputs).catch((err) => {
+      console.log(`[Campaign Service] Launching workflow run from END-RUN handler — workflow=${freshCampaign.workflowSlug}, campaignId=${campaignId}, previousRunSuccess=${success}`);
+      executeCampaignWorkflow(freshCampaign.workflowSlug, retriggerInputs).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });
     } catch (err) {
