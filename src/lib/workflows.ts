@@ -25,21 +25,21 @@ export function validateWorkflowInputs(
  * Execute a campaign's workflow by name.
  *
  * Campaign-service no longer defines or deploys DAGs — workflow-service
- * owns workflow definitions. Campaign-service receives a workflowName
+ * owns workflow definitions. Campaign-service receives a workflowSlug
  * at campaign creation and uses it to trigger execution.
  *
  * All inputs are required — workflow-service rejects calls missing any
  * of the 7 tracking headers (x-org-id, x-user-id, x-run-id, x-brand-id,
- * x-campaign-id, x-workflow-name, x-feature-slug).
+ * x-campaign-id, x-workflow-slug, x-feature-slug).
  */
 export async function executeCampaignWorkflow(
-  workflowName: string,
+  workflowSlug: string,
   inputs: WorkflowExecutionInputs,
 ): Promise<void> {
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
 
-  console.log(`[Workflow] executeCampaignWorkflow called: workflowName=${workflowName}, campaignId=${inputs.campaignId}, orgId=${inputs.orgId}`);
+  console.log(`[Workflow] executeCampaignWorkflow called: workflowSlug=${workflowSlug}, campaignId=${inputs.campaignId}, orgId=${inputs.orgId}`);
 
   if (!url || !apiKey) {
     console.warn("[Workflow] WORKFLOW_SERVICE_URL or WORKFLOW_SERVICE_API_KEY not set, skipping workflow execution");
@@ -52,7 +52,7 @@ export async function executeCampaignWorkflow(
     throw new Error(`[Workflow] Cannot execute workflow — missing required fields: ${missing.join(", ")}`);
   }
 
-  const executeUrl = `${url}/workflows/by-name/${workflowName}/execute`;
+  const executeUrl = `${url}/workflows/by-slug/${workflowSlug}/execute`;
   console.log(`[Workflow] POST ${executeUrl}`);
 
   const headers: Record<string, string> = {
@@ -64,7 +64,7 @@ export async function executeCampaignWorkflow(
     "x-brand-id": inputs.brandId,
     "x-campaign-id": inputs.campaignId,
     "x-feature-slug": inputs.featureSlug,
-    "x-workflow-name": workflowName,
+    "x-workflow-slug": workflowSlug,
   };
 
   const res = await fetch(executeUrl, {
@@ -85,5 +85,5 @@ export async function executeCampaignWorkflow(
   }
 
   const data = await res.json() as { id?: string; status?: string };
-  console.log(`[Workflow] ${workflowName} started successfully: workflowRunId=${data.id}, status=${data.status}`);
+  console.log(`[Workflow] ${workflowSlug} started successfully: workflowRunId=${data.id}, status=${data.status}`);
 }

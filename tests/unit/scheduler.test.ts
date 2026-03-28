@@ -14,7 +14,7 @@ const {
   const mockDbValues: Array<{
     id: string;
     orgId: string;
-    workflowName: string;
+    workflowSlug: string;
     brandId?: string | null;
     createdByUserId?: string | null;
     featureSlug?: string | null;
@@ -54,7 +54,7 @@ vi.mock("../../src/db/schema.js", () => ({
     id: "id",
     status: "status",
     toResumeAt: "to_resume_at",
-    workflowName: "workflow_name",
+    workflowSlug: "workflow_slug",
     orgId: "org_id",
     updatedAt: "updated_at",
   },
@@ -87,7 +87,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
     mockDbValues.push({
       id: "campaign-1",
       orgId: "org-ext-1",
-      workflowName: "sales-email-cold-outreach",
+      workflowSlug: "sales-email-cold-outreach",
       brandId: "brand-123",
       createdByUserId: "user-1",
       featureSlug: "sales-cold-email-v1",
@@ -107,7 +107,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       userId: "user-1",
       campaignId: "campaign-1",
       brandId: "brand-123",
-      workflowName: "sales-email-cold-outreach",
+      workflowSlug: "sales-email-cold-outreach",
       featureSlug: "sales-cold-email-v1",
     });
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
@@ -127,7 +127,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
     mockDbValues.push({
       id: "campaign-no-brand",
       orgId: "org-ext-1",
-      workflowName: "sales-email-cold-outreach",
+      workflowSlug: "sales-email-cold-outreach",
       brandId: null,
       createdByUserId: "user-1",
       featureSlug: "sales-cold-email-v1",
@@ -144,7 +144,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
     mockDbValues.push({
       id: "campaign-no-user",
       orgId: "org-ext-1",
-      workflowName: "sales-email-cold-outreach",
+      workflowSlug: "sales-email-cold-outreach",
       brandId: "brand-1",
       createdByUserId: null,
       featureSlug: null,
@@ -162,7 +162,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       {
         id: "campaign-1",
         orgId: "org-ext-1",
-        workflowName: "sales-email-cold-outreach",
+        workflowSlug: "sales-email-cold-outreach",
         brandId: "brand-1",
         createdByUserId: "user-1",
         featureSlug: "sales-cold-email-v1",
@@ -170,7 +170,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       {
         id: "campaign-2",
         orgId: "org-ext-2",
-        workflowName: "pr-email-cold-outreach",
+        workflowSlug: "pr-email-cold-outreach",
         brandId: "brand-2",
         createdByUserId: "user-2",
         featureSlug: "pr-media-pitch-v1",
@@ -188,7 +188,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       {
         id: "campaign-1",
         orgId: "org-ext-1",
-        workflowName: "sales-email-cold-outreach",
+        workflowSlug: "sales-email-cold-outreach",
         brandId: "brand-1",
         createdByUserId: "user-1",
         featureSlug: "sales-cold-email-v1",
@@ -196,7 +196,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       {
         id: "campaign-2",
         orgId: "org-ext-2",
-        workflowName: "pr-email-cold-outreach",
+        workflowSlug: "pr-email-cold-outreach",
         brandId: "brand-2",
         createdByUserId: "user-2",
         featureSlug: "pr-media-pitch-v1",

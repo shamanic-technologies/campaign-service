@@ -41,7 +41,7 @@ describe("Workflow module", () => {
   });
 
   describe("executeCampaignWorkflow", () => {
-    it("should use workflowName directly in URL and send all required headers", async () => {
+    it("should use workflowSlug directly in URL and send all required headers", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ id: "run-123", status: "queued" }),
@@ -52,7 +52,7 @@ describe("Workflow module", () => {
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe("https://workflow.test.local/workflows/by-name/sales-email-cold-outreach/execute");
+      expect(url).toBe("https://workflow.test.local/workflows/by-slug/sales-email-cold-outreach/execute");
       expect(opts.method).toBe("POST");
 
       // All 7 tracking headers must be present
@@ -62,7 +62,7 @@ describe("Workflow module", () => {
       expect(opts.headers["x-brand-id"]).toBe("brand-abc");
       expect(opts.headers["x-campaign-id"]).toBe("campaign-1");
       expect(opts.headers["x-feature-slug"]).toBe("sales-cold-email-v1");
-      expect(opts.headers["x-workflow-name"]).toBe("sales-email-cold-outreach");
+      expect(opts.headers["x-workflow-slug"]).toBe("sales-email-cold-outreach");
 
       const body = JSON.parse(opts.body);
       expect(body).not.toHaveProperty("appId");

@@ -31,7 +31,7 @@ const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
 const validBody = {
   name: "Activation Test Campaign",
-  workflowName: "sales-email-cold-outreach",
+  workflowSlug: "sales-email-cold-outreach",
   orgId: "org_activation_test",
   brandUrl: "https://example.com",
   brandId: crypto.randomUUID(),

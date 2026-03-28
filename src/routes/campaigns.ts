@@ -22,7 +22,7 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
         id: campaigns.id,
         orgId: campaigns.orgId,
         name: campaigns.name,
-        workflowName: campaigns.workflowName,
+        workflowSlug: campaigns.workflowSlug,
         status: campaigns.status,
         maxBudgetDailyUsd: campaigns.maxBudgetDailyUsd,
         maxBudgetWeeklyUsd: campaigns.maxBudgetWeeklyUsd,
@@ -107,7 +107,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
   try {
     const {
       name,
-      workflowName,
+      workflowSlug,
       brandUrl,
       brandId,
       featureSlug,
@@ -159,7 +159,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         orgId: req.orgId!,
         createdByUserId: req.userId ?? null,
         name,
-        workflowName,
+        workflowSlug,
         brandUrl: normalizedBrandUrl,
         brandId,
         featureSlug: resolvedFeatureSlug,
@@ -187,8 +187,8 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       runId: req.runId!,
       featureSlug: campaign.featureSlug!,
     };
-    console.log(`[Campaign Service] Launching workflow run from CAMPAIGN CREATION — workflow=${campaign.workflowName}, campaignId=${campaign.id}`);
-    executeCampaignWorkflow(campaign.workflowName, workflowInputs).catch((err) => {
+    console.log(`[Campaign Service] Launching workflow run from CAMPAIGN CREATION — workflow=${campaign.workflowSlug}, campaignId=${campaign.id}`);
+    executeCampaignWorkflow(campaign.workflowSlug, workflowInputs).catch((err) => {
       console.error(`[Campaign Service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
 
@@ -265,8 +265,8 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         runId: req.runId!,
         featureSlug: req.featureSlug!,
       };
-      console.log(`[Campaign Service] Launching workflow run from CAMPAIGN ACTIVATION — workflow=${updated.workflowName}, campaignId=${updated.id}`);
-      executeCampaignWorkflow(updated.workflowName, activateInputs).catch((err) => {
+      console.log(`[Campaign Service] Launching workflow run from CAMPAIGN ACTIVATION — workflow=${updated.workflowSlug}, campaignId=${updated.id}`);
+      executeCampaignWorkflow(updated.workflowSlug, activateInputs).catch((err) => {
         console.error(`[Campaign Service] Failed to trigger workflow for campaign ${id}:`, err);
       });
     }

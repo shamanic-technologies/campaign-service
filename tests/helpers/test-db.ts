@@ -16,7 +16,7 @@ export async function insertTestCampaign(
   orgId: string,
   data: {
     name?: string;
-    workflowName?: string;
+    workflowSlug?: string;
     status?: string;
     brandUrl?: string;
     brandId?: string;
@@ -36,7 +36,7 @@ export async function insertTestCampaign(
     .values({
       orgId,
       name: data.name || `Test Campaign ${Date.now()}`,
-      workflowName: data.workflowName || "sales-email-cold-outreach",
+      workflowSlug: data.workflowSlug || "sales-email-cold-outreach",
       status: data.status || "ongoing",
       brandUrl: data.brandUrl || null,
       brandId: "brandId" in data ? (data.brandId || null) : crypto.randomUUID(),

@@ -10,8 +10,8 @@ export const campaigns = pgTable(
 
     name: text("name").notNull(),
 
-    // Workflow name — resolved by workflow-service, passed at campaign creation
-    workflowName: text("workflow_name").notNull(),
+    // Workflow slug — resolved by workflow-service, passed at campaign creation
+    workflowSlug: text("workflow_slug").notNull(),
 
     // Brand URL - used to identify which brand this campaign promotes
     brandUrl: text("brand_url"),

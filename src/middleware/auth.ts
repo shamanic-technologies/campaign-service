@@ -6,7 +6,7 @@ export interface AuthenticatedRequest extends Request {
   runId?: string;
   campaignId?: string;
   brandId?: string;
-  workflowName?: string;
+  workflowSlug?: string;
   featureSlug?: string;
 }
 
@@ -53,7 +53,7 @@ export function requireOrg(
 
 /**
  * Reads optional tracking headers injected by workflow-service:
- * x-campaign-id, x-brand-id, x-workflow-name
+ * x-campaign-id, x-brand-id, x-workflow-slug
  */
 export function trackingHeaders(
   req: AuthenticatedRequest,
@@ -62,12 +62,12 @@ export function trackingHeaders(
 ) {
   const campaignId = req.headers["x-campaign-id"] as string | undefined;
   const brandId = req.headers["x-brand-id"] as string | undefined;
-  const workflowName = req.headers["x-workflow-name"] as string | undefined;
+  const workflowSlug = req.headers["x-workflow-slug"] as string | undefined;
   const featureSlug = req.headers["x-feature-slug"] as string | undefined;
 
   if (campaignId) req.campaignId = campaignId;
   if (brandId) req.brandId = brandId;
-  if (workflowName) req.workflowName = workflowName;
+  if (workflowSlug) req.workflowSlug = workflowSlug;
   if (featureSlug) req.featureSlug = featureSlug;
 
   next();
