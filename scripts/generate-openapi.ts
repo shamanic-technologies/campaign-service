@@ -7,6 +7,7 @@ import {
   CampaignSchema,
   CreateCampaignBody,
   UpdateCampaignBody,
+  CampaignsFilterQuery,
   StatsFilterQuery,
   StatsResponse,
   GroupedStatsResponse,
@@ -69,7 +70,7 @@ registry.registerPath({
   tags: ["Campaigns"],
   summary: "List campaigns for org",
   security: [{ [apiKeyAuth.name]: [] }],
-  request: { query: z.object({ brandId: z.string().optional() }).openapi("CampaignsQuery") },
+  request: { query: CampaignsFilterQuery },
   responses: {
     200: { description: "List of campaigns", content: { "application/json": { schema: z.object({ campaigns: z.array(CampaignSchema) }) } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },

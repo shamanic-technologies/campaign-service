@@ -17,6 +17,8 @@ export async function insertTestCampaign(
   data: {
     name?: string;
     workflowSlug?: string;
+    workflowDynastySlug?: string;
+    featureDynastySlug?: string;
     status?: string;
     brandUrl?: string;
     brandId?: string;
@@ -37,6 +39,8 @@ export async function insertTestCampaign(
       orgId,
       name: data.name || `Test Campaign ${Date.now()}`,
       workflowSlug: data.workflowSlug || "sales-email-cold-outreach",
+      workflowDynastySlug: data.workflowDynastySlug || null,
+      featureDynastySlug: data.featureDynastySlug || null,
       status: data.status || "ongoing",
       brandUrl: data.brandUrl || null,
       brandId: "brandId" in data ? (data.brandId || null) : crypto.randomUUID(),

@@ -20,6 +20,10 @@ export const campaigns = pgTable(
     // Nullable initially, populated when brand is created/found in brand-service
     brandId: text("brand_id"),
 
+    // Dynasty slugs — stable lineage identifiers (e.g. "cold-email", "sales-cold-email")
+    workflowDynastySlug: text("workflow_dynasty_slug"),
+    featureDynastySlug: text("feature_dynasty_slug"),
+
     // Feature slug — references features-service catalogue (e.g. "sales-cold-email-v1")
     featureSlug: text("feature_slug"),
 

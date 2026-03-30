@@ -40,6 +40,14 @@
           "workflowSlug": {
             "type": "string"
           },
+          "workflowDynastySlug": {
+            "type": "string",
+            "nullable": true
+          },
+          "featureDynastySlug": {
+            "type": "string",
+            "nullable": true
+          },
           "brandUrl": {
             "type": "string",
             "nullable": true
@@ -120,6 +128,8 @@
           "createdByUserId",
           "name",
           "workflowSlug",
+          "workflowDynastySlug",
+          "featureDynastySlug",
           "brandUrl",
           "brandId",
           "featureSlug",
@@ -162,6 +172,10 @@
             "type": "string",
             "minLength": 1
           },
+          "workflowDynastySlug": {
+            "type": "string",
+            "minLength": 1
+          },
           "orgId": {
             "type": "string",
             "minLength": 1
@@ -175,6 +189,10 @@
             "format": "uuid"
           },
           "featureSlug": {
+            "type": "string",
+            "minLength": 1
+          },
+          "featureDynastySlug": {
             "type": "string",
             "minLength": 1
           },
@@ -217,7 +235,6 @@
         },
         "required": [
           "name",
-          "workflowSlug",
           "orgId",
           "brandUrl",
           "brandId"
@@ -237,6 +254,10 @@
             "format": "uuid"
           },
           "featureSlug": {
+            "type": "string",
+            "minLength": 1
+          },
+          "featureDynastySlug": {
             "type": "string",
             "minLength": 1
           },
@@ -598,6 +619,38 @@
             },
             "required": false,
             "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "workflowSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "workflowDynastySlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "featureDynastySlug",
             "in": "query"
           }
         ],
