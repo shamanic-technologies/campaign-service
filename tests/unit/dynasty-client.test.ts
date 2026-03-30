@@ -6,6 +6,8 @@ vi.stubGlobal("fetch", mockFetch);
 import {
   resolveWorkflowDynastySlugs,
   resolveFeatureDynastySlugs,
+  resolveLatestWorkflowSlug,
+  resolveLatestFeatureSlug,
   getWorkflowDynastyMap,
   getFeatureDynastyMap,
 } from "../../src/lib/dynasty-client.js";
@@ -79,6 +81,48 @@ describe("dynasty-client", () => {
     it("should throw on non-ok response", async () => {
       mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
       await expect(resolveFeatureDynastySlugs("x")).rejects.toThrow("404");
+    });
+  });
+
+  describe("resolveLatestWorkflowSlug", () => {
+    it("should return last slug from dynasty resolution", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ slugs: ["cold-email", "cold-email-v2", "cold-email-v3"] }),
+      });
+
+      const result = await resolveLatestWorkflowSlug("cold-email");
+      expect(result).toBe("cold-email-v3");
+    });
+
+    it("should throw when dynasty resolves to empty list", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ slugs: [] }),
+      });
+
+      await expect(resolveLatestWorkflowSlug("empty")).rejects.toThrow("No versioned slugs found");
+    });
+  });
+
+  describe("resolveLatestFeatureSlug", () => {
+    it("should return last slug from dynasty resolution", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ slugs: ["feat-alpha", "feat-alpha-v2"] }),
+      });
+
+      const result = await resolveLatestFeatureSlug("feat-alpha");
+      expect(result).toBe("feat-alpha-v2");
+    });
+
+    it("should throw when dynasty resolves to empty list", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ slugs: [] }),
+      });
+
+      await expect(resolveLatestFeatureSlug("empty")).rejects.toThrow("No versioned slugs found");
     });
   });
 

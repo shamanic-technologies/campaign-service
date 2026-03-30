@@ -1,12 +1,18 @@
 import { Router } from "express";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
-import { validateBody } from "../middleware/validate.js";
+import { validateBody, validateQuery } from "../middleware/validate.js";
 import { normalizeUrl, extractDomain } from "../lib/domain.js";
-import { CreateCampaignBody, UpdateCampaignBody } from "../schemas.js";
+import { CreateCampaignBody, UpdateCampaignBody, CampaignsFilterQuery } from "../schemas.js";
 import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
+import {
+  resolveLatestWorkflowSlug,
+  resolveLatestFeatureSlug,
+  resolveWorkflowDynastySlugs,
+  resolveFeatureDynastySlugs,
+} from "../lib/dynasty-client.js";
 
 const router = Router();
 
@@ -23,6 +29,8 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
         orgId: campaigns.orgId,
         name: campaigns.name,
         workflowSlug: campaigns.workflowSlug,
+        workflowDynastySlug: campaigns.workflowDynastySlug,
+        featureDynastySlug: campaigns.featureDynastySlug,
         status: campaigns.status,
         maxBudgetDailyUsd: campaigns.maxBudgetDailyUsd,
         maxBudgetWeeklyUsd: campaigns.maxBudgetWeeklyUsd,
@@ -53,20 +61,53 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
 
 /**
  * GET /campaigns - List all campaigns for org
+ *
+ * Supports filtering by brandId, workflowSlug, featureSlug,
+ * workflowDynastySlug, and featureDynastySlug.
  */
-router.get("/campaigns", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
+router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilterQuery), async (req: AuthenticatedRequest, res) => {
   try {
-    const { brandId } = req.query;
+    const {
+      brandId, workflowSlug, featureSlug,
+      workflowDynastySlug, featureDynastySlug,
+    } = req.query as {
+      brandId?: string;
+      workflowSlug?: string;
+      featureSlug?: string;
+      workflowDynastySlug?: string;
+      featureDynastySlug?: string;
+    };
 
-    let results = await db
+    const conditions = [eq(campaigns.orgId, req.orgId!)];
+
+    if (brandId) conditions.push(eq(campaigns.brandId, brandId));
+
+    // Dynasty slugs resolve to all versioned slugs and take priority
+    if (workflowDynastySlug) {
+      const resolved = await resolveWorkflowDynastySlugs(workflowDynastySlug);
+      if (resolved.length === 0) {
+        return res.json({ campaigns: [] });
+      }
+      conditions.push(inArray(campaigns.workflowSlug, resolved));
+    } else if (workflowSlug) {
+      conditions.push(eq(campaigns.workflowSlug, workflowSlug));
+    }
+
+    if (featureDynastySlug) {
+      const resolved = await resolveFeatureDynastySlugs(featureDynastySlug);
+      if (resolved.length === 0) {
+        return res.json({ campaigns: [] });
+      }
+      conditions.push(inArray(campaigns.featureSlug, resolved));
+    } else if (featureSlug) {
+      conditions.push(eq(campaigns.featureSlug, featureSlug));
+    }
+
+    const results = await db
       .select()
       .from(campaigns)
-      .where(eq(campaigns.orgId, req.orgId!))
+      .where(and(...conditions))
       .orderBy(desc(campaigns.createdAt));
-
-    if (brandId && typeof brandId === "string") {
-      results = results.filter(c => c.brandId === brandId);
-    }
 
     res.json({ campaigns: results });
   } catch (error) {
@@ -107,10 +148,12 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
   try {
     const {
       name,
-      workflowSlug,
+      workflowSlug: bodyWorkflowSlug,
+      workflowDynastySlug,
       brandUrl,
       brandId,
-      featureSlug,
+      featureSlug: bodyFeatureSlug,
+      featureDynastySlug,
       featureInputs,
       maxBudgetDailyUsd,
       maxBudgetWeeklyUsd,
@@ -126,6 +169,16 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
 
     const normalizedBrandUrl = normalizeUrl(brandUrl);
     console.log(`[Campaign Service] Creating campaign with brandUrl: ${normalizedBrandUrl}`);
+
+    // Resolve workflow slug: explicit versioned slug takes priority, otherwise resolve from dynasty
+    let resolvedWorkflowSlug: string;
+    if (bodyWorkflowSlug) {
+      resolvedWorkflowSlug = bodyWorkflowSlug;
+    } else {
+      console.log(`[Campaign Service] Resolving workflowDynastySlug=${workflowDynastySlug} to latest versioned slug`);
+      resolvedWorkflowSlug = await resolveLatestWorkflowSlug(workflowDynastySlug!);
+      console.log(`[Campaign Service] Resolved to workflowSlug=${resolvedWorkflowSlug}`);
+    }
 
     // featureSlug comes exclusively from x-feature-slug header
     const resolvedFeatureSlug = req.featureSlug || "";
@@ -159,7 +212,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         orgId: req.orgId!,
         createdByUserId: req.userId ?? null,
         name,
-        workflowSlug,
+        workflowSlug: resolvedWorkflowSlug,
+        workflowDynastySlug: workflowDynastySlug ?? null,
+        featureDynastySlug: featureDynastySlug ?? null,
         brandUrl: normalizedBrandUrl,
         brandId,
         featureSlug: resolvedFeatureSlug,
@@ -247,6 +302,12 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     const updates = { ...req.body, updatedAt: new Date() };
     if (updates.status) {
       updates.status = statusMap[updates.status] ?? updates.status;
+    }
+    // If featureDynastySlug is provided on update, resolve to latest versioned slug
+    if (updates.featureDynastySlug && !updates.featureSlug) {
+      console.log(`[Campaign Service] Resolving featureDynastySlug=${updates.featureDynastySlug} on PATCH`);
+      updates.featureSlug = await resolveLatestFeatureSlug(updates.featureDynastySlug);
+      console.log(`[Campaign Service] Resolved to featureSlug=${updates.featureSlug}`);
     }
 
     const [updated] = await db

@@ -8,6 +8,28 @@ interface DynastyEntry {
 }
 
 /**
+ * Resolve a workflow dynasty slug to the latest versioned slug (last in the list).
+ */
+export async function resolveLatestWorkflowSlug(dynastySlug: string): Promise<string> {
+  const slugs = await resolveWorkflowDynastySlugs(dynastySlug);
+  if (slugs.length === 0) {
+    throw new Error(`[campaign-service] No versioned slugs found for workflow dynasty: ${dynastySlug}`);
+  }
+  return slugs[slugs.length - 1];
+}
+
+/**
+ * Resolve a feature dynasty slug to the latest versioned slug (last in the list).
+ */
+export async function resolveLatestFeatureSlug(dynastySlug: string): Promise<string> {
+  const slugs = await resolveFeatureDynastySlugs(dynastySlug);
+  if (slugs.length === 0) {
+    throw new Error(`[campaign-service] No versioned slugs found for feature dynasty: ${dynastySlug}`);
+  }
+  return slugs[slugs.length - 1];
+}
+
+/**
  * Resolve a workflow dynasty slug into all its versioned slugs.
  */
 export async function resolveWorkflowDynastySlugs(dynastySlug: string): Promise<string[]> {

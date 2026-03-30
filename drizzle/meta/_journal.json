@@ -183,6 +183,13 @@
       "when": 1774900000000,
       "tag": "0025_rename_workflow_name_to_slug",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1775100000000,
+      "tag": "0026_add_dynasty_slugs",
+      "breakpoints": true
     }
   ]
 }
