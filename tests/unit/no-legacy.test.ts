@@ -5,8 +5,8 @@ import * as path from 'path';
 /**
  * CRITICAL: These tests ensure no legacy patterns remain in campaign-service.
  * 
- * Context: We migrated from brandUrl filtering (domain matching) to brandId filtering.
- * brandId comes from brand-service and is set on campaigns by the worker after brand creation.
+ * Context: We use brandIds (from brand-service) as the sole brand reference.
+ * brandUrl was removed — downstream services resolve brand data via brand-service.
  */
 describe('No Legacy Patterns - CRITICAL', () => {
   const srcDir = path.join(__dirname, '../../src');

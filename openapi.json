@@ -48,10 +48,6 @@
             "type": "string",
             "nullable": true
           },
-          "brandUrl": {
-            "type": "string",
-            "nullable": true
-          },
           "brandIds": {
             "type": "array",
             "nullable": true,
@@ -133,7 +129,6 @@
           "workflowSlug",
           "workflowDynastySlug",
           "featureDynastySlug",
-          "brandUrl",
           "brandIds",
           "featureSlug",
           "featureInputs",
@@ -180,10 +175,6 @@
             "minLength": 1
           },
           "orgId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "brandUrl": {
             "type": "string",
             "minLength": 1
           },
@@ -243,7 +234,6 @@
         "required": [
           "name",
           "orgId",
-          "brandUrl",
           "brandIds"
         ]
       },
@@ -251,9 +241,6 @@
         "type": "object",
         "properties": {
           "name": {
-            "type": "string"
-          },
-          "brandUrl": {
             "type": "string"
           },
           "brandIds": {
@@ -448,12 +435,6 @@
               "format": "uuid"
             }
           },
-          "brandUrl": {
-            "type": "string"
-          },
-          "brandDomain": {
-            "type": "string"
-          },
           "workflowSlug": {
             "type": "string"
           },
@@ -485,8 +466,6 @@
           "campaignId",
           "orgId",
           "brandIds",
-          "brandUrl",
-          "brandDomain",
           "workflowSlug",
           "userId",
           "featureSlug",
@@ -1126,32 +1105,7 @@
                     "campaigns": {
                       "type": "array",
                       "items": {
-                        "allOf": [
-                          {
-                            "$ref": "#/components/schemas/Campaign"
-                          },
-                          {
-                            "type": "object",
-                            "properties": {
-                              "externalOrgId": {
-                                "type": "string"
-                              },
-                              "brandDomain": {
-                                "type": "string",
-                                "nullable": true
-                              },
-                              "brandName": {
-                                "type": "string",
-                                "nullable": true
-                              }
-                            },
-                            "required": [
-                              "externalOrgId",
-                              "brandDomain",
-                              "brandName"
-                            ]
-                          }
-                        ]
+                        "$ref": "#/components/schemas/Campaign"
                       }
                     }
                   },
@@ -1311,7 +1265,7 @@
             }
           },
           "400": {
-            "description": "Missing brandUrl or brandId",
+            "description": "Missing brandIds",
             "content": {
               "application/json": {
                 "schema": {

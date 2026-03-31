@@ -5,7 +5,7 @@ import { db } from "../db/index.js";
 import { campaigns, type Campaign } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
-import { getStatsBudget } from "@mcpfactory/runs-client";
+import { getStatsBudget } from "@distribute/runs-client";
 import { BatchBudgetUsageBody, StatsFilterQuery } from "../schemas.js";
 import {
   resolveWorkflowDynastySlugs,

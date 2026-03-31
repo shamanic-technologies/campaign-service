@@ -21,8 +21,8 @@ const PORT = process.env.PORT || 3003;
 // Middleware
 app.use(cors({
   origin: [
-    "https://dashboard.mcpfactory.org",
-    "https://mcpfactory.org",
+    "https://dashboard.distribute.you",
+    "https://distribute.you",
     "http://localhost:3000",
     "http://localhost:3001",
     "http://localhost:3003",

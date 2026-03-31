@@ -17,7 +17,7 @@ const {
   };
 });
 
-vi.mock("@mcpfactory/runs-client", () => ({
+vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
   updateRun: mockUpdateRun,
   getStatsBudget: mockGetStatsBudget,

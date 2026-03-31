@@ -47,7 +47,7 @@ describe("Dynasty Slug Support", () => {
   const baseBody = {
     name: "Dynasty Campaign",
     orgId: "org_dynasty",
-    brandUrl: "https://example.com",
+
     brandIds: [crypto.randomUUID()],
   };
 

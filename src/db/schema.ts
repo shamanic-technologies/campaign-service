@@ -13,9 +13,6 @@ export const campaigns = pgTable(
     // Workflow slug — resolved by workflow-service, passed at campaign creation
     workflowSlug: text("workflow_slug").notNull(),
 
-    // Brand URL - used to identify which brand this campaign promotes
-    brandUrl: text("brand_url"),
-
     // Brand IDs from brand-service (CSV in x-brand-id header, stored as array)
     // Nullable initially, populated when brands are created/found in brand-service
     brandIds: text("brand_ids").array(),

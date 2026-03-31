@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { createRun } from "@mcpfactory/runs-client";
+import { createRun } from "@distribute/runs-client";
 
 describe("runs-client createRun", () => {
   beforeEach(() => {

@@ -13,7 +13,7 @@ vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
   };
 });
 
-vi.mock("@mcpfactory/runs-client", () => ({
+vi.mock("@distribute/runs-client", () => ({
   listRuns: vi.fn().mockResolvedValue({ runs: [] }),
   createRun: mockCreateRun,
   updateRun: vi.fn(),

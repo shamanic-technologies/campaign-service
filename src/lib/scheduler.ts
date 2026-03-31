@@ -2,7 +2,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
-import { createRun } from "@mcpfactory/runs-client";
+import { createRun } from "@distribute/runs-client";
 
 const SCHEDULER_INTERVAL_MS = 60_000; // 1 minute
 

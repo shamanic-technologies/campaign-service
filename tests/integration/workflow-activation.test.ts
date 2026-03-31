@@ -17,7 +17,7 @@ vi.mock("../../src/lib/gate-check.js", () => ({
   runGateChecks: vi.fn().mockResolvedValue({ allowed: true }),
 }));
 
-vi.mock("@mcpfactory/runs-client", () => ({
+vi.mock("@distribute/runs-client", () => ({
   createRun: vi.fn().mockResolvedValue({ id: "mock-run-id" }),
   updateRun: vi.fn().mockResolvedValue({}),
   listRuns: vi.fn().mockResolvedValue({ runs: [] }),
@@ -33,7 +33,7 @@ const validBody = {
   name: "Activation Test Campaign",
   workflowSlug: "sales-email-cold-outreach",
   orgId: "org_activation_test",
-  brandUrl: "https://example.com",
+
   brandIds: [crypto.randomUUID()],
 };
 
