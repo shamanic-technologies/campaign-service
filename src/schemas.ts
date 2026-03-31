@@ -17,7 +17,6 @@ export const CampaignSchema = z.object({
   workflowSlug: z.string(),
   workflowDynastySlug: z.string().nullable(),
   featureDynastySlug: z.string().nullable(),
-  brandUrl: z.string().nullable(),
   brandIds: z.array(z.string().uuid()).nullable(),
   featureSlug: z.string().nullable(),
   featureInputs: z.record(z.string(), z.unknown()).nullable(),
@@ -44,7 +43,6 @@ export const CreateCampaignBody = z.object({
   workflowSlug: z.string().min(1).optional(),
   workflowDynastySlug: z.string().min(1).optional(),
   orgId: z.string().min(1, "orgId is required"),
-  brandUrl: z.string().min(1, "brandUrl is required"),
   brandIds: z.array(z.string().uuid("each brandId must be a valid UUID")).min(1, "at least one brandId is required"),
   featureSlug: z.string().min(1).optional(),
   featureDynastySlug: z.string().min(1).optional(),
@@ -74,7 +72,6 @@ export const CampaignsFilterQuery = z.object({
 
 export const UpdateCampaignBody = z.object({
   name: z.string().optional(),
-  brandUrl: z.string().optional(),
   brandIds: z.array(z.string().uuid()).optional(),
   featureSlug: z.string().min(1).optional(),
   featureDynastySlug: z.string().min(1).optional(),
@@ -159,8 +156,6 @@ export const StartRunResponse = z.object({
   campaignId: z.string().uuid(),
   orgId: z.string(),
   brandIds: z.array(z.string().uuid()),
-  brandUrl: z.string(),
-  brandDomain: z.string(),
   workflowSlug: z.string(),
   userId: z.string().nullable(),
   featureSlug: z.string().nullable(),

@@ -34,7 +34,7 @@ vi.mock("../../src/lib/workflows.js", () => ({
   executeCampaignWorkflow: mockExecuteCampaignWorkflow,
 }));
 
-vi.mock("@mcpfactory/runs-client", () => ({
+vi.mock("@distribute/runs-client", () => ({
   createRun: mockCreateRun,
 }));
 

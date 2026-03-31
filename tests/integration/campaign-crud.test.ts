@@ -19,7 +19,6 @@ describe("Campaign CRUD", () => {
     name: "Test Campaign",
     workflowSlug: "sales-email-cold-outreach",
     orgId: "org_test_crud",
-    brandUrl: "https://example.com",
     brandIds: [crypto.randomUUID()],
   };
 

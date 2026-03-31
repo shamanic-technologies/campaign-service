@@ -20,7 +20,6 @@ export async function insertTestCampaign(
     workflowDynastySlug?: string;
     featureDynastySlug?: string;
     status?: string;
-    brandUrl?: string;
     brandIds?: string[];
     maxBudgetDailyUsd?: string;
     maxBudgetWeeklyUsd?: string;
@@ -42,7 +41,6 @@ export async function insertTestCampaign(
       workflowDynastySlug: data.workflowDynastySlug || null,
       featureDynastySlug: data.featureDynastySlug || null,
       status: data.status || "ongoing",
-      brandUrl: data.brandUrl || null,
       brandIds: "brandIds" in data ? (data.brandIds || null) : [crypto.randomUUID()],
       featureSlug: data.featureSlug || null,
       featureInputs: data.featureInputs || null,

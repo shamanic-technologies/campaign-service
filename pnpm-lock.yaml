@@ -14,7 +14,7 @@ importers:
       '@clerk/backend':
         specifier: ^1.0.0
         version: 1.34.0(react@19.2.4)
-      '@mcpfactory/runs-client':
+      '@distribute/runs-client':
         specifier: workspace:*
         version: link:packages/runs-client
       '@sentry/node':

@@ -5,7 +5,6 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
-import { normalizeUrl, extractDomain } from "../lib/domain.js";
 import { CreateCampaignBody, UpdateCampaignBody, CampaignsFilterQuery } from "../schemas.js";
 import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
 import {
@@ -39,19 +38,12 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
         maxBudgetTotalUsd: campaigns.maxBudgetTotalUsd,
         maxLeads: campaigns.maxLeads,
         createdAt: campaigns.createdAt,
-        brandUrl: campaigns.brandUrl,
         featureSlug: campaigns.featureSlug,
       })
       .from(campaigns)
       .orderBy(campaigns.createdAt);
 
-    const enrichedCampaigns = allCampaigns.map(c => ({
-      ...c,
-      brandDomain: c.brandUrl ? extractDomain(c.brandUrl) : null,
-      brandName: c.brandUrl ? extractDomain(c.brandUrl) : null,
-    }));
-
-    res.json({ campaigns: enrichedCampaigns });
+    res.json({ campaigns: allCampaigns });
   } catch (error) {
     console.error("[Campaign Service] List all campaigns error:", error);
     res.status(500).json({ error: "Internal server error" });
@@ -151,7 +143,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       name,
       workflowSlug: bodyWorkflowSlug,
       workflowDynastySlug,
-      brandUrl,
       brandIds,
       featureSlug: bodyFeatureSlug,
       featureDynastySlug,
@@ -167,9 +158,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       notifyChannel,
       notifyDestination,
     } = req.body;
-
-    const normalizedBrandUrl = normalizeUrl(brandUrl);
-    console.log(`[Campaign Service] Creating campaign with brandUrl: ${normalizedBrandUrl}`);
 
     // Resolve workflow slug: explicit versioned slug takes priority, otherwise resolve from dynasty
     let resolvedWorkflowSlug: string;
@@ -217,7 +205,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         workflowSlug: resolvedWorkflowSlug,
         workflowDynastySlug: workflowDynastySlug ?? null,
         featureDynastySlug: featureDynastySlug ?? null,
-        brandUrl: normalizedBrandUrl,
         brandIds,
         featureSlug: resolvedFeatureSlug,
         featureInputs,

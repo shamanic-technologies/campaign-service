@@ -193,7 +193,7 @@ registry.registerPath({
   summary: "List all campaigns across all orgs",
   security: [{ [apiKeyAuth.name]: [] }],
   responses: {
-    200: { description: "All campaigns with org info", content: { "application/json": { schema: z.object({ campaigns: z.array(CampaignSchema.extend({ externalOrgId: z.string(), brandDomain: z.string().nullable(), brandName: z.string().nullable() })) }) } } },
+    200: { description: "All campaigns with org info", content: { "application/json": { schema: z.object({ campaigns: z.array(CampaignSchema) }) } } },
   },
 });
 
@@ -235,7 +235,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: "Run created, campaign data returned", content: { "application/json": { schema: StartRunResponse } } },
-    400: { description: "Missing brandUrl or brandId", content: { "application/json": { schema: ErrorResponse } } },
+    400: { description: "Missing brandIds", content: { "application/json": { schema: ErrorResponse } } },
     404: { description: "Campaign or org not found", content: { "application/json": { schema: ErrorResponse } } },
   },
 });

@@ -4,10 +4,9 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { requireApiKey, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
-import { createRun, listRuns, updateRun, type IdentityHeaders } from "@mcpfactory/runs-client";
+import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
 import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
-import { extractDomain } from "../lib/domain.js";
 import { GateCheckBody, StartRunBody, EndRunBody } from "../schemas.js";
 
 const router = Router();
@@ -93,7 +92,7 @@ router.post("/gate-check", requireApiKey, trackingHeaders, validateBody(GateChec
  *
  * Returns:
  *   200 — run started, campaign data returned
- *   400 — bad request (missing brandUrl/brandId)
+ *   400 — bad request (missing brandIds)
  *   404 — campaign not found
  *   500 — internal error
  */
@@ -109,11 +108,7 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       console.warn(`[Start Run] Campaign not found: ${campaignId} (orgId=${orgId})`);
       return res.status(404).json({ error: "Campaign not found" });
     }
-    console.log(`[Start Run] Campaign found: name=${campaign.name}, workflowSlug=${campaign.workflowSlug}, status=${campaign.status}, brandUrl=${campaign.brandUrl}`);
-    if (!campaign.brandUrl) {
-      console.warn(`[Start Run] Campaign ${campaignId} has no brandUrl`);
-      return res.status(400).json({ error: "Campaign has no brandUrl" });
-    }
+    console.log(`[Start Run] Campaign found: name=${campaign.name}, workflowSlug=${campaign.workflowSlug}, status=${campaign.status}`);
     if (!campaign.brandIds || campaign.brandIds.length === 0) {
       console.warn(`[Start Run] Campaign ${campaignId} has no brandIds`);
       return res.status(400).json({ error: "Campaign has no brandIds" });
@@ -143,9 +138,7 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
     const featureInputs = campaign.featureInputs as Record<string, unknown> | null;
     const searchParams = (featureInputs && Object.keys(featureInputs).length > 0) ? featureInputs : null;
 
-    const brandDomain = extractDomain(campaign.brandUrl);
-
-    console.log(`[Start Run] SUCCESS — runId=${run.id}, brandDomain=${brandDomain}, searchParams=${searchParams ? "yes" : "none"}`);
+    console.log(`[Start Run] SUCCESS — runId=${run.id}, searchParams=${searchParams ? "yes" : "none"}`);
 
     // Return campaign data for downstream DAG nodes
     res.json({
@@ -153,8 +146,6 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       campaignId,
       orgId,
       brandIds: campaign.brandIds,
-      brandUrl: campaign.brandUrl,
-      brandDomain,
       workflowSlug: campaign.workflowSlug,
       userId: campaign.createdByUserId ?? null,
       featureSlug: campaign.featureSlug ?? null,

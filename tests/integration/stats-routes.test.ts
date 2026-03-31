@@ -5,7 +5,7 @@ const { mockGetStatsBudget } = vi.hoisted(() => ({
   mockGetStatsBudget: vi.fn(),
 }));
 
-vi.mock("@mcpfactory/runs-client", () => ({
+vi.mock("@distribute/runs-client", () => ({
   listRuns: vi.fn(),
   createRun: vi.fn(),
   updateRun: vi.fn(),

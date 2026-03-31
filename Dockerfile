@@ -17,7 +17,7 @@ RUN pnpm install --frozen-lockfile || pnpm install
 COPY . .
 
 # Build runs-client package
-RUN pnpm --filter @mcpfactory/runs-client build
+RUN pnpm --filter @distribute/runs-client build
 
 # Build the service
 RUN pnpm build
