@@ -5,9 +5,14 @@ export interface AuthenticatedRequest extends Request {
   orgId?: string;
   runId?: string;
   campaignId?: string;
-  brandId?: string;
+  brandIds?: string[];
   workflowSlug?: string;
   featureSlug?: string;
+}
+
+/** Parse the x-brand-id header as a comma-separated list of UUIDs. */
+export function parseBrandIdHeader(raw: string | undefined): string[] {
+  return String(raw ?? "").split(",").map(s => s.trim()).filter(Boolean);
 }
 
 /**
@@ -61,12 +66,12 @@ export function trackingHeaders(
   next: NextFunction
 ) {
   const campaignId = req.headers["x-campaign-id"] as string | undefined;
-  const brandId = req.headers["x-brand-id"] as string | undefined;
+  const brandIds = parseBrandIdHeader(req.headers["x-brand-id"] as string | undefined);
   const workflowSlug = req.headers["x-workflow-slug"] as string | undefined;
   const featureSlug = req.headers["x-feature-slug"] as string | undefined;
 
   if (campaignId) req.campaignId = campaignId;
-  if (brandId) req.brandId = brandId;
+  if (brandIds.length > 0) req.brandIds = brandIds;
   if (workflowSlug) req.workflowSlug = workflowSlug;
   if (featureSlug) req.featureSlug = featureSlug;
 

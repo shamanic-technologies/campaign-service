@@ -81,12 +81,12 @@ describe('No Legacy Patterns - CRITICAL', () => {
     ).toHaveLength(0);
   });
 
-  it('should have brandId column in schema', () => {
+  it('should have brandIds array column in schema', () => {
     const schemaFile = path.join(srcDir, 'db/schema.ts');
     const content = fs.readFileSync(schemaFile, 'utf-8');
 
-    expect(content).toContain('brandId');
-    expect(content).toContain('brand_id');
+    expect(content).toContain('brandIds');
+    expect(content).toContain('brand_ids');
   });
 
   it('should NOT define orgs or users tables in schema', () => {

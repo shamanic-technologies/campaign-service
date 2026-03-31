@@ -201,7 +201,7 @@ registry.registerPath({
 
 const TrackingHeaders = z.object({
   "x-campaign-id": z.string().uuid().optional().openapi({ description: "Campaign ID (injected by workflow-service)" }),
-  "x-brand-id": z.string().uuid().optional().openapi({ description: "Brand ID (injected by workflow-service)" }),
+  "x-brand-id": z.string().optional().openapi({ description: "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.", example: "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8" }),
   "x-workflow-slug": z.string().optional().openapi({ description: "Workflow slug (injected by workflow-service)" }),
 }).openapi("TrackingHeaders");
 

@@ -15,7 +15,7 @@ const {
     id: string;
     orgId: string;
     workflowSlug: string;
-    brandId?: string | null;
+    brandIds?: string[] | null;
     createdByUserId?: string | null;
     featureSlug?: string | null;
   }> = [];
@@ -57,6 +57,7 @@ vi.mock("../../src/db/schema.js", () => ({
     workflowSlug: "workflow_slug",
     orgId: "org_id",
     updatedAt: "updated_at",
+    brandIds: "brand_ids",
   },
 }));
 
@@ -88,7 +89,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       id: "campaign-1",
       orgId: "org-ext-1",
       workflowSlug: "sales-email-cold-outreach",
-      brandId: "brand-123",
+      brandIds: ["brand-123"],
       createdByUserId: "user-1",
       featureSlug: "sales-cold-email-v1",
     });
@@ -128,7 +129,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       id: "campaign-no-brand",
       orgId: "org-ext-1",
       workflowSlug: "sales-email-cold-outreach",
-      brandId: null,
+      brandIds: null,
       createdByUserId: "user-1",
       featureSlug: "sales-cold-email-v1",
     });
@@ -145,7 +146,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       id: "campaign-no-user",
       orgId: "org-ext-1",
       workflowSlug: "sales-email-cold-outreach",
-      brandId: "brand-1",
+      brandIds: ["brand-1"],
       createdByUserId: null,
       featureSlug: null,
     });
@@ -163,7 +164,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
         id: "campaign-1",
         orgId: "org-ext-1",
         workflowSlug: "sales-email-cold-outreach",
-        brandId: "brand-1",
+        brandIds: ["brand-1"],
         createdByUserId: "user-1",
         featureSlug: "sales-cold-email-v1",
       },
@@ -171,7 +172,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
         id: "campaign-2",
         orgId: "org-ext-2",
         workflowSlug: "pr-email-cold-outreach",
-        brandId: "brand-2",
+        brandIds: ["brand-2"],
         createdByUserId: "user-2",
         featureSlug: "pr-media-pitch-v1",
       },
@@ -189,7 +190,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
         id: "campaign-1",
         orgId: "org-ext-1",
         workflowSlug: "sales-email-cold-outreach",
-        brandId: "brand-1",
+        brandIds: ["brand-1"],
         createdByUserId: "user-1",
         featureSlug: "sales-cold-email-v1",
       },
@@ -197,7 +198,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
         id: "campaign-2",
         orgId: "org-ext-2",
         workflowSlug: "pr-email-cold-outreach",
-        brandId: "brand-2",
+        brandIds: ["brand-2"],
         createdByUserId: "user-2",
         featureSlug: "pr-media-pitch-v1",
       },

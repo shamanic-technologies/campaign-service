@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { eq, and, inArray } from "drizzle-orm";
+import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
 import { campaigns, type Campaign } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
@@ -149,7 +150,7 @@ router.get("/stats", requireApiKey, validateQuery(StatsFilterQuery), async (req,
     // Build conditions
     const conditions = [];
     if (orgId) conditions.push(eq(campaigns.orgId, orgId));
-    if (brandId) conditions.push(eq(campaigns.brandId, brandId));
+    if (brandId) conditions.push(arrayContains(campaigns.brandIds, [brandId]));
     if (campaignId) conditions.push(eq(campaigns.id, campaignId));
 
     // Dynasty slugs take priority over exact slugs

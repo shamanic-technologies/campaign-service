@@ -52,10 +52,13 @@
             "type": "string",
             "nullable": true
           },
-          "brandId": {
-            "type": "string",
+          "brandIds": {
+            "type": "array",
             "nullable": true,
-            "format": "uuid"
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           "featureSlug": {
             "type": "string",
@@ -131,7 +134,7 @@
           "workflowDynastySlug",
           "featureDynastySlug",
           "brandUrl",
-          "brandId",
+          "brandIds",
           "featureSlug",
           "featureInputs",
           "maxBudgetDailyUsd",
@@ -184,9 +187,13 @@
             "type": "string",
             "minLength": 1
           },
-          "brandId": {
-            "type": "string",
-            "format": "uuid"
+          "brandIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1
           },
           "featureSlug": {
             "type": "string",
@@ -237,7 +244,7 @@
           "name",
           "orgId",
           "brandUrl",
-          "brandId"
+          "brandIds"
         ]
       },
       "UpdateCampaignBody": {
@@ -249,9 +256,12 @@
           "brandUrl": {
             "type": "string"
           },
-          "brandId": {
-            "type": "string",
-            "format": "uuid"
+          "brandIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           "featureSlug": {
             "type": "string",
@@ -431,9 +441,12 @@
           "orgId": {
             "type": "string"
           },
-          "brandId": {
-            "type": "string",
-            "format": "uuid"
+          "brandIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           "brandUrl": {
             "type": "string"
@@ -471,7 +484,7 @@
           "runId",
           "campaignId",
           "orgId",
-          "brandId",
+          "brandIds",
           "brandUrl",
           "brandDomain",
           "workflowSlug",
@@ -1179,11 +1192,11 @@
           {
             "schema": {
               "type": "string",
-              "format": "uuid",
-              "description": "Brand ID (injected by workflow-service)"
+              "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
+              "example": "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8"
             },
             "required": false,
-            "description": "Brand ID (injected by workflow-service)",
+            "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -1258,11 +1271,11 @@
           {
             "schema": {
               "type": "string",
-              "format": "uuid",
-              "description": "Brand ID (injected by workflow-service)"
+              "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
+              "example": "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8"
             },
             "required": false,
-            "description": "Brand ID (injected by workflow-service)",
+            "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -1347,11 +1360,11 @@
           {
             "schema": {
               "type": "string",
-              "format": "uuid",
-              "description": "Brand ID (injected by workflow-service)"
+              "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
+              "example": "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8"
             },
             "required": false,
-            "description": "Brand ID (injected by workflow-service)",
+            "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
             "name": "x-brand-id",
             "in": "header"
           },

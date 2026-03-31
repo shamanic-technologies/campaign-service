@@ -20,7 +20,7 @@ describe("Campaign CRUD", () => {
     workflowSlug: "sales-email-cold-outreach",
     orgId: "org_test_crud",
     brandUrl: "https://example.com",
-    brandId: crypto.randomUUID(),
+    brandIds: [crypto.randomUUID()],
   };
 
   /** Helper: create a campaign with all required headers */
@@ -42,7 +42,7 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign).toBeDefined();
       expect(res.body.campaign.name).toBe("Test Campaign");
       expect(res.body.campaign.workflowSlug).toBe("sales-email-cold-outreach");
-      expect(res.body.campaign.brandId).toBe(validBody.brandId);
+      expect(res.body.campaign.brandIds).toEqual(validBody.brandIds);
     });
 
     it("should reject when workflowSlug is missing", async () => {
@@ -52,8 +52,8 @@ describe("Campaign CRUD", () => {
       expect(res.body.error).toBeDefined();
     });
 
-    it("should reject when brandId is missing", async () => {
-      const { brandId, ...body } = validBody;
+    it("should reject when brandIds is missing", async () => {
+      const { brandIds, ...body } = validBody;
 
       const res = await createCampaign(body).expect(400);
       expect(res.body.error).toBeDefined();
@@ -66,8 +66,8 @@ describe("Campaign CRUD", () => {
       expect(res.body.error).toBeDefined();
     });
 
-    it("should reject when brandId is not a valid UUID", async () => {
-      const res = await createCampaign({ ...validBody, brandId: "not-a-uuid" }).expect(400);
+    it("should reject when brandIds contains invalid UUIDs", async () => {
+      const res = await createCampaign({ ...validBody, brandIds: ["not-a-uuid"] }).expect(400);
       expect(res.body.error).toBeDefined();
     });
 

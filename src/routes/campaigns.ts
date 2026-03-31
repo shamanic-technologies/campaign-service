@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, desc, inArray, sql } from "drizzle-orm";
+import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
@@ -80,7 +81,7 @@ router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilt
 
     const conditions = [eq(campaigns.orgId, req.orgId!)];
 
-    if (brandId) conditions.push(eq(campaigns.brandId, brandId));
+    if (brandId) conditions.push(arrayContains(campaigns.brandIds, [brandId]));
 
     // Dynasty slugs resolve to all versioned slugs and take priority
     if (workflowDynastySlug) {
@@ -151,7 +152,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       workflowSlug: bodyWorkflowSlug,
       workflowDynastySlug,
       brandUrl,
-      brandId,
+      brandIds,
       featureSlug: bodyFeatureSlug,
       featureDynastySlug,
       featureInputs,
@@ -184,10 +185,11 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     const resolvedFeatureSlug = req.featureSlug || "";
 
     // Validate all required workflow fields BEFORE creating the campaign
+    const brandIdCsv = (brandIds as string[]).join(",");
     const preCheckInputs = {
       campaignId: "pending",  // will be assigned after insert
       orgId: req.orgId!,
-      brandId: brandId || "",
+      brandId: brandIdCsv || "",
       userId: req.userId || "",
       runId: req.runId || "",
       featureSlug: resolvedFeatureSlug,
@@ -216,7 +218,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         workflowDynastySlug: workflowDynastySlug ?? null,
         featureDynastySlug: featureDynastySlug ?? null,
         brandUrl: normalizedBrandUrl,
-        brandId,
+        brandIds,
         featureSlug: resolvedFeatureSlug,
         featureInputs,
         maxBudgetDailyUsd,
@@ -237,7 +239,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     const workflowInputs = {
       campaignId: campaign.id,
       orgId: req.orgId!,
-      brandId: campaign.brandId!,
+      brandId: (campaign.brandIds ?? []).join(","),
       userId: req.userId!,
       runId: req.runId!,
       featureSlug: campaign.featureSlug!,
@@ -280,7 +282,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       const preActivateInputs = {
         campaignId: id,
         orgId: req.orgId!,
-        brandId: existing.brandId || "",
+        brandId: (existing.brandIds ?? []).join(",") || "",
         userId: req.userId || "",
         runId: req.runId || "",
         featureSlug: req.featureSlug || "",
@@ -321,7 +323,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       const activateInputs = {
         campaignId: updated.id,
         orgId: req.orgId!,
-        brandId: updated.brandId!,
+        brandId: (updated.brandIds ?? []).join(","),
         userId: req.userId!,
         runId: req.runId!,
         featureSlug: req.featureSlug!,
