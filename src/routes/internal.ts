@@ -42,12 +42,13 @@ router.post("/gate-check", requireApiKey, trackingHeaders, validateBody(GateChec
     }
 
     console.log(`[Gate Check] Running checks for campaign ${campaignId} (status=${campaign.status})...`);
+    const resolvedBrandIds = (req.brandIds && req.brandIds.length > 0) ? req.brandIds : (campaign.brandIds ?? []);
     const result = await runGateChecks({
       campaignId,
       orgId,
       userId: req.headers["x-user-id"] as string | undefined,
       runId: req.headers["x-run-id"] as string | undefined,
-      brandId: req.brandId || campaign.brandId || "",
+      brandId: resolvedBrandIds.join(","),
       workflowSlug: req.workflowSlug || campaign.workflowSlug,
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
@@ -113,9 +114,9 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       console.warn(`[Start Run] Campaign ${campaignId} has no brandUrl`);
       return res.status(400).json({ error: "Campaign has no brandUrl" });
     }
-    if (!campaign.brandId) {
-      console.warn(`[Start Run] Campaign ${campaignId} has no brandId`);
-      return res.status(400).json({ error: "Campaign has no brandId" });
+    if (!campaign.brandIds || campaign.brandIds.length === 0) {
+      console.warn(`[Start Run] Campaign ${campaignId} has no brandIds`);
+      return res.status(400).json({ error: "Campaign has no brandIds" });
     }
 
     // featureSlug comes exclusively from x-feature-slug header
@@ -123,13 +124,14 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
 
     // Create run in runs-service (x-run-id from caller becomes parentRunId)
     const parentRunId = req.headers["x-run-id"] as string | undefined;
+    const brandIdCsv = campaign.brandIds!.join(",");
     console.log(`[Start Run] Creating run in runs-service for campaign ${campaignId} (parentRunId=${parentRunId || "none"}, featureSlug=${featureSlug || "none"})...`);
     const run = await createRun({
       orgId,
       serviceName: "campaign-service",
       taskName: campaignId,
       campaignId,
-      brandId: campaign.brandId,
+      brandId: brandIdCsv,
       userId: campaign.createdByUserId || undefined,
       parentRunId: parentRunId || undefined,
       workflowSlug: campaign.workflowSlug,
@@ -150,7 +152,7 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
       runId: run.id,
       campaignId,
       orgId,
-      brandId: campaign.brandId,
+      brandIds: campaign.brandIds,
       brandUrl: campaign.brandUrl,
       brandDomain,
       workflowSlug: campaign.workflowSlug,
@@ -187,7 +189,7 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
       userId: req.headers["x-user-id"] as string | undefined,
       runId: req.headers["x-run-id"] as string | undefined,
       campaignId: req.campaignId,
-      brandId: req.brandId,
+      brandId: req.brandIds?.join(","),
       workflowSlug: req.workflowSlug,
       featureSlug: req.featureSlug,
     };
@@ -241,13 +243,13 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
         return;
       }
 
-      const resolvedBrandId = req.brandId || freshCampaign.brandId || "";
+      const resolvedBrandIdCsv = (req.brandIds && req.brandIds.length > 0) ? req.brandIds.join(",") : (freshCampaign.brandIds ?? []).join(",");
       const resolvedFeatureSlug = identity.featureSlug || "";
 
       const retriggerInputs = {
         campaignId,
         orgId,
-        brandId: resolvedBrandId,
+        brandId: resolvedBrandIdCsv || "",
         userId: identity.userId || "",
         runId: identity.runId || "",
         featureSlug: resolvedFeatureSlug,

@@ -16,9 +16,9 @@ export const campaigns = pgTable(
     // Brand URL - used to identify which brand this campaign promotes
     brandUrl: text("brand_url"),
 
-    // Brand ID from brand-service (set by worker after brand-upsert)
-    // Nullable initially, populated when brand is created/found in brand-service
-    brandId: text("brand_id"),
+    // Brand IDs from brand-service (CSV in x-brand-id header, stored as array)
+    // Nullable initially, populated when brands are created/found in brand-service
+    brandIds: text("brand_ids").array(),
 
     // Dynasty slugs — stable lineage identifiers (e.g. "cold-email", "sales-cold-email")
     workflowDynastySlug: text("workflow_dynasty_slug"),

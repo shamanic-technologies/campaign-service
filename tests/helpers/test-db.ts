@@ -21,7 +21,7 @@ export async function insertTestCampaign(
     featureDynastySlug?: string;
     status?: string;
     brandUrl?: string;
-    brandId?: string;
+    brandIds?: string[];
     maxBudgetDailyUsd?: string;
     maxBudgetWeeklyUsd?: string;
     maxBudgetMonthlyUsd?: string;
@@ -43,7 +43,7 @@ export async function insertTestCampaign(
       featureDynastySlug: data.featureDynastySlug || null,
       status: data.status || "ongoing",
       brandUrl: data.brandUrl || null,
-      brandId: "brandId" in data ? (data.brandId || null) : crypto.randomUUID(),
+      brandIds: "brandIds" in data ? (data.brandIds || null) : [crypto.randomUUID()],
       featureSlug: data.featureSlug || null,
       featureInputs: data.featureInputs || null,
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",

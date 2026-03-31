@@ -34,7 +34,7 @@ const validBody = {
   workflowSlug: "sales-email-cold-outreach",
   orgId: "org_activation_test",
   brandUrl: "https://example.com",
-  brandId: crypto.randomUUID(),
+  brandIds: [crypto.randomUUID()],
 };
 
 /** Helper: create a campaign with all required headers */
@@ -76,7 +76,7 @@ describe("Workflow trigger", () => {
         expect.objectContaining({
           campaignId,
           orgId: "org_activation_test",
-          brandId: validBody.brandId,
+          brandIds: validBody.brandIds,
           userId: "user_activation_test",
           featureSlug: "sales-cold-email-v1",
         }),

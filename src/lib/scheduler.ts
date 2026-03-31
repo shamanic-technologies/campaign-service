@@ -19,7 +19,7 @@ export async function resumeDueCampaigns(): Promise<number> {
       orgId: campaigns.orgId,
       createdByUserId: campaigns.createdByUserId,
       workflowSlug: campaigns.workflowSlug,
-      brandId: campaigns.brandId,
+      brandIds: campaigns.brandIds,
       featureSlug: campaigns.featureSlug,
     })
     .from(campaigns)
@@ -38,7 +38,7 @@ export async function resumeDueCampaigns(): Promise<number> {
   for (const campaign of dueCampaigns) {
     try {
       const missingFields: string[] = [];
-      if (!campaign.brandId) missingFields.push("brandId");
+      if (!campaign.brandIds || campaign.brandIds.length === 0) missingFields.push("brandIds");
       if (!campaign.createdByUserId) missingFields.push("createdByUserId");
       if (!campaign.featureSlug) missingFields.push("featureSlug");
       if (missingFields.length > 0) {
@@ -53,7 +53,7 @@ export async function resumeDueCampaigns(): Promise<number> {
 
       console.log(`[Campaign Service] Launching workflow run from SCHEDULER RESUME — workflow=${campaign.workflowSlug}, campaignId=${campaign.id}`);
       // All three fields are validated non-null above
-      const brandId = campaign.brandId!;
+      const brandIdCsv = campaign.brandIds!.join(",");
       const userId = campaign.createdByUserId!;
       const featureSlug = campaign.featureSlug!;
 
@@ -63,14 +63,14 @@ export async function resumeDueCampaigns(): Promise<number> {
         taskName: "scheduler-resume",
         userId,
         campaignId: campaign.id,
-        brandId,
+        brandId: brandIdCsv,
         workflowSlug: campaign.workflowSlug,
         featureSlug,
       });
       executeCampaignWorkflow(campaign.workflowSlug, {
         campaignId: campaign.id,
         orgId: campaign.orgId,
-        brandId,
+        brandId: brandIdCsv,
         userId,
         runId: run.id,
         featureSlug,

@@ -48,7 +48,7 @@ describe("Dynasty Slug Support", () => {
     name: "Dynasty Campaign",
     orgId: "org_dynasty",
     brandUrl: "https://example.com",
-    brandId: crypto.randomUUID(),
+    brandIds: [crypto.randomUUID()],
   };
 
   describe("POST /campaigns — dynasty slug resolution", () => {
@@ -187,9 +187,9 @@ describe("Dynasty Slug Support", () => {
 
     it("should combine workflowDynastySlug with brandId filter", async () => {
       const brandId = crypto.randomUUID();
-      await insertTestCampaign("org_combo_dyn", { name: "Combo 1", workflowSlug: "cold-email-v1", brandId });
+      await insertTestCampaign("org_combo_dyn", { name: "Combo 1", workflowSlug: "cold-email-v1", brandIds: [brandId] });
       await insertTestCampaign("org_combo_dyn", { name: "Combo 2", workflowSlug: "cold-email-v2" });
-      await insertTestCampaign("org_combo_dyn", { name: "Combo 3", workflowSlug: "warm-intro-v1", brandId });
+      await insertTestCampaign("org_combo_dyn", { name: "Combo 3", workflowSlug: "warm-intro-v1", brandIds: [brandId] });
 
       mockResolveWorkflow.mockResolvedValueOnce(["cold-email-v1", "cold-email-v2"]);
 

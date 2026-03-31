@@ -182,8 +182,8 @@ describe("Stats Routes", () => {
 
     it("should return stats filtered by brandId", async () => {
       const brandId = crypto.randomUUID();
-      await insertTestCampaign("org_brand_stat", { status: "ongoing", brandId });
-      await insertTestCampaign("org_brand_stat", { status: "ongoing" }); // no brandId
+      await insertTestCampaign("org_brand_stat", { status: "ongoing", brandIds: [brandId] });
+      await insertTestCampaign("org_brand_stat", { status: "ongoing" }); // no brandIds
 
       const res = await request(app)
         .get(`/stats?brandId=${brandId}`)

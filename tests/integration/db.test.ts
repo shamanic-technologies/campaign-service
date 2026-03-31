@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
+import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../../src/db/index.js";
 import { campaigns } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
@@ -40,38 +41,38 @@ describe("Campaign Service Database", () => {
       expect(results[0].name).toBe("Org1 Campaign");
     });
 
-    it("should create a campaign with brandId", async () => {
+    it("should create a campaign with brandIds", async () => {
       const brandId = crypto.randomUUID();
       const campaign = await insertTestCampaign("org_1", {
         name: "Brand Campaign",
-        brandId,
+        brandIds: [brandId],
       });
 
-      expect(campaign.brandId).toBe(brandId);
+      expect(campaign.brandIds).toEqual([brandId]);
     });
 
-    it("should store null brandId when explicitly set to undefined", async () => {
+    it("should store null brandIds when explicitly set to undefined", async () => {
       const campaign = await insertTestCampaign("org_1", {
         name: "No Brand Campaign",
-        brandId: undefined,
+        brandIds: undefined,
       });
 
-      expect(campaign.brandId).toBeNull();
+      expect(campaign.brandIds).toBeNull();
     });
 
-    it("should query campaigns by brandId", async () => {
+    it("should query campaigns by brandIds", async () => {
       const brandId = crypto.randomUUID();
-      await insertTestCampaign("org_1", { name: "With Brand", brandId });
-      await insertTestCampaign("org_1", { name: "Without Brand", brandId: undefined });
+      await insertTestCampaign("org_1", { name: "With Brand", brandIds: [brandId] });
+      await insertTestCampaign("org_1", { name: "Without Brand", brandIds: undefined });
 
       const results = await db
         .select()
         .from(campaigns)
-        .where(eq(campaigns.brandId, brandId));
+        .where(arrayContains(campaigns.brandIds, [brandId]));
 
       expect(results).toHaveLength(1);
       expect(results[0].name).toBe("With Brand");
-      expect(results[0].brandId).toBe(brandId);
+      expect(results[0].brandIds).toEqual([brandId]);
     });
 
     it("should not have appId or keySource columns", async () => {

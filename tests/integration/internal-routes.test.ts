@@ -44,7 +44,7 @@ const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
 describe("Pipeline routes", () => {
   const orgId = "org_internal_test";
-  const brandId = crypto.randomUUID();
+  const brandIds = [crypto.randomUUID()];
 
   beforeEach(async () => {
     await cleanTestData();
@@ -95,7 +95,7 @@ describe("Pipeline routes", () => {
     it("should return allowed: true when gate checks pass", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       const res = await request(app)
@@ -111,7 +111,7 @@ describe("Pipeline routes", () => {
     it("should return allowed: false with reason when gate checks fail", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       mockGateChecks.mockResolvedValue({
@@ -132,7 +132,7 @@ describe("Pipeline routes", () => {
     it("should return autoStopped flag when campaign is auto-stopped", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       mockGateChecks.mockResolvedValue({
@@ -154,7 +154,7 @@ describe("Pipeline routes", () => {
     it("should save toResumeAt to DB when gate-check returns it", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       const tomorrow = new Date();
@@ -184,7 +184,7 @@ describe("Pipeline routes", () => {
     it("should NOT save toResumeAt when gate-check does not return it", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       mockGateChecks.mockResolvedValue({
@@ -208,7 +208,7 @@ describe("Pipeline routes", () => {
     it("should pass campaign data to runGateChecks", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
         maxBudgetDailyUsd: "50.00",
         maxLeads: 100,
       });
@@ -223,7 +223,7 @@ describe("Pipeline routes", () => {
         expect.objectContaining({
           campaignId: campaign.id,
           orgId,
-          brandId,
+          brandIds,
           status: "ongoing",
           maxBudgetDailyUsd: "50.00",
           maxLeads: 100,
@@ -255,7 +255,7 @@ describe("Pipeline routes", () => {
 
     it("should return 400 if campaign has no brandUrl", async () => {
       const campaign = await insertTestCampaign(orgId, {
-        brandId,
+        brandIds,
         brandUrl: undefined,
       });
 
@@ -268,10 +268,10 @@ describe("Pipeline routes", () => {
       expect(res.body.error).toBe("Campaign has no brandUrl");
     });
 
-    it("should return 400 if campaign has no brandId", async () => {
+    it("should return 400 if campaign has no brandIds", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId: undefined,
+        brandIds: undefined,
       });
 
       const res = await request(app)
@@ -280,13 +280,13 @@ describe("Pipeline routes", () => {
         .send({ campaignId: campaign.id, orgId })
         .expect(400);
 
-      expect(res.body.error).toBe("Campaign has no brandId");
+      expect(res.body.error).toBe("Campaign has no brandIds");
     });
 
     it("should return 200 with campaign data and runId", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       const res = await request(app)
@@ -298,7 +298,7 @@ describe("Pipeline routes", () => {
       expect(res.body.runId).toBe("run-123");
       expect(res.body.campaignId).toBe(campaign.id);
       expect(res.body.orgId).toBe(orgId);
-      expect(res.body.brandId).toBe(brandId);
+      expect(res.body.brandIds).toEqual(brandIds);
       expect(res.body.brandUrl).toBe("https://example.com");
       expect(res.body.brandDomain).toBe("example.com");
       expect(res.body.workflowSlug).toBe("sales-email-cold-outreach");
@@ -309,7 +309,7 @@ describe("Pipeline routes", () => {
     it("should not return sales-specific fields", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       const res = await request(app)
@@ -327,7 +327,7 @@ describe("Pipeline routes", () => {
     it("should have null searchParams when no featureInputs", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       const res = await request(app)
@@ -342,7 +342,7 @@ describe("Pipeline routes", () => {
     it("should extract brandDomain from brandUrl", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://www.example.com/path",
-        brandId,
+        brandIds,
       });
 
       const res = await request(app)
@@ -359,7 +359,7 @@ describe("Pipeline routes", () => {
       const parentRunId = crypto.randomUUID();
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       await request(app)
@@ -377,7 +377,7 @@ describe("Pipeline routes", () => {
     it("should NOT pass parentRunId to createRun when x-run-id header is absent", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       await request(app)
@@ -394,7 +394,7 @@ describe("Pipeline routes", () => {
     it("should pass workflowSlug to createRun", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
         workflowSlug: "pr-email-cold-outreach",
       });
 
@@ -412,7 +412,7 @@ describe("Pipeline routes", () => {
     it("should pass featureSlug to createRun", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       await request(app)
@@ -430,7 +430,7 @@ describe("Pipeline routes", () => {
     it("should prefer x-feature-slug header over campaign.featureSlug", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
         featureSlug: "old-slug",
       });
 
@@ -449,7 +449,7 @@ describe("Pipeline routes", () => {
     it("should return featureSlug and featureInputs when set", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
         featureSlug: "pr-media-pitch-v1",
         featureInputs: { mediaType: "podcast", region: "US" },
       });
@@ -467,7 +467,7 @@ describe("Pipeline routes", () => {
     it("should use featureInputs as searchParams when available", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
         featureInputs: { mediaType: "podcast", region: "US" },
       });
 
@@ -483,7 +483,7 @@ describe("Pipeline routes", () => {
     it("should NOT call gate checks (gate check is a separate DAG node)", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       await request(app)
@@ -498,7 +498,7 @@ describe("Pipeline routes", () => {
     it("should not pass appId to createRun", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       await request(app)
@@ -526,7 +526,7 @@ describe("Pipeline routes", () => {
     it("should find and mark running run as completed when success is true", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       mockListRuns.mockResolvedValue({
@@ -552,7 +552,7 @@ describe("Pipeline routes", () => {
     it("should find and mark running run as failed when success is false", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       mockListRuns.mockResolvedValue({
@@ -578,7 +578,7 @@ describe("Pipeline routes", () => {
     it("should skip run update when no running runs exist (gate-check blocked)", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       mockListRuns.mockResolvedValue({ runs: [] });
@@ -600,7 +600,7 @@ describe("Pipeline routes", () => {
     it("should re-trigger workflow using workflowSlug if campaign is still ongoing", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
         status: "ongoing",
         workflowSlug: "sales-email-cold-outreach",
         featureSlug: "sales-cold-email-v1",
@@ -613,7 +613,7 @@ describe("Pipeline routes", () => {
         .set("x-org-id", orgId)
         .set("x-run-id", runId)
         .set("x-user-id", "user_test")
-        .set("x-brand-id", brandId)
+        .set("x-brand-id", brandIds[0])
         .set("x-campaign-id", campaign.id)
         .set("x-feature-slug", "sales-cold-email-v1")
         .send({
@@ -639,7 +639,7 @@ describe("Pipeline routes", () => {
     it("should forward x-run-id header to re-triggered workflow", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
         status: "ongoing",
         workflowSlug: "sales-email-cold-outreach",
         featureSlug: "sales-cold-email-v1",
@@ -652,7 +652,7 @@ describe("Pipeline routes", () => {
         .set("x-org-id", orgId)
         .set("x-run-id", parentRunId)
         .set("x-user-id", "user_test")
-        .set("x-brand-id", brandId)
+        .set("x-brand-id", brandIds[0])
         .set("x-campaign-id", campaign.id)
         .set("x-feature-slug", "sales-cold-email-v1")
         .send({
@@ -674,7 +674,7 @@ describe("Pipeline routes", () => {
     it("should NOT re-trigger if campaign is stopped", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
         status: "stopped",
       });
 
@@ -696,7 +696,7 @@ describe("Pipeline routes", () => {
     it("should auto-stop campaign and NOT re-trigger when leadFound is false", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
         status: "ongoing",
       });
 
@@ -730,7 +730,7 @@ describe("Pipeline routes", () => {
     it("should re-trigger normally when leadFound is true", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
         status: "ongoing",
         featureSlug: "sales-cold-email-v1",
       });
@@ -747,7 +747,7 @@ describe("Pipeline routes", () => {
         .set("x-org-id", orgId)
         .set("x-user-id", "user_test")
         .set("x-run-id", crypto.randomUUID())
-        .set("x-brand-id", brandId)
+        .set("x-brand-id", brandIds[0])
         .set("x-campaign-id", campaign.id)
         .set("x-feature-slug", "sales-cold-email-v1")
         .send({
@@ -773,7 +773,7 @@ describe("Pipeline routes", () => {
     it("should not pass appId to listRuns", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandUrl: "https://example.com",
-        brandId,
+        brandIds,
       });
 
       mockListRuns.mockResolvedValue({ runs: [] });
