@@ -51,7 +51,6 @@ export async function resumeDueCampaigns(): Promise<number> {
         .set({ toResumeAt: null, updatedAt: new Date() })
         .where(eq(campaigns.id, campaign.id));
 
-      console.log(`[Campaign Service] Launching workflow run from SCHEDULER RESUME — workflow=${campaign.workflowSlug}, campaignId=${campaign.id}`);
       // All three fields are validated non-null above
       const brandIdCsv = campaign.brandIds!.join(",");
       const userId = campaign.createdByUserId!;

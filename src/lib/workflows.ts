@@ -39,8 +39,6 @@ export async function executeCampaignWorkflow(
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
 
-  console.log(`[Workflow] executeCampaignWorkflow called: workflowSlug=${workflowSlug}, campaignId=${inputs.campaignId}, orgId=${inputs.orgId}`);
-
   if (!url || !apiKey) {
     console.warn("[Workflow] WORKFLOW_SERVICE_URL or WORKFLOW_SERVICE_API_KEY not set, skipping workflow execution");
     return;
@@ -53,7 +51,6 @@ export async function executeCampaignWorkflow(
   }
 
   const executeUrl = `${url}/workflows/by-slug/${workflowSlug}/execute`;
-  console.log(`[Workflow] POST ${executeUrl}`);
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -84,6 +81,5 @@ export async function executeCampaignWorkflow(
     return;
   }
 
-  const data = await res.json() as { id?: string; status?: string };
-  console.log(`[Workflow] ${workflowSlug} started successfully: workflowRunId=${data.id}, status=${data.status}`);
+  await res.json();
 }
