@@ -164,9 +164,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     if (bodyWorkflowSlug) {
       resolvedWorkflowSlug = bodyWorkflowSlug;
     } else {
-      console.log(`[Campaign Service] Resolving workflowDynastySlug=${workflowDynastySlug} to latest versioned slug`);
       resolvedWorkflowSlug = await resolveLatestWorkflowSlug(workflowDynastySlug!);
-      console.log(`[Campaign Service] Resolved to workflowSlug=${resolvedWorkflowSlug}`);
     }
 
     // featureSlug comes exclusively from x-feature-slug header
@@ -231,7 +229,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       runId: req.runId!,
       featureSlug: campaign.featureSlug!,
     };
-    console.log(`[Campaign Service] Launching workflow run from CAMPAIGN CREATION — workflow=${campaign.workflowSlug}, campaignId=${campaign.id}`);
     executeCampaignWorkflow(campaign.workflowSlug, workflowInputs).catch((err) => {
       console.error(`[Campaign Service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
@@ -294,9 +291,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     }
     // If featureDynastySlug is provided on update, resolve to latest versioned slug
     if (updates.featureDynastySlug && !updates.featureSlug) {
-      console.log(`[Campaign Service] Resolving featureDynastySlug=${updates.featureDynastySlug} on PATCH`);
       updates.featureSlug = await resolveLatestFeatureSlug(updates.featureDynastySlug);
-      console.log(`[Campaign Service] Resolved to featureSlug=${updates.featureSlug}`);
     }
 
     const [updated] = await db
@@ -315,7 +310,6 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         runId: req.runId!,
         featureSlug: req.featureSlug!,
       };
-      console.log(`[Campaign Service] Launching workflow run from CAMPAIGN ACTIVATION — workflow=${updated.workflowSlug}, campaignId=${updated.id}`);
       executeCampaignWorkflow(updated.workflowSlug, activateInputs).catch((err) => {
         console.error(`[Campaign Service] Failed to trigger workflow for campaign ${id}:`, err);
       });
