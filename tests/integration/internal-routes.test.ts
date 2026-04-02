@@ -66,19 +66,19 @@ describe("Pipeline routes", () => {
   // === POST /gate-check ===
 
   describe("POST /gate-check", () => {
-    it("should return 400 if campaignId is missing", async () => {
+    it("should return 400 if x-campaign-id header is missing", async () => {
       await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ orgId: "some-org" })
+        .set("x-org-id", "some-org")
         .expect(400);
     });
 
-    it("should return 400 if orgId is missing", async () => {
+    it("should return 400 if x-org-id header is missing", async () => {
       await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: crypto.randomUUID() })
+        .set("x-campaign-id", crypto.randomUUID())
         .expect(400);
     });
 
@@ -86,7 +86,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: crypto.randomUUID(), orgId: "nonexistent-org" })
+        .set("x-campaign-id", crypto.randomUUID())
+        .set("x-org-id", "nonexistent-org")
         .expect(404);
 
       expect(res.body.error).toBe("Campaign not found");
@@ -100,7 +101,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(res.body.allowed).toBe(true);
@@ -120,7 +122,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(res.body.allowed).toBe(false);
@@ -141,7 +144,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(res.body.allowed).toBe(false);
@@ -166,7 +170,8 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       // Verify toResumeAt was saved to the DB
@@ -191,7 +196,8 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       const updated = await db.query.campaigns.findFirst({
@@ -210,7 +216,8 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/gate-check")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(mockGateChecks).toHaveBeenCalledWith(
@@ -229,11 +236,11 @@ describe("Pipeline routes", () => {
   // === POST /start-run ===
 
   describe("POST /start-run", () => {
-    it("should return 400 if campaignId is missing", async () => {
+    it("should return 400 if x-campaign-id header is missing", async () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ orgId: "some-org" })
+        .set("x-org-id", "some-org")
         .expect(400);
     });
 
@@ -241,7 +248,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: crypto.randomUUID(), orgId: "nonexistent-org" })
+        .set("x-campaign-id", crypto.randomUUID())
+        .set("x-org-id", "nonexistent-org")
         .expect(404);
 
       expect(res.body.error).toBe("Campaign not found");
@@ -255,7 +263,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(400);
 
       expect(res.body.error).toBe("Campaign has no brandIds");
@@ -269,7 +278,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(res.body.runId).toBe("run-123");
@@ -289,7 +299,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(res.body).not.toHaveProperty("urgency");
@@ -306,7 +317,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(res.body.searchParams).toBeNull();
@@ -321,8 +333,9 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .set("x-run-id", parentRunId)
-        .send({ campaignId: campaign.id, orgId })
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -338,7 +351,8 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -355,7 +369,8 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -371,8 +386,9 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .set("x-feature-slug", "sales-cold-email-v1")
-        .send({ campaignId: campaign.id, orgId })
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -389,8 +405,9 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .set("x-feature-slug", "header-slug")
-        .send({ campaignId: campaign.id, orgId })
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -408,7 +425,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(res.body.featureSlug).toBe("pr-media-pitch-v1");
@@ -424,7 +442,8 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(res.body.searchParams).toEqual({ mediaType: "podcast", region: "US" });
@@ -438,7 +457,8 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       expect(mockGateChecks).not.toHaveBeenCalled();
@@ -452,7 +472,8 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/start-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: campaign.id, orgId })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
         .expect(200);
 
       const callArgs = mockCreateRun.mock.calls[0][0];
@@ -463,11 +484,22 @@ describe("Pipeline routes", () => {
   // === POST /end-run ===
 
   describe("POST /end-run", () => {
-    it("should return 400 if required fields are missing", async () => {
+    it("should return 400 if success field is missing from body", async () => {
       await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
-        .send({ campaignId: crypto.randomUUID(), orgId: "org-1" })
+        .set("x-campaign-id", crypto.randomUUID())
+        .set("x-org-id", "org-1")
+        .send({})
+        .expect(400);
+    });
+
+    it("should return 400 if x-campaign-id header is missing", async () => {
+      await request(app)
+        .post("/end-run")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org-1")
+        .send({ success: true })
         .expect(400);
     });
 
@@ -485,11 +517,9 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
-        .send({
-          campaignId: campaign.id,
-          orgId,
-          success: true,
-        })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
+        .send({ success: true })
         .expect(200);
 
       expect(res.body.status).toBe("completed");
@@ -510,11 +540,9 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
-        .send({
-          campaignId: campaign.id,
-          orgId,
-          success: false,
-        })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
+        .send({ success: false })
         .expect(200);
 
       expect(res.body.status).toBe("failed");
@@ -531,11 +559,9 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
-        .send({
-          campaignId: campaign.id,
-          orgId,
-          success: false,
-        })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
+        .send({ success: false })
         .expect(200);
 
       expect(res.body.status).toBe("failed");
@@ -560,11 +586,7 @@ describe("Pipeline routes", () => {
         .set("x-brand-id", brandIds[0])
         .set("x-campaign-id", campaign.id)
         .set("x-feature-slug", "sales-cold-email-v1")
-        .send({
-          campaignId: campaign.id,
-          orgId,
-          success: true,
-        })
+        .send({ success: true })
         .expect(200);
 
       // Wait for async re-trigger
@@ -598,11 +620,7 @@ describe("Pipeline routes", () => {
         .set("x-brand-id", brandIds[0])
         .set("x-campaign-id", campaign.id)
         .set("x-feature-slug", "sales-cold-email-v1")
-        .send({
-          campaignId: campaign.id,
-          orgId,
-          success: false,
-        })
+        .send({ success: false })
         .expect(200);
 
       // Wait for async re-trigger
@@ -623,11 +641,9 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
-        .send({
-          campaignId: campaign.id,
-          orgId,
-          success: true,
-        })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
+        .send({ success: true })
         .expect(200);
 
       await new Promise((r) => setTimeout(r, 100));
@@ -650,12 +666,9 @@ describe("Pipeline routes", () => {
       const res = await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
-        .send({
-          campaignId: campaign.id,
-          orgId,
-          success: true,
-          leadFound: false,
-        })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
+        .send({ success: true, leadFound: false })
         .expect(200);
 
       expect(res.body.status).toBe("completed");
@@ -690,12 +703,7 @@ describe("Pipeline routes", () => {
         .set("x-brand-id", brandIds[0])
         .set("x-campaign-id", campaign.id)
         .set("x-feature-slug", "sales-cold-email-v1")
-        .send({
-          campaignId: campaign.id,
-          orgId,
-          success: true,
-          leadFound: true,
-        })
+        .send({ success: true, leadFound: true })
         .expect(200);
 
       // Wait for async re-trigger
@@ -720,11 +728,9 @@ describe("Pipeline routes", () => {
       await request(app)
         .post("/end-run")
         .set("x-api-key", API_KEY)
-        .send({
-          campaignId: campaign.id,
-          orgId,
-          success: true,
-        })
+        .set("x-campaign-id", campaign.id)
+        .set("x-org-id", orgId)
+        .send({ success: true })
         .expect(200);
 
       const callArgs = mockListRuns.mock.calls[0][0];

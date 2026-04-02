@@ -397,23 +397,6 @@
           "allowed"
         ]
       },
-      "GateCheckBody": {
-        "type": "object",
-        "properties": {
-          "campaignId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "orgId": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "campaignId",
-          "orgId"
-        ]
-      },
       "StartRunResponse": {
         "type": "object",
         "properties": {
@@ -473,23 +456,6 @@
           "searchParams"
         ]
       },
-      "StartRunBody": {
-        "type": "object",
-        "properties": {
-          "campaignId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "orgId": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "campaignId",
-          "orgId"
-        ]
-      },
       "EndRunResponse": {
         "type": "object",
         "properties": {
@@ -504,14 +470,6 @@
       "EndRunBody": {
         "type": "object",
         "properties": {
-          "campaignId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "orgId": {
-            "type": "string",
-            "minLength": 1
-          },
           "success": {
             "type": "boolean"
           },
@@ -520,8 +478,6 @@
           }
         },
         "required": [
-          "campaignId",
-          "orgId",
           "success"
         ]
       }
@@ -1135,12 +1091,42 @@
           {
             "schema": {
               "type": "string",
+              "description": "Organization UUID (required)"
+            },
+            "required": true,
+            "description": "Organization UUID (required)",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
               "format": "uuid",
-              "description": "Campaign ID (injected by workflow-service)"
+              "description": "Campaign UUID (required)"
+            },
+            "required": true,
+            "description": "Campaign UUID (required)",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "User UUID"
             },
             "required": false,
-            "description": "Campaign ID (injected by workflow-service)",
-            "name": "x-campaign-id",
+            "description": "User UUID",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Parent run UUID"
+            },
+            "required": false,
+            "description": "Parent run UUID",
+            "name": "x-run-id",
             "in": "header"
           },
           {
@@ -1163,17 +1149,18 @@
             "description": "Workflow slug (injected by workflow-service)",
             "name": "x-workflow-slug",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug"
+            },
+            "required": false,
+            "description": "Feature slug",
+            "name": "x-feature-slug",
+            "in": "header"
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GateCheckBody"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "Gate check result",
@@ -1185,8 +1172,18 @@
               }
             }
           },
+          "400": {
+            "description": "Missing required headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "Campaign or org not found",
+            "description": "Campaign not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1214,12 +1211,42 @@
           {
             "schema": {
               "type": "string",
+              "description": "Organization UUID (required)"
+            },
+            "required": true,
+            "description": "Organization UUID (required)",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
               "format": "uuid",
-              "description": "Campaign ID (injected by workflow-service)"
+              "description": "Campaign UUID (required)"
+            },
+            "required": true,
+            "description": "Campaign UUID (required)",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "User UUID"
             },
             "required": false,
-            "description": "Campaign ID (injected by workflow-service)",
-            "name": "x-campaign-id",
+            "description": "User UUID",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Parent run UUID"
+            },
+            "required": false,
+            "description": "Parent run UUID",
+            "name": "x-run-id",
             "in": "header"
           },
           {
@@ -1242,17 +1269,18 @@
             "description": "Workflow slug (injected by workflow-service)",
             "name": "x-workflow-slug",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug"
+            },
+            "required": false,
+            "description": "Feature slug",
+            "name": "x-feature-slug",
+            "in": "header"
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StartRunBody"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "Run created, campaign data returned",
@@ -1265,7 +1293,7 @@
             }
           },
           "400": {
-            "description": "Missing brandIds",
+            "description": "Missing required headers or brandIds",
             "content": {
               "application/json": {
                 "schema": {
@@ -1275,7 +1303,7 @@
             }
           },
           "404": {
-            "description": "Campaign or org not found",
+            "description": "Campaign not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1303,12 +1331,42 @@
           {
             "schema": {
               "type": "string",
+              "description": "Organization UUID (required)"
+            },
+            "required": true,
+            "description": "Organization UUID (required)",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
               "format": "uuid",
-              "description": "Campaign ID (injected by workflow-service)"
+              "description": "Campaign UUID (required)"
+            },
+            "required": true,
+            "description": "Campaign UUID (required)",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "User UUID"
             },
             "required": false,
-            "description": "Campaign ID (injected by workflow-service)",
-            "name": "x-campaign-id",
+            "description": "User UUID",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Parent run UUID"
+            },
+            "required": false,
+            "description": "Parent run UUID",
+            "name": "x-run-id",
             "in": "header"
           },
           {
@@ -1330,6 +1388,16 @@
             "required": false,
             "description": "Workflow slug (injected by workflow-service)",
             "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug"
+            },
+            "required": false,
+            "description": "Feature slug",
+            "name": "x-feature-slug",
             "in": "header"
           }
         ],
