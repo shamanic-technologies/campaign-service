@@ -13,9 +13,7 @@ import {
   GroupedStatsResponse,
   BatchBudgetUsageBody,
   ErrorResponse,
-  GateCheckBody,
   GateCheckResponse,
-  StartRunBody,
   StartRunResponse,
   EndRunBody,
   EndRunResponse,
@@ -199,11 +197,15 @@ registry.registerPath({
 
 // === PIPELINE (called by DAG via workflow-service) ===
 
-const TrackingHeaders = z.object({
-  "x-campaign-id": z.string().uuid().optional().openapi({ description: "Campaign ID (injected by workflow-service)" }),
+const PipelineHeaders = z.object({
+  "x-org-id": z.string().openapi({ description: "Organization UUID (required)" }),
+  "x-campaign-id": z.string().uuid().openapi({ description: "Campaign UUID (required)" }),
+  "x-user-id": z.string().optional().openapi({ description: "User UUID" }),
+  "x-run-id": z.string().optional().openapi({ description: "Parent run UUID" }),
   "x-brand-id": z.string().optional().openapi({ description: "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.", example: "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8" }),
   "x-workflow-slug": z.string().optional().openapi({ description: "Workflow slug (injected by workflow-service)" }),
-}).openapi("TrackingHeaders");
+  "x-feature-slug": z.string().optional().openapi({ description: "Feature slug" }),
+}).openapi("PipelineHeaders");
 
 registry.registerPath({
   method: "post",
@@ -213,12 +215,12 @@ registry.registerPath({
   description: "Validates budget limits (daily/weekly/monthly/total) via runs-service stats/budget, volume limits (maxLeads), campaign status, and consecutive failures. Auto-stops the campaign if total budget or maxLeads is exceeded. Called as the first DAG node.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: {
-    headers: TrackingHeaders,
-    body: { content: { "application/json": { schema: GateCheckBody } } },
+    headers: PipelineHeaders,
   },
   responses: {
     200: { description: "Gate check result", content: { "application/json": { schema: GateCheckResponse } } },
-    404: { description: "Campaign or org not found", content: { "application/json": { schema: ErrorResponse } } },
+    400: { description: "Missing required headers", content: { "application/json": { schema: ErrorResponse } } },
+    404: { description: "Campaign not found", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 
@@ -230,13 +232,12 @@ registry.registerPath({
   description: "Creates a new run in runs-service and returns all campaign data needed by downstream DAG nodes (brand-profile, fetch-lead, email-generate, etc.).",
   security: [{ [apiKeyAuth.name]: [] }],
   request: {
-    headers: TrackingHeaders,
-    body: { content: { "application/json": { schema: StartRunBody } } },
+    headers: PipelineHeaders,
   },
   responses: {
     200: { description: "Run created, campaign data returned", content: { "application/json": { schema: StartRunResponse } } },
-    400: { description: "Missing brandIds", content: { "application/json": { schema: ErrorResponse } } },
-    404: { description: "Campaign or org not found", content: { "application/json": { schema: ErrorResponse } } },
+    400: { description: "Missing required headers or brandIds", content: { "application/json": { schema: ErrorResponse } } },
+    404: { description: "Campaign not found", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 
@@ -248,7 +249,7 @@ registry.registerPath({
   description: "Finds any running runs for the campaign and marks them as completed or failed. Then re-triggers the workflow if the campaign is still ongoing. Does not require runId — finds running runs via runs-service.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: {
-    headers: TrackingHeaders,
+    headers: PipelineHeaders,
     body: { content: { "application/json": { schema: EndRunBody } } },
   },
   responses: {

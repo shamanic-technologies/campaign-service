@@ -135,10 +135,7 @@ export const BatchBudgetUsageBody = z.object({
 
 // --- Pipeline endpoints (called by DAG) ---
 
-export const GateCheckBody = z.object({
-  campaignId: z.string().uuid("campaignId must be a valid UUID"),
-  orgId: z.string().min(1, "orgId is required"),
-}).openapi("GateCheckBody");
+export const GateCheckBody = z.object({}).openapi("GateCheckBody");
 
 export const GateCheckResponse = z.object({
   allowed: z.boolean(),
@@ -146,10 +143,7 @@ export const GateCheckResponse = z.object({
   autoStopped: z.boolean().optional(),
 }).openapi("GateCheckResponse");
 
-export const StartRunBody = z.object({
-  campaignId: z.string().uuid("campaignId must be a valid UUID"),
-  orgId: z.string().min(1, "orgId is required"),
-}).openapi("StartRunBody");
+export const StartRunBody = z.object({}).openapi("StartRunBody");
 
 export const StartRunResponse = z.object({
   runId: z.string().uuid(),
@@ -164,8 +158,6 @@ export const StartRunResponse = z.object({
 }).openapi("StartRunResponse");
 
 export const EndRunBody = z.object({
-  campaignId: z.string().uuid("campaignId must be a valid UUID"),
-  orgId: z.string().min(1, "orgId is required"),
   success: z.boolean(),
   leadFound: z.boolean().optional(),
 }).openapi("EndRunBody");

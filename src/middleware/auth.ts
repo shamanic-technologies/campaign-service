@@ -58,18 +58,27 @@ export function requireOrg(
 
 /**
  * Reads optional tracking headers injected by workflow-service:
- * x-campaign-id, x-brand-id, x-workflow-slug
+ * x-org-id, x-user-id, x-run-id, x-campaign-id, x-brand-id,
+ * x-workflow-slug, x-feature-slug.
+ *
+ * Does NOT overwrite values already set by serviceAuth.
  */
 export function trackingHeaders(
   req: AuthenticatedRequest,
   _res: Response,
   next: NextFunction
 ) {
+  const orgId = req.headers["x-org-id"] as string | undefined;
+  const userId = req.headers["x-user-id"] as string | undefined;
+  const runId = req.headers["x-run-id"] as string | undefined;
   const campaignId = req.headers["x-campaign-id"] as string | undefined;
   const brandIds = parseBrandIdHeader(req.headers["x-brand-id"] as string | undefined);
   const workflowSlug = req.headers["x-workflow-slug"] as string | undefined;
   const featureSlug = req.headers["x-feature-slug"] as string | undefined;
 
+  if (orgId && !req.orgId) req.orgId = orgId;
+  if (userId && !req.userId) req.userId = userId;
+  if (runId && !req.runId) req.runId = runId;
   if (campaignId) req.campaignId = campaignId;
   if (brandIds.length > 0) req.brandIds = brandIds;
   if (workflowSlug) req.workflowSlug = workflowSlug;

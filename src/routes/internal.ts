@@ -7,7 +7,7 @@ import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
 import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
-import { GateCheckBody, StartRunBody, EndRunBody } from "../schemas.js";
+import { EndRunBody } from "../schemas.js";
 
 const router = Router();
 
@@ -27,9 +27,14 @@ const router = Router();
  *   404 — campaign not found
  *   500 — internal error
  */
-router.post("/gate-check", requireApiKey, trackingHeaders, validateBody(GateCheckBody), async (req: AuthenticatedRequest, res) => {
+router.post("/gate-check", requireApiKey, trackingHeaders, async (req: AuthenticatedRequest, res) => {
   try {
-    const { campaignId, orgId } = req.body;
+    const campaignId = req.campaignId;
+    const orgId = req.orgId || (req.headers["x-org-id"] as string);
+
+    if (!campaignId || !orgId) {
+      return res.status(400).json({ error: "x-campaign-id and x-org-id headers are required" });
+    }
 
     const campaign = await db.query.campaigns.findFirst({
       where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
@@ -90,9 +95,14 @@ router.post("/gate-check", requireApiKey, trackingHeaders, validateBody(GateChec
  *   404 — campaign not found
  *   500 — internal error
  */
-router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunBody), async (req: AuthenticatedRequest, res) => {
+router.post("/start-run", requireApiKey, trackingHeaders, async (req: AuthenticatedRequest, res) => {
   try {
-    const { campaignId, orgId } = req.body;
+    const campaignId = req.campaignId;
+    const orgId = req.orgId || (req.headers["x-org-id"] as string);
+
+    if (!campaignId || !orgId) {
+      return res.status(400).json({ error: "x-campaign-id and x-org-id headers are required" });
+    }
 
     const campaign = await db.query.campaigns.findFirst({
       where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
@@ -158,14 +168,20 @@ router.post("/start-run", requireApiKey, trackingHeaders, validateBody(StartRunB
  */
 router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody), async (req: AuthenticatedRequest, res) => {
   try {
-    const { campaignId, orgId, success, leadFound } = req.body;
+    const campaignId = req.campaignId;
+    const orgId = req.orgId || (req.headers["x-org-id"] as string);
+    const { success, leadFound } = req.body;
+
+    if (!campaignId || !orgId) {
+      return res.status(400).json({ error: "x-campaign-id and x-org-id headers are required" });
+    }
 
     const status = success === true ? "completed" : "failed";
     const identity: IdentityHeaders = {
-      orgId: (req.headers["x-org-id"] as string) || orgId,
-      userId: req.headers["x-user-id"] as string | undefined,
-      runId: req.headers["x-run-id"] as string | undefined,
-      campaignId: req.campaignId,
+      orgId,
+      userId: req.userId,
+      runId: req.runId,
+      campaignId,
       brandId: req.brandIds?.join(","),
       workflowSlug: req.workflowSlug,
       featureSlug: req.featureSlug,
