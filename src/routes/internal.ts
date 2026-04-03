@@ -232,18 +232,10 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         return;
       }
 
-      // Create a new run for the re-trigger, linked to the campaign's parentRunId
-      const newRun = await createRun({
-        orgId,
-        serviceName: "campaign-service",
-        taskName: campaignId,
-        campaignId,
-        brandId: brandIdCsv,
-        userId,
-        parentRunId: freshCampaign.parentRunId || undefined,
-        workflowSlug: freshCampaign.workflowSlug,
-        featureSlug,
-      });
+      // Do NOT create a run here — /start-run in the new workflow will create it.
+      // Creating one here causes a race: gate-check in the new workflow sees it as
+      // "running" and blocks with "A run is already in progress".
+      const runId = freshCampaign.parentRunId || crypto.randomUUID();
 
       // Fire-and-forget: gate-check in the next workflow execution will validate limits
       executeCampaignWorkflow(freshCampaign.workflowSlug, {
@@ -251,7 +243,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         orgId,
         brandId: brandIdCsv,
         userId,
-        runId: newRun.id,
+        runId,
         featureSlug,
       }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);

@@ -572,7 +572,9 @@ describe("Pipeline routes", () => {
       // Wait for async re-trigger
       await new Promise((r) => setTimeout(r, 100));
 
-      expect(mockCreateRun).toHaveBeenCalled();
+      // end-run must NOT create a run — /start-run in the new workflow handles that.
+      // Creating one here would cause gate-check to block with "A run is already in progress".
+      expect(mockCreateRun).not.toHaveBeenCalled();
       expect(mockExecute).toHaveBeenCalledWith(
         "sales-email-cold-outreach",
         expect.objectContaining({
@@ -582,7 +584,7 @@ describe("Pipeline routes", () => {
       );
     });
 
-    it("should create a new run for re-trigger with parentRunId from campaign", async () => {
+    it("should use parentRunId from campaign as runId for re-trigger", async () => {
       const parentRunId = crypto.randomUUID();
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
@@ -601,8 +603,9 @@ describe("Pipeline routes", () => {
 
       await new Promise((r) => setTimeout(r, 100));
 
-      expect(mockCreateRun).toHaveBeenCalledWith(
-        expect.objectContaining({ parentRunId }),
+      expect(mockExecute).toHaveBeenCalledWith(
+        "sales-email-cold-outreach",
+        expect.objectContaining({ runId: parentRunId }),
       );
     });
 
