@@ -2,11 +2,11 @@ import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
-import { requireApiKey, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
+import { requireApiKey, requirePipelineHeaders, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
-import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
+import { executeCampaignWorkflow } from "../lib/workflows.js";
 import { EndRunBody } from "../schemas.js";
 
 const router = Router();
@@ -24,17 +24,14 @@ const router = Router();
  *
  * Returns:
  *   200 — gate check result (allowed or blocked)
+ *   400 — missing required headers
  *   404 — campaign not found
  *   500 — internal error
  */
-router.post("/gate-check", requireApiKey, trackingHeaders, async (req: AuthenticatedRequest, res) => {
+router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeaders, async (req: AuthenticatedRequest, res) => {
   try {
-    const campaignId = req.campaignId;
-    const orgId = req.orgId || (req.headers["x-org-id"] as string);
-
-    if (!campaignId || !orgId) {
-      return res.status(400).json({ error: "x-campaign-id and x-org-id headers are required" });
-    }
+    const campaignId = req.campaignId!;
+    const orgId = req.orgId!;
 
     const campaign = await db.query.campaigns.findFirst({
       where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
@@ -47,8 +44,8 @@ router.post("/gate-check", requireApiKey, trackingHeaders, async (req: Authentic
     const result = await runGateChecks({
       campaignId,
       orgId,
-      userId: req.headers["x-user-id"] as string | undefined,
-      runId: req.headers["x-run-id"] as string | undefined,
+      userId: req.userId,
+      runId: req.runId,
       brandId: resolvedBrandIds.join(","),
       workflowSlug: req.workflowSlug || campaign.workflowSlug,
       status: campaign.status,
@@ -91,18 +88,14 @@ router.post("/gate-check", requireApiKey, trackingHeaders, async (req: Authentic
  *
  * Returns:
  *   200 — run started, campaign data returned
- *   400 — bad request (missing brandIds)
+ *   400 — bad request (missing headers or brandIds)
  *   404 — campaign not found
  *   500 — internal error
  */
-router.post("/start-run", requireApiKey, trackingHeaders, async (req: AuthenticatedRequest, res) => {
+router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders, async (req: AuthenticatedRequest, res) => {
   try {
-    const campaignId = req.campaignId;
-    const orgId = req.orgId || (req.headers["x-org-id"] as string);
-
-    if (!campaignId || !orgId) {
-      return res.status(400).json({ error: "x-campaign-id and x-org-id headers are required" });
-    }
+    const campaignId = req.campaignId!;
+    const orgId = req.orgId!;
 
     const campaign = await db.query.campaigns.findFirst({
       where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
@@ -120,7 +113,7 @@ router.post("/start-run", requireApiKey, trackingHeaders, async (req: Authentica
     const featureSlug = req.featureSlug || undefined;
 
     // Create run in runs-service (x-run-id from caller becomes parentRunId)
-    const parentRunId = req.headers["x-run-id"] as string | undefined;
+    const parentRunId = req.runId;
     const brandIdCsv = campaign.brandIds!.join(",");
     const run = await createRun({
       orgId,
@@ -159,22 +152,22 @@ router.post("/start-run", requireApiKey, trackingHeaders, async (req: Authentica
  * POST /end-run
  *
  * Marks the running run as completed or failed, then re-triggers the
- * workflow if the campaign is still ongoing.
+ * workflow if the campaign is still ongoing and stopCampaign is false.
+ *
+ * Body: { success: boolean, stopCampaign: boolean }
+ *   - success: whether the run completed successfully
+ *   - stopCampaign: whether to auto-stop the campaign (no more work to do)
  *
  * Does NOT require runId — finds the running run via runs-service.
  * This lets it handle both the happy path (email-send → end-run) and
  * the error path (onError → end-run-error) including cases where
  * no run was created (gate-check blocked).
  */
-router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody), async (req: AuthenticatedRequest, res) => {
+router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, validateBody(EndRunBody), async (req: AuthenticatedRequest, res) => {
   try {
-    const campaignId = req.campaignId;
-    const orgId = req.orgId || (req.headers["x-org-id"] as string);
-    const { success, leadFound } = req.body;
-
-    if (!campaignId || !orgId) {
-      return res.status(400).json({ error: "x-campaign-id and x-org-id headers are required" });
-    }
+    const campaignId = req.campaignId!;
+    const orgId = req.orgId!;
+    const { success, stopCampaign } = req.body;
 
     const status = success === true ? "completed" : "failed";
     const identity: IdentityHeaders = {
@@ -206,13 +199,13 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
     // Respond immediately, then handle re-trigger asynchronously
     res.json({ status });
 
-    // No leads found → auto-stop campaign, no re-trigger
-    if (success === true && leadFound === false) {
+    // stopCampaign → auto-stop campaign, no re-trigger
+    if (stopCampaign === true) {
       try {
         await db.update(campaigns)
-          .set({ status: "stopped" })
+          .set({ status: "stopped", updatedAt: new Date() })
           .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)));
-        console.warn(`[End Run] No leads found — auto-stopped campaign ${campaignId}`);
+        console.warn(`[End Run] stopCampaign=true — auto-stopped campaign ${campaignId}`);
       } catch (err) {
         console.error(`[End Run] Failed to auto-stop campaign:`, err);
       }
@@ -221,7 +214,7 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
 
     // Re-trigger if campaign is still ongoing
     try {
-      // Re-fetch campaign for fresh status (may have been auto-stopped by gate-check)
+      // Re-fetch campaign for fresh status and stored data
       const freshCampaign = await db.query.campaigns.findFirst({
         where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
       });
@@ -229,25 +222,38 @@ router.post("/end-run", requireApiKey, trackingHeaders, validateBody(EndRunBody)
         return;
       }
 
-      const resolvedBrandIdCsv = (req.brandIds && req.brandIds.length > 0) ? req.brandIds.join(",") : (freshCampaign.brandIds ?? []).join(",");
-      const resolvedFeatureSlug = identity.featureSlug || "";
+      // Resolve all fields from the campaign DB record — no dependence on forwarded headers
+      const brandIdCsv = (freshCampaign.brandIds ?? []).join(",");
+      const userId = freshCampaign.createdByUserId;
+      const featureSlug = freshCampaign.featureSlug;
 
-      const retriggerInputs = {
-        campaignId,
-        orgId,
-        brandId: resolvedBrandIdCsv || "",
-        userId: identity.userId || "",
-        runId: identity.runId || "",
-        featureSlug: resolvedFeatureSlug,
-      };
-      const missingRetrigger = validateWorkflowInputs(retriggerInputs);
-      if (missingRetrigger.length > 0) {
-        console.warn(`[End Run] Cannot re-trigger campaign ${campaignId} — missing required fields: ${missingRetrigger.join(", ")}`);
+      if (!brandIdCsv || !userId || !featureSlug) {
+        console.warn(`[End Run] Cannot re-trigger campaign ${campaignId} — missing campaign data: brandIds=${!!brandIdCsv}, userId=${!!userId}, featureSlug=${!!featureSlug}`);
         return;
       }
 
+      // Create a new run for the re-trigger, linked to the campaign's parentRunId
+      const newRun = await createRun({
+        orgId,
+        serviceName: "campaign-service",
+        taskName: campaignId,
+        campaignId,
+        brandId: brandIdCsv,
+        userId,
+        parentRunId: freshCampaign.parentRunId || undefined,
+        workflowSlug: freshCampaign.workflowSlug,
+        featureSlug,
+      });
+
       // Fire-and-forget: gate-check in the next workflow execution will validate limits
-      executeCampaignWorkflow(freshCampaign.workflowSlug, retriggerInputs).catch((err) => {
+      executeCampaignWorkflow(freshCampaign.workflowSlug, {
+        campaignId,
+        orgId,
+        brandId: brandIdCsv,
+        userId,
+        runId: newRun.id,
+        featureSlug,
+      }).catch((err) => {
         console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
       });
     } catch (err) {

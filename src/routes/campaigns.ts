@@ -199,6 +199,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       .values({
         orgId: req.orgId!,
         createdByUserId: req.userId ?? null,
+        parentRunId: req.runId ?? null,
         name,
         workflowSlug: resolvedWorkflowSlug,
         workflowDynastySlug: workflowDynastySlug ?? null,

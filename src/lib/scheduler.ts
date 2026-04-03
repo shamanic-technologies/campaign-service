@@ -18,6 +18,7 @@ export async function resumeDueCampaigns(): Promise<number> {
       id: campaigns.id,
       orgId: campaigns.orgId,
       createdByUserId: campaigns.createdByUserId,
+      parentRunId: campaigns.parentRunId,
       workflowSlug: campaigns.workflowSlug,
       brandIds: campaigns.brandIds,
       featureSlug: campaigns.featureSlug,
@@ -63,6 +64,7 @@ export async function resumeDueCampaigns(): Promise<number> {
         userId,
         campaignId: campaign.id,
         brandId: brandIdCsv,
+        parentRunId: campaign.parentRunId || undefined,
         workflowSlug: campaign.workflowSlug,
         featureSlug,
       });

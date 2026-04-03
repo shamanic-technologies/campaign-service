@@ -88,6 +88,34 @@ export function trackingHeaders(
 }
 
 /**
+ * Require all pipeline headers (called by DAG nodes via workflow-service).
+ * Workflow-service forwards all headers to every node — if any is missing,
+ * it's a misconfiguration. Returns 400 with the list of missing headers.
+ */
+const REQUIRED_PIPELINE_HEADERS = [
+  "x-org-id",
+  "x-campaign-id",
+  "x-user-id",
+  "x-run-id",
+  "x-workflow-slug",
+  "x-feature-slug",
+] as const;
+
+export function requirePipelineHeaders(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+) {
+  const missing = REQUIRED_PIPELINE_HEADERS.filter((h) => !req.headers[h]);
+  if (missing.length > 0) {
+    return res.status(400).json({
+      error: `Missing required pipeline headers: ${missing.join(", ")}`,
+    });
+  }
+  next();
+}
+
+/**
  * Middleware to verify CAMPAIGN_SERVICE_API_KEY for internal service-to-service calls
  * Checks x-api-key header against CAMPAIGN_SERVICE_API_KEY env var
  */

@@ -13,6 +13,7 @@ export const CampaignSchema = z.object({
   id: z.string().uuid(),
   orgId: z.string(),
   createdByUserId: z.string().nullable(),
+  parentRunId: z.string().nullable(),
   name: z.string(),
   workflowSlug: z.string(),
   workflowDynastySlug: z.string().nullable(),
@@ -159,7 +160,7 @@ export const StartRunResponse = z.object({
 
 export const EndRunBody = z.object({
   success: z.boolean(),
-  leadFound: z.boolean().optional(),
+  stopCampaign: z.boolean(),
 }).openapi("EndRunBody");
 
 export const EndRunResponse = z.object({
