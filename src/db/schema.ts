@@ -8,6 +8,9 @@ export const campaigns = pgTable(
     orgId: text("org_id").notNull(),
     createdByUserId: text("created_by_user_id"),
 
+    // The run ID that initiated the campaign (from x-run-id at creation time)
+    parentRunId: text("parent_run_id"),
+
     name: text("name").notNull(),
 
     // Workflow slug — resolved by workflow-service, passed at campaign creation

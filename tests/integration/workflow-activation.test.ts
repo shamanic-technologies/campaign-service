@@ -76,7 +76,7 @@ describe("Workflow trigger", () => {
         expect.objectContaining({
           campaignId,
           orgId: "org_activation_test",
-          brandIds: validBody.brandIds,
+          brandId: validBody.brandIds.join(","),
           userId: "user_activation_test",
           featureSlug: "sales-cold-email-v1",
         }),

@@ -34,6 +34,10 @@
             "type": "string",
             "nullable": true
           },
+          "parentRunId": {
+            "type": "string",
+            "nullable": true
+          },
           "name": {
             "type": "string"
           },
@@ -125,6 +129,7 @@
           "id",
           "orgId",
           "createdByUserId",
+          "parentRunId",
           "name",
           "workflowSlug",
           "workflowDynastySlug",
@@ -473,12 +478,13 @@
           "success": {
             "type": "boolean"
           },
-          "leadFound": {
+          "stopCampaign": {
             "type": "boolean"
           }
         },
         "required": [
-          "success"
+          "success",
+          "stopCampaign"
         ]
       }
     },
@@ -1112,51 +1118,51 @@
           {
             "schema": {
               "type": "string",
-              "description": "User UUID"
+              "description": "User UUID (required)"
             },
-            "required": false,
-            "description": "User UUID",
+            "required": true,
+            "description": "User UUID (required)",
             "name": "x-user-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Parent run UUID"
+              "description": "Parent run UUID (required)"
             },
-            "required": false,
-            "description": "Parent run UUID",
+            "required": true,
+            "description": "Parent run UUID (required)",
             "name": "x-run-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
+              "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Optional — resolved from campaign DB if absent.",
               "example": "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8"
             },
             "required": false,
-            "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
+            "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Optional — resolved from campaign DB if absent.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow slug (injected by workflow-service)"
+              "description": "Workflow slug (required, injected by workflow-service)"
             },
-            "required": false,
-            "description": "Workflow slug (injected by workflow-service)",
+            "required": true,
+            "description": "Workflow slug (required, injected by workflow-service)",
             "name": "x-workflow-slug",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug"
+              "description": "Feature slug (required)"
             },
-            "required": false,
-            "description": "Feature slug",
+            "required": true,
+            "description": "Feature slug (required)",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -1232,51 +1238,51 @@
           {
             "schema": {
               "type": "string",
-              "description": "User UUID"
+              "description": "User UUID (required)"
             },
-            "required": false,
-            "description": "User UUID",
+            "required": true,
+            "description": "User UUID (required)",
             "name": "x-user-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Parent run UUID"
+              "description": "Parent run UUID (required)"
             },
-            "required": false,
-            "description": "Parent run UUID",
+            "required": true,
+            "description": "Parent run UUID (required)",
             "name": "x-run-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
+              "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Optional — resolved from campaign DB if absent.",
               "example": "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8"
             },
             "required": false,
-            "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
+            "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Optional — resolved from campaign DB if absent.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow slug (injected by workflow-service)"
+              "description": "Workflow slug (required, injected by workflow-service)"
             },
-            "required": false,
-            "description": "Workflow slug (injected by workflow-service)",
+            "required": true,
+            "description": "Workflow slug (required, injected by workflow-service)",
             "name": "x-workflow-slug",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug"
+              "description": "Feature slug (required)"
             },
-            "required": false,
-            "description": "Feature slug",
+            "required": true,
+            "description": "Feature slug (required)",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -1320,8 +1326,8 @@
         "tags": [
           "Pipeline"
         ],
-        "summary": "Finalize run and re-trigger workflow if campaign is ongoing",
-        "description": "Finds any running runs for the campaign and marks them as completed or failed. Then re-triggers the workflow if the campaign is still ongoing. Does not require runId — finds running runs via runs-service.",
+        "summary": "Finalize run and optionally stop or re-trigger campaign",
+        "description": "Marks running runs as completed or failed. If stopCampaign=true, auto-stops the campaign. Otherwise re-triggers the workflow if the campaign is still ongoing. Body requires { success: boolean, stopCampaign: boolean }.",
         "security": [
           {
             "apiKeyAuth": []
@@ -1352,51 +1358,51 @@
           {
             "schema": {
               "type": "string",
-              "description": "User UUID"
+              "description": "User UUID (required)"
             },
-            "required": false,
-            "description": "User UUID",
+            "required": true,
+            "description": "User UUID (required)",
             "name": "x-user-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Parent run UUID"
+              "description": "Parent run UUID (required)"
             },
-            "required": false,
-            "description": "Parent run UUID",
+            "required": true,
+            "description": "Parent run UUID (required)",
             "name": "x-run-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
+              "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Optional — resolved from campaign DB if absent.",
               "example": "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8"
             },
             "required": false,
-            "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.",
+            "description": "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Optional — resolved from campaign DB if absent.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow slug (injected by workflow-service)"
+              "description": "Workflow slug (required, injected by workflow-service)"
             },
-            "required": false,
-            "description": "Workflow slug (injected by workflow-service)",
+            "required": true,
+            "description": "Workflow slug (required, injected by workflow-service)",
             "name": "x-workflow-slug",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug"
+              "description": "Feature slug (required)"
             },
-            "required": false,
-            "description": "Feature slug",
+            "required": true,
+            "description": "Feature slug (required)",
             "name": "x-feature-slug",
             "in": "header"
           }

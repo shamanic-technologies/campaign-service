@@ -42,6 +42,19 @@ import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.j
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
+/** All required pipeline headers for a valid DAG request */
+function pipelineHeaders(overrides: Record<string, string> = {}) {
+  return {
+    "x-api-key": API_KEY,
+    "x-org-id": overrides["x-org-id"] ?? "org_internal_test",
+    "x-campaign-id": overrides["x-campaign-id"] ?? crypto.randomUUID(),
+    "x-user-id": overrides["x-user-id"] ?? "user_test",
+    "x-run-id": overrides["x-run-id"] ?? crypto.randomUUID(),
+    "x-workflow-slug": overrides["x-workflow-slug"] ?? "sales-email-cold-outreach",
+    "x-feature-slug": overrides["x-feature-slug"] ?? "sales-cold-email-v1",
+  };
+}
+
 describe("Pipeline routes", () => {
   const orgId = "org_internal_test";
   const brandIds = [crypto.randomUUID()];
@@ -67,42 +80,65 @@ describe("Pipeline routes", () => {
 
   describe("POST /gate-check", () => {
     it("should return 400 if x-campaign-id header is missing", async () => {
+      const headers = pipelineHeaders();
+      delete (headers as any)["x-campaign-id"];
       await request(app)
         .post("/gate-check")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "some-org")
+        .set(headers)
         .expect(400);
     });
 
     it("should return 400 if x-org-id header is missing", async () => {
+      const headers = pipelineHeaders();
+      delete (headers as any)["x-org-id"];
       await request(app)
         .post("/gate-check")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", crypto.randomUUID())
+        .set(headers)
+        .expect(400);
+    });
+
+    it("should return 400 if x-workflow-slug header is missing", async () => {
+      const headers = pipelineHeaders();
+      delete (headers as any)["x-workflow-slug"];
+      await request(app)
+        .post("/gate-check")
+        .set(headers)
+        .expect(400);
+    });
+
+    it("should return 400 if x-user-id header is missing", async () => {
+      const headers = pipelineHeaders();
+      delete (headers as any)["x-user-id"];
+      await request(app)
+        .post("/gate-check")
+        .set(headers)
+        .expect(400);
+    });
+
+    it("should return 400 if x-feature-slug header is missing", async () => {
+      const headers = pipelineHeaders();
+      delete (headers as any)["x-feature-slug"];
+      await request(app)
+        .post("/gate-check")
+        .set(headers)
         .expect(400);
     });
 
     it("should return 404 if campaign not found", async () => {
       const res = await request(app)
         .post("/gate-check")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", crypto.randomUUID())
-        .set("x-org-id", "nonexistent-org")
+        .set(pipelineHeaders({ "x-org-id": "nonexistent-org" }))
         .expect(404);
 
       expect(res.body.error).toBe("Campaign not found");
     });
 
     it("should return allowed: true when gate checks pass", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
         .post("/gate-check")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(res.body.allowed).toBe(true);
@@ -110,9 +146,7 @@ describe("Pipeline routes", () => {
     });
 
     it("should return allowed: false with reason when gate checks fail", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       mockGateChecks.mockResolvedValue({
         allowed: false,
@@ -121,9 +155,7 @@ describe("Pipeline routes", () => {
 
       const res = await request(app)
         .post("/gate-check")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(res.body.allowed).toBe(false);
@@ -131,9 +163,7 @@ describe("Pipeline routes", () => {
     });
 
     it("should return autoStopped flag when campaign is auto-stopped", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       mockGateChecks.mockResolvedValue({
         allowed: false,
@@ -143,9 +173,7 @@ describe("Pipeline routes", () => {
 
       const res = await request(app)
         .post("/gate-check")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(res.body.allowed).toBe(false);
@@ -153,9 +181,7 @@ describe("Pipeline routes", () => {
     });
 
     it("should save toResumeAt to DB when gate-check returns it", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
@@ -169,12 +195,9 @@ describe("Pipeline routes", () => {
 
       await request(app)
         .post("/gate-check")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      // Verify toResumeAt was saved to the DB
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
@@ -183,9 +206,7 @@ describe("Pipeline routes", () => {
     });
 
     it("should NOT save toResumeAt when gate-check does not return it", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       mockGateChecks.mockResolvedValue({
         allowed: false,
@@ -195,9 +216,7 @@ describe("Pipeline routes", () => {
 
       await request(app)
         .post("/gate-check")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       const updated = await db.query.campaigns.findFirst({
@@ -215,16 +234,14 @@ describe("Pipeline routes", () => {
 
       await request(app)
         .post("/gate-check")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(mockGateChecks).toHaveBeenCalledWith(
         expect.objectContaining({
           campaignId: campaign.id,
           orgId,
-          brandIds,
+          brandId: brandIds.join(","),
           status: "ongoing",
           maxBudgetDailyUsd: "50.00",
           maxLeads: 100,
@@ -237,19 +254,27 @@ describe("Pipeline routes", () => {
 
   describe("POST /start-run", () => {
     it("should return 400 if x-campaign-id header is missing", async () => {
+      const headers = pipelineHeaders();
+      delete (headers as any)["x-campaign-id"];
       await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "some-org")
+        .set(headers)
+        .expect(400);
+    });
+
+    it("should return 400 if x-user-id header is missing", async () => {
+      const headers = pipelineHeaders();
+      delete (headers as any)["x-user-id"];
+      await request(app)
+        .post("/start-run")
+        .set(headers)
         .expect(400);
     });
 
     it("should return 404 if campaign not found", async () => {
       const res = await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", crypto.randomUUID())
-        .set("x-org-id", "nonexistent-org")
+        .set(pipelineHeaders({ "x-org-id": "nonexistent-org" }))
         .expect(404);
 
       expect(res.body.error).toBe("Campaign not found");
@@ -262,24 +287,18 @@ describe("Pipeline routes", () => {
 
       const res = await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(400);
 
       expect(res.body.error).toBe("Campaign has no brandIds");
     });
 
     it("should return 200 with campaign data and runId", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(res.body.runId).toBe("run-123");
@@ -292,15 +311,11 @@ describe("Pipeline routes", () => {
     });
 
     it("should not return sales-specific fields", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(res.body).not.toHaveProperty("urgency");
@@ -310,15 +325,11 @@ describe("Pipeline routes", () => {
     });
 
     it("should have null searchParams when no featureInputs", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(res.body.searchParams).toBeNull();
@@ -326,37 +337,19 @@ describe("Pipeline routes", () => {
 
     it("should pass x-run-id header as parentRunId to createRun", async () => {
       const parentRunId = crypto.randomUUID();
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
-        .set("x-run-id", parentRunId)
+        .set(pipelineHeaders({
+          "x-org-id": orgId,
+          "x-campaign-id": campaign.id,
+          "x-run-id": parentRunId,
+        }))
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
         expect.objectContaining({ parentRunId }),
-      );
-    });
-
-    it("should NOT pass parentRunId to createRun when x-run-id header is absent", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
-
-      await request(app)
-        .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
-        .expect(200);
-
-      expect(mockCreateRun).toHaveBeenCalledWith(
-        expect.not.objectContaining({ parentRunId: expect.any(String) }),
       );
     });
 
@@ -368,9 +361,7 @@ describe("Pipeline routes", () => {
 
       await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -379,16 +370,15 @@ describe("Pipeline routes", () => {
     });
 
     it("should pass featureSlug to createRun", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
-        .set("x-feature-slug", "sales-cold-email-v1")
+        .set(pipelineHeaders({
+          "x-org-id": orgId,
+          "x-campaign-id": campaign.id,
+          "x-feature-slug": "sales-cold-email-v1",
+        }))
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -404,10 +394,11 @@ describe("Pipeline routes", () => {
 
       await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
-        .set("x-feature-slug", "header-slug")
+        .set(pipelineHeaders({
+          "x-org-id": orgId,
+          "x-campaign-id": campaign.id,
+          "x-feature-slug": "header-slug",
+        }))
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
@@ -424,9 +415,7 @@ describe("Pipeline routes", () => {
 
       const res = await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(res.body.featureSlug).toBe("pr-media-pitch-v1");
@@ -441,39 +430,29 @@ describe("Pipeline routes", () => {
 
       const res = await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(res.body.searchParams).toEqual({ mediaType: "podcast", region: "US" });
     });
 
     it("should NOT call gate checks (gate check is a separate DAG node)", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       expect(mockGateChecks).not.toHaveBeenCalled();
     });
 
     it("should not pass appId to createRun", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       await request(app)
         .post("/start-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
       const callArgs = mockCreateRun.mock.calls[0][0];
@@ -485,28 +464,45 @@ describe("Pipeline routes", () => {
 
   describe("POST /end-run", () => {
     it("should return 400 if success field is missing from body", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
       await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", crypto.randomUUID())
-        .set("x-org-id", "org-1")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .send({})
         .expect(400);
     });
 
-    it("should return 400 if x-campaign-id header is missing", async () => {
+    it("should return 400 if stopCampaign field is missing from body", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
       await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", "org-1")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .send({ success: true })
         .expect(400);
     });
 
+    it("should return 400 if x-campaign-id header is missing", async () => {
+      const headers = pipelineHeaders();
+      delete (headers as any)["x-campaign-id"];
+      await request(app)
+        .post("/end-run")
+        .set(headers)
+        .send({ success: true, stopCampaign: false })
+        .expect(400);
+    });
+
+    it("should return 400 if x-workflow-slug header is missing", async () => {
+      const headers = pipelineHeaders();
+      delete (headers as any)["x-workflow-slug"];
+      await request(app)
+        .post("/end-run")
+        .set(headers)
+        .send({ success: true, stopCampaign: false })
+        .expect(400);
+    });
+
     it("should find and mark running run as completed when success is true", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       mockListRuns.mockResolvedValue({
         runs: [
@@ -516,10 +512,8 @@ describe("Pipeline routes", () => {
 
       const res = await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
-        .send({ success: true })
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: false })
         .expect(200);
 
       expect(res.body.status).toBe("completed");
@@ -527,9 +521,7 @@ describe("Pipeline routes", () => {
     });
 
     it("should find and mark running run as failed when success is false", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       mockListRuns.mockResolvedValue({
         runs: [
@@ -539,10 +531,8 @@ describe("Pipeline routes", () => {
 
       const res = await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
-        .send({ success: false })
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: false, stopCampaign: false })
         .expect(200);
 
       expect(res.body.status).toBe("failed");
@@ -550,85 +540,69 @@ describe("Pipeline routes", () => {
     });
 
     it("should skip run update when no running runs exist (gate-check blocked)", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       mockListRuns.mockResolvedValue({ runs: [] });
 
       const res = await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
-        .send({ success: false })
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: false, stopCampaign: false })
         .expect(200);
 
       expect(res.body.status).toBe("failed");
       expect(mockUpdateRun).not.toHaveBeenCalled();
     });
 
-    it("should re-trigger workflow using workflowSlug if campaign is still ongoing", async () => {
+    it("should re-trigger workflow when stopCampaign is false and campaign is ongoing", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
         workflowSlug: "sales-email-cold-outreach",
         featureSlug: "sales-cold-email-v1",
+        createdByUserId: "user_test",
       });
 
-      const runId = crypto.randomUUID();
       await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", orgId)
-        .set("x-run-id", runId)
-        .set("x-user-id", "user_test")
-        .set("x-brand-id", brandIds[0])
-        .set("x-campaign-id", campaign.id)
-        .set("x-feature-slug", "sales-cold-email-v1")
-        .send({ success: true })
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: false })
         .expect(200);
 
       // Wait for async re-trigger
       await new Promise((r) => setTimeout(r, 100));
 
+      expect(mockCreateRun).toHaveBeenCalled();
       expect(mockExecute).toHaveBeenCalledWith(
         "sales-email-cold-outreach",
         expect.objectContaining({
           campaignId: campaign.id,
           orgId,
-          runId,
         }),
       );
     });
 
-    it("should forward x-run-id header to re-triggered workflow", async () => {
+    it("should create a new run for re-trigger with parentRunId from campaign", async () => {
+      const parentRunId = crypto.randomUUID();
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
         workflowSlug: "sales-email-cold-outreach",
         featureSlug: "sales-cold-email-v1",
+        createdByUserId: "user_test",
+        parentRunId,
       });
 
-      const parentRunId = crypto.randomUUID();
       await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", orgId)
-        .set("x-run-id", parentRunId)
-        .set("x-user-id", "user_test")
-        .set("x-brand-id", brandIds[0])
-        .set("x-campaign-id", campaign.id)
-        .set("x-feature-slug", "sales-cold-email-v1")
-        .send({ success: false })
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: false })
         .expect(200);
 
-      // Wait for async re-trigger
       await new Promise((r) => setTimeout(r, 100));
 
-      expect(mockExecute).toHaveBeenCalledWith(
-        "sales-email-cold-outreach",
-        expect.objectContaining({ runId: parentRunId }),
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ parentRunId }),
       );
     });
 
@@ -640,10 +614,8 @@ describe("Pipeline routes", () => {
 
       await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
-        .send({ success: true })
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: false })
         .expect(200);
 
       await new Promise((r) => setTimeout(r, 100));
@@ -651,7 +623,7 @@ describe("Pipeline routes", () => {
       expect(mockExecute).not.toHaveBeenCalled();
     });
 
-    it("should auto-stop campaign and NOT re-trigger when leadFound is false", async () => {
+    it("should auto-stop campaign and NOT re-trigger when stopCampaign is true", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
@@ -665,10 +637,8 @@ describe("Pipeline routes", () => {
 
       const res = await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
-        .send({ success: true, leadFound: false })
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: true })
         .expect(200);
 
       expect(res.body.status).toBe("completed");
@@ -679,13 +649,20 @@ describe("Pipeline routes", () => {
 
       // Should NOT re-trigger
       expect(mockExecute).not.toHaveBeenCalled();
+
+      // Should auto-stop in DB
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      expect(updated!.status).toBe("stopped");
     });
 
-    it("should re-trigger normally when leadFound is true", async () => {
+    it("should re-trigger normally when stopCampaign is false", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
         featureSlug: "sales-cold-email-v1",
+        createdByUserId: "user_test",
       });
 
       mockListRuns.mockResolvedValue({
@@ -696,14 +673,8 @@ describe("Pipeline routes", () => {
 
       await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-org-id", orgId)
-        .set("x-user-id", "user_test")
-        .set("x-run-id", crypto.randomUUID())
-        .set("x-brand-id", brandIds[0])
-        .set("x-campaign-id", campaign.id)
-        .set("x-feature-slug", "sales-cold-email-v1")
-        .send({ success: true, leadFound: true })
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: false })
         .expect(200);
 
       // Wait for async re-trigger
@@ -719,18 +690,14 @@ describe("Pipeline routes", () => {
     });
 
     it("should not pass appId to listRuns", async () => {
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
 
       mockListRuns.mockResolvedValue({ runs: [] });
 
       await request(app)
         .post("/end-run")
-        .set("x-api-key", API_KEY)
-        .set("x-campaign-id", campaign.id)
-        .set("x-org-id", orgId)
-        .send({ success: true })
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: false })
         .expect(200);
 
       const callArgs = mockListRuns.mock.calls[0][0];

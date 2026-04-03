@@ -30,6 +30,7 @@ export async function insertTestCampaign(
     featureInputs?: Record<string, unknown>;
     toResumeAt?: Date | null;
     createdByUserId?: string;
+    parentRunId?: string;
   } = {}
 ) {
   const [campaign] = await db
@@ -51,6 +52,7 @@ export async function insertTestCampaign(
       maxLeads: data.maxLeads || null,
       toResumeAt: data.toResumeAt ?? null,
       createdByUserId: data.createdByUserId || null,
+      parentRunId: data.parentRunId || null,
     })
     .returning();
   return campaign;

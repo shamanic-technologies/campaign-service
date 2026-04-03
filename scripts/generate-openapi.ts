@@ -200,11 +200,11 @@ registry.registerPath({
 const PipelineHeaders = z.object({
   "x-org-id": z.string().openapi({ description: "Organization UUID (required)" }),
   "x-campaign-id": z.string().uuid().openapi({ description: "Campaign UUID (required)" }),
-  "x-user-id": z.string().optional().openapi({ description: "User UUID" }),
-  "x-run-id": z.string().optional().openapi({ description: "Parent run UUID" }),
-  "x-brand-id": z.string().optional().openapi({ description: "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Single UUID for single-brand campaigns.", example: "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8" }),
-  "x-workflow-slug": z.string().optional().openapi({ description: "Workflow slug (injected by workflow-service)" }),
-  "x-feature-slug": z.string().optional().openapi({ description: "Feature slug" }),
+  "x-user-id": z.string().openapi({ description: "User UUID (required)" }),
+  "x-run-id": z.string().openapi({ description: "Parent run UUID (required)" }),
+  "x-brand-id": z.string().optional().openapi({ description: "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Optional — resolved from campaign DB if absent.", example: "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8" }),
+  "x-workflow-slug": z.string().openapi({ description: "Workflow slug (required, injected by workflow-service)" }),
+  "x-feature-slug": z.string().openapi({ description: "Feature slug (required)" }),
 }).openapi("PipelineHeaders");
 
 registry.registerPath({
@@ -245,8 +245,8 @@ registry.registerPath({
   method: "post",
   path: "/end-run",
   tags: ["Pipeline"],
-  summary: "Finalize run and re-trigger workflow if campaign is ongoing",
-  description: "Finds any running runs for the campaign and marks them as completed or failed. Then re-triggers the workflow if the campaign is still ongoing. Does not require runId — finds running runs via runs-service.",
+  summary: "Finalize run and optionally stop or re-trigger campaign",
+  description: "Marks running runs as completed or failed. If stopCampaign=true, auto-stops the campaign. Otherwise re-triggers the workflow if the campaign is still ongoing. Body requires { success: boolean, stopCampaign: boolean }.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: {
     headers: PipelineHeaders,
