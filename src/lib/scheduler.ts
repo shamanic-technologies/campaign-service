@@ -2,19 +2,32 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
-import { createRun } from "@distribute/runs-client";
 
 const SCHEDULER_INTERVAL_MS = 60_000; // 1 minute
 
 /**
  * Find all ongoing campaigns whose toResumeAt has passed,
- * clear the flag, and re-trigger their workflow.
+ * atomically claim them (clear toResumeAt), and re-trigger their workflow.
+ *
+ * Uses UPDATE ... RETURNING to atomically claim campaigns, preventing
+ * duplicate triggers from overlapping ticks or multiple service instances.
  */
 export async function resumeDueCampaigns(): Promise<number> {
   const now = new Date();
 
+  // Atomic claim: UPDATE + RETURNING ensures only one instance/tick processes each campaign.
+  // PostgreSQL row-level locks prevent two concurrent UPDATEs from claiming the same row.
   const dueCampaigns = await db
-    .select({
+    .update(campaigns)
+    .set({ toResumeAt: null, updatedAt: now })
+    .where(
+      and(
+        eq(campaigns.status, "ongoing"),
+        isNotNull(campaigns.toResumeAt),
+        lte(campaigns.toResumeAt, now),
+      ),
+    )
+    .returning({
       id: campaigns.id,
       orgId: campaigns.orgId,
       createdByUserId: campaigns.createdByUserId,
@@ -22,19 +35,11 @@ export async function resumeDueCampaigns(): Promise<number> {
       workflowSlug: campaigns.workflowSlug,
       brandIds: campaigns.brandIds,
       featureSlug: campaigns.featureSlug,
-    })
-    .from(campaigns)
-    .where(
-      and(
-        eq(campaigns.status, "ongoing"),
-        isNotNull(campaigns.toResumeAt),
-        lte(campaigns.toResumeAt, now),
-      ),
-    );
+    });
 
   if (dueCampaigns.length === 0) return 0;
 
-  console.log(`[Scheduler] Found ${dueCampaigns.length} campaign(s) due for resume`);
+  console.log(`[Scheduler] Claimed ${dueCampaigns.length} campaign(s) for resume`);
 
   for (const campaign of dueCampaigns) {
     try {
@@ -47,33 +52,21 @@ export async function resumeDueCampaigns(): Promise<number> {
         continue;
       }
 
-      // Clear toResumeAt before re-triggering (prevent double-fire)
-      await db.update(campaigns)
-        .set({ toResumeAt: null, updatedAt: new Date() })
-        .where(eq(campaigns.id, campaign.id));
-
-      // All three fields are validated non-null above
       const brandIdCsv = campaign.brandIds!.join(",");
       const userId = campaign.createdByUserId!;
       const featureSlug = campaign.featureSlug!;
 
-      const run = await createRun({
-        orgId: campaign.orgId,
-        serviceName: "campaign-service",
-        taskName: "scheduler-resume",
-        userId,
-        campaignId: campaign.id,
-        brandId: brandIdCsv,
-        parentRunId: campaign.parentRunId || undefined,
-        workflowSlug: campaign.workflowSlug,
-        featureSlug,
-      });
+      // Do NOT create a run here — /start-run in the workflow DAG creates it.
+      // Creating one here with a different taskName caused orphan runs that were
+      // invisible to gate-check and never cleaned up.
+      const runId = campaign.parentRunId || crypto.randomUUID();
+
       executeCampaignWorkflow(campaign.workflowSlug, {
         campaignId: campaign.id,
         orgId: campaign.orgId,
         brandId: brandIdCsv,
         userId,
-        runId: run.id,
+        runId,
         featureSlug,
       }).catch((err) => {
         console.error(`[Scheduler] Failed to re-trigger campaign ${campaign.id}:`, err);
@@ -86,16 +79,31 @@ export async function resumeDueCampaigns(): Promise<number> {
   return dueCampaigns.length;
 }
 
+/** Tracks whether a scheduler tick is currently running. */
+let isRunning = false;
+
 /**
  * Start the scheduler interval. Returns a cleanup function.
+ *
+ * Uses a concurrency guard so overlapping ticks (when processing takes > 60s)
+ * are skipped rather than causing duplicate triggers.
  */
 export function startScheduler(): () => void {
   console.log(`[Scheduler] Starting (interval=${SCHEDULER_INTERVAL_MS}ms)`);
 
   const handle = setInterval(() => {
-    resumeDueCampaigns().catch((err) => {
-      console.error("[Scheduler] Unhandled error:", err);
-    });
+    if (isRunning) {
+      console.warn("[Scheduler] Previous tick still running, skipping");
+      return;
+    }
+    isRunning = true;
+    resumeDueCampaigns()
+      .catch((err) => {
+        console.error("[Scheduler] Unhandled error:", err);
+      })
+      .finally(() => {
+        isRunning = false;
+      });
   }, SCHEDULER_INTERVAL_MS);
 
   return () => clearInterval(handle);

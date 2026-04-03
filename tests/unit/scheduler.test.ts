@@ -2,31 +2,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const {
   mockExecuteCampaignWorkflow,
-  mockCreateRun,
-  mockDbValues,
-  mockDbUpdate,
-  mockSet,
-  mockWhere,
+  mockDbReturning,
 } = vi.hoisted(() => {
-  const mockWhere = vi.fn().mockResolvedValue(undefined);
-  const mockSet = vi.fn().mockReturnValue({ where: mockWhere });
-  const mockDbUpdate = vi.fn().mockReturnValue({ set: mockSet });
-  const mockDbValues: Array<{
-    id: string;
-    orgId: string;
-    workflowSlug: string;
-    brandIds?: string[] | null;
-    createdByUserId?: string | null;
-    featureSlug?: string | null;
-  }> = [];
-
   return {
     mockExecuteCampaignWorkflow: vi.fn(),
-    mockCreateRun: vi.fn(),
-    mockDbValues,
-    mockDbUpdate,
-    mockSet,
-    mockWhere,
+    mockDbReturning: vi.fn(),
   };
 });
 
@@ -34,18 +14,15 @@ vi.mock("../../src/lib/workflows.js", () => ({
   executeCampaignWorkflow: mockExecuteCampaignWorkflow,
 }));
 
-vi.mock("@distribute/runs-client", () => ({
-  createRun: mockCreateRun,
-}));
-
 vi.mock("../../src/db/index.js", () => ({
   db: {
-    select: vi.fn().mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockImplementation(() => mockDbValues),
+    update: vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: mockDbReturning,
+        }),
       }),
     }),
-    update: mockDbUpdate,
   },
 }));
 
@@ -58,6 +35,9 @@ vi.mock("../../src/db/schema.js", () => ({
     orgId: "org_id",
     updatedAt: "updated_at",
     brandIds: "brand_ids",
+    createdByUserId: "created_by_user_id",
+    parentRunId: "parent_run_id",
+    featureSlug: "feature_slug",
   },
 }));
 
@@ -73,9 +53,8 @@ import { resumeDueCampaigns } from "../../src/lib/scheduler.js";
 describe("Scheduler - resumeDueCampaigns", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbValues.length = 0;
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
-    mockCreateRun.mockResolvedValue({ id: "scheduler-run-123" });
+    mockDbReturning.mockResolvedValue([]);
   });
 
   it("should return 0 when no campaigns are due", async () => {
@@ -84,88 +63,142 @@ describe("Scheduler - resumeDueCampaigns", () => {
     expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
   });
 
-  it("should re-trigger due campaigns and clear toResumeAt", async () => {
-    mockDbValues.push({
-      id: "campaign-1",
-      orgId: "org-ext-1",
-      workflowSlug: "sales-email-cold-outreach",
-      brandIds: ["brand-123"],
-      createdByUserId: "user-1",
-      featureSlug: "sales-cold-email-v1",
-    });
+  it("should re-trigger due campaigns using atomic UPDATE RETURNING", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+      },
+    ]);
 
     const count = await resumeDueCampaigns();
 
     expect(count).toBe(1);
-    expect(mockDbUpdate).toHaveBeenCalled();
-    expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ toResumeAt: null }),
-    );
-    expect(mockCreateRun).toHaveBeenCalledWith({
-      orgId: "org-ext-1",
-      serviceName: "campaign-service",
-      taskName: "scheduler-resume",
-      userId: "user-1",
-      campaignId: "campaign-1",
-      brandId: "brand-123",
-      workflowSlug: "sales-email-cold-outreach",
-      featureSlug: "sales-cold-email-v1",
-    });
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
       "sales-email-cold-outreach",
-      {
+      expect.objectContaining({
         campaignId: "campaign-1",
         orgId: "org-ext-1",
         brandId: "brand-123",
         userId: "user-1",
-        runId: "scheduler-run-123",
         featureSlug: "sales-cold-email-v1",
-      },
+      }),
     );
   });
 
-  it("should skip campaigns without brandId", async () => {
-    mockDbValues.push({
-      id: "campaign-no-brand",
-      orgId: "org-ext-1",
-      workflowSlug: "sales-email-cold-outreach",
-      brandIds: null,
-      createdByUserId: "user-1",
-      featureSlug: "sales-cold-email-v1",
-    });
+  it("should NOT create a run — let the workflow's start-run do it", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+      },
+    ]);
+
+    await resumeDueCampaigns();
+
+    // No createRun import or call — scheduler delegates run creation to the DAG
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it("should use parentRunId as runId when available", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: "parent-run-abc",
+        featureSlug: "sales-cold-email-v1",
+      },
+    ]);
+
+    await resumeDueCampaigns();
+
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
+      "sales-email-cold-outreach",
+      expect.objectContaining({ runId: "parent-run-abc" }),
+    );
+  });
+
+  it("should generate a UUID runId when no parentRunId", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+      },
+    ]);
+
+    await resumeDueCampaigns();
+
+    const call = mockExecuteCampaignWorkflow.mock.calls[0];
+    expect(call[1].runId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it("should skip campaigns without brandIds", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-no-brand",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: null,
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+      },
+    ]);
 
     const count = await resumeDueCampaigns();
 
     expect(count).toBe(1);
     expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
-    expect(mockCreateRun).not.toHaveBeenCalled();
   });
 
   it("should skip campaigns without createdByUserId or featureSlug", async () => {
-    mockDbValues.push({
-      id: "campaign-no-user",
-      orgId: "org-ext-1",
-      workflowSlug: "sales-email-cold-outreach",
-      brandIds: ["brand-1"],
-      createdByUserId: null,
-      featureSlug: null,
-    });
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-no-user",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-1"],
+        createdByUserId: null,
+        parentRunId: null,
+        featureSlug: null,
+      },
+    ]);
 
     const count = await resumeDueCampaigns();
 
     expect(count).toBe(1);
     expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
-    expect(mockCreateRun).not.toHaveBeenCalled();
   });
 
   it("should handle multiple due campaigns", async () => {
-    mockDbValues.push(
+    mockDbReturning.mockResolvedValue([
       {
         id: "campaign-1",
         orgId: "org-ext-1",
         workflowSlug: "sales-email-cold-outreach",
         brandIds: ["brand-1"],
         createdByUserId: "user-1",
+        parentRunId: null,
         featureSlug: "sales-cold-email-v1",
       },
       {
@@ -174,9 +207,10 @@ describe("Scheduler - resumeDueCampaigns", () => {
         workflowSlug: "pr-email-cold-outreach",
         brandIds: ["brand-2"],
         createdByUserId: "user-2",
+        parentRunId: null,
         featureSlug: "pr-media-pitch-v1",
       },
-    );
+    ]);
 
     const count = await resumeDueCampaigns();
 
@@ -184,14 +218,15 @@ describe("Scheduler - resumeDueCampaigns", () => {
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(2);
   });
 
-  it("should continue processing other campaigns if one fails", async () => {
-    mockDbValues.push(
+  it("should continue processing other campaigns if one throws", async () => {
+    mockDbReturning.mockResolvedValue([
       {
         id: "campaign-1",
         orgId: "org-ext-1",
         workflowSlug: "sales-email-cold-outreach",
         brandIds: ["brand-1"],
         createdByUserId: "user-1",
+        parentRunId: null,
         featureSlug: "sales-cold-email-v1",
       },
       {
@@ -200,26 +235,19 @@ describe("Scheduler - resumeDueCampaigns", () => {
         workflowSlug: "pr-email-cold-outreach",
         brandIds: ["brand-2"],
         createdByUserId: "user-2",
+        parentRunId: null,
         featureSlug: "pr-media-pitch-v1",
       },
-    );
+    ]);
 
-    // First update call fails (clearing toResumeAt for campaign-1)
-    mockDbUpdate
-      .mockReturnValueOnce({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockRejectedValue(new Error("DB error")),
-        }),
-      })
-      .mockReturnValue({ set: mockSet });
+    // First workflow execution throws synchronously
+    mockExecuteCampaignWorkflow
+      .mockImplementationOnce(() => { throw new Error("Workflow error"); })
+      .mockResolvedValueOnce(undefined);
 
     const count = await resumeDueCampaigns();
 
     expect(count).toBe(2);
-    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(1);
-    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
-      "pr-email-cold-outreach",
-      expect.objectContaining({ campaignId: "campaign-2" }),
-    );
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(2);
   });
 });
