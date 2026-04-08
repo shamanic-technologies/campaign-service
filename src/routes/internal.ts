@@ -123,7 +123,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       brandId: brandIdCsv,
       userId: campaign.createdByUserId || undefined,
       parentRunId: parentRunId || undefined,
-      workflowSlug: campaign.workflowSlug,
+      workflowSlug: req.workflowSlug || campaign.workflowSlug,
       featureSlug,
     });
     // Build searchParams from featureInputs
