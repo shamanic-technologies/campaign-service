@@ -353,10 +353,10 @@ describe("Pipeline routes", () => {
       );
     });
 
-    it("should pass workflowSlug to createRun", async () => {
+    it("should fall back to campaign.workflowSlug when header matches DB", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
-        workflowSlug: "pr-email-cold-outreach",
+        workflowSlug: "sales-email-cold-outreach",
       });
 
       await request(app)
@@ -365,7 +365,27 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(mockCreateRun).toHaveBeenCalledWith(
-        expect.objectContaining({ workflowSlug: "pr-email-cold-outreach" }),
+        expect.objectContaining({ workflowSlug: "sales-email-cold-outreach" }),
+      );
+    });
+
+    it("should prefer x-workflow-slug header over campaign.workflowSlug for createRun", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        workflowSlug: "pr-cold-email-outreach-sophia-mistral",
+      });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({
+          "x-org-id": orgId,
+          "x-campaign-id": campaign.id,
+          "x-workflow-slug": "pr-cold-email-outreach-sophia-mistral-v3",
+        }))
+        .expect(200);
+
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowSlug: "pr-cold-email-outreach-sophia-mistral-v3" }),
       );
     });
 
