@@ -4,7 +4,7 @@ import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 
 const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
-const MAX_CONSECUTIVE_FAILURES = 3;
+const MAX_CONSECUTIVE_FAILURES = 10;
 
 export interface GateCheckInput {
   campaignId: string;
