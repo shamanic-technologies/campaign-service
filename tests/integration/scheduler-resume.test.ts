@@ -69,23 +69,12 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
     });
     expect(updated!.toResumeAt).toBeNull();
 
-    // Should have created a run for the scheduler
-    expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        orgId,
-        serviceName: "campaign-service",
-        taskName: "scheduler-resume",
-        campaignId: campaign.id,
-      }),
-    );
-
-    // Should have triggered workflow with the scheduler run ID
+    // Should have triggered workflow (run is created by /start-run in the DAG, not here)
     expect(mockExecute).toHaveBeenCalledWith(
       "sales-email-cold-outreach",
       expect.objectContaining({
         campaignId: campaign.id,
         orgId,
-        runId: "scheduler-run-123",
       }),
     );
   });
