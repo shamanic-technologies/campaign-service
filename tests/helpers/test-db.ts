@@ -37,7 +37,7 @@ export async function insertTestCampaign(
     .insert(campaigns)
     .values({
       orgId,
-      name: data.name || `Test Campaign ${Date.now()}`,
+      name: data.name || `Test Campaign ${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
       workflowSlug: data.workflowSlug || "sales-email-cold-outreach",
       workflowDynastySlug: data.workflowDynastySlug || null,
       featureDynastySlug: data.featureDynastySlug || null,
