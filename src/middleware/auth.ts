@@ -108,6 +108,7 @@ export function requirePipelineHeaders(
 ) {
   const missing = REQUIRED_PIPELINE_HEADERS.filter((h) => !req.headers[h]);
   if (missing.length > 0) {
+    console.warn(`[campaign-service] 400 on ${req.path} — missing pipeline headers: ${missing.join(", ")}`);
     return res.status(400).json({
       error: `Missing required pipeline headers: ${missing.join(", ")}`,
     });
