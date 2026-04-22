@@ -124,6 +124,7 @@ router.get("/campaigns/:id", requireApiKey, serviceAuth, async (req: Authenticat
     });
 
     if (!campaign) {
+      console.warn(`[campaign-service] GET /campaigns/:id 404 — id=${id}, x-org-id=${req.orgId}`);
       return res.status(404).json({ error: "Campaign not found" });
     }
 
