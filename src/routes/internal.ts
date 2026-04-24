@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { requireApiKey, requirePipelineHeaders, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
@@ -7,7 +7,7 @@ import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
 import { executeCampaignWorkflow } from "../lib/workflows.js";
-import { EndRunBody } from "../schemas.js";
+import { EndRunBody, TransferBrandBody } from "../schemas.js";
 
 const router = Router();
 
@@ -253,6 +253,42 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
     }
   } catch (error) {
     console.error("[End Run] Unhandled error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/transfer-brand
+ *
+ * Transfers all solo-brand campaigns from one org to another.
+ * Solo-brand = brand_ids array contains exactly one element matching brandId.
+ * Skips co-branding rows (multiple brand IDs).
+ * Idempotent: re-running with same params is a no-op.
+ */
+router.post("/internal/transfer-brand", requireApiKey, validateBody(TransferBrandBody), async (req, res) => {
+  try {
+    const { brandId, sourceOrgId, targetOrgId } = req.body;
+
+    const result = await db.execute(
+      sql`WITH updated AS (
+            UPDATE campaigns
+            SET org_id = ${targetOrgId}, updated_at = NOW()
+            WHERE org_id = ${sourceOrgId}
+              AND brand_ids = ARRAY[${brandId}]::text[]
+            RETURNING id
+          )
+          SELECT count(*)::int AS cnt FROM updated`
+    );
+
+    const count = Number((result as unknown as Array<{ cnt: number }>)[0]?.cnt ?? 0);
+
+    console.log(`[campaign-service] transfer-brand: updated ${count} campaigns (brandId=${brandId}, ${sourceOrgId} -> ${targetOrgId})`);
+
+    res.json({
+      updatedTables: [{ tableName: "campaigns", count }],
+    });
+  } catch (error) {
+    console.error("[campaign-service] transfer-brand error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
