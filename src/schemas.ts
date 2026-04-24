@@ -167,3 +167,18 @@ export const EndRunResponse = z.object({
   status: z.string(),
 }).openapi("EndRunResponse");
 
+// --- Internal: Brand Transfer ---
+
+export const TransferBrandBody = z.object({
+  brandId: z.string().uuid(),
+  sourceOrgId: z.string().min(1),
+  targetOrgId: z.string().min(1),
+}).openapi("TransferBrandBody");
+
+export const TransferBrandResponse = z.object({
+  updatedTables: z.array(z.object({
+    tableName: z.string(),
+    count: z.number().int(),
+  })),
+}).openapi("TransferBrandResponse");
+

@@ -17,6 +17,8 @@ import {
   StartRunResponse,
   EndRunBody,
   EndRunResponse,
+  TransferBrandBody,
+  TransferBrandResponse,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -254,6 +256,25 @@ registry.registerPath({
   },
   responses: {
     200: { description: "Run finalized", content: { "application/json": { schema: EndRunResponse } } },
+  },
+});
+
+// === INTERNAL: BRAND TRANSFER ===
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/transfer-brand",
+  tags: ["Internal"],
+  summary: "Transfer solo-brand campaigns from one org to another",
+  description: "Updates org_id on all campaigns where brand_ids contains exactly one element matching brandId and org_id matches sourceOrgId. Skips co-branding rows. Idempotent.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    body: { content: { "application/json": { schema: TransferBrandBody } } },
+  },
+  responses: {
+    200: { description: "Transfer result", content: { "application/json": { schema: TransferBrandResponse } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 
