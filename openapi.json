@@ -516,7 +516,7 @@
       "TransferBrandBody": {
         "type": "object",
         "properties": {
-          "brandId": {
+          "sourceBrandId": {
             "type": "string",
             "format": "uuid"
           },
@@ -527,10 +527,14 @@
           "targetOrgId": {
             "type": "string",
             "minLength": 1
+          },
+          "targetBrandId": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
-          "brandId",
+          "sourceBrandId",
           "sourceOrgId",
           "targetOrgId"
         ]
