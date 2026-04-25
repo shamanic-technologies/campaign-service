@@ -212,6 +212,44 @@ describe("POST /internal/transfer-brand", () => {
     expect(res.body.updatedTables[0].count).toBe(2);
   });
 
+  it("step 2 remaps brand_ids across all orgs (no org filter)", async () => {
+    // Campaign in source org — step 1 moves it, step 2 remaps it
+    const campaignSource = await insertTestCampaign(sourceOrgId, {
+      name: "Source Org Campaign",
+      brandIds: [sourceBrandId],
+    });
+
+    // Campaign in a third org with same sourceBrandId — step 1 skips it, step 2 remaps it
+    const thirdOrgId = "org_third_test";
+    const campaignThird = await insertTestCampaign(thirdOrgId, {
+      name: "Third Org Campaign",
+      brandIds: [sourceBrandId],
+    });
+
+    const res = await request(app)
+      .post("/internal/transfer-brand")
+      .set("x-api-key", API_KEY)
+      .send({ sourceBrandId, sourceOrgId, targetOrgId, targetBrandId });
+
+    expect(res.status).toBe(200);
+    // count reflects max(step1=1, step2=2) = 2
+    expect(res.body.updatedTables[0].count).toBe(2);
+
+    // Source campaign: moved to targetOrg AND brand remapped
+    const updatedSource = await db.query.campaigns.findFirst({
+      where: eq(campaigns.id, campaignSource.id),
+    });
+    expect(updatedSource!.orgId).toBe(targetOrgId);
+    expect(updatedSource!.brandIds).toEqual([targetBrandId]);
+
+    // Third org campaign: stayed in thirdOrg but brand was remapped
+    const updatedThird = await db.query.campaigns.findFirst({
+      where: eq(campaigns.id, campaignThird.id),
+    });
+    expect(updatedThird!.orgId).toBe(thirdOrgId);
+    expect(updatedThird!.brandIds).toEqual([targetBrandId]);
+  });
+
   it("returns 400 for invalid body", async () => {
     const res = await request(app)
       .post("/internal/transfer-brand")

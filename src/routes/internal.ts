@@ -263,20 +263,22 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
  * Transfers all solo-brand campaigns from one org to another.
  * Solo-brand = brand_ids array contains exactly one element matching sourceBrandId.
  * Skips co-branding rows (multiple brand IDs).
- * When targetBrandId is provided, also rewrites brand_ids to the new brand.
+ *
+ * Two-step process:
+ *   Step 1: UPDATE org_id WHERE brand_ids = [sourceBrandId] AND org_id = sourceOrgId
+ *   Step 2 (when targetBrandId present): UPDATE brand_ids WHERE brand_ids = [sourceBrandId] (no org filter)
+ *
  * Idempotent: re-running with same params is a no-op.
  */
 router.post("/internal/transfer-brand", requireApiKey, validateBody(TransferBrandBody), async (req, res) => {
   try {
     const { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId } = req.body;
 
-    const newBrandId = targetBrandId ?? sourceBrandId;
-
-    const result = await db.execute(
+    // Step 1: Move matching rows to target org
+    const step1 = await db.execute(
       sql`WITH updated AS (
             UPDATE campaigns
             SET org_id = ${targetOrgId},
-                brand_ids = ARRAY[${newBrandId}]::text[],
                 updated_at = NOW()
             WHERE org_id = ${sourceOrgId}
               AND brand_ids = ARRAY[${sourceBrandId}]::text[]
@@ -285,12 +287,30 @@ router.post("/internal/transfer-brand", requireApiKey, validateBody(TransferBran
           SELECT count(*)::int AS cnt FROM updated`
     );
 
-    const count = Number((result as unknown as Array<{ cnt: number }>)[0]?.cnt ?? 0);
+    const movedCount = Number((step1 as unknown as Array<{ cnt: number }>)[0]?.cnt ?? 0);
 
-    console.log(`[campaign-service] transfer-brand: updated ${count} campaigns (sourceBrandId=${sourceBrandId}, targetBrandId=${newBrandId}, ${sourceOrgId} -> ${targetOrgId})`);
+    // Step 2: Rewrite brand_ids (no org filter — catches all rows with sourceBrandId)
+    let remappedCount = 0;
+    if (targetBrandId) {
+      const step2 = await db.execute(
+        sql`WITH updated AS (
+              UPDATE campaigns
+              SET brand_ids = ARRAY[${targetBrandId}]::text[],
+                  updated_at = NOW()
+              WHERE brand_ids = ARRAY[${sourceBrandId}]::text[]
+              RETURNING id
+            )
+            SELECT count(*)::int AS cnt FROM updated`
+      );
+      remappedCount = Number((step2 as unknown as Array<{ cnt: number }>)[0]?.cnt ?? 0);
+    }
+
+    const totalCount = Math.max(movedCount, remappedCount);
+
+    console.log(`[campaign-service] transfer-brand: moved ${movedCount}, remapped ${remappedCount} campaigns (sourceBrandId=${sourceBrandId}, targetBrandId=${targetBrandId ?? "none"}, ${sourceOrgId} -> ${targetOrgId})`);
 
     res.json({
-      updatedTables: [{ tableName: "campaigns", count }],
+      updatedTables: [{ tableName: "campaigns", count: totalCount }],
     });
   } catch (error) {
     console.error("[campaign-service] transfer-brand error:", error);
