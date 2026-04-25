@@ -170,9 +170,10 @@ export const EndRunResponse = z.object({
 // --- Internal: Brand Transfer ---
 
 export const TransferBrandBody = z.object({
-  brandId: z.string().uuid(),
+  sourceBrandId: z.string().uuid(),
   sourceOrgId: z.string().min(1),
   targetOrgId: z.string().min(1),
+  targetBrandId: z.string().uuid().optional(),
 }).openapi("TransferBrandBody");
 
 export const TransferBrandResponse = z.object({

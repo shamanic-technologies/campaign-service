@@ -261,20 +261,25 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
  * POST /internal/transfer-brand
  *
  * Transfers all solo-brand campaigns from one org to another.
- * Solo-brand = brand_ids array contains exactly one element matching brandId.
+ * Solo-brand = brand_ids array contains exactly one element matching sourceBrandId.
  * Skips co-branding rows (multiple brand IDs).
+ * When targetBrandId is provided, also rewrites brand_ids to the new brand.
  * Idempotent: re-running with same params is a no-op.
  */
 router.post("/internal/transfer-brand", requireApiKey, validateBody(TransferBrandBody), async (req, res) => {
   try {
-    const { brandId, sourceOrgId, targetOrgId } = req.body;
+    const { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId } = req.body;
+
+    const newBrandId = targetBrandId ?? sourceBrandId;
 
     const result = await db.execute(
       sql`WITH updated AS (
             UPDATE campaigns
-            SET org_id = ${targetOrgId}, updated_at = NOW()
+            SET org_id = ${targetOrgId},
+                brand_ids = ARRAY[${newBrandId}]::text[],
+                updated_at = NOW()
             WHERE org_id = ${sourceOrgId}
-              AND brand_ids = ARRAY[${brandId}]::text[]
+              AND brand_ids = ARRAY[${sourceBrandId}]::text[]
             RETURNING id
           )
           SELECT count(*)::int AS cnt FROM updated`
@@ -282,7 +287,7 @@ router.post("/internal/transfer-brand", requireApiKey, validateBody(TransferBran
 
     const count = Number((result as unknown as Array<{ cnt: number }>)[0]?.cnt ?? 0);
 
-    console.log(`[campaign-service] transfer-brand: updated ${count} campaigns (brandId=${brandId}, ${sourceOrgId} -> ${targetOrgId})`);
+    console.log(`[campaign-service] transfer-brand: updated ${count} campaigns (sourceBrandId=${sourceBrandId}, targetBrandId=${newBrandId}, ${sourceOrgId} -> ${targetOrgId})`);
 
     res.json({
       updatedTables: [{ tableName: "campaigns", count }],
