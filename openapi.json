@@ -44,14 +44,6 @@
           "workflowSlug": {
             "type": "string"
           },
-          "workflowDynastySlug": {
-            "type": "string",
-            "nullable": true
-          },
-          "featureDynastySlug": {
-            "type": "string",
-            "nullable": true
-          },
           "brandIds": {
             "type": "array",
             "nullable": true,
@@ -132,8 +124,6 @@
           "parentRunId",
           "name",
           "workflowSlug",
-          "workflowDynastySlug",
-          "featureDynastySlug",
           "brandIds",
           "featureSlug",
           "featureInputs",
@@ -175,10 +165,6 @@
             "type": "string",
             "minLength": 1
           },
-          "workflowDynastySlug": {
-            "type": "string",
-            "minLength": 1
-          },
           "orgId": {
             "type": "string",
             "minLength": 1
@@ -192,10 +178,6 @@
             "minItems": 1
           },
           "featureSlug": {
-            "type": "string",
-            "minLength": 1
-          },
-          "featureDynastySlug": {
             "type": "string",
             "minLength": 1
           },
@@ -238,6 +220,7 @@
         },
         "required": [
           "name",
+          "workflowSlug",
           "orgId",
           "brandIds"
         ]
@@ -256,10 +239,6 @@
             }
           },
           "featureSlug": {
-            "type": "string",
-            "minLength": 1
-          },
-          "featureDynastySlug": {
             "type": "string",
             "minLength": 1
           },
@@ -365,9 +344,7 @@
         "type": "string",
         "enum": [
           "workflowSlug",
-          "featureSlug",
-          "workflowDynastySlug",
-          "featureDynastySlug"
+          "featureSlug"
         ]
       },
       "BatchBudgetUsageBody": {
@@ -640,23 +617,7 @@
               "type": "string"
             },
             "required": false,
-            "name": "workflowDynastySlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": false,
             "name": "featureSlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": false,
-            "name": "featureDynastySlug",
             "in": "query"
           }
         ],
@@ -918,7 +879,7 @@
           "Stats"
         ],
         "summary": "Campaign stats from own DB (query params)",
-        "description": "Returns campaign counts, status breakdown, and configured budget totals. Supports filtering by workflowSlug, featureSlug, workflowDynastySlug, featureDynastySlug, and groupBy for aggregation by slug or dynasty slug. When groupBy is set, returns groupedStats keyed by the group value. Requires API key.",
+        "description": "Returns campaign counts, status breakdown, and configured budget totals. Supports filtering by workflowSlug, featureSlug, and groupBy for aggregation by slug. When groupBy is set, returns groupedStats keyed by the group value. Requires API key.",
         "security": [
           {
             "apiKeyAuth": []
@@ -963,22 +924,6 @@
             },
             "required": false,
             "name": "featureSlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": false,
-            "name": "workflowDynastySlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": false,
-            "name": "featureDynastySlug",
             "in": "query"
           },
           {

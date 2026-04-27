@@ -16,8 +16,6 @@ export const CampaignSchema = z.object({
   parentRunId: z.string().nullable(),
   name: z.string(),
   workflowSlug: z.string(),
-  workflowDynastySlug: z.string().nullable(),
-  featureDynastySlug: z.string().nullable(),
   brandIds: z.array(z.string().uuid()).nullable(),
   featureSlug: z.string().nullable(),
   featureInputs: z.record(z.string(), z.unknown()).nullable(),
@@ -41,12 +39,10 @@ export const CampaignSchema = z.object({
 
 export const CreateCampaignBody = z.object({
   name: z.string().min(1, "Campaign name is required"),
-  workflowSlug: z.string().min(1).optional(),
-  workflowDynastySlug: z.string().min(1).optional(),
+  workflowSlug: z.string().min(1),
   orgId: z.string().min(1, "orgId is required"),
   brandIds: z.array(z.string().uuid("each brandId must be a valid UUID")).min(1, "at least one brandId is required"),
   featureSlug: z.string().min(1).optional(),
-  featureDynastySlug: z.string().min(1).optional(),
   featureInputs: z.record(z.string(), z.unknown()).optional(),
   maxBudgetDailyUsd: z.string().optional(),
   maxBudgetWeeklyUsd: z.string().optional(),
@@ -58,24 +54,18 @@ export const CreateCampaignBody = z.object({
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
-}).refine(
-  (data) => data.workflowSlug || data.workflowDynastySlug,
-  { message: "Either workflowSlug or workflowDynastySlug is required" }
-).openapi("CreateCampaignBody");
+}).openapi("CreateCampaignBody");
 
 export const CampaignsFilterQuery = z.object({
   brandId: z.string().optional(),
   workflowSlug: z.string().optional(),
-  workflowDynastySlug: z.string().optional(),
   featureSlug: z.string().optional(),
-  featureDynastySlug: z.string().optional(),
 }).openapi("CampaignsFilterQuery");
 
 export const UpdateCampaignBody = z.object({
   name: z.string().optional(),
   brandIds: z.array(z.string().uuid()).optional(),
   featureSlug: z.string().min(1).optional(),
-  featureDynastySlug: z.string().min(1).optional(),
   featureInputs: z.record(z.string(), z.unknown()).optional(),
   maxBudgetDailyUsd: z.string().optional(),
   maxBudgetWeeklyUsd: z.string().optional(),
@@ -95,8 +85,6 @@ export const UpdateCampaignBody = z.object({
 export const StatsGroupByEnum = z.enum([
   "workflowSlug",
   "featureSlug",
-  "workflowDynastySlug",
-  "featureDynastySlug",
 ]).openapi("StatsGroupByEnum");
 
 export const StatsFilterQuery = z.object({
@@ -105,8 +93,6 @@ export const StatsFilterQuery = z.object({
   campaignId: z.string().optional(),
   workflowSlug: z.string().optional(),
   featureSlug: z.string().optional(),
-  workflowDynastySlug: z.string().optional(),
-  featureDynastySlug: z.string().optional(),
   groupBy: StatsGroupByEnum.optional(),
 }).refine(
   (data) => data.orgId || data.brandId || data.campaignId,
