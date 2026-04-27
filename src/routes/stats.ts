@@ -7,12 +7,6 @@ import { requireApiKey } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { getStatsBudget } from "@distribute/runs-client";
 import { BatchBudgetUsageBody, StatsFilterQuery } from "../schemas.js";
-import {
-  resolveWorkflowDynastySlugs,
-  resolveFeatureDynastySlugs,
-  getWorkflowDynastyMap,
-  getFeatureDynastyMap,
-} from "../lib/dynasty-client.js";
 
 const router = Router();
 
@@ -103,14 +97,13 @@ function computeStats(rows: Campaign[]) {
  * GET /stats - Campaign stats from own DB (query-param filters)
  *
  * Accepts orgId, brandId, campaignId, workflowSlug, featureSlug,
- * workflowDynastySlug, featureDynastySlug, groupBy as query params.
+ * groupBy as query params.
  */
 router.get("/stats", requireApiKey, validateQuery(StatsFilterQuery), async (req, res) => {
   try {
     const {
       orgId, brandId, campaignId,
       workflowSlug, featureSlug,
-      workflowDynastySlug, featureDynastySlug,
       groupBy,
     } = req.query as {
       orgId?: string;
@@ -118,53 +111,15 @@ router.get("/stats", requireApiKey, validateQuery(StatsFilterQuery), async (req,
       campaignId?: string;
       workflowSlug?: string;
       featureSlug?: string;
-      workflowDynastySlug?: string;
-      featureDynastySlug?: string;
       groupBy?: string;
     };
 
-    // Resolve dynasty slugs into versioned slug lists
-    let resolvedWorkflowSlugs: string[] | undefined;
-    let resolvedFeatureSlugs: string[] | undefined;
-
-    if (workflowDynastySlug) {
-      resolvedWorkflowSlugs = await resolveWorkflowDynastySlugs(workflowDynastySlug);
-      if (resolvedWorkflowSlugs.length === 0) {
-        if (groupBy) {
-          return res.json({ groupedStats: {} });
-        }
-        return res.json({ stats: computeStats([]) });
-      }
-    }
-
-    if (featureDynastySlug) {
-      resolvedFeatureSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
-      if (resolvedFeatureSlugs.length === 0) {
-        if (groupBy) {
-          return res.json({ groupedStats: {} });
-        }
-        return res.json({ stats: computeStats([]) });
-      }
-    }
-
-    // Build conditions
     const conditions = [];
     if (orgId) conditions.push(eq(campaigns.orgId, orgId));
     if (brandId) conditions.push(arrayContains(campaigns.brandIds, [brandId]));
     if (campaignId) conditions.push(eq(campaigns.id, campaignId));
-
-    // Dynasty slugs take priority over exact slugs
-    if (resolvedWorkflowSlugs && resolvedWorkflowSlugs.length > 0) {
-      conditions.push(inArray(campaigns.workflowSlug, resolvedWorkflowSlugs));
-    } else if (workflowSlug) {
-      conditions.push(eq(campaigns.workflowSlug, workflowSlug));
-    }
-
-    if (resolvedFeatureSlugs && resolvedFeatureSlugs.length > 0) {
-      conditions.push(inArray(campaigns.featureSlug, resolvedFeatureSlugs));
-    } else if (featureSlug) {
-      conditions.push(eq(campaigns.featureSlug, featureSlug));
-    }
+    if (workflowSlug) conditions.push(eq(campaigns.workflowSlug, workflowSlug));
+    if (featureSlug) conditions.push(eq(campaigns.featureSlug, featureSlug));
 
     const where = conditions.length === 1 ? conditions[0] : conditions.length > 1 ? and(...conditions) : undefined;
 
@@ -179,14 +134,6 @@ router.get("/stats", requireApiKey, validateQuery(StatsFilterQuery), async (req,
     }
 
     // GroupBy logic
-    let dynastyMap: Map<string, string> | undefined;
-
-    if (groupBy === "workflowDynastySlug") {
-      dynastyMap = await getWorkflowDynastyMap();
-    } else if (groupBy === "featureDynastySlug") {
-      dynastyMap = await getFeatureDynastyMap();
-    }
-
     const groups = new Map<string, Campaign[]>();
 
     for (const c of matching) {
@@ -194,13 +141,9 @@ router.get("/stats", requireApiKey, validateQuery(StatsFilterQuery), async (req,
 
       if (groupBy === "workflowSlug") {
         key = c.workflowSlug;
-      } else if (groupBy === "featureSlug") {
-        key = c.featureSlug || "__null__";
-      } else if (groupBy === "workflowDynastySlug") {
-        key = dynastyMap!.get(c.workflowSlug) || c.workflowSlug;
       } else {
-        // featureDynastySlug
-        key = c.featureSlug ? (dynastyMap!.get(c.featureSlug) || c.featureSlug) : "__null__";
+        // featureSlug
+        key = c.featureSlug || "__null__";
       }
 
       const list = groups.get(key) || [];

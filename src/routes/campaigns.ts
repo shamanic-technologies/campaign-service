@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, desc, inArray, sql } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
@@ -7,12 +7,6 @@ import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { CreateCampaignBody, UpdateCampaignBody, CampaignsFilterQuery } from "../schemas.js";
 import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
-import {
-  resolveLatestWorkflowSlug,
-  resolveLatestFeatureSlug,
-  resolveWorkflowDynastySlugs,
-  resolveFeatureDynastySlugs,
-} from "../lib/dynasty-client.js";
 
 const router = Router();
 
@@ -29,8 +23,6 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
         orgId: campaigns.orgId,
         name: campaigns.name,
         workflowSlug: campaigns.workflowSlug,
-        workflowDynastySlug: campaigns.workflowDynastySlug,
-        featureDynastySlug: campaigns.featureDynastySlug,
         status: campaigns.status,
         maxBudgetDailyUsd: campaigns.maxBudgetDailyUsd,
         maxBudgetWeeklyUsd: campaigns.maxBudgetWeeklyUsd,
@@ -55,46 +47,23 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
 /**
  * GET /campaigns - List all campaigns for org
  *
- * Supports filtering by brandId, workflowSlug, featureSlug,
- * workflowDynastySlug, and featureDynastySlug.
+ * Supports filtering by brandId, workflowSlug, featureSlug.
  */
 router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilterQuery), async (req: AuthenticatedRequest, res) => {
   try {
     const {
       brandId, workflowSlug, featureSlug,
-      workflowDynastySlug, featureDynastySlug,
     } = req.query as {
       brandId?: string;
       workflowSlug?: string;
       featureSlug?: string;
-      workflowDynastySlug?: string;
-      featureDynastySlug?: string;
     };
 
     const conditions = [eq(campaigns.orgId, req.orgId!)];
 
     if (brandId) conditions.push(arrayContains(campaigns.brandIds, [brandId]));
-
-    // Dynasty slugs resolve to all versioned slugs and take priority
-    if (workflowDynastySlug) {
-      const resolved = await resolveWorkflowDynastySlugs(workflowDynastySlug);
-      if (resolved.length === 0) {
-        return res.json({ campaigns: [] });
-      }
-      conditions.push(inArray(campaigns.workflowSlug, resolved));
-    } else if (workflowSlug) {
-      conditions.push(eq(campaigns.workflowSlug, workflowSlug));
-    }
-
-    if (featureDynastySlug) {
-      const resolved = await resolveFeatureDynastySlugs(featureDynastySlug);
-      if (resolved.length === 0) {
-        return res.json({ campaigns: [] });
-      }
-      conditions.push(inArray(campaigns.featureSlug, resolved));
-    } else if (featureSlug) {
-      conditions.push(eq(campaigns.featureSlug, featureSlug));
-    }
+    if (workflowSlug) conditions.push(eq(campaigns.workflowSlug, workflowSlug));
+    if (featureSlug) conditions.push(eq(campaigns.featureSlug, featureSlug));
 
     const results = await db
       .select()
@@ -142,11 +111,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
   try {
     const {
       name,
-      workflowSlug: bodyWorkflowSlug,
-      workflowDynastySlug,
+      workflowSlug,
       brandIds,
       featureSlug: bodyFeatureSlug,
-      featureDynastySlug,
       featureInputs,
       maxBudgetDailyUsd,
       maxBudgetWeeklyUsd,
@@ -159,14 +126,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       notifyChannel,
       notifyDestination,
     } = req.body;
-
-    // Resolve workflow slug: explicit versioned slug takes priority, otherwise resolve from dynasty
-    let resolvedWorkflowSlug: string;
-    if (bodyWorkflowSlug) {
-      resolvedWorkflowSlug = bodyWorkflowSlug;
-    } else {
-      resolvedWorkflowSlug = await resolveLatestWorkflowSlug(workflowDynastySlug!);
-    }
 
     // featureSlug comes exclusively from x-feature-slug header
     const resolvedFeatureSlug = req.featureSlug || "";
@@ -202,9 +161,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         createdByUserId: req.userId ?? null,
         parentRunId: req.runId ?? null,
         name,
-        workflowSlug: resolvedWorkflowSlug,
-        workflowDynastySlug: workflowDynastySlug ?? null,
-        featureDynastySlug: featureDynastySlug ?? null,
+        workflowSlug,
         brandIds,
         featureSlug: resolvedFeatureSlug,
         featureInputs,
@@ -290,10 +247,6 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     const updates = { ...req.body, updatedAt: new Date() };
     if (updates.status) {
       updates.status = statusMap[updates.status] ?? updates.status;
-    }
-    // If featureDynastySlug is provided on update, resolve to latest versioned slug
-    if (updates.featureDynastySlug && !updates.featureSlug) {
-      updates.featureSlug = await resolveLatestFeatureSlug(updates.featureDynastySlug);
     }
 
     const [updated] = await db
