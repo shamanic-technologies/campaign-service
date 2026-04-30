@@ -40,14 +40,14 @@ export async function executeCampaignWorkflow(
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
 
   if (!url || !apiKey) {
-    console.warn("[Workflow] WORKFLOW_SERVICE_URL or WORKFLOW_SERVICE_API_KEY not set, skipping workflow execution");
+    console.warn("[campaign-service] WORKFLOW_SERVICE_URL or WORKFLOW_SERVICE_API_KEY not set, skipping workflow execution");
     return;
   }
 
   // Defense-in-depth: validate all required fields even though callers should check first
   const missing = validateWorkflowInputs(inputs);
   if (missing.length > 0) {
-    throw new Error(`[Workflow] Cannot execute workflow — missing required fields: ${missing.join(", ")}`);
+    throw new Error(`[campaign-service] Cannot execute workflow — missing required fields: ${missing.join(", ")}`);
   }
 
   const executeUrl = `${url}/workflows/by-slug/${workflowSlug}/execute`;
@@ -77,7 +77,7 @@ export async function executeCampaignWorkflow(
 
   if (!res.ok) {
     const body = await res.text();
-    console.error(`[Workflow] Execution failed (${res.status}): ${body}`);
+    console.error(`[campaign-service] Execution failed (${res.status}): ${body}`);
     return;
   }
 
