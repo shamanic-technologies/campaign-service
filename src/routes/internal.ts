@@ -8,6 +8,7 @@ import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribut
 import { runGateChecks } from "../lib/gate-check.js";
 import { executeCampaignWorkflow } from "../lib/workflows.js";
 import { EndRunBody, TransferBrandBody } from "../schemas.js";
+import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
@@ -37,10 +38,20 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
     });
     if (!campaign) {
-      console.warn(`[Gate Check] Campaign not found: ${campaignId}`);
+      console.warn(`[campaign-service] Campaign not found: ${campaignId}`);
       return res.status(404).json({ error: "Campaign not found" });
     }
     const resolvedBrandIds = (req.brandIds && req.brandIds.length > 0) ? req.brandIds : (campaign.brandIds ?? []);
+
+    if (req.runId) {
+      traceEvent(req.runId, {
+        service: "campaign-service",
+        event: "gate-check-start",
+        detail: `Running gate checks for campaign ${campaignId} — status=${campaign.status}, brandIds=[${resolvedBrandIds.join(",")}]`,
+        data: { campaignId, status: campaign.status, brandIds: resolvedBrandIds },
+      }, req.headers).catch(() => {});
+    }
+
     const result = await runGateChecks({
       campaignId,
       orgId,
@@ -56,8 +67,18 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       maxLeads: campaign.maxLeads,
     });
 
+    if (req.runId) {
+      traceEvent(req.runId, {
+        service: "campaign-service",
+        event: "gate-check-result",
+        detail: `Gate check ${result.allowed ? "PASSED" : "BLOCKED"} for campaign ${campaignId}${result.reason ? ` — reason: ${result.reason}` : ""}${result.autoStopped ? " (auto-stopped)" : ""}`,
+        level: result.allowed ? "info" : "warn",
+        data: { campaignId, allowed: result.allowed, reason: result.reason, autoStopped: result.autoStopped },
+      }, req.headers).catch(() => {});
+    }
+
     if (!result.allowed) {
-      console.warn(`[Gate Check] BLOCKED: reason=${result.reason}, autoStopped=${result.autoStopped}`);
+      console.warn(`[campaign-service] BLOCKED: reason=${result.reason}, autoStopped=${result.autoStopped}`);
 
       // Save toResumeAt so the scheduler can re-trigger when the budget window resets
       if (result.toResumeAt) {
@@ -73,7 +94,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       ...(result.autoStopped && { autoStopped: result.autoStopped }),
     });
   } catch (error) {
-    console.error("[Gate Check] Unhandled error:", error);
+    console.error("[campaign-service] Unhandled error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -101,16 +122,25 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
     });
     if (!campaign) {
-      console.warn(`[Start Run] Campaign not found: ${campaignId} (orgId=${orgId})`);
+      console.warn(`[campaign-service] Campaign not found: ${campaignId} (orgId=${orgId})`);
       return res.status(404).json({ error: "Campaign not found" });
     }
     if (!campaign.brandIds || campaign.brandIds.length === 0) {
-      console.warn(`[Start Run] Campaign ${campaignId} has no brandIds`);
+      console.warn(`[campaign-service] Campaign ${campaignId} has no brandIds`);
       return res.status(400).json({ error: "Campaign has no brandIds" });
     }
 
     // featureSlug comes exclusively from x-feature-slug header
     const featureSlug = req.featureSlug || undefined;
+
+    if (req.runId) {
+      traceEvent(req.runId, {
+        service: "campaign-service",
+        event: "start-run",
+        detail: `Starting run for campaign ${campaignId} — brandIds=[${campaign.brandIds!.join(",")}], workflowSlug=${campaign.workflowSlug}, featureSlug=${featureSlug ?? "none"}`,
+        data: { campaignId, brandIds: campaign.brandIds, workflowSlug: campaign.workflowSlug, featureSlug },
+      }, req.headers).catch(() => {});
+    }
 
     // Create run in runs-service (x-run-id from caller becomes parentRunId)
     const parentRunId = req.runId;
@@ -130,6 +160,15 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     const featureInputs = campaign.featureInputs as Record<string, unknown> | null;
     const searchParams = (featureInputs && Object.keys(featureInputs).length > 0) ? featureInputs : null;
 
+    if (req.runId) {
+      traceEvent(req.runId, {
+        service: "campaign-service",
+        event: "run-created",
+        detail: `Run created id=${run.id} for campaign ${campaignId} — parentRunId=${parentRunId ?? "none"}`,
+        data: { runId: run.id, campaignId, parentRunId },
+      }, req.headers).catch(() => {});
+    }
+
     // Return campaign data for downstream DAG nodes
     res.json({
       runId: run.id,
@@ -143,7 +182,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       searchParams,
     });
   } catch (error) {
-    console.error("[Start Run] Unhandled error:", error);
+    console.error("[campaign-service] Unhandled error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -180,6 +219,15 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       featureSlug: req.featureSlug,
     };
 
+    if (req.runId) {
+      traceEvent(req.runId, {
+        service: "campaign-service",
+        event: "end-run",
+        detail: `Ending run for campaign ${campaignId} — success=${success}, stopCampaign=${stopCampaign}, status=${status}`,
+        data: { campaignId, success, stopCampaign, status },
+      }, req.headers).catch(() => {});
+    }
+
     // Find and update running runs for this campaign
     try {
       const { runs } = await listRuns({
@@ -193,7 +241,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         await updateRun(run.id, status, identity);
       }
     } catch (err) {
-      console.error(`[End Run] Failed to update runs:`, err);
+      console.error(`[campaign-service] Failed to update runs:`, err);
     }
 
     // Respond immediately, then handle re-trigger asynchronously
@@ -205,9 +253,9 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         await db.update(campaigns)
           .set({ status: "stopped", updatedAt: new Date() })
           .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)));
-        console.warn(`[End Run] stopCampaign=true — auto-stopped campaign ${campaignId}`);
+        console.warn(`[campaign-service] stopCampaign=true — auto-stopped campaign ${campaignId}`);
       } catch (err) {
-        console.error(`[End Run] Failed to auto-stop campaign:`, err);
+        console.error(`[campaign-service] Failed to auto-stop campaign:`, err);
       }
       return;
     }
@@ -228,7 +276,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       const featureSlug = freshCampaign.featureSlug;
 
       if (!brandIdCsv || !userId || !featureSlug) {
-        console.warn(`[End Run] Cannot re-trigger campaign ${campaignId} — missing campaign data: brandIds=${!!brandIdCsv}, userId=${!!userId}, featureSlug=${!!featureSlug}`);
+        console.warn(`[campaign-service] Cannot re-trigger campaign ${campaignId} — missing campaign data: brandIds=${!!brandIdCsv}, userId=${!!userId}, featureSlug=${!!featureSlug}`);
         return;
       }
 
@@ -236,6 +284,15 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       // Creating one here causes a race: gate-check in the new workflow sees it as
       // "running" and blocks with "A run is already in progress".
       const runId = freshCampaign.parentRunId || crypto.randomUUID();
+
+      if (req.runId) {
+        traceEvent(req.runId, {
+          service: "campaign-service",
+          event: "re-trigger",
+          detail: `Re-triggering workflow "${freshCampaign.workflowSlug}" for campaign ${campaignId} — brandIds=[${brandIdCsv}], userId=${userId}, featureSlug=${featureSlug}`,
+          data: { campaignId, workflowSlug: freshCampaign.workflowSlug, brandIdCsv, userId, featureSlug },
+        }, req.headers).catch(() => {});
+      }
 
       // Fire-and-forget: gate-check in the next workflow execution will validate limits
       executeCampaignWorkflow(freshCampaign.workflowSlug, {
@@ -246,13 +303,13 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         runId,
         featureSlug,
       }).catch((err) => {
-        console.error(`[End Run] Re-trigger failed for campaign ${campaignId}:`, err);
+        console.error(`[campaign-service] Re-trigger failed for campaign ${campaignId}:`, err);
       });
     } catch (err) {
-      console.error(`[End Run] Re-trigger check failed:`, err);
+      console.error(`[campaign-service] Re-trigger check failed:`, err);
     }
   } catch (error) {
-    console.error("[End Run] Unhandled error:", error);
+    console.error("[campaign-service] Unhandled error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

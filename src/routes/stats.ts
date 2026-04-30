@@ -61,7 +61,7 @@ router.post("/stats/batch-budget", requireApiKey, validateBody(BatchBudgetUsageB
             totalCostInUsdCents: totalCostCents > 0 ? String(totalCostCents) : null,
           };
         } catch (err) {
-          console.warn(`[Campaign Service] Batch budget failed for campaign ${campaignId}:`, err);
+          console.warn(`[campaign-service] Batch budget failed for campaign ${campaignId}:`, err);
           results[campaignId] = { error: "Failed to fetch stats" };
         }
       })
@@ -69,7 +69,7 @@ router.post("/stats/batch-budget", requireApiKey, validateBody(BatchBudgetUsageB
 
     res.json({ results });
   } catch (error) {
-    console.error("[Campaign Service] Batch budget error:", error);
+    console.error("[campaign-service] Batch budget error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -158,7 +158,7 @@ router.get("/stats", requireApiKey, validateQuery(StatsFilterQuery), async (req,
 
     return res.json({ groupedStats });
   } catch (error) {
-    console.error("[Campaign Service] Stats error:", error);
+    console.error("[campaign-service] Stats error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
