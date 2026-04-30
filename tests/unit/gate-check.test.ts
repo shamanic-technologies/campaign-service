@@ -107,11 +107,11 @@ describe("Gate Check", () => {
   });
 
   describe("Stale run cleanup", () => {
-    it("should mark runs running > 30 min as failed", async () => {
+    it("should mark runs running > 3 hours as failed", async () => {
       const staleRun = makeRun({
         id: "stale-run-1",
         status: "running",
-        startedAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+        startedAt: new Date(Date.now() - (3 * 60 + 1) * 60 * 1000).toISOString(),
       });
       mockListRuns.mockResolvedValue({ runs: [staleRun] });
 
