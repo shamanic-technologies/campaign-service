@@ -129,7 +129,7 @@ export function requireApiKey(
   const expectedKey = process.env.CAMPAIGN_SERVICE_API_KEY;
 
   if (!expectedKey) {
-    console.error("[Campaign Service] CAMPAIGN_SERVICE_API_KEY not configured");
+    console.error("[campaign-service] CAMPAIGN_SERVICE_API_KEY not configured");
     return res.status(500).json({ error: "API key not configured" });
   }
 

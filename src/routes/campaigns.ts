@@ -7,6 +7,7 @@ import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { CreateCampaignBody, UpdateCampaignBody, CampaignsFilterQuery } from "../schemas.js";
 import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
+import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
@@ -37,7 +38,7 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
 
     res.json({ campaigns: allCampaigns });
   } catch (error) {
-    console.error("[Campaign Service] List all campaigns error:", error);
+    console.error("[campaign-service] List all campaigns error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -73,7 +74,7 @@ router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilt
 
     res.json({ campaigns: results });
   } catch (error) {
-    console.error("[Campaign Service] List campaigns error:", error);
+    console.error("[campaign-service] List campaigns error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -99,7 +100,7 @@ router.get("/campaigns/:id", requireApiKey, serviceAuth, async (req: Authenticat
 
     res.json({ campaign });
   } catch (error) {
-    console.error("[Campaign Service] Get campaign error:", error);
+    console.error("[campaign-service] Get campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -154,6 +155,15 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       });
     }
 
+    if (req.runId) {
+      traceEvent(req.runId, {
+        service: "campaign-service",
+        event: "create-campaign",
+        detail: `Creating campaign "${name}" — workflowSlug=${workflowSlug}, brandIds=[${brandIds}], featureSlug=${resolvedFeatureSlug}`,
+        data: { name, workflowSlug, brandIds, featureSlug: resolvedFeatureSlug },
+      }, req.headers).catch(() => {});
+    }
+
     const [campaign] = await db
       .insert(campaigns)
       .values({
@@ -179,6 +189,15 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       })
       .returning();
 
+    if (req.runId) {
+      traceEvent(req.runId, {
+        service: "campaign-service",
+        event: "campaign-created",
+        detail: `Campaign created id=${campaign.id}, triggering workflow "${campaign.workflowSlug}"`,
+        data: { campaignId: campaign.id, workflowSlug: campaign.workflowSlug },
+      }, req.headers).catch(() => {});
+    }
+
     // Trigger first workflow execution (fire-and-forget)
     const workflowInputs = {
       campaignId: campaign.id,
@@ -189,7 +208,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       featureSlug: campaign.featureSlug!,
     };
     executeCampaignWorkflow(campaign.workflowSlug, workflowInputs).catch((err) => {
-      console.error(`[Campaign Service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
+      console.error(`[campaign-service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
 
     res.status(201).json({ campaign });
@@ -197,7 +216,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     if (error?.code === "23505" && (error?.constraint === "uniq_campaigns_org_name" || error?.constraint_name === "uniq_campaigns_org_name")) {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
     }
-    console.error("[Campaign Service] Create campaign error:", error);
+    console.error("[campaign-service] Create campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -243,6 +262,15 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       }
     }
 
+    if (req.runId) {
+      traceEvent(req.runId, {
+        service: "campaign-service",
+        event: "update-campaign",
+        detail: `Updating campaign ${id} — fields: ${Object.keys(req.body).join(", ")}`,
+        data: { campaignId: id, fields: Object.keys(req.body) },
+      }, req.headers).catch(() => {});
+    }
+
     const statusMap: Record<string, string> = { activate: "ongoing", stop: "stopped" };
     const updates = { ...req.body, updatedAt: new Date() };
     if (updates.status) {
@@ -266,7 +294,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         featureSlug: req.featureSlug!,
       };
       executeCampaignWorkflow(updated.workflowSlug, activateInputs).catch((err) => {
-        console.error(`[Campaign Service] Failed to trigger workflow for campaign ${id}:`, err);
+        console.error(`[campaign-service] Failed to trigger workflow for campaign ${id}:`, err);
       });
     }
 
@@ -275,7 +303,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     if (error?.code === "23505" && (error?.constraint === "uniq_campaigns_org_name" || error?.constraint_name === "uniq_campaigns_org_name")) {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
     }
-    console.error("[Campaign Service] Update campaign error:", error);
+    console.error("[campaign-service] Update campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -301,7 +329,7 @@ router.delete("/campaigns/:id", requireApiKey, serviceAuth, async (req: Authenti
 
     res.json({ message: "Campaign deleted successfully" });
   } catch (error) {
-    console.error("[Campaign Service] Delete campaign error:", error);
+    console.error("[campaign-service] Delete campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

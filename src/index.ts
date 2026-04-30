@@ -56,7 +56,7 @@ Sentry.setupExpressErrorHandler(app);
 
 // Fallback error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error("[Campaign Service] Unhandled error:", err);
+  console.error("[campaign-service] Unhandled error:", err);
   res.status(500).json({ error: "Internal server error" });
 });
 
@@ -64,14 +64,14 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 if (process.env.NODE_ENV !== "test") {
   migrate(db, { migrationsFolder: "./drizzle" })
     .then(() => {
-      console.log("[Campaign Service] Migrations complete");
+      console.log("[campaign-service] Migrations complete");
       startScheduler();
       app.listen(Number(PORT), "::", () => {
-        console.log(`[Campaign Service] Running on port ${PORT}`);
+        console.log(`[campaign-service] Running on port ${PORT}`);
       });
     })
     .catch((err) => {
-      console.error("[Campaign Service] Migration failed:", err);
+      console.error("[campaign-service] Migration failed:", err);
       process.exit(1);
     });
 }

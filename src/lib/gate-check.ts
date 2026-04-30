@@ -58,7 +58,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         await updateRun(run.id, "failed", identity);
         run.status = "failed"; // update in-memory
       } catch (err) {
-        console.error(`[Gate Check] Failed to clean stale run ${run.id}:`, err);
+        console.error(`[campaign-service] Failed to clean stale run ${run.id}:`, err);
       }
     }
   }
@@ -159,7 +159,7 @@ async function autoStopCampaign(campaignId: string): Promise<void> {
   await db.update(campaigns)
     .set({ status: "stopped", updatedAt: new Date() })
     .where(eq(campaigns.id, campaignId));
-  console.log(`[Campaign Service] Auto-stopped campaign ${campaignId}`);
+  console.log(`[campaign-service] Auto-stopped campaign ${campaignId}`);
 }
 
 async function fetchLeadStats(

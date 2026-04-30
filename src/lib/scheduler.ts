@@ -39,7 +39,7 @@ export async function resumeDueCampaigns(): Promise<number> {
 
   if (dueCampaigns.length === 0) return 0;
 
-  console.log(`[Scheduler] Claimed ${dueCampaigns.length} campaign(s) for resume`);
+  console.log(`[campaign-service] Claimed ${dueCampaigns.length} campaign(s) for resume`);
 
   for (const campaign of dueCampaigns) {
     try {
@@ -48,7 +48,7 @@ export async function resumeDueCampaigns(): Promise<number> {
       if (!campaign.createdByUserId) missingFields.push("createdByUserId");
       if (!campaign.featureSlug) missingFields.push("featureSlug");
       if (missingFields.length > 0) {
-        console.warn(`[Scheduler] Campaign ${campaign.id} missing required fields for workflow execution: ${missingFields.join(", ")} — skipping resume`);
+        console.warn(`[campaign-service] Campaign ${campaign.id} missing required fields for workflow execution: ${missingFields.join(", ")} — skipping resume`);
         continue;
       }
 
@@ -69,10 +69,10 @@ export async function resumeDueCampaigns(): Promise<number> {
         runId,
         featureSlug,
       }).catch((err) => {
-        console.error(`[Scheduler] Failed to re-trigger campaign ${campaign.id}:`, err);
+        console.error(`[campaign-service] Failed to re-trigger campaign ${campaign.id}:`, err);
       });
     } catch (err) {
-      console.error(`[Scheduler] Error processing campaign ${campaign.id}:`, err);
+      console.error(`[campaign-service] Error processing campaign ${campaign.id}:`, err);
     }
   }
 
@@ -89,17 +89,17 @@ let isRunning = false;
  * are skipped rather than causing duplicate triggers.
  */
 export function startScheduler(): () => void {
-  console.log(`[Scheduler] Starting (interval=${SCHEDULER_INTERVAL_MS}ms)`);
+  console.log(`[campaign-service] Starting (interval=${SCHEDULER_INTERVAL_MS}ms)`);
 
   const handle = setInterval(() => {
     if (isRunning) {
-      console.warn("[Scheduler] Previous tick still running, skipping");
+      console.warn("[campaign-service] Previous tick still running, skipping");
       return;
     }
     isRunning = true;
     resumeDueCampaigns()
       .catch((err) => {
-        console.error("[Scheduler] Unhandled error:", err);
+        console.error("[campaign-service] Unhandled error:", err);
       })
       .finally(() => {
         isRunning = false;
