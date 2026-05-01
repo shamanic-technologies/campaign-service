@@ -46,9 +46,10 @@ vi.mock("drizzle-orm", () => ({
   and: vi.fn(),
   lte: vi.fn(),
   isNotNull: vi.fn(),
+  isNull: vi.fn(),
 }));
 
-import { resumeDueCampaigns } from "../../src/lib/scheduler.js";
+import { resumeDueCampaigns, claimStuckCampaigns } from "../../src/lib/scheduler.js";
 
 describe("Scheduler - resumeDueCampaigns", () => {
   beforeEach(() => {
@@ -249,5 +250,27 @@ describe("Scheduler - resumeDueCampaigns", () => {
 
     expect(count).toBe(2);
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Scheduler - claimStuckCampaigns", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDbReturning.mockResolvedValue([]);
+  });
+
+  it("should return 0 when no stuck campaigns exist", async () => {
+    const count = await claimStuckCampaigns();
+    expect(count).toBe(0);
+  });
+
+  it("should claim stuck campaigns and return the count", async () => {
+    mockDbReturning.mockResolvedValue([
+      { id: "stuck-campaign-1" },
+      { id: "stuck-campaign-2" },
+    ]);
+
+    const count = await claimStuckCampaigns();
+    expect(count).toBe(2);
   });
 });

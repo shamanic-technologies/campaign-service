@@ -574,7 +574,7 @@ describe("Pipeline routes", () => {
       expect(mockUpdateRun).not.toHaveBeenCalled();
     });
 
-    it("should re-trigger workflow when stopCampaign is false and campaign is ongoing", async () => {
+    it("should set toResumeAt=now when success=true stopCampaign=false and campaign is ongoing", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
@@ -583,53 +583,60 @@ describe("Pipeline routes", () => {
         createdByUserId: "user_test",
       });
 
+      const before = Date.now();
+
       await request(app)
         .post("/end-run")
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .send({ success: true, stopCampaign: false })
         .expect(200);
 
-      // Wait for async re-trigger
+      // Wait for async toResumeAt update
       await new Promise((r) => setTimeout(r, 100));
 
-      // end-run must NOT create a run — /start-run in the new workflow handles that.
-      // Creating one here would cause gate-check to block with "A run is already in progress".
-      expect(mockCreateRun).not.toHaveBeenCalled();
-      expect(mockExecute).toHaveBeenCalledWith(
-        "sales-email-cold-outreach",
-        expect.objectContaining({
-          campaignId: campaign.id,
-          orgId,
-        }),
-      );
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      expect(updated!.toResumeAt).not.toBeNull();
+      const resumeTime = new Date(updated!.toResumeAt!).getTime();
+      // Should be ~now (within 5s tolerance)
+      expect(resumeTime).toBeGreaterThanOrEqual(before);
+      expect(resumeTime).toBeLessThan(before + 5_000);
+      // Must NOT fire-and-forget
+      expect(mockExecute).not.toHaveBeenCalled();
     });
 
-    it("should use parentRunId from campaign as runId for re-trigger", async () => {
-      const parentRunId = crypto.randomUUID();
+    it("should set toResumeAt=now+60s when success=false stopCampaign=false and campaign is ongoing", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
         workflowSlug: "sales-email-cold-outreach",
         featureSlug: "sales-cold-email-v1",
         createdByUserId: "user_test",
-        parentRunId,
       });
+
+      const before = Date.now();
 
       await request(app)
         .post("/end-run")
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
-        .send({ success: true, stopCampaign: false })
+        .send({ success: false, stopCampaign: false })
         .expect(200);
 
       await new Promise((r) => setTimeout(r, 100));
 
-      expect(mockExecute).toHaveBeenCalledWith(
-        "sales-email-cold-outreach",
-        expect.objectContaining({ runId: parentRunId }),
-      );
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      expect(updated!.toResumeAt).not.toBeNull();
+      const resumeTime = new Date(updated!.toResumeAt!).getTime();
+      // Should be ~now + 60s (within 5s tolerance)
+      expect(resumeTime).toBeGreaterThanOrEqual(before + 55_000);
+      expect(resumeTime).toBeLessThan(before + 65_000);
+      expect(mockExecute).not.toHaveBeenCalled();
     });
 
-    it("should NOT re-trigger if campaign is stopped", async () => {
+    it("should NOT set toResumeAt if campaign is stopped", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "stopped",
@@ -643,6 +650,10 @@ describe("Pipeline routes", () => {
 
       await new Promise((r) => setTimeout(r, 100));
 
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      expect(updated!.toResumeAt).toBeNull();
       expect(mockExecute).not.toHaveBeenCalled();
     });
 
@@ -673,14 +684,15 @@ describe("Pipeline routes", () => {
       // Should NOT re-trigger
       expect(mockExecute).not.toHaveBeenCalled();
 
-      // Should auto-stop in DB
+      // Should auto-stop in DB and NOT set toResumeAt
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
       expect(updated!.status).toBe("stopped");
+      expect(updated!.toResumeAt).toBeNull();
     });
 
-    it("should re-trigger normally when stopCampaign is false", async () => {
+    it("should set toResumeAt and NOT fire-and-forget when stopCampaign is false", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
@@ -700,16 +712,13 @@ describe("Pipeline routes", () => {
         .send({ success: true, stopCampaign: false })
         .expect(200);
 
-      // Wait for async re-trigger
       await new Promise((r) => setTimeout(r, 100));
 
-      expect(mockExecute).toHaveBeenCalledWith(
-        "sales-email-cold-outreach",
-        expect.objectContaining({
-          campaignId: campaign.id,
-          orgId,
-        }),
-      );
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      expect(updated!.toResumeAt).not.toBeNull();
+      expect(mockExecute).not.toHaveBeenCalled();
     });
 
     it("should not pass appId to listRuns", async () => {
