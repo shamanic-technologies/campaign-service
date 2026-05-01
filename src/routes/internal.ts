@@ -6,7 +6,6 @@ import { requireApiKey, requirePipelineHeaders, trackingHeaders, type Authentica
 import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
-import { executeCampaignWorkflow } from "../lib/workflows.js";
 import { EndRunBody, TransferBrandBody } from "../schemas.js";
 import { traceEvent } from "../lib/trace-event.js";
 
@@ -260,9 +259,9 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       return;
     }
 
-    // Re-trigger if campaign is still ongoing
+    // Schedule re-trigger via toResumeAt — the scheduler picks it up on the next tick.
+    // This prevents exponential cascades when downstream services are down.
     try {
-      // Re-fetch campaign for fresh status and stored data
       const freshCampaign = await db.query.campaigns.findFirst({
         where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
       });
@@ -270,43 +269,26 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         return;
       }
 
-      // Resolve all fields from the campaign DB record — no dependence on forwarded headers
-      const brandIdCsv = (freshCampaign.brandIds ?? []).join(",");
-      const userId = freshCampaign.createdByUserId;
-      const featureSlug = freshCampaign.featureSlug;
-
-      if (!brandIdCsv || !userId || !featureSlug) {
-        console.warn(`[campaign-service] Cannot re-trigger campaign ${campaignId} — missing campaign data: brandIds=${!!brandIdCsv}, userId=${!!userId}, featureSlug=${!!featureSlug}`);
-        return;
-      }
-
-      // Do NOT create a run here — /start-run in the new workflow will create it.
-      // Creating one here causes a race: gate-check in the new workflow sees it as
-      // "running" and blocks with "A run is already in progress".
-      const runId = freshCampaign.parentRunId || crypto.randomUUID();
+      // Failed runs get a 60s backoff; completed runs resume immediately
+      const delayMs = status === "failed" ? 60_000 : 0;
+      const toResumeAt = new Date(Date.now() + delayMs);
 
       if (req.runId) {
         traceEvent(req.runId, {
           service: "campaign-service",
-          event: "re-trigger",
-          detail: `Re-triggering workflow "${freshCampaign.workflowSlug}" for campaign ${campaignId} — brandIds=[${brandIdCsv}], userId=${userId}, featureSlug=${featureSlug}`,
-          data: { campaignId, workflowSlug: freshCampaign.workflowSlug, brandIdCsv, userId, featureSlug },
+          event: "re-trigger-scheduled",
+          detail: `Scheduled re-trigger for campaign ${campaignId} via toResumeAt=${toResumeAt.toISOString()} (delay=${delayMs}ms)`,
+          data: { campaignId, toResumeAt: toResumeAt.toISOString(), delayMs },
         }, req.headers).catch(() => {});
       }
 
-      // Fire-and-forget: gate-check in the next workflow execution will validate limits
-      executeCampaignWorkflow(freshCampaign.workflowSlug, {
-        campaignId,
-        orgId,
-        brandId: brandIdCsv,
-        userId,
-        runId,
-        featureSlug,
-      }).catch((err) => {
-        console.error(`[campaign-service] Re-trigger failed for campaign ${campaignId}:`, err);
-      });
+      await db.update(campaigns)
+        .set({ toResumeAt, updatedAt: new Date() })
+        .where(eq(campaigns.id, campaignId));
+
+      console.log(`[campaign-service] Set toResumeAt=${toResumeAt.toISOString()} for campaign ${campaignId} (status=${status})`);
     } catch (err) {
-      console.error(`[campaign-service] Re-trigger check failed:`, err);
+      console.error(`[campaign-service] Failed to schedule re-trigger for campaign ${campaignId}:`, err);
     }
   } catch (error) {
     console.error("[campaign-service] Unhandled error:", error);

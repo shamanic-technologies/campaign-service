@@ -1,6 +1,6 @@
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
-import { eq, and, lte, isNotNull } from "drizzle-orm";
+import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
 
 const SCHEDULER_INTERVAL_MS = 60_000; // 1 minute
@@ -79,6 +79,31 @@ export async function resumeDueCampaigns(): Promise<number> {
   return dueCampaigns.length;
 }
 
+/**
+ * Heartbeat: detect ongoing campaigns with no toResumeAt (stuck campaigns).
+ * Sets toResumeAt = now so the next tick picks them up via resumeDueCampaigns.
+ */
+export async function claimStuckCampaigns(): Promise<number> {
+  const now = new Date();
+
+  const stuck = await db
+    .update(campaigns)
+    .set({ toResumeAt: now, updatedAt: now })
+    .where(
+      and(
+        eq(campaigns.status, "ongoing"),
+        isNull(campaigns.toResumeAt),
+      ),
+    )
+    .returning({ id: campaigns.id });
+
+  if (stuck.length > 0) {
+    console.warn(`[campaign-service] Heartbeat: claimed ${stuck.length} stuck campaign(s): ${stuck.map((c) => c.id).join(", ")}`);
+  }
+
+  return stuck.length;
+}
+
 /** Tracks whether a scheduler tick is currently running. */
 let isRunning = false;
 
@@ -97,7 +122,8 @@ export function startScheduler(): () => void {
       return;
     }
     isRunning = true;
-    resumeDueCampaigns()
+    claimStuckCampaigns()
+      .then(() => resumeDueCampaigns())
       .catch((err) => {
         console.error("[campaign-service] Unhandled error:", err);
       })
