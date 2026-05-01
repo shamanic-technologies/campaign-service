@@ -305,42 +305,6 @@ describe("Gate Check", () => {
     });
   });
 
-  describe("Consecutive failures check", () => {
-    it("should auto-stop after 10 consecutive failures", async () => {
-      const runs = Array.from({ length: 10 }, (_, i) =>
-        makeRun({ id: `r${i + 1}`, status: "failed", startedAt: new Date(Date.now() - (i + 1) * 1000).toISOString() })
-      );
-      mockListRuns.mockResolvedValue({ runs });
-
-      const result = await runGateChecks(makeCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("10 consecutive failures");
-      expect(result.autoStopped).toBe(true);
-    });
-
-    it("should allow when failures are not consecutive", async () => {
-      const runs = [
-        makeRun({ id: "r1", status: "failed", startedAt: new Date(Date.now() - 1000).toISOString() }),
-        makeRun({ id: "r2", status: "completed", startedAt: new Date(Date.now() - 2000).toISOString() }),
-        makeRun({ id: "r3", status: "failed", startedAt: new Date(Date.now() - 3000).toISOString() }),
-      ];
-      mockListRuns.mockResolvedValue({ runs });
-
-      const result = await runGateChecks(makeCampaign());
-      expect(result.allowed).toBe(true);
-    });
-
-    it("should allow when fewer than 10 consecutive failures", async () => {
-      const runs = Array.from({ length: 9 }, (_, i) =>
-        makeRun({ id: `r${i + 1}`, status: "failed", startedAt: new Date(Date.now() - (i + 1) * 1000).toISOString() })
-      );
-      mockListRuns.mockResolvedValue({ runs });
-
-      const result = await runGateChecks(makeCampaign());
-      expect(result.allowed).toBe(true);
-    });
-  });
-
   describe("toResumeAt on temporal budget exceeded", () => {
     it("should return toResumeAt when daily budget is exceeded", async () => {
       mockGetStatsBudget.mockResolvedValue(

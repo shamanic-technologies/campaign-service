@@ -4,7 +4,6 @@ import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 
 const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
-const MAX_CONSECUTIVE_FAILURES = 10;
 
 export interface GateCheckInput {
   campaignId: string;
@@ -136,20 +135,6 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       await autoStopCampaign(campaign.campaignId);
       return { allowed: false, reason: "Max leads reached", autoStopped: true };
     }
-  }
-
-  // 5. Consecutive failures check
-  const sortedRuns = [...runs].sort((a, b) =>
-    new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
-  );
-  let consecutiveFailures = 0;
-  for (const run of sortedRuns) {
-    if (run.status === "failed") consecutiveFailures++;
-    else break;
-  }
-  if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-    await autoStopCampaign(campaign.campaignId);
-    return { allowed: false, reason: `${MAX_CONSECUTIVE_FAILURES} consecutive failures`, autoStopped: true };
   }
 
   return { allowed: true };
