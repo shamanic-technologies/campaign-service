@@ -77,8 +77,6 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
     }
 
     if (!result.allowed) {
-      console.warn(`[campaign-service] BLOCKED: reason=${result.reason}, autoStopped=${result.autoStopped}`);
-
       // Save toResumeAt so the scheduler can re-trigger when the budget window resets
       if (result.toResumeAt) {
         await db.update(campaigns)
