@@ -305,8 +305,8 @@ describe("Gate Check", () => {
     });
   });
 
-  describe("toResumeAt on temporal budget exceeded", () => {
-    it("should return toResumeAt when daily budget is exceeded", async () => {
+  describe("nextRunAt on temporal budget exceeded", () => {
+    it("should return nextRunAt when daily budget is exceeded", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "1500" }])
       );
@@ -314,13 +314,13 @@ describe("Gate Check", () => {
       const result = await runGateChecks(makeCampaign({ maxBudgetDailyUsd: "10.00" }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("daily budget exceeded");
-      expect(result.toResumeAt).toBeInstanceOf(Date);
+      expect(result.nextRunAt).toBeInstanceOf(Date);
       // Should be tomorrow at midnight
       const expected = nextDayStart();
-      expect(result.toResumeAt!.getTime()).toBe(expected.getTime());
+      expect(result.nextRunAt!.getTime()).toBe(expected.getTime());
     });
 
-    it("should return toResumeAt when weekly budget is exceeded", async () => {
+    it("should return nextRunAt when weekly budget is exceeded", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "weekly", totalCostInUsdCents: "6000" }])
       );
@@ -331,12 +331,12 @@ describe("Gate Check", () => {
       }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("weekly budget exceeded");
-      expect(result.toResumeAt).toBeInstanceOf(Date);
+      expect(result.nextRunAt).toBeInstanceOf(Date);
       const expected = nextWeekStart();
-      expect(result.toResumeAt!.getTime()).toBe(expected.getTime());
+      expect(result.nextRunAt!.getTime()).toBe(expected.getTime());
     });
 
-    it("should return toResumeAt when monthly budget is exceeded", async () => {
+    it("should return nextRunAt when monthly budget is exceeded", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "monthly", totalCostInUsdCents: "11000" }])
       );
@@ -347,12 +347,12 @@ describe("Gate Check", () => {
       }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("monthly budget exceeded");
-      expect(result.toResumeAt).toBeInstanceOf(Date);
+      expect(result.nextRunAt).toBeInstanceOf(Date);
       const expected = nextMonthStart();
-      expect(result.toResumeAt!.getTime()).toBe(expected.getTime());
+      expect(result.nextRunAt!.getTime()).toBe(expected.getTime());
     });
 
-    it("should NOT return toResumeAt when total budget is exceeded (auto-stop instead)", async () => {
+    it("should NOT return nextRunAt when total budget is exceeded (auto-stop instead)", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "total", totalCostInUsdCents: "5500" }])
       );
@@ -363,10 +363,10 @@ describe("Gate Check", () => {
       }));
       expect(result.allowed).toBe(false);
       expect(result.autoStopped).toBe(true);
-      expect(result.toResumeAt).toBeUndefined();
+      expect(result.nextRunAt).toBeUndefined();
     });
 
-    it("should return earliest toResumeAt when daily exceeds before weekly", async () => {
+    it("should return earliest nextRunAt when daily exceeds before weekly", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
           { label: "daily", totalCostInUsdCents: "1500" },
@@ -380,9 +380,9 @@ describe("Gate Check", () => {
       }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("daily budget exceeded");
-      // Daily is checked first, so toResumeAt should be next day
+      // Daily is checked first, so nextRunAt should be next day
       const expected = nextDayStart();
-      expect(result.toResumeAt!.getTime()).toBe(expected.getTime());
+      expect(result.nextRunAt!.getTime()).toBe(expected.getTime());
     });
   });
 

@@ -27,7 +27,7 @@ export const CampaignSchema = z.object({
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),
   status: z.string(),
-  toResumeAt: z.string().nullable(),
+  nextRunAt: z.string().nullable(),
   notifyFrequency: z.string().nullable(),
   notifyChannel: z.string().nullable(),
   notifyDestination: z.string().nullable(),

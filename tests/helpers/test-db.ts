@@ -26,7 +26,7 @@ export async function insertTestCampaign(
     maxLeads?: number;
     featureSlug?: string;
     featureInputs?: Record<string, unknown>;
-    toResumeAt?: Date | null;
+    nextRunAt?: Date | null;
     createdByUserId?: string;
     parentRunId?: string;
   } = {}
@@ -46,7 +46,7 @@ export async function insertTestCampaign(
       maxBudgetMonthlyUsd: data.maxBudgetMonthlyUsd || null,
       maxBudgetTotalUsd: data.maxBudgetTotalUsd || null,
       maxLeads: data.maxLeads || null,
-      toResumeAt: data.toResumeAt ?? null,
+      nextRunAt: data.nextRunAt ?? null,
       createdByUserId: data.createdByUserId || null,
       parentRunId: data.parentRunId || null,
     })
