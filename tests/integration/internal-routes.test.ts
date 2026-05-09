@@ -735,5 +735,59 @@ describe("Pipeline routes", () => {
       const callArgs = mockListRuns.mock.calls[0][0];
       expect(callArgs).not.toHaveProperty("appId");
     });
+
+    it("should warn when run failed and reschedule via console.warn", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        status: "ongoing",
+        featureSlug: "sales-cold-email-v1",
+        createdByUserId: "user_test",
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await request(app)
+          .post("/end-run")
+          .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+          .send({ success: false, stopCampaign: false })
+          .expect(200);
+
+        await new Promise((r) => setTimeout(r, 100));
+
+        const allWarns = warnSpy.mock.calls.flat().join(" ");
+        expect(allWarns).toMatch(/Run failed — rescheduled campaign /);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("should NOT warn when run completed (use console.log)", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        status: "ongoing",
+        featureSlug: "sales-cold-email-v1",
+        createdByUserId: "user_test",
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      try {
+        await request(app)
+          .post("/end-run")
+          .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+          .send({ success: true, stopCampaign: false })
+          .expect(200);
+
+        await new Promise((r) => setTimeout(r, 100));
+
+        const allWarns = warnSpy.mock.calls.flat().join(" ");
+        expect(allWarns).not.toMatch(/Run failed/);
+        const allLogs = logSpy.mock.calls.flat().join(" ");
+        expect(allLogs).toMatch(/Set nextRunAt=/);
+      } finally {
+        warnSpy.mockRestore();
+        logSpy.mockRestore();
+      }
+    });
   });
 });
