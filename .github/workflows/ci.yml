@@ -47,8 +47,11 @@ jobs:
       - name: Build workspace packages
         run: pnpm run build:packages
 
-      - name: Push schema to test DB
-        run: pnpm run db:push
+      - name: Validate migrations journal
+        run: pnpm run check:migrations
+
+      - name: Run migrations against test DB
+        run: pnpm run db:migrate
 
       - name: Run tests
         run: pnpm test
