@@ -180,7 +180,7 @@ describe("Pipeline routes", () => {
       expect(res.body.autoStopped).toBe(true);
     });
 
-    it("should save toResumeAt to DB when gate-check returns it", async () => {
+    it("should save nextRunAt to DB when gate-check returns it", async () => {
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const tomorrow = new Date();
@@ -190,7 +190,7 @@ describe("Pipeline routes", () => {
       mockGateChecks.mockResolvedValue({
         allowed: false,
         reason: "daily budget exceeded",
-        toResumeAt: tomorrow,
+        nextRunAt: tomorrow,
       });
 
       await request(app)
@@ -201,11 +201,11 @@ describe("Pipeline routes", () => {
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
-      expect(updated!.toResumeAt).not.toBeNull();
-      expect(new Date(updated!.toResumeAt!).getTime()).toBe(tomorrow.getTime());
+      expect(updated!.nextRunAt).not.toBeNull();
+      expect(new Date(updated!.nextRunAt!).getTime()).toBe(tomorrow.getTime());
     });
 
-    it("should NOT save toResumeAt when gate-check does not return it", async () => {
+    it("should NOT save nextRunAt when gate-check does not return it", async () => {
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       mockGateChecks.mockResolvedValue({
@@ -222,7 +222,7 @@ describe("Pipeline routes", () => {
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
-      expect(updated!.toResumeAt).toBeNull();
+      expect(updated!.nextRunAt).toBeNull();
     });
 
     it("should pass campaign data to runGateChecks", async () => {
@@ -574,7 +574,7 @@ describe("Pipeline routes", () => {
       expect(mockUpdateRun).not.toHaveBeenCalled();
     });
 
-    it("should set toResumeAt=now when success=true stopCampaign=false and campaign is ongoing", async () => {
+    it("should set nextRunAt=now when success=true stopCampaign=false and campaign is ongoing", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
@@ -591,22 +591,22 @@ describe("Pipeline routes", () => {
         .send({ success: true, stopCampaign: false })
         .expect(200);
 
-      // Wait for async toResumeAt update
+      // Wait for async nextRunAt update
       await new Promise((r) => setTimeout(r, 100));
 
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
-      expect(updated!.toResumeAt).not.toBeNull();
-      const resumeTime = new Date(updated!.toResumeAt!).getTime();
+      expect(updated!.nextRunAt).not.toBeNull();
+      const nextRunTime = new Date(updated!.nextRunAt!).getTime();
       // Should be ~now (within 5s tolerance)
-      expect(resumeTime).toBeGreaterThanOrEqual(before);
-      expect(resumeTime).toBeLessThan(before + 5_000);
+      expect(nextRunTime).toBeGreaterThanOrEqual(before);
+      expect(nextRunTime).toBeLessThan(before + 5_000);
       // Must NOT fire-and-forget
       expect(mockExecute).not.toHaveBeenCalled();
     });
 
-    it("should set toResumeAt=now+60s when success=false stopCampaign=false and campaign is ongoing", async () => {
+    it("should set nextRunAt=now+60s when success=false stopCampaign=false and campaign is ongoing", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
@@ -628,15 +628,15 @@ describe("Pipeline routes", () => {
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
-      expect(updated!.toResumeAt).not.toBeNull();
-      const resumeTime = new Date(updated!.toResumeAt!).getTime();
+      expect(updated!.nextRunAt).not.toBeNull();
+      const nextRunTime = new Date(updated!.nextRunAt!).getTime();
       // Should be ~now + 60s (within 5s tolerance)
-      expect(resumeTime).toBeGreaterThanOrEqual(before + 55_000);
-      expect(resumeTime).toBeLessThan(before + 65_000);
+      expect(nextRunTime).toBeGreaterThanOrEqual(before + 55_000);
+      expect(nextRunTime).toBeLessThan(before + 65_000);
       expect(mockExecute).not.toHaveBeenCalled();
     });
 
-    it("should NOT set toResumeAt if campaign is stopped", async () => {
+    it("should NOT set nextRunAt if campaign is stopped", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "stopped",
@@ -653,7 +653,7 @@ describe("Pipeline routes", () => {
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
-      expect(updated!.toResumeAt).toBeNull();
+      expect(updated!.nextRunAt).toBeNull();
       expect(mockExecute).not.toHaveBeenCalled();
     });
 
@@ -684,15 +684,15 @@ describe("Pipeline routes", () => {
       // Should NOT re-trigger
       expect(mockExecute).not.toHaveBeenCalled();
 
-      // Should auto-stop in DB and NOT set toResumeAt
+      // Should auto-stop in DB and NOT set nextRunAt
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
       expect(updated!.status).toBe("stopped");
-      expect(updated!.toResumeAt).toBeNull();
+      expect(updated!.nextRunAt).toBeNull();
     });
 
-    it("should set toResumeAt and NOT fire-and-forget when stopCampaign is false", async () => {
+    it("should set nextRunAt and NOT fire-and-forget when stopCampaign is false", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
@@ -717,7 +717,7 @@ describe("Pipeline routes", () => {
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
-      expect(updated!.toResumeAt).not.toBeNull();
+      expect(updated!.nextRunAt).not.toBeNull();
       expect(mockExecute).not.toHaveBeenCalled();
     });
 

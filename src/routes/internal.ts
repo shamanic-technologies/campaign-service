@@ -77,10 +77,10 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
     }
 
     if (!result.allowed) {
-      // Save toResumeAt so the scheduler can re-trigger when the budget window resets
-      if (result.toResumeAt) {
+      // Save nextRunAt so the scheduler can re-trigger when the budget window resets
+      if (result.nextRunAt) {
         await db.update(campaigns)
-          .set({ toResumeAt: result.toResumeAt, updatedAt: new Date() })
+          .set({ nextRunAt: result.nextRunAt, updatedAt: new Date() })
           .where(eq(campaigns.id, campaignId));
       }
     }
@@ -257,7 +257,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       return;
     }
 
-    // Schedule re-trigger via toResumeAt — the scheduler picks it up on the next tick.
+    // Schedule re-trigger via nextRunAt — the scheduler picks it up on the next tick.
     // This prevents exponential cascades when downstream services are down.
     try {
       const freshCampaign = await db.query.campaigns.findFirst({
@@ -267,24 +267,24 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         return;
       }
 
-      // Failed runs get a 60s backoff; completed runs resume immediately
+      // Failed runs get a 60s backoff; completed runs re-run immediately
       const delayMs = status === "failed" ? 60_000 : 0;
-      const toResumeAt = new Date(Date.now() + delayMs);
+      const nextRunAt = new Date(Date.now() + delayMs);
 
       if (req.runId) {
         traceEvent(req.runId, {
           service: "campaign-service",
           event: "re-trigger-scheduled",
-          detail: `Scheduled re-trigger for campaign ${campaignId} via toResumeAt=${toResumeAt.toISOString()} (delay=${delayMs}ms)`,
-          data: { campaignId, toResumeAt: toResumeAt.toISOString(), delayMs },
+          detail: `Scheduled re-trigger for campaign ${campaignId} via nextRunAt=${nextRunAt.toISOString()} (delay=${delayMs}ms)`,
+          data: { campaignId, nextRunAt: nextRunAt.toISOString(), delayMs },
         }, req.headers).catch(() => {});
       }
 
       await db.update(campaigns)
-        .set({ toResumeAt, updatedAt: new Date() })
+        .set({ nextRunAt, updatedAt: new Date() })
         .where(eq(campaigns.id, campaignId));
 
-      console.log(`[campaign-service] Set toResumeAt=${toResumeAt.toISOString()} for campaign ${campaignId} (status=${status})`);
+      console.log(`[campaign-service] Set nextRunAt=${nextRunAt.toISOString()} for campaign ${campaignId} (status=${status})`);
     } catch (err) {
       console.error(`[campaign-service] Failed to schedule re-trigger for campaign ${campaignId}:`, err);
     }

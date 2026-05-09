@@ -24,11 +24,11 @@ import { db } from "../../src/db/index.js";
 import { campaigns } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
-import { resumeDueCampaigns } from "../../src/lib/scheduler.js";
+import { reRunDueCampaigns } from "../../src/lib/scheduler.js";
 
 const orgId = "scheduler-test-org";
 
-describe("Scheduler - resumeDueCampaigns (integration)", () => {
+describe("Scheduler - reRunDueCampaigns (integration)", () => {
   beforeEach(async () => {
     await cleanTestData();
     vi.clearAllMocks();
@@ -46,28 +46,28 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
       status: "ongoing",
     });
 
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
     expect(count).toBe(0);
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
-  it("should resume campaign whose toResumeAt is in the past", async () => {
+  it("should re-run campaign whose nextRunAt is in the past", async () => {
     const pastDate = new Date(Date.now() - 60_000); // 1 minute ago
     const campaign = await insertTestCampaign(orgId, {
       status: "ongoing",
-      toResumeAt: pastDate,
+      nextRunAt: pastDate,
       featureSlug: "sales-cold-email-v1",
       createdByUserId: "user_scheduler_test",
     });
 
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
     expect(count).toBe(1);
 
-    // Should have cleared toResumeAt
+    // Should have cleared nextRunAt
     const updated = await db.query.campaigns.findFirst({
       where: eq(campaigns.id, campaign.id),
     });
-    expect(updated!.toResumeAt).toBeNull();
+    expect(updated!.nextRunAt).toBeNull();
 
     // Should have triggered workflow (run is created by /start-run in the DAG, not here)
     expect(mockExecute).toHaveBeenCalledWith(
@@ -79,49 +79,49 @@ describe("Scheduler - resumeDueCampaigns (integration)", () => {
     );
   });
 
-  it("should NOT resume campaign whose toResumeAt is in the future", async () => {
+  it("should NOT resume campaign whose nextRunAt is in the future", async () => {
     const futureDate = new Date(Date.now() + 3_600_000); // 1 hour from now
     await insertTestCampaign(orgId, {
       status: "ongoing",
-      toResumeAt: futureDate,
+      nextRunAt: futureDate,
     });
 
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
     expect(count).toBe(0);
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
-  it("should NOT resume stopped campaigns even with past toResumeAt", async () => {
+  it("should NOT resume stopped campaigns even with past nextRunAt", async () => {
     const pastDate = new Date(Date.now() - 60_000);
     await insertTestCampaign(orgId, {
       status: "stopped",
-      toResumeAt: pastDate,
+      nextRunAt: pastDate,
     });
 
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
     expect(count).toBe(0);
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
-  it("should resume multiple due campaigns", async () => {
+  it("should re-run multiple due campaigns", async () => {
     const pastDate = new Date(Date.now() - 60_000);
 
     await insertTestCampaign(orgId, {
       name: "Campaign A",
       status: "ongoing",
-      toResumeAt: pastDate,
+      nextRunAt: pastDate,
       featureSlug: "sales-cold-email-v1",
       createdByUserId: "user_scheduler_test",
     });
     await insertTestCampaign(orgId, {
       name: "Campaign B",
       status: "ongoing",
-      toResumeAt: pastDate,
+      nextRunAt: pastDate,
       featureSlug: "sales-cold-email-v1",
       createdByUserId: "user_scheduler_test",
     });
 
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
     expect(count).toBe(2);
     expect(mockExecute).toHaveBeenCalledTimes(2);
   });

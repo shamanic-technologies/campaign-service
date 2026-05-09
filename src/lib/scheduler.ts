@@ -6,25 +6,25 @@ import { executeCampaignWorkflow } from "./workflows.js";
 const SCHEDULER_INTERVAL_MS = 60_000; // 1 minute
 
 /**
- * Find all ongoing campaigns whose toResumeAt has passed,
- * atomically claim them (clear toResumeAt), and re-trigger their workflow.
+ * Find all ongoing campaigns whose nextRunAt has passed,
+ * atomically claim them (clear nextRunAt), and re-trigger their workflow.
  *
  * Uses UPDATE ... RETURNING to atomically claim campaigns, preventing
  * duplicate triggers from overlapping ticks or multiple service instances.
  */
-export async function resumeDueCampaigns(): Promise<number> {
+export async function reRunDueCampaigns(): Promise<number> {
   const now = new Date();
 
   // Atomic claim: UPDATE + RETURNING ensures only one instance/tick processes each campaign.
   // PostgreSQL row-level locks prevent two concurrent UPDATEs from claiming the same row.
   const dueCampaigns = await db
     .update(campaigns)
-    .set({ toResumeAt: null, updatedAt: now })
+    .set({ nextRunAt: null, updatedAt: now })
     .where(
       and(
         eq(campaigns.status, "ongoing"),
-        isNotNull(campaigns.toResumeAt),
-        lte(campaigns.toResumeAt, now),
+        isNotNull(campaigns.nextRunAt),
+        lte(campaigns.nextRunAt, now),
       ),
     )
     .returning({
@@ -39,7 +39,7 @@ export async function resumeDueCampaigns(): Promise<number> {
 
   if (dueCampaigns.length === 0) return 0;
 
-  console.log(`[campaign-service] Claimed ${dueCampaigns.length} campaign(s) for resume`);
+  console.log(`[campaign-service] Claimed ${dueCampaigns.length} campaign(s) for re-run`);
 
   for (const campaign of dueCampaigns) {
     try {
@@ -48,7 +48,7 @@ export async function resumeDueCampaigns(): Promise<number> {
       if (!campaign.createdByUserId) missingFields.push("createdByUserId");
       if (!campaign.featureSlug) missingFields.push("featureSlug");
       if (missingFields.length > 0) {
-        console.warn(`[campaign-service] Campaign ${campaign.id} missing required fields for workflow execution: ${missingFields.join(", ")} — skipping resume`);
+        console.warn(`[campaign-service] Campaign ${campaign.id} missing required fields for workflow execution: ${missingFields.join(", ")} — skipping re-run`);
         continue;
       }
 
@@ -80,19 +80,19 @@ export async function resumeDueCampaigns(): Promise<number> {
 }
 
 /**
- * Heartbeat: detect ongoing campaigns with no toResumeAt (stuck campaigns).
- * Sets toResumeAt = now so the next tick picks them up via resumeDueCampaigns.
+ * Heartbeat: detect ongoing campaigns with no nextRunAt (stuck campaigns).
+ * Sets nextRunAt = now so the next tick picks them up via reRunDueCampaigns.
  */
 export async function claimStuckCampaigns(): Promise<number> {
   const now = new Date();
 
   const stuck = await db
     .update(campaigns)
-    .set({ toResumeAt: now, updatedAt: now })
+    .set({ nextRunAt: now, updatedAt: now })
     .where(
       and(
         eq(campaigns.status, "ongoing"),
-        isNull(campaigns.toResumeAt),
+        isNull(campaigns.nextRunAt),
       ),
     )
     .returning({ id: campaigns.id });
@@ -123,7 +123,7 @@ export function startScheduler(): () => void {
     }
     isRunning = true;
     claimStuckCampaigns()
-      .then(() => resumeDueCampaigns())
+      .then(() => reRunDueCampaigns())
       .catch((err) => {
         console.error("[campaign-service] Unhandled error:", err);
       })
