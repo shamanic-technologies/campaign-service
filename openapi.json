@@ -94,7 +94,7 @@
           "status": {
             "type": "string"
           },
-          "toResumeAt": {
+          "nextRunAt": {
             "type": "string",
             "nullable": true
           },
@@ -135,7 +135,7 @@
           "startDate",
           "endDate",
           "status",
-          "toResumeAt",
+          "nextRunAt",
           "notifyFrequency",
           "notifyChannel",
           "notifyDestination",

@@ -24,7 +24,7 @@ export interface GateCheckResult {
   allowed: boolean;
   reason?: string;
   autoStopped?: boolean;
-  toResumeAt?: Date;
+  nextRunAt?: Date;
 }
 
 export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheckResult> {
@@ -75,20 +75,20 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   }
 
   // Build windows for configured budgets only
-  const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean; resumeAt?: Date }> = [];
+  const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean; nextRunAt?: Date }> = [];
   const windows: BudgetWindow[] = [];
 
   if (campaign.maxBudgetDailyUsd) {
     windows.push({ label: "daily", since: startOfToday().toISOString() });
-    budgetLimits.push({ limit: campaign.maxBudgetDailyUsd, label: "daily", autoStop: false, resumeAt: nextDayStart() });
+    budgetLimits.push({ limit: campaign.maxBudgetDailyUsd, label: "daily", autoStop: false, nextRunAt: nextDayStart() });
   }
   if (campaign.maxBudgetWeeklyUsd) {
     windows.push({ label: "weekly", since: daysAgo(7).toISOString() });
-    budgetLimits.push({ limit: campaign.maxBudgetWeeklyUsd, label: "weekly", autoStop: false, resumeAt: nextWeekStart() });
+    budgetLimits.push({ limit: campaign.maxBudgetWeeklyUsd, label: "weekly", autoStop: false, nextRunAt: nextWeekStart() });
   }
   if (campaign.maxBudgetMonthlyUsd) {
     windows.push({ label: "monthly", since: startOfMonth().toISOString() });
-    budgetLimits.push({ limit: campaign.maxBudgetMonthlyUsd, label: "monthly", autoStop: false, resumeAt: nextMonthStart() });
+    budgetLimits.push({ limit: campaign.maxBudgetMonthlyUsd, label: "monthly", autoStop: false, nextRunAt: nextMonthStart() });
   }
   if (campaign.maxBudgetTotalUsd) {
     windows.push({ label: "total" });
@@ -112,7 +112,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         await autoStopCampaign(campaign.campaignId);
         return { allowed: false, reason: "Total budget exceeded", autoStopped: true };
       }
-      return { allowed: false, reason: `${budgetLimit.label} budget exceeded`, toResumeAt: budgetLimit.resumeAt };
+      return { allowed: false, reason: `${budgetLimit.label} budget exceeded`, nextRunAt: budgetLimit.nextRunAt };
     }
   }
 

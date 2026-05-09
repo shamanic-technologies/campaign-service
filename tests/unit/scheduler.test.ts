@@ -30,7 +30,7 @@ vi.mock("../../src/db/schema.js", () => ({
   campaigns: {
     id: "id",
     status: "status",
-    toResumeAt: "to_resume_at",
+    nextRunAt: "next_run_at",
     workflowSlug: "workflow_slug",
     orgId: "org_id",
     updatedAt: "updated_at",
@@ -49,9 +49,9 @@ vi.mock("drizzle-orm", () => ({
   isNull: vi.fn(),
 }));
 
-import { resumeDueCampaigns, claimStuckCampaigns } from "../../src/lib/scheduler.js";
+import { reRunDueCampaigns, claimStuckCampaigns } from "../../src/lib/scheduler.js";
 
-describe("Scheduler - resumeDueCampaigns", () => {
+describe("Scheduler - reRunDueCampaigns", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
@@ -59,7 +59,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
   });
 
   it("should return 0 when no campaigns are due", async () => {
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
     expect(count).toBe(0);
     expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
   });
@@ -77,7 +77,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       },
     ]);
 
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
 
     expect(count).toBe(1);
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
@@ -105,7 +105,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       },
     ]);
 
-    await resumeDueCampaigns();
+    await reRunDueCampaigns();
 
     // No createRun import or call — scheduler delegates run creation to the DAG
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(1);
@@ -124,7 +124,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       },
     ]);
 
-    await resumeDueCampaigns();
+    await reRunDueCampaigns();
 
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
       "sales-email-cold-outreach",
@@ -145,7 +145,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       },
     ]);
 
-    await resumeDueCampaigns();
+    await reRunDueCampaigns();
 
     const call = mockExecuteCampaignWorkflow.mock.calls[0];
     expect(call[1].runId).toMatch(
@@ -166,7 +166,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       },
     ]);
 
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
 
     expect(count).toBe(1);
     expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
@@ -185,7 +185,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       },
     ]);
 
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
 
     expect(count).toBe(1);
     expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
@@ -213,7 +213,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       },
     ]);
 
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
 
     expect(count).toBe(2);
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(2);
@@ -246,7 +246,7 @@ describe("Scheduler - resumeDueCampaigns", () => {
       .mockImplementationOnce(() => { throw new Error("Workflow error"); })
       .mockResolvedValueOnce(undefined);
 
-    const count = await resumeDueCampaigns();
+    const count = await reRunDueCampaigns();
 
     expect(count).toBe(2);
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(2);
