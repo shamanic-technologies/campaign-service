@@ -284,7 +284,11 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         .set({ nextRunAt, updatedAt: new Date() })
         .where(eq(campaigns.id, campaignId));
 
-      console.log(`[campaign-service] Set nextRunAt=${nextRunAt.toISOString()} for campaign ${campaignId} (status=${status})`);
+      if (status === "failed") {
+        console.warn(`[campaign-service] Run failed — rescheduled campaign ${campaignId} in ${delayMs}ms (nextRunAt=${nextRunAt.toISOString()})`);
+      } else {
+        console.log(`[campaign-service] Set nextRunAt=${nextRunAt.toISOString()} for campaign ${campaignId} (status=${status})`);
+      }
     } catch (err) {
       console.error(`[campaign-service] Failed to schedule re-trigger for campaign ${campaignId}:`, err);
     }
