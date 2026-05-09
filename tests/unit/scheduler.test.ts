@@ -1,17 +1,25 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 const {
   mockExecuteCampaignWorkflow,
   mockDbReturning,
+  mockDbFindMany,
+  mockListRuns,
 } = vi.hoisted(() => {
   return {
     mockExecuteCampaignWorkflow: vi.fn(),
     mockDbReturning: vi.fn(),
+    mockDbFindMany: vi.fn(),
+    mockListRuns: vi.fn(),
   };
 });
 
 vi.mock("../../src/lib/workflows.js", () => ({
   executeCampaignWorkflow: mockExecuteCampaignWorkflow,
+}));
+
+vi.mock("@distribute/runs-client", () => ({
+  listRuns: mockListRuns,
 }));
 
 vi.mock("../../src/db/index.js", () => ({
@@ -23,6 +31,11 @@ vi.mock("../../src/db/index.js", () => ({
         }),
       }),
     }),
+    query: {
+      campaigns: {
+        findMany: mockDbFindMany,
+      },
+    },
   },
 }));
 
@@ -257,20 +270,155 @@ describe("Scheduler - claimStuckCampaigns", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDbReturning.mockResolvedValue([]);
+    mockDbFindMany.mockResolvedValue([]);
+    mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
   });
 
-  it("should return 0 when no stuck campaigns exist", async () => {
+  it("should return 0 and skip runs-service when no candidates", async () => {
+    mockDbFindMany.mockResolvedValue([]);
+
     const count = await claimStuckCampaigns();
+
     expect(count).toBe(0);
+    expect(mockListRuns).not.toHaveBeenCalled();
+    expect(mockDbReturning).not.toHaveBeenCalled();
   });
 
-  it("should claim stuck campaigns and return the count", async () => {
+  it("should NOT claim when a fresh running run exists", async () => {
+    mockDbFindMany.mockResolvedValue([{ id: "c-running", orgId: "org-1" }]);
+    mockListRuns.mockResolvedValue({
+      runs: [
+        { id: "run-1", status: "running", startedAt: new Date().toISOString() },
+      ],
+      limit: 50,
+      offset: 0,
+    });
+
+    const count = await claimStuckCampaigns();
+
+    expect(count).toBe(0);
+    expect(mockListRuns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgId: "org-1",
+        serviceName: "campaign-service",
+        taskName: "c-running",
+        status: "running",
+        startedAfter: expect.any(String),
+      }),
+    );
+    expect(mockDbReturning).not.toHaveBeenCalled();
+  });
+
+  it("should claim when no running run exists (true stuck)", async () => {
+    mockDbFindMany.mockResolvedValue([{ id: "c-stuck", orgId: "org-2" }]);
+    mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
+    mockDbReturning.mockResolvedValue([{ id: "c-stuck" }]);
+
+    const count = await claimStuckCampaigns();
+
+    expect(count).toBe(1);
+    expect(mockListRuns).toHaveBeenCalledTimes(1);
+    expect(mockDbReturning).toHaveBeenCalledTimes(1);
+  });
+
+  it("should only claim the stuck candidate when mixed with a running one", async () => {
+    mockDbFindMany.mockResolvedValue([
+      { id: "c-running", orgId: "org-1" },
+      { id: "c-stuck", orgId: "org-2" },
+    ]);
+    mockListRuns
+      .mockResolvedValueOnce({
+        runs: [
+          { id: "run-1", status: "running", startedAt: new Date().toISOString() },
+        ],
+        limit: 50,
+        offset: 0,
+      })
+      .mockResolvedValueOnce({ runs: [], limit: 50, offset: 0 });
+    mockDbReturning.mockResolvedValue([{ id: "c-stuck" }]);
+
+    const count = await claimStuckCampaigns();
+
+    expect(count).toBe(1);
+    expect(mockListRuns).toHaveBeenCalledTimes(2);
+    expect(mockDbReturning).toHaveBeenCalledTimes(1);
+  });
+
+  it("should propagate listRuns errors (no swallow)", async () => {
+    mockDbFindMany.mockResolvedValue([{ id: "c1", orgId: "org-1" }]);
+    mockListRuns.mockRejectedValue(new Error("runs-service down"));
+
+    await expect(claimStuckCampaigns()).rejects.toThrow("runs-service down");
+    expect(mockDbReturning).not.toHaveBeenCalled();
+  });
+});
+
+describe("Scheduler - logging hygiene", () => {
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
+    mockDbReturning.mockResolvedValue([]);
+    mockDbFindMany.mockResolvedValue([]);
+    mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("reRunDueCampaigns should NOT log 'Claimed N campaign(s) for re-run'", async () => {
     mockDbReturning.mockResolvedValue([
-      { id: "stuck-campaign-1" },
-      { id: "stuck-campaign-2" },
+      {
+        id: "campaign-1",
+        orgId: "org-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-1"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+      },
     ]);
 
-    const count = await claimStuckCampaigns();
-    expect(count).toBe(2);
+    await reRunDueCampaigns();
+
+    const allLogs = [
+      ...logSpy.mock.calls.flat(),
+      ...warnSpy.mock.calls.flat(),
+    ].join(" ");
+    expect(allLogs).not.toMatch(/Claimed \d+ campaign\(s\) for re-run/);
+  });
+
+  it("claimStuckCampaigns should NOT emit a warn and should log per claim", async () => {
+    mockDbFindMany.mockResolvedValue([{ id: "c-stuck", orgId: "org-2" }]);
+    mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
+    mockDbReturning.mockResolvedValue([{ id: "c-stuck" }]);
+
+    await claimStuckCampaigns();
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    const allLogs = logSpy.mock.calls.flat().join(" ");
+    expect(allLogs).toMatch(/Claimed stuck campaign c-stuck/);
+  });
+
+  it("claimStuckCampaigns should NOT log when nothing claimed", async () => {
+    mockDbFindMany.mockResolvedValue([{ id: "c-running", orgId: "org-1" }]);
+    mockListRuns.mockResolvedValue({
+      runs: [
+        { id: "run-1", status: "running", startedAt: new Date().toISOString() },
+      ],
+      limit: 50,
+      offset: 0,
+    });
+
+    await claimStuckCampaigns();
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
   });
 });

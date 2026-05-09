@@ -2,8 +2,13 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
+import { listRuns } from "@distribute/runs-client";
 
 const SCHEDULER_INTERVAL_MS = 60_000; // 1 minute
+
+// A run is considered "fresh" (campaign actively executing) if it started within this window.
+// Older running rows are treated as orphans (workflow died without /end-run).
+const STUCK_RUN_FRESHNESS_THRESHOLD_MS = 10 * 60_000; // 10 minutes
 
 /**
  * Find all ongoing campaigns whose nextRunAt has passed,
@@ -38,8 +43,6 @@ export async function reRunDueCampaigns(): Promise<number> {
     });
 
   if (dueCampaigns.length === 0) return 0;
-
-  console.log(`[campaign-service] Claimed ${dueCampaigns.length} campaign(s) for re-run`);
 
   for (const campaign of dueCampaigns) {
     try {
@@ -80,28 +83,65 @@ export async function reRunDueCampaigns(): Promise<number> {
 }
 
 /**
- * Heartbeat: detect ongoing campaigns with no nextRunAt (stuck campaigns).
- * Sets nextRunAt = now so the next tick picks them up via reRunDueCampaigns.
+ * Heartbeat: detect ongoing campaigns whose workflow died without calling /end-run.
+ *
+ * State `(status=ongoing, nextRunAt=NULL)` is shared by two cases:
+ *   1. Campaign currently running (cleared by reRunDueCampaigns at claim time)
+ *   2. Campaign whose workflow process died mid-run (no /end-run call ever happened)
+ *
+ * runs-service is the oracle: if a fresh `running` run exists for the campaign,
+ * it's case 1 — leave it alone. Otherwise it's case 2 — set nextRunAt=now so the
+ * next reRunDueCampaigns tick picks it up.
  */
 export async function claimStuckCampaigns(): Promise<number> {
   const now = new Date();
+  const freshnessCutoff = new Date(now.getTime() - STUCK_RUN_FRESHNESS_THRESHOLD_MS);
 
-  const stuck = await db
-    .update(campaigns)
-    .set({ nextRunAt: now, updatedAt: now })
-    .where(
-      and(
-        eq(campaigns.status, "ongoing"),
-        isNull(campaigns.nextRunAt),
-      ),
-    )
-    .returning({ id: campaigns.id });
+  const candidates = await db.query.campaigns.findMany({
+    where: and(
+      eq(campaigns.status, "ongoing"),
+      isNull(campaigns.nextRunAt),
+    ),
+    columns: { id: true, orgId: true },
+  });
 
-  if (stuck.length > 0) {
-    console.warn(`[campaign-service] Heartbeat: claimed ${stuck.length} stuck campaign(s): ${stuck.map((c) => c.id).join(", ")}`);
+  if (candidates.length === 0) return 0;
+
+  let claimedCount = 0;
+
+  for (const candidate of candidates) {
+    const { runs } = await listRuns({
+      orgId: candidate.orgId,
+      serviceName: "campaign-service",
+      taskName: candidate.id,
+      status: "running",
+      startedAfter: freshnessCutoff.toISOString(),
+    });
+
+    if (runs.length > 0) {
+      // Fresh run in flight → campaign is alive, not stuck.
+      continue;
+    }
+
+    const claimed = await db
+      .update(campaigns)
+      .set({ nextRunAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(campaigns.id, candidate.id),
+          eq(campaigns.status, "ongoing"),
+          isNull(campaigns.nextRunAt),
+        ),
+      )
+      .returning({ id: campaigns.id });
+
+    if (claimed.length > 0) {
+      claimedCount++;
+      console.log(`[campaign-service] Claimed stuck campaign ${candidate.id} (no fresh run in last ${STUCK_RUN_FRESHNESS_THRESHOLD_MS / 60_000}min)`);
+    }
   }
 
-  return stuck.length;
+  return claimedCount;
 }
 
 /** Tracks whether a scheduler tick is currently running. */
