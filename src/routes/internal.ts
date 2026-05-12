@@ -225,20 +225,28 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       }, req.headers).catch(() => {});
     }
 
-    // Find and update running runs for this campaign
-    try {
-      const { runs } = await listRuns({
-        orgId,
-        serviceName: "campaign-service",
-        taskName: campaignId,
-      });
-
-      const runningRuns = runs.filter((r) => r.status === "running");
-      for (const run of runningRuns) {
-        await updateRun(run.id, status, identity);
+    // Finalize ONLY this caller's own run row, matched by parentRunId === req.runId.
+    // Sibling parent runs (concurrent campaign runs from a stale schedule) are NOT touched —
+    // each is responsible for ending its own row when its DAG terminates. The previous
+    // "mark all running runs failed" behavior swept siblings and was the root cause of
+    // the serial-invariant violation seen at lead-service.
+    if (!req.runId) {
+      console.warn(`[campaign-service] /end-run called without x-run-id for campaign ${campaignId} — cannot finalize a run row`);
+    } else {
+      try {
+        const { runs } = await listRuns({
+          orgId,
+          serviceName: "campaign-service",
+          taskName: campaignId,
+          parentRunId: req.runId,
+          status: "running",
+        });
+        for (const run of runs) {
+          await updateRun(run.id, status, identity);
+        }
+      } catch (err) {
+        console.error(`[campaign-service] Failed to update run for campaign ${campaignId}:`, err);
       }
-    } catch (err) {
-      console.error(`[campaign-service] Failed to update runs:`, err);
     }
 
     // Respond immediately, then handle re-trigger asynchronously
