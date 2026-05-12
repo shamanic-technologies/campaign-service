@@ -69,6 +69,7 @@ describe("Scheduler - reRunDueCampaigns", () => {
     vi.clearAllMocks();
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
     mockDbReturning.mockResolvedValue([]);
+    mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
   });
 
   it("should return 0 when no campaigns are due", async () => {
@@ -230,6 +231,73 @@ describe("Scheduler - reRunDueCampaigns", () => {
 
     expect(count).toBe(2);
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(2);
+  });
+
+  it("should NOT fire when a running run already exists for the campaign", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+      },
+    ]);
+    mockListRuns.mockResolvedValue({
+      runs: [{ id: "run-inflight", status: "running", startedAt: new Date().toISOString() }],
+      limit: 50,
+      offset: 0,
+    });
+
+    const count = await reRunDueCampaigns();
+
+    expect(count).toBe(1);
+    expect(mockListRuns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgId: "org-ext-1",
+        serviceName: "campaign-service",
+        taskName: "campaign-1",
+        status: "running",
+      }),
+    );
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("should reschedule nextRunAt to ~now+60s when skipping due to in-flight run", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-skip",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+      },
+    ]);
+    mockListRuns.mockResolvedValue({
+      runs: [{ id: "run-inflight", status: "running", startedAt: new Date().toISOString() }],
+      limit: 50,
+      offset: 0,
+    });
+
+    const { db } = await import("../../src/db/index.js");
+    const setMock = (db.update as unknown as ReturnType<typeof vi.fn>)().set as unknown as ReturnType<typeof vi.fn>;
+    setMock.mockClear();
+
+    const before = Date.now();
+    await reRunDueCampaigns();
+
+    // The atomic claim call uses .set({ nextRunAt: null, ... }) → returning(...).
+    // The reschedule call uses .set({ nextRunAt: <Date>, ... }) with no .returning() chain.
+    // Find the call whose payload has a Date nextRunAt.
+    const rescheduleCall = setMock.mock.calls.find((args) => args[0]?.nextRunAt instanceof Date);
+    expect(rescheduleCall).toBeDefined();
+    const rescheduledAt = rescheduleCall![0].nextRunAt as Date;
+    expect(rescheduledAt.getTime()).toBeGreaterThanOrEqual(before + 55_000);
+    expect(rescheduledAt.getTime()).toBeLessThan(before + 65_000);
   });
 
   it("should continue processing other campaigns if one throws", async () => {

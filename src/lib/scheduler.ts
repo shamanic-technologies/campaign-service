@@ -55,6 +55,25 @@ export async function reRunDueCampaigns(): Promise<number> {
         continue;
       }
 
+      // Sequential-runs invariant: never fire a new parent run while a prior one is still alive.
+      // Without this guard, /end-run mis-fires (or claimStuckCampaigns false-positives) can lead to
+      // two parent flows running in parallel — caught downstream by lead-service as 409, but noisy.
+      const { runs: inflight } = await listRuns({
+        orgId: campaign.orgId,
+        serviceName: "campaign-service",
+        taskName: campaign.id,
+        status: "running",
+      });
+      if (inflight.length > 0) {
+        const rescheduledAt = new Date(now.getTime() + 60_000);
+        await db
+          .update(campaigns)
+          .set({ nextRunAt: rescheduledAt, updatedAt: new Date() })
+          .where(eq(campaigns.id, campaign.id));
+        console.warn(`[campaign-service] Skipped re-fire for campaign ${campaign.id} — ${inflight.length} run(s) still in-flight. Rescheduled nextRunAt=${rescheduledAt.toISOString()}`);
+        continue;
+      }
+
       const brandIdCsv = campaign.brandIds!.join(",");
       const userId = campaign.createdByUserId!;
       const featureSlug = campaign.featureSlug!;

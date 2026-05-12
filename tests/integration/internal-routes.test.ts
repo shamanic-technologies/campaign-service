@@ -574,6 +574,33 @@ describe("Pipeline routes", () => {
       expect(mockUpdateRun).not.toHaveBeenCalled();
     });
 
+    it("should call listRuns with parentRunId filter matching caller's x-run-id", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+      const callerRunId = crypto.randomUUID();
+
+      mockListRuns.mockResolvedValue({
+        runs: [{ id: "run-own", status: "running", startedAt: new Date().toISOString() }],
+      });
+
+      await request(app)
+        .post("/end-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id, "x-run-id": callerRunId }))
+        .send({ success: false, stopCampaign: false })
+        .expect(200);
+
+      expect(mockListRuns).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orgId,
+          serviceName: "campaign-service",
+          taskName: campaign.id,
+          parentRunId: callerRunId,
+          status: "running",
+        }),
+      );
+      expect(mockUpdateRun).toHaveBeenCalledTimes(1);
+      expect(mockUpdateRun).toHaveBeenCalledWith("run-own", "failed", expect.objectContaining({ orgId }));
+    });
+
     it("should set nextRunAt=now when success=true stopCampaign=false and campaign is ongoing", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
