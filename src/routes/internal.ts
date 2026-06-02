@@ -7,6 +7,7 @@ import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
 import { EndRunBody, TransferBrandBody } from "../schemas.js";
+import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
@@ -291,6 +292,10 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       await db.update(campaigns)
         .set({ nextRunAt, updatedAt: new Date() })
         .where(eq(campaigns.id, campaignId));
+
+      // Re-run scheduled → wake the scheduler so it fires at (or near) nextRunAt
+      // instead of waiting out the current idle sleep.
+      wakeScheduler();
 
       if (status === "failed") {
         console.warn(`[campaign-service] Run failed — rescheduled campaign ${campaignId} in ${delayMs}ms (nextRunAt=${nextRunAt.toISOString()})`);

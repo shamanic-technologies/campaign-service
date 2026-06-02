@@ -62,7 +62,15 @@ vi.mock("drizzle-orm", () => ({
   isNull: vi.fn(),
 }));
 
-import { reRunDueCampaigns, claimStuckCampaigns } from "../../src/lib/scheduler.js";
+import {
+  reRunDueCampaigns,
+  claimStuckCampaigns,
+  computeNextDelayMs,
+  startScheduler,
+  wakeScheduler,
+  ACTIVE_INTERVAL_MS,
+  IDLE_MAX_MS,
+} from "../../src/lib/scheduler.js";
 
 describe("Scheduler - reRunDueCampaigns", () => {
   beforeEach(() => {
@@ -488,5 +496,105 @@ describe("Scheduler - logging hygiene", () => {
 
     expect(warnSpy).not.toHaveBeenCalled();
     expect(logSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("Scheduler - computeNextDelayMs (cadence)", () => {
+  const NOW = 1_000_000_000_000;
+
+  it("returns IDLE_MAX_MS when no campaigns are ongoing (Neon can suspend)", () => {
+    expect(computeNextDelayMs([], NOW)).toBe(IDLE_MAX_MS);
+  });
+
+  it("returns ACTIVE_INTERVAL_MS when any campaign is in-flight (nextRunAt null)", () => {
+    const delay = computeNextDelayMs(
+      [{ nextRunAt: null }, { nextRunAt: new Date(NOW + 5 * 60_000) }],
+      NOW,
+    );
+    expect(delay).toBe(ACTIVE_INTERVAL_MS);
+  });
+
+  it("sleeps until the soonest future nextRunAt when all are waiting", () => {
+    const delay = computeNextDelayMs(
+      [
+        { nextRunAt: new Date(NOW + 5 * 60_000) },
+        { nextRunAt: new Date(NOW + 30 * 60_000) },
+      ],
+      NOW,
+    );
+    expect(delay).toBe(5 * 60_000);
+  });
+
+  it("caps the delay at IDLE_MAX_MS for a far-future nextRunAt (setTimeout-overflow safe)", () => {
+    const delay = computeNextDelayMs(
+      [{ nextRunAt: new Date(NOW + 6 * 60 * 60_000) }], // 6h away
+      NOW,
+    );
+    expect(delay).toBe(IDLE_MAX_MS);
+  });
+
+  it("floors the delay at 1s for a due/past nextRunAt (no busy-spin)", () => {
+    expect(computeNextDelayMs([{ nextRunAt: new Date(NOW - 10_000) }], NOW)).toBe(1_000);
+    expect(computeNextDelayMs([{ nextRunAt: new Date(NOW + 500) }], NOW)).toBe(1_000);
+  });
+});
+
+describe("Scheduler - lifecycle (timers)", () => {
+  let stop: (() => void) | null = null;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
+    mockDbReturning.mockResolvedValue([]);
+    mockDbFindMany.mockResolvedValue([]);
+    mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    if (stop) {
+      stop();
+      stop = null;
+    }
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("runs an immediate tick on start (queries ongoing campaigns)", async () => {
+    stop = startScheduler();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockDbFindMany).toHaveBeenCalled();
+  });
+
+  it("wakeScheduler() triggers a prompt tick", async () => {
+    stop = startScheduler();
+    await vi.advanceTimersByTimeAsync(0); // boot tick (0 ongoing → next tick in IDLE_MAX_MS)
+    mockDbFindMany.mockClear();
+
+    wakeScheduler();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockDbFindMany).toHaveBeenCalled();
+  });
+
+  it("with 0 ongoing campaigns, does NOT re-poll at the 60s active cadence", async () => {
+    stop = startScheduler();
+    await vi.advanceTimersByTimeAsync(0); // boot tick: 0 ongoing → schedules IDLE_MAX_MS
+    mockDbFindMany.mockClear();
+
+    // No tick should fire at the old 60s interval — Neon stays asleep.
+    await vi.advanceTimersByTimeAsync(ACTIVE_INTERVAL_MS + 5_000);
+    expect(mockDbFindMany).not.toHaveBeenCalled();
+
+    // The idle backstop tick fires only once IDLE_MAX_MS has elapsed.
+    await vi.advanceTimersByTimeAsync(IDLE_MAX_MS);
+    expect(mockDbFindMany).toHaveBeenCalled();
+  });
+
+  it("wakeScheduler() is a no-op when the scheduler is not started", async () => {
+    // Note: no startScheduler() call here.
+    wakeScheduler();
+    await vi.advanceTimersByTimeAsync(IDLE_MAX_MS + ACTIVE_INTERVAL_MS);
+    expect(mockDbFindMany).not.toHaveBeenCalled();
   });
 });
