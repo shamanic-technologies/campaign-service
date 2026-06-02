@@ -4,7 +4,19 @@ import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { listRuns } from "@distribute/runs-client";
 
-const SCHEDULER_INTERVAL_MS = 60_000; // 1 minute
+// Cadence while a campaign is actively running (a run is in-flight). At this
+// rate the scheduler catches /end-run reschedules and stuck-run detection.
+export const ACTIVE_INTERVAL_MS = 60_000; // 1 minute
+
+// Hard ceiling on how long the scheduler sleeps between ticks. Two reasons:
+//   1. setTimeout delays above ~2^31 ms (~24.8 days) overflow int32 and fire
+//      immediately — a far-future nextRunAt must be bounded.
+//   2. Safety backstop: if a future code path marks a campaign "ongoing"
+//      without calling wakeScheduler(), the hourly re-check still picks it up
+//      instead of stranding it forever.
+// Cost of one wake/hour while fully idle is negligible (~0.30 $/month) and lets
+// Neon's compute suspend (5-min idle timeout) for ~55 of every 60 minutes.
+export const IDLE_MAX_MS = 60 * 60_000; // 1 hour
 
 // A run is considered "fresh" (campaign actively executing) if it started within this window.
 // Older running rows are treated as orphans (workflow died without /end-run).
@@ -163,33 +175,112 @@ export async function claimStuckCampaigns(): Promise<number> {
   return claimedCount;
 }
 
-/** Tracks whether a scheduler tick is currently running. */
+/**
+ * Pure decision: how long until the next scheduler tick should run, given the
+ * current snapshot of ongoing campaigns.
+ *
+ *   - No ongoing campaigns        → IDLE_MAX_MS. Nothing to poll; the Neon
+ *     compute can suspend. A new campaign wakes the scheduler via wakeScheduler().
+ *   - Any in-flight (nextRunAt=NULL) → ACTIVE_INTERVAL_MS. A run is executing
+ *     (or possibly stuck); poll at the active cadence to catch /end-run + stuck.
+ *   - All waiting (future nextRunAt) → sleep until the soonest due time, floored
+ *     to avoid a busy-spin and capped at IDLE_MAX_MS.
+ *
+ * Pure (no DB / no clock side-effect) so the cadence logic is trivially testable.
+ */
+export function computeNextDelayMs(
+  ongoing: Array<{ nextRunAt: Date | null }>,
+  now: number = Date.now(),
+): number {
+  if (ongoing.length === 0) return IDLE_MAX_MS;
+  if (ongoing.some((c) => c.nextRunAt === null)) return ACTIVE_INTERVAL_MS;
+  const soonest = Math.min(...ongoing.map((c) => c.nextRunAt!.getTime()));
+  const delay = soonest - now;
+  return Math.min(Math.max(delay, 1_000), IDLE_MAX_MS);
+}
+
+/** Load the ongoing-campaign snapshot used to pick the next tick delay. */
+async function loadOngoingSnapshot(): Promise<Array<{ nextRunAt: Date | null }>> {
+  return db.query.campaigns.findMany({
+    where: eq(campaigns.status, "ongoing"),
+    columns: { nextRunAt: true },
+  });
+}
+
+let timer: ReturnType<typeof setTimeout> | null = null;
 let isRunning = false;
+let started = false;
+
+function scheduleNext(delayMs: number): void {
+  if (!started) return;
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(() => {
+    void tick();
+  }, delayMs);
+}
 
 /**
- * Start the scheduler interval. Returns a cleanup function.
+ * One scheduler tick: detect stuck campaigns, re-fire due ones, then pick and
+ * schedule the next tick delay from the resulting ongoing-campaign state.
  *
- * Uses a concurrency guard so overlapping ticks (when processing takes > 60s)
- * are skipped rather than causing duplicate triggers.
+ * The concurrency guard makes overlapping ticks (when processing takes longer
+ * than the scheduled delay) a no-op — the in-flight tick reschedules on its way
+ * out, so exactly one live timer survives.
+ */
+async function tick(): Promise<void> {
+  if (!started || isRunning) return;
+  isRunning = true;
+  try {
+    try {
+      await claimStuckCampaigns();
+      await reRunDueCampaigns();
+    } catch (err) {
+      console.error("[campaign-service] Scheduler tick error:", err);
+    }
+
+    let delayMs = ACTIVE_INTERVAL_MS;
+    try {
+      delayMs = computeNextDelayMs(await loadOngoingSnapshot());
+    } catch (err) {
+      console.error("[campaign-service] Scheduler delay computation error:", err);
+    }
+    scheduleNext(delayMs);
+  } finally {
+    isRunning = false;
+  }
+}
+
+/**
+ * Wake the scheduler to run a tick promptly. Call after any write that makes a
+ * campaign schedulable (create, activate, /end-run reschedule) so re-runs fire
+ * without waiting out the current sleep — and so the scheduler resumes from a
+ * deep idle sleep the moment work appears.
+ *
+ * No-op when the scheduler isn't running (e.g. unit tests, NODE_ENV=test) so it
+ * never strands a dangling timer.
+ */
+export function wakeScheduler(): void {
+  if (!started) return;
+  scheduleNext(0);
+}
+
+/**
+ * Start the scheduler. Returns a cleanup function that stops it.
+ *
+ * Self-rescheduling setTimeout (not a fixed setInterval): each tick picks its
+ * own next delay so an idle service stops querying Postgres and lets the Neon
+ * compute suspend, while an active one keeps the 60s cadence.
  */
 export function startScheduler(): () => void {
-  console.log(`[campaign-service] Starting (interval=${SCHEDULER_INTERVAL_MS}ms)`);
+  started = true;
+  console.log(`[campaign-service] Scheduler starting (active=${ACTIVE_INTERVAL_MS}ms, idleMax=${IDLE_MAX_MS}ms)`);
+  scheduleNext(0);
 
-  const handle = setInterval(() => {
-    if (isRunning) {
-      console.warn("[campaign-service] Previous tick still running, skipping");
-      return;
+  return () => {
+    started = false;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
     }
-    isRunning = true;
-    claimStuckCampaigns()
-      .then(() => reRunDueCampaigns())
-      .catch((err) => {
-        console.error("[campaign-service] Unhandled error:", err);
-      })
-      .finally(() => {
-        isRunning = false;
-      });
-  }, SCHEDULER_INTERVAL_MS);
-
-  return () => clearInterval(handle);
+  };
 }

@@ -7,6 +7,7 @@ import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { CreateCampaignBody, UpdateCampaignBody, CampaignsFilterQuery } from "../schemas.js";
 import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
+import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
@@ -211,6 +212,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       console.error(`[campaign-service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
 
+    // New ongoing campaign → wake the scheduler so it resumes monitoring from idle.
+    wakeScheduler();
+
     res.status(201).json({ campaign });
   } catch (error: any) {
     if (error?.code === "23505" && (error?.constraint === "uniq_campaigns_org_name" || error?.constraint_name === "uniq_campaigns_org_name")) {
@@ -296,6 +300,8 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       executeCampaignWorkflow(updated.workflowSlug, activateInputs).catch((err) => {
         console.error(`[campaign-service] Failed to trigger workflow for campaign ${id}:`, err);
       });
+      // Campaign just activated (status → ongoing) → wake the scheduler from idle.
+      wakeScheduler();
     }
 
     res.json({ campaign: updated });
