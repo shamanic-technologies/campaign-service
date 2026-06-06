@@ -20,6 +20,15 @@ Campaign CRUD and orchestration service for MCP Factory. Manages campaign lifecy
 - `pnpm run db:migrate` — run migrations
 - `pnpm run db:push` — push schema directly (dev only)
 
+## Running tests in a fresh workspace
+
+A new Conductor workspace has no built local package and no test DB. Before `pnpm test:integration`:
+
+1. **Build the workspace client first** — `pnpm --filter @distribute/runs-client build`. Without it `tsc`/`vitest` fail with `TS2307 Cannot find module '@distribute/runs-client'` (looks like a code bug, isn't).
+2. **Provide a local Postgres** named `campaign_test` — integration tests connect to `postgresql://test:test@localhost/campaign_test` (see `tests/setup.ts`). Create role `test`/`test` + DB, then materialize the schema with **`db:push`, NOT `db:migrate`** — a from-scratch `db:migrate` fails on a historical FK type drift (`campaign_runs.campaign_id uuid` vs `campaigns.id text`, error `42804`). `db:push` uses `schema.ts` (source of truth) directly. Set `CAMPAIGN_SERVICE_DATABASE_URL` for the run.
+
+Unit tests (`pnpm test:unit`) need neither — they fully mock db/runs-client.
+
 ## Architecture
 
 - `src/schemas.ts` — Zod schemas (source of truth for validation + OpenAPI)
