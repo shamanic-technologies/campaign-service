@@ -151,7 +151,7 @@ describe("Gate Check", () => {
   });
 
   describe("Budget check", () => {
-    it("should block if no budget is defined (fail-closed)", async () => {
+    it("should auto-stop if no budget is defined (fail-closed, terminal)", async () => {
       const result = await runGateChecks(makeCampaign({
         maxBudgetDailyUsd: null,
         maxBudgetWeeklyUsd: null,
@@ -160,6 +160,10 @@ describe("Gate Check", () => {
       }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("No budget defined (fail-closed)");
+      // A zero-budget campaign can never run → terminal auto-stop, not retryable,
+      // so it is never re-claimed by the scheduler (no Windmill re-fire loop).
+      expect(result.autoStopped).toBe(true);
+      expect(mockDbUpdate).toHaveBeenCalled();
     });
 
     it("should block when daily budget is exceeded", async () => {
