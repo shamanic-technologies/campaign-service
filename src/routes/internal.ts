@@ -12,6 +12,11 @@ import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
+// Backoff applied to a BLOCKED gate result that carries no scheduler decision
+// (neither autoStopped nor a window nextRunAt). Guarantees the campaign is not
+// re-claimed + re-fired on the very next scheduler tick.
+const GATE_BLOCK_BACKOFF_MS = 15 * 60_000; // 15 min
+
 /**
  * POST /gate-check
  *
@@ -78,10 +83,18 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
     }
 
     if (!result.allowed) {
-      // Save nextRunAt so the scheduler can re-trigger when the budget window resets
-      if (result.nextRunAt) {
+      // Invariant: every BLOCKED result must persist a scheduler decision — either
+      // terminal (autoStopped) OR a future nextRunAt. A null here would let
+      // claimStuckCampaigns re-claim the (ongoing, nextRunAt=null) campaign every tick
+      // and re-fire the Windmill flow indefinitely. Window blocks carry their own
+      // nextRunAt (reset boundary); any other no-decision block backs off explicitly.
+      let nextRunAt = result.nextRunAt ?? null;
+      if (!nextRunAt && !result.autoStopped) {
+        nextRunAt = new Date(Date.now() + GATE_BLOCK_BACKOFF_MS);
+      }
+      if (nextRunAt) {
         await db.update(campaigns)
-          .set({ nextRunAt: result.nextRunAt, updatedAt: new Date() })
+          .set({ nextRunAt, updatedAt: new Date() })
           .where(eq(campaigns.id, campaignId));
       }
     }

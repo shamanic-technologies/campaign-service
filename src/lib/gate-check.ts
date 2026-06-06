@@ -68,10 +68,14 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   }
 
   // 3. Budget check (fail-closed: no budget defined = blocked)
+  // A campaign with no budget can never run → terminal auto-stop (mirrors the
+  // "Total budget exceeded" / "Max leads reached" blocks). Leaving it ongoing with
+  // no nextRunAt makes the scheduler re-claim + re-fire the Windmill flow every tick.
   const hasAnyBudget = campaign.maxBudgetDailyUsd || campaign.maxBudgetWeeklyUsd ||
                        campaign.maxBudgetMonthlyUsd || campaign.maxBudgetTotalUsd;
   if (!hasAnyBudget) {
-    return { allowed: false, reason: "No budget defined (fail-closed)" };
+    await autoStopCampaign(campaign.campaignId);
+    return { allowed: false, reason: "No budget defined (fail-closed)", autoStopped: true };
   }
 
   // Build windows for configured budgets only
