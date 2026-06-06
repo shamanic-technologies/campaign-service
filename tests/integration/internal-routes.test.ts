@@ -225,6 +225,30 @@ describe("Pipeline routes", () => {
       expect(updated!.nextRunAt).toBeNull();
     });
 
+    it("should persist a future nextRunAt when a blocked result has neither autoStopped nor nextRunAt", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      // A no-decision block (e.g. "A run is already in progress" / "Lead stats unavailable")
+      // must NOT leave nextRunAt null — otherwise claimStuckCampaigns re-claims the
+      // (ongoing, nextRunAt=null) campaign every tick and re-fires the Windmill flow.
+      mockGateChecks.mockResolvedValue({
+        allowed: false,
+        reason: "A run is already in progress",
+      });
+
+      const before = Date.now();
+      await request(app)
+        .post("/gate-check")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      expect(updated!.nextRunAt).not.toBeNull();
+      expect(new Date(updated!.nextRunAt!).getTime()).toBeGreaterThan(before);
+    });
+
     it("should pass campaign data to runGateChecks", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
