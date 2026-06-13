@@ -262,15 +262,73 @@ describe("Scheduler - reRunDueCampaigns", () => {
     const count = await reRunDueCampaigns();
 
     expect(count).toBe(1);
-    expect(mockListRuns).toHaveBeenCalledWith(
+    // Guard is scoped to the campaign (any service), NOT the ephemeral
+    // (campaign-service, campaignId) marker run — so a live lead-service
+    // buffer/next run is seen.
+    const guardCall = mockListRuns.mock.calls[0][0];
+    expect(guardCall).toEqual(
       expect.objectContaining({
         orgId: "org-ext-1",
-        serviceName: "campaign-service",
-        taskName: "campaign-1",
+        campaignId: "campaign-1",
         status: "running",
+        startedAfter: expect.any(String),
       }),
     );
+    expect(guardCall.serviceName).toBeUndefined();
+    expect(guardCall.taskName).toBeUndefined();
     expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("should detect a live run owned by another service (e.g. lead-service)", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+      },
+    ]);
+    // The campaign-service marker is long dead; the genuinely-alive run is a
+    // lead-service buffer/next fill. campaignId-scoped query returns it.
+    mockListRuns.mockResolvedValue({
+      runs: [{ id: "lead-serve-run", status: "running", startedAt: new Date().toISOString() }],
+      limit: 50,
+      offset: 0,
+    });
+
+    await reRunDueCampaigns();
+
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("should re-fire when the only running run has aged past the freshness threshold", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+      },
+    ]);
+    // runs-service filters by startedAfter=freshnessCutoff; an orphan older than
+    // 15min is excluded → empty result → re-fire (orphan recovery).
+    mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
+
+    const before = Date.now();
+    await reRunDueCampaigns();
+
+    // Freshness cutoff sent to runs-service is ~15min in the past.
+    const cutoffIso = mockListRuns.mock.calls[0][0].startedAfter as string;
+    const cutoffAgeMs = before - new Date(cutoffIso).getTime();
+    expect(cutoffAgeMs).toBeGreaterThanOrEqual(15 * 60_000 - 5_000);
+    expect(cutoffAgeMs).toBeLessThanOrEqual(15 * 60_000 + 5_000);
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(1);
   });
 
   it("should reschedule nextRunAt to ~now+60s when skipping due to in-flight run", async () => {
@@ -373,15 +431,39 @@ describe("Scheduler - claimStuckCampaigns", () => {
     const count = await claimStuckCampaigns();
 
     expect(count).toBe(0);
-    expect(mockListRuns).toHaveBeenCalledWith(
+    // Same campaignId-scoped definition of "alive" as reRunDueCampaigns.
+    const guardCall = mockListRuns.mock.calls[0][0];
+    expect(guardCall).toEqual(
       expect.objectContaining({
         orgId: "org-1",
-        serviceName: "campaign-service",
-        taskName: "c-running",
+        campaignId: "c-running",
         status: "running",
         startedAfter: expect.any(String),
       }),
     );
+    expect(guardCall.serviceName).toBeUndefined();
+    expect(guardCall.taskName).toBeUndefined();
+    expect(mockDbReturning).not.toHaveBeenCalled();
+  });
+
+  it("should NOT reclaim a campaign whose run is 10-min-but-alive (within 15-min window)", async () => {
+    mockDbFindMany.mockResolvedValue([{ id: "c-long-fill", orgId: "org-1" }]);
+    // A 10-min-old buffer/next run is still within the 15-min freshness window,
+    // so runs-service (startedAfter filter) returns it → alive → not stuck.
+    const tenMinOld = new Date(Date.now() - 10 * 60_000).toISOString();
+    mockListRuns.mockResolvedValue({
+      runs: [{ id: "lead-serve-run", status: "running", startedAt: tenMinOld }],
+      limit: 50,
+      offset: 0,
+    });
+
+    const count = await claimStuckCampaigns();
+
+    expect(count).toBe(0);
+    const cutoffIso = mockListRuns.mock.calls[0][0].startedAfter as string;
+    const cutoffAgeMs = Date.now() - new Date(cutoffIso).getTime();
+    expect(cutoffAgeMs).toBeGreaterThanOrEqual(15 * 60_000 - 5_000);
+    expect(cutoffAgeMs).toBeLessThanOrEqual(15 * 60_000 + 5_000);
     expect(mockDbReturning).not.toHaveBeenCalled();
   });
 
