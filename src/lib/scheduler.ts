@@ -20,7 +20,49 @@ export const IDLE_MAX_MS = 60 * 60_000; // 1 hour
 
 // A run is considered "fresh" (campaign actively executing) if it started within this window.
 // Older running rows are treated as orphans (workflow died without /end-run).
-const STUCK_RUN_FRESHNESS_THRESHOLD_MS = 10 * 60_000; // 10 minutes
+//
+// MUST be strictly greater than the longest legitimate flow duration. lead-service's
+// buffer/next fill can run up to ~10min (PULL_NEXT_TIMEOUT_MS=600s), and the wrapping
+// `lead-service/lead-serve` run has been observed at 755s in prod — so the old 10min
+// (= 600s) value left a legit long fill sitting right at the orphan boundary, where
+// claimStuckCampaigns could misclassify it as stuck and re-fire mid-fill (→ lead-service
+// 409 "Concurrent buffer/next" storms). 15min gives margin above the observed max.
+const STUCK_RUN_FRESHNESS_THRESHOLD_MS = 15 * 60_000; // 15 minutes
+
+/**
+ * Is a flow genuinely alive for this campaign right now?
+ *
+ * True when runs-service has ANY `running` run tagged with this campaignId that
+ * started within the freshness window — regardless of which service/taskName
+ * created it.
+ *
+ * Why campaignId-scoped and NOT (serviceName="campaign-service", taskName=campaignId):
+ * the campaign-service parent run is an ephemeral ~2s marker (start-run → end-run
+ * within seconds), NOT an enclosing span. The real work — lead-service buffer/next —
+ * runs up to ~12min in a separate `lead-service/lead-serve` run that is NOT linked
+ * under the marker (no parent_run_id chain). Scoping the inflight check to the marker
+ * saw a corpse and re-fired mid-fill, colliding with the still-running buffer/next
+ * → lead-service rejects the duplicate with 409 → windmill job hard-fails. Scoping to
+ * campaignId + running + freshness sees the genuinely-live descendant instead.
+ *
+ * The freshness bound preserves orphan recovery: a run still marked `running` past the
+ * threshold (workflow died without /end-run) no longer counts as alive, so the campaign
+ * is re-claimed/re-fired.
+ */
+async function hasLiveRunForCampaign(
+  orgId: string,
+  campaignId: string,
+  freshnessCutoff: Date,
+): Promise<boolean> {
+  const { runs } = await listRuns({
+    orgId,
+    campaignId,
+    status: "running",
+    startedAfter: freshnessCutoff.toISOString(),
+    limit: 1,
+  });
+  return runs.length > 0;
+}
 
 /**
  * Find all ongoing campaigns whose nextRunAt has passed,
@@ -67,22 +109,19 @@ export async function reRunDueCampaigns(): Promise<number> {
         continue;
       }
 
-      // Sequential-runs invariant: never fire a new parent run while a prior one is still alive.
-      // Without this guard, /end-run mis-fires (or claimStuckCampaigns false-positives) can lead to
-      // two parent flows running in parallel — caught downstream by lead-service as 409, but noisy.
-      const { runs: inflight } = await listRuns({
-        orgId: campaign.orgId,
-        serviceName: "campaign-service",
-        taskName: campaign.id,
-        status: "running",
-      });
-      if (inflight.length > 0) {
+      // Sequential-runs invariant: never fire a new flow while a prior one is still alive.
+      // Checks ANY running run for the campaign (not the ephemeral campaign-service marker),
+      // so the genuinely-long lead-service buffer/next fill is seen. Without this, /end-run's
+      // immediate re-trigger fires a second flow mid-fill → lead-service 409 storm.
+      const freshnessCutoff = new Date(now.getTime() - STUCK_RUN_FRESHNESS_THRESHOLD_MS);
+      const alive = await hasLiveRunForCampaign(campaign.orgId, campaign.id, freshnessCutoff);
+      if (alive) {
         const rescheduledAt = new Date(now.getTime() + 60_000);
         await db
           .update(campaigns)
           .set({ nextRunAt: rescheduledAt, updatedAt: new Date() })
           .where(eq(campaigns.id, campaign.id));
-        console.warn(`[campaign-service] Skipped re-fire for campaign ${campaign.id} — ${inflight.length} run(s) still in-flight. Rescheduled nextRunAt=${rescheduledAt.toISOString()}`);
+        console.warn(`[campaign-service] Skipped re-fire for campaign ${campaign.id} — a run is still in-flight. Rescheduled nextRunAt=${rescheduledAt.toISOString()}`);
         continue;
       }
 
@@ -141,15 +180,11 @@ export async function claimStuckCampaigns(): Promise<number> {
   let claimedCount = 0;
 
   for (const candidate of candidates) {
-    const { runs } = await listRuns({
-      orgId: candidate.orgId,
-      serviceName: "campaign-service",
-      taskName: candidate.id,
-      status: "running",
-      startedAfter: freshnessCutoff.toISOString(),
-    });
+    // Same definition of "alive" as reRunDueCampaigns: ANY running run for the
+    // campaign within the freshness window, regardless of which service owns it.
+    const alive = await hasLiveRunForCampaign(candidate.orgId, candidate.id, freshnessCutoff);
 
-    if (runs.length > 0) {
+    if (alive) {
       // Fresh run in flight → campaign is alive, not stuck.
       continue;
     }
