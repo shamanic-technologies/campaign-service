@@ -207,8 +207,11 @@ async function fetchLeadStats(
 async function checkAffordability(campaignId: string, identity: IdentityHeaders): Promise<boolean> {
   const url = process.env.BILLING_SERVICE_URL;
   const apiKey = process.env.BILLING_SERVICE_API_KEY;
+  // Silent fail-open. Every fail-open path below (missing config / non-2xx / throw) is
+  // hit per gate check, i.e. per ~minute per campaign across every client — logging it
+  // (even at info) spams the fleet for a deliberate pre-filter degradation. Billing's own
+  // monitoring owns billing's health; chat-service authorize stays the hard gate downstream.
   if (!url || !apiKey) {
-    console.warn("[campaign-service] Billing service not configured — skipping affordability check (fail-open)");
     return true;
   }
 
@@ -225,14 +228,12 @@ async function checkAffordability(campaignId: string, identity: IdentityHeaders)
   try {
     const res = await fetch(`${url}/internal/campaigns/${campaignId}/affordability`, { headers });
     if (!res.ok) {
-      console.warn(`[campaign-service] Affordability check failed (${res.status}) — allowing run (fail-open)`);
       return true;
     }
     const data = await res.json() as { affordable?: boolean };
     // Only an explicit affordable=false blocks. Anything else (true, missing) allows.
     return data.affordable !== false;
-  } catch (err) {
-    console.warn("[campaign-service] Affordability check threw — allowing run (fail-open):", err);
+  } catch {
     return true;
   }
 }

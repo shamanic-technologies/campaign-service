@@ -356,13 +356,14 @@ describe("Gate Check", () => {
       expect(result.allowed).toBe(true);
     });
 
-    it("should fail-open (allow + warn) when the billing call throws", async () => {
+    it("should fail-open SILENTLY (allow, no warn) when the billing call throws", async () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
 
       const result = await runGateChecks(makeCampaign());
       expect(result.allowed).toBe(true);
-      expect(warnSpy).toHaveBeenCalled();
+      // No log on the fail-open path — it fires per-tick per-campaign across the fleet.
+      expect(warnSpy).not.toHaveBeenCalled();
       warnSpy.mockRestore();
     });
 
