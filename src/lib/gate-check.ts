@@ -120,6 +120,18 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     }
   }
 
+  // 3b. Credit affordability check (fail-OPEN — deliberately differs from the budget
+  // checks' fail-closed stance). A broke org's run is pre-filtered here so it stops
+  // storming the per-minute Windmill flow + wasting Apollo enrichment before the LLM
+  // step 402s. This is NOT a terminal stop: the campaign stays ongoing and backs off
+  // via nextRunAt, so a recharge auto-resumes it on the next check (no manual restart,
+  // no webhook). A billing blip must not freeze ALL campaigns, and chat-service's own
+  // authorize remains the hard gate downstream — so any billing-call failure allows.
+  const affordable = await checkAffordability(campaign.campaignId, identity);
+  if (!affordable) {
+    return { allowed: false, reason: "Insufficient credits", nextRunAt: nextHalfHour() };
+  }
+
   // 4. Volume check
   if (campaign.maxLeads != null) {
     const completedRuns = runs.filter((r: Run) => r.status === "completed");
@@ -184,6 +196,47 @@ async function fetchLeadStats(
   return { totalServed: (data.totalServed as number) || (data.served as number) || 0 };
 }
 
+/**
+ * Pre-flight credit affordability check against billing-service.
+ * Returns true (allow the run) unless billing explicitly reports affordable=false.
+ *
+ * Fail-OPEN by design: missing config, network error, or non-2xx all return true.
+ * Credit affordability is a PRE-FILTER, not the final gate — chat-service's own
+ * authorize is the hard gate. A billing outage must never freeze every campaign.
+ */
+async function checkAffordability(campaignId: string, identity: IdentityHeaders): Promise<boolean> {
+  const url = process.env.BILLING_SERVICE_URL;
+  const apiKey = process.env.BILLING_SERVICE_API_KEY;
+  if (!url || !apiKey) {
+    console.warn("[campaign-service] Billing service not configured — skipping affordability check (fail-open)");
+    return true;
+  }
+
+  const headers: Record<string, string> = {
+    "x-api-key": apiKey,
+    "x-org-id": identity.orgId,
+  };
+  if (identity.userId) headers["x-user-id"] = identity.userId;
+  if (identity.runId) headers["x-run-id"] = identity.runId;
+  if (identity.campaignId) headers["x-campaign-id"] = identity.campaignId;
+  if (identity.brandId) headers["x-brand-id"] = identity.brandId;
+  if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
+
+  try {
+    const res = await fetch(`${url}/internal/campaigns/${campaignId}/affordability`, { headers });
+    if (!res.ok) {
+      console.warn(`[campaign-service] Affordability check failed (${res.status}) — allowing run (fail-open)`);
+      return true;
+    }
+    const data = await res.json() as { affordable?: boolean };
+    // Only an explicit affordable=false blocks. Anything else (true, missing) allows.
+    return data.affordable !== false;
+  } catch (err) {
+    console.warn("[campaign-service] Affordability check threw — allowing run (fail-open):", err);
+    return true;
+  }
+}
+
 function startOfToday(): Date {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -199,6 +252,12 @@ function startOfMonth(): Date {
   d.setDate(1);
   d.setHours(0, 0, 0, 0);
   return d;
+}
+
+// Backoff for the credit-affordability block. Short enough to resume promptly after a
+// recharge, long enough not to defeat the scheduler's adaptive-tick Neon scale-to-zero.
+export function nextHalfHour(): Date {
+  return new Date(Date.now() + 30 * 60 * 1000);
 }
 
 export function nextDayStart(): Date {

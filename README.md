@@ -20,7 +20,12 @@ Required variables:
 - `DATABASE_URL` - PostgreSQL connection string
 - `RUNS_SERVICE_URL` - URL of runs-service
 - `RUNS_SERVICE_API_KEY` - API key for runs-service
+- `BILLING_SERVICE_URL` - URL of billing-service (credit-affordability pre-flight in the gate)
+- `BILLING_SERVICE_API_KEY` - API key for billing-service
 - `SENTRY_DSN` - Sentry DSN for error tracking (optional)
+
+If `BILLING_SERVICE_URL` / `BILLING_SERVICE_API_KEY` are unset, the gate's credit-affordability
+check fails open (the run is allowed) so a missing config never freezes campaigns.
 
 ## Development
 

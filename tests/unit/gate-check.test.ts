@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 const {
   mockListRuns,
@@ -306,6 +306,86 @@ describe("Gate Check", () => {
       const result = await runGateChecks(makeCampaign({ maxLeads: 10 }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("Lead stats unavailable (fail-closed)");
+    });
+  });
+
+  describe("Credit affordability check", () => {
+    const ORIG_URL = process.env.BILLING_SERVICE_URL;
+    const ORIG_KEY = process.env.BILLING_SERVICE_API_KEY;
+
+    beforeEach(() => {
+      process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+      process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
+    });
+
+    afterEach(() => {
+      if (ORIG_URL === undefined) delete process.env.BILLING_SERVICE_URL;
+      else process.env.BILLING_SERVICE_URL = ORIG_URL;
+      if (ORIG_KEY === undefined) delete process.env.BILLING_SERVICE_API_KEY;
+      else process.env.BILLING_SERVICE_API_KEY = ORIG_KEY;
+    });
+
+    it("should block with 30min backoff (NOT auto-stopped) when org cannot afford the run", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ affordable: false, balanceCents: "0", lastRequiredCents: "150", hasHistory: true }),
+      });
+
+      const before = Date.now();
+      const result = await runGateChecks(makeCampaign());
+      const after = Date.now();
+
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Insufficient credits");
+      // Backed off ~30min, campaign stays ongoing → recharge auto-resumes (no manual restart).
+      expect(result.nextRunAt).toBeInstanceOf(Date);
+      expect(result.nextRunAt!.getTime()).toBeGreaterThanOrEqual(before + 30 * 60 * 1000);
+      expect(result.nextRunAt!.getTime()).toBeLessThanOrEqual(after + 30 * 60 * 1000 + 1000);
+      // Must NOT auto-stop — that would need a manual restart instead of self-healing.
+      expect(result.autoStopped).toBeUndefined();
+      expect(mockDbUpdate).not.toHaveBeenCalled();
+    });
+
+    it("should proceed when org can afford the run (affordable=true)", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ affordable: true, balanceCents: "5000", lastRequiredCents: "150", hasHistory: true }),
+      });
+
+      const result = await runGateChecks(makeCampaign());
+      expect(result.allowed).toBe(true);
+    });
+
+    it("should fail-open (allow + warn) when the billing call throws", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
+
+      const result = await runGateChecks(makeCampaign());
+      expect(result.allowed).toBe(true);
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it("should fail-open (allow) on a non-2xx billing response", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+
+      const result = await runGateChecks(makeCampaign());
+      expect(result.allowed).toBe(true);
+    });
+
+    it("should call the locked affordability contract with x-api-key + identity headers", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ affordable: true, balanceCents: "5000", lastRequiredCents: null, hasHistory: false }),
+      });
+
+      await runGateChecks(makeCampaign({ userId: "user-1", runId: "run-1" }));
+
+      const [calledUrl, opts] = mockFetch.mock.calls[0];
+      expect(calledUrl).toBe("https://billing.test.local/internal/campaigns/campaign-1/affordability");
+      expect(opts.headers["x-api-key"]).toBe("test-billing-key");
+      expect(opts.headers["x-org-id"]).toBe("org-1");
+      expect(opts.headers["x-campaign-id"]).toBe("campaign-1");
     });
   });
 
