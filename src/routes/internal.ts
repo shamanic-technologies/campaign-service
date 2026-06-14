@@ -73,11 +73,16 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
     });
 
     if (req.runId) {
+      // An out-of-credit org is a NORMAL, expected state (people run out of credit) —
+      // not an anomaly to warn on. The campaign simply backs off and auto-resumes on
+      // recharge. Trace it at info level, like a passing check, so it never surfaces as
+      // a warning/error in logs. Genuine fail-closed blocks keep warn level.
+      const benignBlock = result.reason === "Insufficient credits";
       traceEvent(req.runId, {
         service: "campaign-service",
         event: "gate-check-result",
         detail: `Gate check ${result.allowed ? "PASSED" : "BLOCKED"} for campaign ${campaignId}${result.reason ? ` — reason: ${result.reason}` : ""}${result.autoStopped ? " (auto-stopped)" : ""}`,
-        level: result.allowed ? "info" : "warn",
+        level: result.allowed || benignBlock ? "info" : "warn",
         data: { campaignId, allowed: result.allowed, reason: result.reason, autoStopped: result.autoStopped },
       }, req.headers).catch(() => {});
     }
