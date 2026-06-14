@@ -625,7 +625,7 @@ describe("Pipeline routes", () => {
       expect(mockUpdateRun).toHaveBeenCalledWith("run-own", "failed", expect.objectContaining({ orgId }));
     });
 
-    it("should set nextRunAt=now when success=true stopCampaign=false and campaign is ongoing", async () => {
+    it("should set nextRunAt=now+10s grace when success=true stopCampaign=false and campaign is ongoing", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
@@ -650,9 +650,10 @@ describe("Pipeline routes", () => {
       });
       expect(updated!.nextRunAt).not.toBeNull();
       const nextRunTime = new Date(updated!.nextRunAt!).getTime();
-      // Should be ~now (within 5s tolerance)
-      expect(nextRunTime).toBeGreaterThanOrEqual(before);
-      expect(nextRunTime).toBeLessThan(before + 5_000);
+      // Should be ~now + 10s grace (lets the wrapping workflow run finish teardown
+      // before the re-run tick, so the in-flight guard doesn't slam a +60s skip).
+      expect(nextRunTime).toBeGreaterThanOrEqual(before + 9_000);
+      expect(nextRunTime).toBeLessThan(before + 15_000);
       // Must NOT fire-and-forget
       expect(mockExecute).not.toHaveBeenCalled();
     });
