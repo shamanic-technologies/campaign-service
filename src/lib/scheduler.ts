@@ -121,7 +121,10 @@ export async function reRunDueCampaigns(): Promise<number> {
           .update(campaigns)
           .set({ nextRunAt: rescheduledAt, updatedAt: new Date() })
           .where(eq(campaigns.id, campaign.id));
-        console.warn(`[campaign-service] Skipped re-fire for campaign ${campaign.id} — a run is still in-flight. Rescheduled nextRunAt=${rescheduledAt.toISOString()}`);
+        // No log here on purpose. This in-flight skip + reschedule fires every ~60s for
+        // EVERY campaign with a live run (a long fill re-checks ~12×/run), across every
+        // client — logging it (even at info) spams the logs minute-by-minute for a routine
+        // dedup. The decision is already observable via the persisted nextRunAt in DB.
         continue;
       }
 
