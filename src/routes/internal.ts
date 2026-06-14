@@ -17,6 +17,22 @@ const router = Router();
 // re-claimed + re-fired on the very next scheduler tick.
 const GATE_BLOCK_BACKOFF_MS = 15 * 60_000; // 15 min
 
+// Grace delay before a COMPLETED run becomes due for re-trigger.
+//
+// Why not 0: the campaign-service `/end-run` is fired by the ephemeral
+// `campaign-service / <campaignId>` marker, which ends ~6s BEFORE the wrapping
+// `workflow / execute-workflow` run (that run is tagged with the same campaignId).
+// Setting nextRunAt=now + wakeScheduler() fired the next tick instantly, but the
+// in-flight guard (scheduler.ts hasLiveRunForCampaign) still saw the tearing-down
+// wrapper run as "alive" → skipped + rescheduled +60s. So an intended-instant
+// re-run actually paid a flat ~60s idle tax EVERY lead (~110s/lead observed).
+//
+// A small grace lets the wrapper run finish before the re-run tick, so the guard
+// sees no live run and re-fires cleanly (~40s/lead). If teardown ever exceeds the
+// grace, the guard's +60s skip still applies — never worse than the old behavior.
+// Does NOT touch the long-fill (cold-buffer up to ~755s) in-flight protection.
+const RERUN_GRACE_MS = 10_000; // 10s
+
 /**
  * POST /gate-check
  *
@@ -294,8 +310,10 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         return;
       }
 
-      // Failed runs get a 60s backoff; completed runs re-run immediately
-      const delayMs = status === "failed" ? 60_000 : 0;
+      // Failed runs get a 60s backoff; completed runs re-run after a short grace
+      // (RERUN_GRACE_MS) so the wrapping workflow run finishes teardown before the
+      // re-run tick — otherwise the in-flight guard sees it alive and forces +60s.
+      const delayMs = status === "failed" ? 60_000 : RERUN_GRACE_MS;
       const nextRunAt = new Date(Date.now() + delayMs);
 
       if (req.runId) {
