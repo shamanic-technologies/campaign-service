@@ -5,6 +5,7 @@ const {
   mockUpdateRun,
   mockGetStatsBudget,
   mockDbUpdate,
+  mockAnyBrandPaused,
 } = vi.hoisted(() => {
   const mockSet = vi.fn().mockReturnValue({
     where: vi.fn().mockResolvedValue(undefined),
@@ -14,8 +15,13 @@ const {
     mockUpdateRun: vi.fn(),
     mockGetStatsBudget: vi.fn(),
     mockDbUpdate: vi.fn().mockReturnValue({ set: mockSet }),
+    mockAnyBrandPaused: vi.fn(),
   };
 });
+
+vi.mock("../../src/lib/brand-pause.js", () => ({
+  anyBrandPaused: mockAnyBrandPaused,
+}));
 
 vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
@@ -48,6 +54,9 @@ function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
     campaignId: "campaign-1",
     orgId: "org-1",
     brandId: "brand-1",
+    // Empty by default so the per-brand daily-budget loop is a no-op in tests that exercise
+    // the OTHER gates. The brand-budget describe block sets brandIds explicitly.
+    brandIds: [],
     status: "ongoing",
     maxBudgetDailyUsd: "10.00",
     maxBudgetWeeklyUsd: null,
@@ -93,6 +102,33 @@ describe("Gate Check", () => {
     mockListRuns.mockResolvedValue({ runs: [] });
     mockGetStatsBudget.mockResolvedValue({ windows: [] });
     mockUpdateRun.mockResolvedValue({});
+    mockAnyBrandPaused.mockResolvedValue(false);
+  });
+
+  describe("Brand pause", () => {
+    it("should HOLD (block, non-terminal) when a target brand is paused", async () => {
+      mockAnyBrandPaused.mockResolvedValue(true);
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand paused");
+      // HOLD, not terminal: never auto-stops the campaign.
+      expect(result.autoStopped).toBeUndefined();
+      // Short-circuits before the runs fetch — a paused brand never hits runs-service.
+      expect(mockListRuns).not.toHaveBeenCalled();
+    });
+
+    it("should HOLD a multi-brand campaign if ANY one brand is paused", async () => {
+      mockAnyBrandPaused.mockResolvedValue(true);
+      const result = await runGateChecks(makeCampaign({ brandIds: ["b1", "b2", "b3"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand paused");
+    });
+
+    it("should NOT block when no target brand is paused", async () => {
+      mockAnyBrandPaused.mockResolvedValue(false);
+      const result = await runGateChecks(makeCampaign({ brandIds: ["b1", "b2"] }));
+      expect(result.allowed).toBe(true);
+    });
   });
 
   it("should block if campaign is not ongoing", async () => {
@@ -387,6 +423,145 @@ describe("Gate Check", () => {
       expect(opts.headers["x-api-key"]).toBe("test-billing-key");
       expect(opts.headers["x-org-id"]).toBe("org-1");
       expect(opts.headers["x-campaign-id"]).toBe("campaign-1");
+    });
+  });
+
+  describe("Per-brand daily budget pacing", () => {
+    const ORIG_URL = process.env.BILLING_SERVICE_URL;
+    const ORIG_KEY = process.env.BILLING_SERVICE_API_KEY;
+
+    beforeEach(() => {
+      process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+      process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
+      // Default: campaign budget window passes (daily=0) and brand spend is 0 (today=0).
+      // Per-test overrides drive the "today" window to exercise the cap.
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "daily", totalCostInUsdCents: "0" },
+          { label: "today", totalCostInUsdCents: "0" },
+        ])
+      );
+    });
+
+    afterEach(() => {
+      if (ORIG_URL === undefined) delete process.env.BILLING_SERVICE_URL;
+      else process.env.BILLING_SERVICE_URL = ORIG_URL;
+      if (ORIG_KEY === undefined) delete process.env.BILLING_SERVICE_API_KEY;
+      else process.env.BILLING_SERVICE_API_KEY = ORIG_KEY;
+    });
+
+    // Queue one billing daily-budget response (FIFO with other fetches in the same tick).
+    function mockDailyBudget(dailyBudgetCents: string | null, brandId = "brand-1") {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ brandId, dailyBudgetCents, updatedAt: null }),
+      });
+    }
+
+    it("blocks (paced, not stopped) when today's brand spend reaches the ceiling", async () => {
+      mockDailyBudget("1000"); // ceiling 1000 cents
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "daily", totalCostInUsdCents: "0" },
+          { label: "today", totalCostInUsdCents: "1000" }, // spend == ceiling
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand daily budget reached");
+      // D1: not parked till midnight, not terminal — internal.ts applies the 15min backoff,
+      // so a raised ceiling re-enables on the next loop.
+      expect(result.nextRunAt).toBeUndefined();
+      expect(result.autoStopped).toBeUndefined();
+    });
+
+    it("allows when today's brand spend is below the ceiling", async () => {
+      mockDailyBudget("1000");
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "daily", totalCostInUsdCents: "0" },
+          { label: "today", totalCostInUsdCents: "999" },
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(true);
+    });
+
+    it("treats an unset budget (null) as unbounded — no cap", async () => {
+      mockDailyBudget(null);
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "daily", totalCostInUsdCents: "0" },
+          { label: "today", totalCostInUsdCents: "999999" }, // huge spend, null ceiling → never blocks
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(true);
+    });
+
+    it("re-enables on the next loop once the ceiling is raised", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "daily", totalCostInUsdCents: "0" },
+          { label: "today", totalCostInUsdCents: "1000" }, // spend fixed at 1000
+        ])
+      );
+
+      // loop 1: ceiling 1000, spend 1000 → blocked
+      mockDailyBudget("1000");
+      const blocked = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(blocked.allowed).toBe(false);
+
+      // loop 2: ceiling raised to 5000, same spend → allowed
+      mockDailyBudget("5000");
+      const allowed = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(allowed.allowed).toBe(true);
+    });
+
+    it("fail-OPEN (allow) and SILENT when the billing read throws", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "daily", totalCostInUsdCents: "0" },
+          { label: "today", totalCostInUsdCents: "999999" },
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(true); // unreadable ceiling → no cap, other gates pass
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it("blocks the tick if ANY brand in a multi-brand campaign hits its ceiling", async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ brandId: "brand-1", dailyBudgetCents: "1000", updatedAt: null }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ brandId: "brand-2", dailyBudgetCents: "1000", updatedAt: null }) });
+      // getStatsBudget call order: campaign window, brand-1 spend, brand-2 spend
+      mockGetStatsBudget
+        .mockResolvedValueOnce(makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "0" }]))
+        .mockResolvedValueOnce(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "0" }]))
+        .mockResolvedValueOnce(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "2000" }]));
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1", "brand-2"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand daily budget reached");
+    });
+
+    it("calls the locked daily-budget contract with x-api-key + x-brand-id", async () => {
+      mockDailyBudget("999999");
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], runId: "run-1" }));
+      expect(result.allowed).toBe(true);
+
+      const [calledUrl, opts] = mockFetch.mock.calls[0];
+      expect(calledUrl).toBe("https://billing.test.local/internal/brands/brand-1/daily-budget");
+      expect(opts.headers["x-api-key"]).toBe("test-billing-key");
+      expect(opts.headers["x-org-id"]).toBe("org-1");
+      expect(opts.headers["x-brand-id"]).toBe("brand-1");
     });
   });
 

@@ -2,6 +2,7 @@ import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type 
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
+import { anyBrandPaused } from "./brand-pause.js";
 
 const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
 
@@ -11,6 +12,7 @@ export interface GateCheckInput {
   userId?: string;
   runId?: string;
   brandId: string;
+  brandIds: string[];
   workflowSlug?: string;
   status: string;
   maxBudgetDailyUsd: string | null;
@@ -31,6 +33,14 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // Campaign must be ongoing
   if (campaign.status !== "ongoing") {
     return { allowed: false, reason: "Campaign is not ongoing" };
+  }
+
+  // Brand pause — HOLD if ANY target brand is paused (same org). Defense-in-depth: the
+  // scheduler already excludes paused-brand campaigns from its claim, but a run already in
+  // flight when the brand was paused still reaches this gate. NOT a terminal stop — the
+  // campaign stays 'ongoing'; internal.ts backs it off and the next un-pause resumes it.
+  if (await anyBrandPaused(campaign.orgId, campaign.brandIds)) {
+    return { allowed: false, reason: "Brand paused" };
   }
 
   const identity: IdentityHeaders = {
@@ -117,6 +127,39 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         return { allowed: false, reason: "Total budget exceeded", autoStopped: true };
       }
       return { allowed: false, reason: `${budgetLimit.label} budget exceeded`, nextRunAt: budgetLimit.nextRunAt };
+    }
+  }
+
+  // 3c. Per-brand daily budget pacing — the brand is the optimization bucket.
+  // billing-service stores + serves each brand's daily spend ceiling (cents); ENFORCEMENT
+  // is ours. For each brand in scope, compare today's platform spend (runs-service,
+  // brandId-keyed) against that ceiling. A brand at/over its ceiling pauses the loop for
+  // now — NOT a terminal stop: the block carries no nextRunAt, so internal.ts backs it off
+  // ~15min and re-checks. Raising the ceiling re-enables work on the next loop, and the day
+  // rollover naturally resets today's spend. An unset ceiling (null) = unbounded (no cap).
+  // Multi-brand tick: blocked if ANY in-scope brand has reached its ceiling (most campaigns
+  // are solo-brand; per-brand downstream fan-out is out of scope here).
+  //
+  // Units: billing dailyBudgetCents and runs totalCostInUsdCents are BOTH cents → compared
+  // directly (NO ×100, unlike the maxBudget*Usd columns above which are USD).
+  //
+  // Read fail-OPEN: getBrandDailyBudget returns null on any billing failure (→ no cap this
+  // tick), mirroring the affordability pre-filter — a billing blip must never freeze the
+  // fleet, and the org-credit affordability gate below stays the hard money gate.
+  for (const brandId of campaign.brandIds) {
+    const dailyBudgetCents = await getBrandDailyBudget(brandId, identity);
+    if (dailyBudgetCents === null) continue; // unset/unreadable → no cap this tick
+
+    const brandSpend = await getStatsBudget({
+      orgId: campaign.orgId,
+      brandId,
+      windows: [{ label: "today", since: startOfToday().toISOString() }],
+    });
+    const today = brandSpend.windows.find(w => w.label === "today");
+    const spentCents = today ? parseFloat(today.totalCostInUsdCents) || 0 : 0;
+
+    if (spentCents >= dailyBudgetCents) {
+      return { allowed: false, reason: "Brand daily budget reached" };
     }
   }
 
@@ -235,6 +278,53 @@ async function checkAffordability(campaignId: string, identity: IdentityHeaders)
     return data.affordable !== false;
   } catch {
     return true;
+  }
+}
+
+/**
+ * Read a brand's current daily spend ceiling from billing-service.
+ * Returns the ceiling in CENTS, or null when unset (dailyBudgetCents: null) — null means
+ * "no cap this tick" to the caller.
+ *
+ * Fail-OPEN by design: missing config, network error, non-2xx, or unparseable value all
+ * return null (no cap), mirroring checkAffordability. The daily budget is a pacing ceiling,
+ * not the hard money gate — a billing outage must never freeze every campaign, and org-credit
+ * affordability remains the hard gate. Silent for the same per-tick-per-campaign reason: the
+ * fail-open path fires every gate check across the fleet; logging it would spam the logs.
+ *
+ * Contract: GET /internal/brands/{brandId}/daily-budget (x-api-key) ->
+ *   { brandId, dailyBudgetCents: string|null, updatedAt: string|null }
+ */
+async function getBrandDailyBudget(brandId: string, identity: IdentityHeaders): Promise<number | null> {
+  const url = process.env.BILLING_SERVICE_URL;
+  const apiKey = process.env.BILLING_SERVICE_API_KEY;
+  if (!url || !apiKey) {
+    return null;
+  }
+
+  const headers: Record<string, string> = {
+    "x-api-key": apiKey,
+    "x-org-id": identity.orgId,
+    "x-brand-id": brandId,
+  };
+  if (identity.userId) headers["x-user-id"] = identity.userId;
+  if (identity.runId) headers["x-run-id"] = identity.runId;
+  if (identity.campaignId) headers["x-campaign-id"] = identity.campaignId;
+  if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
+
+  try {
+    const res = await fetch(`${url}/internal/brands/${brandId}/daily-budget`, { headers });
+    if (!res.ok) {
+      return null;
+    }
+    const data = await res.json() as { dailyBudgetCents?: string | null };
+    if (data.dailyBudgetCents === null || data.dailyBudgetCents === undefined) {
+      return null;
+    }
+    const cents = parseFloat(data.dailyBudgetCents);
+    return Number.isFinite(cents) ? cents : null;
+  } catch {
+    return null;
   }
 }
 

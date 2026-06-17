@@ -79,6 +79,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       userId: req.userId,
       runId: req.runId,
       brandId: resolvedBrandIds.join(","),
+      brandIds: resolvedBrandIds,
       workflowSlug: req.workflowSlug || campaign.workflowSlug,
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
@@ -93,7 +94,12 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       // not an anomaly to warn on. The campaign simply backs off and auto-resumes on
       // recharge. Trace it at info level, like a passing check, so it never surfaces as
       // a warning/error in logs. Genuine fail-closed blocks keep warn level.
-      const benignBlock = result.reason === "Insufficient credits";
+      // A brand reaching its daily budget is the same class of expected business state
+      // (pacing ceiling hit, not a fault) → also benign/info. A user-paused brand is likewise
+      // an intentional, expected hold — not an anomaly.
+      const benignBlock = result.reason === "Insufficient credits" ||
+                          result.reason === "Brand daily budget reached" ||
+                          result.reason === "Brand paused";
       traceEvent(req.runId, {
         service: "campaign-service",
         event: "gate-check-result",

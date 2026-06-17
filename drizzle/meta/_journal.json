@@ -232,6 +232,13 @@
       "when": 1775700000000,
       "tag": "0032_fix_idx_campaigns_org",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1775800000000,
+      "tag": "0033_brand_pause",
+      "breakpoints": true
     }
   ]
 }
