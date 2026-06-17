@@ -2,6 +2,7 @@ import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type 
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
+import { anyBrandPaused } from "./brand-pause.js";
 
 const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
 
@@ -32,6 +33,14 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // Campaign must be ongoing
   if (campaign.status !== "ongoing") {
     return { allowed: false, reason: "Campaign is not ongoing" };
+  }
+
+  // Brand pause — HOLD if ANY target brand is paused (same org). Defense-in-depth: the
+  // scheduler already excludes paused-brand campaigns from its claim, but a run already in
+  // flight when the brand was paused still reaches this gate. NOT a terminal stop — the
+  // campaign stays 'ongoing'; internal.ts backs it off and the next un-pause resumes it.
+  if (await anyBrandPaused(campaign.orgId, campaign.brandIds)) {
+    return { allowed: false, reason: "Brand paused" };
   }
 
   const identity: IdentityHeaders = {
