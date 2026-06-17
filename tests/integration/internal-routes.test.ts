@@ -150,7 +150,7 @@ describe("Pipeline routes", () => {
 
       mockGateChecks.mockResolvedValue({
         allowed: false,
-        reason: "daily budget exceeded",
+        reason: "Brand daily budget reached",
       });
 
       const res = await request(app)
@@ -159,7 +159,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(res.body.allowed).toBe(false);
-      expect(res.body.reason).toBe("daily budget exceeded");
+      expect(res.body.reason).toBe("Brand daily budget reached");
     });
 
     it("should return autoStopped flag when campaign is auto-stopped", async () => {
@@ -183,14 +183,14 @@ describe("Pipeline routes", () => {
     it("should save nextRunAt to DB when gate-check returns it", async () => {
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0);
+      const nextWeek = new Date();
+      nextWeek.setDate(nextWeek.getDate() + 7);
+      nextWeek.setHours(0, 0, 0, 0);
 
       mockGateChecks.mockResolvedValue({
         allowed: false,
-        reason: "daily budget exceeded",
-        nextRunAt: tomorrow,
+        reason: "weekly budget exceeded",
+        nextRunAt: nextWeek,
       });
 
       await request(app)
@@ -202,7 +202,7 @@ describe("Pipeline routes", () => {
         where: eq(campaigns.id, campaign.id),
       });
       expect(updated!.nextRunAt).not.toBeNull();
-      expect(new Date(updated!.nextRunAt!).getTime()).toBe(tomorrow.getTime());
+      expect(new Date(updated!.nextRunAt!).getTime()).toBe(nextWeek.getTime());
     });
 
     it("should NOT save nextRunAt when gate-check does not return it", async () => {

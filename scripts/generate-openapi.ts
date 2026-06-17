@@ -251,7 +251,7 @@ registry.registerPath({
   path: "/gate-check",
   tags: ["Pipeline"],
   summary: "Check if a campaign can run a new iteration",
-  description: "Validates budget limits (daily/weekly/monthly/total) via runs-service stats/budget, volume limits (maxLeads), campaign status, and consecutive failures. Auto-stops the campaign if total budget or maxLeads is exceeded. Called as the first DAG node.",
+  description: "Validates brand-level daily budget pacing, legacy non-daily budget limits via runs-service stats/budget, volume limits (maxLeads), campaign status, and consecutive failures. Auto-stops the campaign if total budget or maxLeads is exceeded. Called as the first DAG node.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: {
     headers: PipelineHeaders,

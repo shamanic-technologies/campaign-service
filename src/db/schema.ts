@@ -26,7 +26,7 @@ export const campaigns = pgTable(
     // Feature inputs — dynamic key/value inputs declared by the feature
     featureInputs: jsonb("feature_inputs"),
 
-    // Budget limits per campaign (at least one required)
+    // Legacy campaign budget limits. Daily spend control is brand-level via billing-service.
     maxBudgetDailyUsd: decimal("max_budget_daily_usd", { precision: 10, scale: 2 }),
     maxBudgetWeeklyUsd: decimal("max_budget_weekly_usd", { precision: 10, scale: 2 }),
     maxBudgetMonthlyUsd: decimal("max_budget_monthly_usd", { precision: 10, scale: 2 }),
