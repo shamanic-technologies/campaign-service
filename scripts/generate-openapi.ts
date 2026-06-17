@@ -19,6 +19,8 @@ import {
   EndRunResponse,
   TransferBrandBody,
   TransferBrandResponse,
+  UpdateBrandPauseBody,
+  BrandPauseResponse,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -129,6 +131,41 @@ registry.registerPath({
   responses: {
     200: { description: "Campaign deleted", content: { "application/json": { schema: z.object({ message: z.string() }) } } },
     404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+// === BRAND PAUSE ===
+
+registry.registerPath({
+  method: "get",
+  path: "/brands/{brandId}/pause",
+  tags: ["Brands"],
+  summary: "Get a brand's pause state",
+  description: "Returns whether the brand is paused. When paused, the scheduler holds every ongoing campaign targeting this brand. No row → paused=false, updatedAt=null. Org-scoped via x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { params: z.object({ brandId: z.string() }) },
+  responses: {
+    200: { description: "Brand pause state", content: { "application/json": { schema: BrandPauseResponse } } },
+    400: { description: "Missing x-org-id", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/brands/{brandId}/pause",
+  tags: ["Brands"],
+  summary: "Set a brand's pause state (upsert)",
+  description: "Pauses or un-pauses all of the brand's ongoing campaigns at the scheduler. Upserts one mutable row per brand. Un-pausing resumes held campaigns on the next scheduler tick with zero re-launch. Org-scoped via x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ brandId: z.string() }),
+    body: { content: { "application/json": { schema: UpdateBrandPauseBody } } },
+  },
+  responses: {
+    200: { description: "Updated brand pause state", content: { "application/json": { schema: BrandPauseResponse } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 

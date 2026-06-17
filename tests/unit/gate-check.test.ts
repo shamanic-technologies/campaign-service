@@ -5,6 +5,7 @@ const {
   mockUpdateRun,
   mockGetStatsBudget,
   mockDbUpdate,
+  mockAnyBrandPaused,
 } = vi.hoisted(() => {
   const mockSet = vi.fn().mockReturnValue({
     where: vi.fn().mockResolvedValue(undefined),
@@ -14,8 +15,13 @@ const {
     mockUpdateRun: vi.fn(),
     mockGetStatsBudget: vi.fn(),
     mockDbUpdate: vi.fn().mockReturnValue({ set: mockSet }),
+    mockAnyBrandPaused: vi.fn(),
   };
 });
+
+vi.mock("../../src/lib/brand-pause.js", () => ({
+  anyBrandPaused: mockAnyBrandPaused,
+}));
 
 vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
@@ -96,6 +102,33 @@ describe("Gate Check", () => {
     mockListRuns.mockResolvedValue({ runs: [] });
     mockGetStatsBudget.mockResolvedValue({ windows: [] });
     mockUpdateRun.mockResolvedValue({});
+    mockAnyBrandPaused.mockResolvedValue(false);
+  });
+
+  describe("Brand pause", () => {
+    it("should HOLD (block, non-terminal) when a target brand is paused", async () => {
+      mockAnyBrandPaused.mockResolvedValue(true);
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand paused");
+      // HOLD, not terminal: never auto-stops the campaign.
+      expect(result.autoStopped).toBeUndefined();
+      // Short-circuits before the runs fetch — a paused brand never hits runs-service.
+      expect(mockListRuns).not.toHaveBeenCalled();
+    });
+
+    it("should HOLD a multi-brand campaign if ANY one brand is paused", async () => {
+      mockAnyBrandPaused.mockResolvedValue(true);
+      const result = await runGateChecks(makeCampaign({ brandIds: ["b1", "b2", "b3"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand paused");
+    });
+
+    it("should NOT block when no target brand is paused", async () => {
+      mockAnyBrandPaused.mockResolvedValue(false);
+      const result = await runGateChecks(makeCampaign({ brandIds: ["b1", "b2"] }));
+      expect(result.allowed).toBe(true);
+    });
   });
 
   it("should block if campaign is not ongoing", async () => {

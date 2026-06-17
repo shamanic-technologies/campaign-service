@@ -80,6 +80,19 @@ export const UpdateCampaignBody = z.object({
   notifyDestination: z.string().optional(),
 }).openapi("UpdateCampaignBody");
 
+// --- Brand pause ---
+
+export const UpdateBrandPauseBody = z.object({
+  paused: z.boolean(),
+}).openapi("UpdateBrandPauseBody");
+
+export const BrandPauseResponse = z.object({
+  brandId: z.string(),
+  orgId: z.string(),
+  paused: z.boolean(),
+  updatedAt: z.string().nullable(),
+}).openapi("BrandPauseResponse");
+
 // --- Stats ---
 
 export const StatsGroupByEnum = z.enum([

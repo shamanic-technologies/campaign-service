@@ -62,6 +62,12 @@ vi.mock("drizzle-orm", () => ({
   isNull: vi.fn(),
 }));
 
+// The pause filter is exercised in tests/integration/brand-pause.test.ts against a real DB.
+// Here it's a no-op fragment so the narrowly-mocked db/schema/drizzle-orm stay sufficient.
+vi.mock("../../src/lib/brand-pause.js", () => ({
+  notPausedBrandClause: vi.fn(() => undefined),
+}));
+
 import {
   reRunDueCampaigns,
   claimStuckCampaigns,

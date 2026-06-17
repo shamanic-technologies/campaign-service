@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb, boolean } from "drizzle-orm/pg-core";
 
 // Campaigns table
 export const campaigns = pgTable(
@@ -59,3 +59,27 @@ export const campaigns = pgTable(
 
 export type Campaign = typeof campaigns.$inferSelect;
 export type NewCampaign = typeof campaigns.$inferInsert;
+
+// Brand pause flag — ONE mutable row per brand (upsert in place).
+//
+// When paused=true, the campaign-service scheduler holds EVERY ongoing campaign whose
+// brandIds includes this brand (same org): the campaign stays 'ongoing' but is not claimed
+// or re-fired. Un-pausing (paused=false) lets the next scheduler tick pick those campaigns
+// up again with zero re-launch. Read/written via GET/PATCH /brands/:brandId/pause and
+// joined locally by the scheduler + gate-check (no per-tick HTTP). Mirrors the single-scalar
+// per-brand store pattern (billing-service brand_daily_budgets).
+export const brandPause = pgTable(
+  "brand_pause",
+  {
+    brandId: text("brand_id").primaryKey(),
+    orgId: text("org_id").notNull(),
+    paused: boolean("paused").notNull().default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_brand_pause_org").on(table.orgId),
+  ]
+);
+
+export type BrandPause = typeof brandPause.$inferSelect;
+export type NewBrandPause = typeof brandPause.$inferInsert;

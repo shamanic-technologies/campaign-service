@@ -3,6 +3,7 @@ import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { listRuns } from "@distribute/runs-client";
+import { notPausedBrandClause } from "./brand-pause.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -84,6 +85,8 @@ export async function reRunDueCampaigns(): Promise<number> {
         eq(campaigns.status, "ongoing"),
         isNotNull(campaigns.nextRunAt),
         lte(campaigns.nextRunAt, now),
+        // Hold campaigns of paused brands — never claimed while any target brand is paused.
+        notPausedBrandClause(),
       ),
     )
     .returning({
@@ -174,6 +177,8 @@ export async function claimStuckCampaigns(): Promise<number> {
     where: and(
       eq(campaigns.status, "ongoing"),
       isNull(campaigns.nextRunAt),
+      // Hold campaigns of paused brands — a paused brand's stuck campaign is not re-claimed.
+      notPausedBrandClause(),
     ),
     columns: { id: true, orgId: true },
   });
@@ -240,7 +245,13 @@ export function computeNextDelayMs(
 /** Load the ongoing-campaign snapshot used to pick the next tick delay. */
 async function loadOngoingSnapshot(): Promise<Array<{ nextRunAt: Date | null }>> {
   return db.query.campaigns.findMany({
-    where: eq(campaigns.status, "ongoing"),
+    // Exclude paused-brand campaigns from the cadence snapshot too: an all-paused brand then
+    // yields an empty snapshot → IDLE_MAX_MS, so the Neon compute can suspend instead of being
+    // pinned at the 60s active cadence by a paused (nextRunAt=null) campaign.
+    where: and(
+      eq(campaigns.status, "ongoing"),
+      notPausedBrandClause(),
+    ),
     columns: { nextRunAt: true },
   });
 }
