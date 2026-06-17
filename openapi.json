@@ -550,6 +550,32 @@
           "sourceOrgId",
           "targetOrgId"
         ]
+      },
+      "DeleteCampaignsByOrgResponse": {
+        "type": "object",
+        "properties": {
+          "updatedTables": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tableName": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "tableName",
+                "count"
+              ]
+            }
+          }
+        },
+        "required": [
+          "updatedTables"
+        ]
       }
     },
     "parameters": {}
@@ -1625,6 +1651,64 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/campaigns/by-org/{orgId}": {
+      "delete": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Disable campaign-owned state for an org teardown",
+        "description": "Idempotently stops org campaigns, clears queued scheduler candidates, and removes campaign-service-owned org state that can affect future campaign scheduling/execution. Called by client-service during org teardown. No cross-service fan-out.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service"
+            },
+            "required": true,
+            "description": "Internal org UUID from client-service",
+            "name": "orgId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Org campaign state disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteCampaignsByOrgResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Teardown failed",
             "content": {
               "application/json": {
                 "schema": {
