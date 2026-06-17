@@ -21,6 +21,12 @@ describe("Campaign CRUD", () => {
     orgId: "org_test_crud",
     brandIds: [crypto.randomUUID()],
   };
+  const attribution = {
+    activeGoalId: "goal_test_crud",
+    brandProfileId: "brand_profile_test_crud",
+    customerPersonaId: "persona_test_crud",
+    customerProfileId: "customer_profile_test_crud",
+  };
 
   /** Helper: create a campaign with all required headers */
   function createCampaign(body: Record<string, unknown> = validBody, orgId = "org_test_crud") {
@@ -42,6 +48,28 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign.name).toBe("Test Campaign");
       expect(res.body.campaign.workflowSlug).toBe("sales-email-cold-outreach");
       expect(res.body.campaign.brandIds).toEqual(validBody.brandIds);
+      expect(res.body.campaign.activeGoalId).toBeNull();
+      expect(res.body.campaign.brandProfileId).toBeNull();
+      expect(res.body.campaign.customerPersonaId).toBeNull();
+      expect(res.body.campaign.customerProfileId).toBeNull();
+    });
+
+    it("should preserve persona/profile attribution through create and read", async () => {
+      const createRes = await createCampaign({
+        ...validBody,
+        name: "Attributed Campaign",
+        ...attribution,
+      }).expect(201);
+
+      expect(createRes.body.campaign).toMatchObject(attribution);
+
+      const readRes = await request(app)
+        .get(`/campaigns/${createRes.body.campaign.id}`)
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .expect(200);
+
+      expect(readRes.body.campaign).toMatchObject(attribution);
     });
 
     it("should reject when workflowSlug is missing", async () => {

@@ -330,8 +330,32 @@ describe("Pipeline routes", () => {
       expect(res.body.orgId).toBe(orgId);
       expect(res.body.brandIds).toEqual(brandIds);
       expect(res.body.workflowSlug).toBe("sales-email-cold-outreach");
+      expect(res.body.activeGoalId).toBeNull();
+      expect(res.body.brandProfileId).toBeNull();
+      expect(res.body.customerPersonaId).toBeNull();
+      expect(res.body.customerProfileId).toBeNull();
       expect(res.body).not.toHaveProperty("appId");
       expect(res.body).not.toHaveProperty("keySource");
+    });
+
+    it("should return persona/profile attribution for attributed campaigns", async () => {
+      const attribution = {
+        activeGoalId: "goal_internal_test",
+        brandProfileId: "brand_profile_internal_test",
+        customerPersonaId: "persona_internal_test",
+        customerProfileId: "customer_profile_internal_test",
+      };
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        ...attribution,
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(res.body).toMatchObject(attribution);
     });
 
     it("should not return sales-specific fields", async () => {

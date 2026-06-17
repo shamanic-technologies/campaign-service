@@ -245,6 +245,10 @@ const PipelineHeaders = z.object({
   "x-brand-id": z.string().optional().openapi({ description: "Comma-separated brand UUIDs (e.g. 'uuid1,uuid2,uuid3'). Optional — resolved from campaign DB if absent.", example: "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8" }),
   "x-workflow-slug": z.string().openapi({ description: "Workflow slug (required, injected by workflow-service)" }),
   "x-feature-slug": z.string().openapi({ description: "Feature slug (required)" }),
+  "x-active-goal-id": z.string().optional().openapi({ description: "Active goal identity for attributed campaigns. Optional; absent means unattributed." }),
+  "x-brand-profile-id": z.string().optional().openapi({ description: "Brand profile identity for attributed campaigns. Optional; absent means unattributed." }),
+  "x-customer-persona-id": z.string().optional().openapi({ description: "Customer persona identity for attributed campaigns. Optional; absent means unattributed." }),
+  "x-customer-profile-id": z.string().optional().openapi({ description: "Customer profile identity for attributed campaigns. Optional; absent means unattributed." }),
 }).openapi("PipelineHeaders");
 
 registry.registerPath({

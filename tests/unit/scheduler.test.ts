@@ -51,6 +51,10 @@ vi.mock("../../src/db/schema.js", () => ({
     createdByUserId: "created_by_user_id",
     parentRunId: "parent_run_id",
     featureSlug: "feature_slug",
+    activeGoalId: "active_goal_id",
+    brandProfileId: "brand_profile_id",
+    customerPersonaId: "customer_persona_id",
+    customerProfileId: "customer_profile_id",
   },
 }));
 
@@ -157,6 +161,36 @@ describe("Scheduler - reRunDueCampaigns", () => {
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
       "sales-email-cold-outreach",
       expect.objectContaining({ runId: "parent-run-abc" }),
+    );
+  });
+
+  it("should preserve persona/profile attribution when re-triggering due campaigns", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+        activeGoalId: "goal-1",
+        brandProfileId: "brand-profile-1",
+        customerPersonaId: "persona-1",
+        customerProfileId: "customer-profile-1",
+      },
+    ]);
+
+    await reRunDueCampaigns();
+
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
+      "sales-email-cold-outreach",
+      expect.objectContaining({
+        activeGoalId: "goal-1",
+        brandProfileId: "brand-profile-1",
+        customerPersonaId: "persona-1",
+        customerProfileId: "customer-profile-1",
+      }),
     );
   });
 
