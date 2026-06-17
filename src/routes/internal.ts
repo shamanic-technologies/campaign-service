@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaigns } from "../db/schema.js";
+import { brandPause, campaigns } from "../db/schema.js";
 import { requireApiKey, requirePipelineHeaders, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
@@ -410,6 +410,50 @@ router.post("/internal/transfer-brand", requireApiKey, validateBody(TransferBran
     });
   } catch (error) {
     console.error("[campaign-service] transfer-brand error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * DELETE /internal/campaigns/by-org/:orgId
+ *
+ * Deletes campaign-service-owned org-scoped state during client-service org teardown.
+ *
+ * Idempotent: an org with no campaign-service-owned state returns 200 with zero counts.
+ * No cross-service fan-out: client-service remains the cascade coordinator.
+ */
+router.delete("/internal/campaigns/by-org/:orgId", requireApiKey, async (req, res) => {
+  try {
+    const { orgId } = req.params;
+
+    const result = await db.transaction(async (tx) => {
+      const deletedCampaigns = await tx
+        .delete(campaigns)
+        .where(eq(campaigns.orgId, orgId))
+        .returning({ id: campaigns.id });
+
+      const deletedBrandPause = await tx
+        .delete(brandPause)
+        .where(eq(brandPause.orgId, orgId))
+        .returning({ brandId: brandPause.brandId });
+
+      return {
+        campaigns: deletedCampaigns.length,
+        brandPause: deletedBrandPause.length,
+      };
+    });
+
+    console.log(`[campaign-service] org teardown: deleted ${result.campaigns} campaigns and ${result.brandPause} brand_pause rows for orgId=${orgId}`);
+
+    res.json({
+      orgId,
+      deletedTables: [
+        { tableName: "campaigns", count: result.campaigns },
+        { tableName: "brand_pause", count: result.brandPause },
+      ],
+    });
+  } catch (error) {
+    console.error("[campaign-service] org teardown error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

@@ -182,3 +182,12 @@ export const TransferBrandResponse = z.object({
   })),
 }).openapi("TransferBrandResponse");
 
+// --- Internal: Org Teardown ---
+
+export const DeleteCampaignsByOrgResponse = z.object({
+  orgId: z.string(),
+  deletedTables: z.array(z.object({
+    tableName: z.string(),
+    count: z.number().int(),
+  })),
+}).openapi("DeleteCampaignsByOrgResponse");

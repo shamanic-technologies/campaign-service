@@ -550,6 +550,36 @@
           "sourceOrgId",
           "targetOrgId"
         ]
+      },
+      "DeleteCampaignsByOrgResponse": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "deletedTables": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tableName": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "tableName",
+                "count"
+              ]
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "deletedTables"
+        ]
       }
     },
     "parameters": {}
@@ -1625,6 +1655,63 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/campaigns/by-org/{orgId}": {
+      "delete": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Delete campaign-owned org state for org teardown",
+        "description": "Deletes campaign-service-owned org-scoped state needed to stop future scheduling and campaign execution. Idempotent: missing org state returns success with zero counts. Does not call other services.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Org campaign state deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteCampaignsByOrgResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
             "content": {
               "application/json": {
                 "schema": {

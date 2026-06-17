@@ -21,6 +21,7 @@ import {
   TransferBrandResponse,
   UpdateBrandPauseBody,
   BrandPauseResponse,
+  DeleteCampaignsByOrgResponse,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -312,6 +313,23 @@ registry.registerPath({
     200: { description: "Transfer result", content: { "application/json": { schema: TransferBrandResponse } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/internal/campaigns/by-org/{orgId}",
+  tags: ["Internal"],
+  summary: "Delete campaign-owned org state for org teardown",
+  description: "Deletes campaign-service-owned org-scoped state needed to stop future scheduling and campaign execution. Idempotent: missing org state returns success with zero counts. Does not call other services.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ orgId: z.string().uuid() }),
+  },
+  responses: {
+    200: { description: "Org campaign state deleted", content: { "application/json": { schema: DeleteCampaignsByOrgResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 
