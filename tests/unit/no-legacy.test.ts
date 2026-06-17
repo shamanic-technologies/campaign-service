@@ -108,4 +108,37 @@ describe('No Legacy Patterns - CRITICAL', () => {
     expect(content).not.toMatch(/keySource\s*:/);
     expect(content).not.toMatch(/["']key_source["']/);
   });
+
+  it('should NOT use Stripe subscription lifecycle calls', () => {
+    const roots = [
+      srcDir,
+      path.join(__dirname, '../../packages'),
+      path.join(__dirname, '../../scripts'),
+    ].filter((dir) => fs.existsSync(dir));
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const root of roots) {
+      const files = getAllTsFiles(root);
+      for (const file of files) {
+        const content = fs.readFileSync(file, 'utf-8');
+        const lines = content.split('\n');
+
+        lines.forEach((line, index) => {
+          const lower = line.toLowerCase();
+          if (lower.includes('stripe') || lower.includes('subscription')) {
+            violations.push({
+              file: path.relative(path.join(__dirname, '../..'), file),
+              line: index + 1,
+              code: line.trim().substring(0, 80),
+            });
+          }
+        });
+      }
+    }
+
+    expect(
+      violations,
+      `Campaign-service must not create/update/pause/cancel Stripe subscriptions:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`
+    ).toHaveLength(0);
+  });
 });
