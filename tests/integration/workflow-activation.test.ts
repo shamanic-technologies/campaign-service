@@ -36,6 +36,12 @@ const validBody = {
 
   brandIds: [crypto.randomUUID()],
 };
+const attribution = {
+  activeGoalId: "goal_activation_test",
+  brandProfileId: "brand_profile_activation_test",
+  customerPersonaId: "persona_activation_test",
+  customerProfileId: "customer_profile_activation_test",
+};
 
 /** Helper: create a campaign with all required headers */
 function createCampaign(body: Record<string, unknown> = validBody) {
@@ -63,7 +69,7 @@ describe("Workflow trigger", () => {
 
   describe("on campaign creation", () => {
     it("should trigger workflow immediately when campaign is created", async () => {
-      const createRes = await createCampaign().expect(201);
+      const createRes = await createCampaign({ ...validBody, ...attribution }).expect(201);
 
       const campaignId = createRes.body.campaign.id;
 
@@ -79,6 +85,7 @@ describe("Workflow trigger", () => {
           brandId: validBody.brandIds.join(","),
           userId: "user_activation_test",
           featureSlug: "sales-cold-email-v1",
+          ...attribution,
         }),
       );
     });
@@ -132,6 +139,51 @@ describe("Workflow trigger", () => {
         expect.objectContaining({
           campaignId,
           orgId: "org_activation_test",
+          activeGoalId: null,
+          brandProfileId: null,
+          customerPersonaId: null,
+          customerProfileId: null,
+        }),
+      );
+    });
+
+    it("should preserve persona/profile attribution when activating a campaign", async () => {
+      const createRes = await createCampaign({
+        ...validBody,
+        name: "Attributed Activation Campaign",
+        ...attribution,
+      }).expect(201);
+      const campaignId = createRes.body.campaign.id;
+
+      await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_activation_test")
+        .send({ status: "stop" })
+        .expect(200);
+
+      await new Promise((r) => setTimeout(r, 50));
+      vi.clearAllMocks();
+      mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
+
+      await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_activation_test")
+        .set("x-user-id", "user_activation_test")
+        .set("x-run-id", crypto.randomUUID())
+        .set("x-feature-slug", "sales-cold-email-v1")
+        .send({ status: "activate" })
+        .expect(200);
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(mockExecuteCampaignWorkflow).toHaveBeenCalledOnce();
+      expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
+        "sales-email-cold-outreach",
+        expect.objectContaining({
+          campaignId,
+          ...attribution,
         }),
       );
     });

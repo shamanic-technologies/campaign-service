@@ -5,6 +5,10 @@ export interface WorkflowExecutionInputs {
   userId: string;
   runId: string;
   featureSlug: string;
+  activeGoalId?: string | null;
+  brandProfileId?: string | null;
+  customerPersonaId?: string | null;
+  customerProfileId?: string | null;
 }
 
 const REQUIRED_FIELDS: (keyof WorkflowExecutionInputs)[] = [
@@ -63,6 +67,10 @@ export async function executeCampaignWorkflow(
     "x-feature-slug": inputs.featureSlug,
     "x-workflow-slug": workflowSlug,
   };
+  if (inputs.activeGoalId) headers["x-active-goal-id"] = inputs.activeGoalId;
+  if (inputs.brandProfileId) headers["x-brand-profile-id"] = inputs.brandProfileId;
+  if (inputs.customerPersonaId) headers["x-customer-persona-id"] = inputs.customerPersonaId;
+  if (inputs.customerProfileId) headers["x-customer-profile-id"] = inputs.customerProfileId;
 
   const res = await fetch(executeUrl, {
     method: "POST",
@@ -71,6 +79,12 @@ export async function executeCampaignWorkflow(
       inputs: {
         campaignId: inputs.campaignId,
         orgId: inputs.orgId,
+        brandId: inputs.brandId,
+        featureSlug: inputs.featureSlug,
+        activeGoalId: inputs.activeGoalId ?? null,
+        brandProfileId: inputs.brandProfileId ?? null,
+        customerPersonaId: inputs.customerPersonaId ?? null,
+        customerProfileId: inputs.customerProfileId ?? null,
       },
     }),
   });

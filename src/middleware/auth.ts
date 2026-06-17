@@ -8,6 +8,10 @@ export interface AuthenticatedRequest extends Request {
   brandIds?: string[];
   workflowSlug?: string;
   featureSlug?: string;
+  activeGoalId?: string;
+  brandProfileId?: string;
+  customerPersonaId?: string;
+  customerProfileId?: string;
 }
 
 /** Parse the x-brand-id header as a comma-separated list of UUIDs. */
@@ -75,6 +79,10 @@ export function trackingHeaders(
   const brandIds = parseBrandIdHeader(req.headers["x-brand-id"] as string | undefined);
   const workflowSlug = req.headers["x-workflow-slug"] as string | undefined;
   const featureSlug = req.headers["x-feature-slug"] as string | undefined;
+  const activeGoalId = req.headers["x-active-goal-id"] as string | undefined;
+  const brandProfileId = req.headers["x-brand-profile-id"] as string | undefined;
+  const customerPersonaId = req.headers["x-customer-persona-id"] as string | undefined;
+  const customerProfileId = req.headers["x-customer-profile-id"] as string | undefined;
 
   if (orgId && !req.orgId) req.orgId = orgId;
   if (userId && !req.userId) req.userId = userId;
@@ -83,6 +91,10 @@ export function trackingHeaders(
   if (brandIds.length > 0) req.brandIds = brandIds;
   if (workflowSlug) req.workflowSlug = workflowSlug;
   if (featureSlug) req.featureSlug = featureSlug;
+  if (activeGoalId) req.activeGoalId = activeGoalId;
+  if (brandProfileId) req.brandProfileId = brandProfileId;
+  if (customerPersonaId) req.customerPersonaId = customerPersonaId;
+  if (customerProfileId) req.customerProfileId = customerProfileId;
 
   next();
 }

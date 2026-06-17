@@ -97,6 +97,10 @@ export async function reRunDueCampaigns(): Promise<number> {
       workflowSlug: campaigns.workflowSlug,
       brandIds: campaigns.brandIds,
       featureSlug: campaigns.featureSlug,
+      activeGoalId: campaigns.activeGoalId,
+      brandProfileId: campaigns.brandProfileId,
+      customerPersonaId: campaigns.customerPersonaId,
+      customerProfileId: campaigns.customerProfileId,
     });
 
   if (dueCampaigns.length === 0) return 0;
@@ -147,6 +151,10 @@ export async function reRunDueCampaigns(): Promise<number> {
         userId,
         runId,
         featureSlug,
+        activeGoalId: campaign.activeGoalId,
+        brandProfileId: campaign.brandProfileId,
+        customerPersonaId: campaign.customerPersonaId,
+        customerProfileId: campaign.customerProfileId,
       }).catch((err) => {
         console.error(`[campaign-service] Failed to re-trigger campaign ${campaign.id}:`, err);
       });

@@ -63,6 +63,22 @@
               "nullable": true
             }
           },
+          "activeGoalId": {
+            "type": "string",
+            "nullable": true
+          },
+          "brandProfileId": {
+            "type": "string",
+            "nullable": true
+          },
+          "customerPersonaId": {
+            "type": "string",
+            "nullable": true
+          },
+          "customerProfileId": {
+            "type": "string",
+            "nullable": true
+          },
           "maxBudgetDailyUsd": {
             "type": "string",
             "nullable": true
@@ -127,6 +143,10 @@
           "brandIds",
           "featureSlug",
           "featureInputs",
+          "activeGoalId",
+          "brandProfileId",
+          "customerPersonaId",
+          "customerProfileId",
           "maxBudgetDailyUsd",
           "maxBudgetWeeklyUsd",
           "maxBudgetMonthlyUsd",
@@ -186,6 +206,26 @@
             "additionalProperties": {
               "nullable": true
             }
+          },
+          "activeGoalId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
+          },
+          "brandProfileId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
+          },
+          "customerPersonaId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
+          },
+          "customerProfileId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
           },
           "maxBudgetDailyUsd": {
             "type": "string"
@@ -247,6 +287,26 @@
             "additionalProperties": {
               "nullable": true
             }
+          },
+          "activeGoalId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
+          },
+          "brandProfileId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
+          },
+          "customerPersonaId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
+          },
+          "customerProfileId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
           },
           "maxBudgetDailyUsd": {
             "type": "string"
@@ -453,6 +513,22 @@
               "nullable": true
             }
           },
+          "activeGoalId": {
+            "type": "string",
+            "nullable": true
+          },
+          "brandProfileId": {
+            "type": "string",
+            "nullable": true
+          },
+          "customerPersonaId": {
+            "type": "string",
+            "nullable": true
+          },
+          "customerProfileId": {
+            "type": "string",
+            "nullable": true
+          },
           "searchParams": {
             "type": "object",
             "nullable": true,
@@ -470,6 +546,10 @@
           "userId",
           "featureSlug",
           "featureInputs",
+          "activeGoalId",
+          "brandProfileId",
+          "customerPersonaId",
+          "customerProfileId",
           "searchParams"
         ]
       },
@@ -1342,6 +1422,46 @@
             "description": "Feature slug (required)",
             "name": "x-feature-slug",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Active goal identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Active goal identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-active-goal-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand profile identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Brand profile identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-brand-profile-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Customer persona identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Customer persona identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-customer-persona-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Customer profile identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Customer profile identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-customer-profile-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -1462,6 +1582,46 @@
             "description": "Feature slug (required)",
             "name": "x-feature-slug",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Active goal identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Active goal identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-active-goal-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand profile identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Brand profile identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-brand-profile-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Customer persona identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Customer persona identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-customer-persona-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Customer profile identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Customer profile identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-customer-profile-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -1581,6 +1741,46 @@
             "required": true,
             "description": "Feature slug (required)",
             "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Active goal identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Active goal identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-active-goal-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand profile identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Brand profile identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-brand-profile-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Customer persona identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Customer persona identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-customer-persona-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Customer profile identity for attributed campaigns. Optional; absent means unattributed."
+            },
+            "required": false,
+            "description": "Customer profile identity for attributed campaigns. Optional; absent means unattributed.",
+            "name": "x-customer-profile-id",
             "in": "header"
           }
         ],

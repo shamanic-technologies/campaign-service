@@ -57,6 +57,22 @@ describe("trackingHeaders middleware", () => {
     expect(req.campaignId).toBe("camp-123");
   });
 
+  it("should read optional persona/profile attribution headers", () => {
+    const req = createMockReq({
+      "x-active-goal-id": "goal-1",
+      "x-brand-profile-id": "brand-profile-1",
+      "x-customer-persona-id": "persona-1",
+      "x-customer-profile-id": "customer-profile-1",
+    });
+
+    trackingHeaders(req, {} as Response, (() => {}) as NextFunction);
+
+    expect(req.activeGoalId).toBe("goal-1");
+    expect(req.brandProfileId).toBe("brand-profile-1");
+    expect(req.customerPersonaId).toBe("persona-1");
+    expect(req.customerProfileId).toBe("customer-profile-1");
+  });
+
   it("should not set properties when headers are absent", () => {
     const req = createMockReq({});
 
@@ -67,6 +83,10 @@ describe("trackingHeaders middleware", () => {
     expect(req.brandIds).toBeUndefined();
     expect(req.workflowSlug).toBeUndefined();
     expect(req.featureSlug).toBeUndefined();
+    expect(req.activeGoalId).toBeUndefined();
+    expect(req.brandProfileId).toBeUndefined();
+    expect(req.customerPersonaId).toBeUndefined();
+    expect(req.customerProfileId).toBeUndefined();
     expect(nextCalled).toBe(true);
   });
 

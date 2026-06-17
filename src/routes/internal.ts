@@ -217,6 +217,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       userId: campaign.createdByUserId ?? null,
       featureSlug: campaign.featureSlug ?? null,
       featureInputs: featureInputs ?? null,
+      activeGoalId: campaign.activeGoalId ?? null,
+      brandProfileId: campaign.brandProfileId ?? null,
+      customerPersonaId: campaign.customerPersonaId ?? null,
+      customerProfileId: campaign.customerProfileId ?? null,
       searchParams,
     });
   } catch (error) {
