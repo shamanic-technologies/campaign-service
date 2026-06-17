@@ -47,7 +47,7 @@ vi.mock("drizzle-orm", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { runGateChecks, nextDayStart, nextWeekStart, nextMonthStart, type GateCheckInput } from "../../src/lib/gate-check.js";
+import { runGateChecks, nextWeekStart, nextMonthStart, type GateCheckInput } from "../../src/lib/gate-check.js";
 
 function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
   return {
@@ -187,22 +187,19 @@ describe("Gate Check", () => {
   });
 
   describe("Budget check", () => {
-    it("should auto-stop if no budget is defined (fail-closed, terminal)", async () => {
+    it("should allow campaigns with no campaign-level budget", async () => {
       const result = await runGateChecks(makeCampaign({
         maxBudgetDailyUsd: null,
         maxBudgetWeeklyUsd: null,
         maxBudgetMonthlyUsd: null,
         maxBudgetTotalUsd: null,
       }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("No budget defined (fail-closed)");
-      // A zero-budget campaign can never run → terminal auto-stop, not retryable,
-      // so it is never re-claimed by the scheduler (no Windmill re-fire loop).
-      expect(result.autoStopped).toBe(true);
-      expect(mockDbUpdate).toHaveBeenCalled();
+      expect(result.allowed).toBe(true);
+      expect(mockDbUpdate).not.toHaveBeenCalled();
+      expect(mockGetStatsBudget).not.toHaveBeenCalled();
     });
 
-    it("should block when daily budget is exceeded", async () => {
+    it("should ignore legacy campaign daily budget fields", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "1500" }])
       );
@@ -210,19 +207,8 @@ describe("Gate Check", () => {
       const result = await runGateChecks(makeCampaign({
         maxBudgetDailyUsd: "10.00", // 1000 cents
       }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("daily budget exceeded");
-    });
-
-    it("should allow when budget is not exceeded", async () => {
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "500" }])
-      );
-
-      const result = await runGateChecks(makeCampaign({
-        maxBudgetDailyUsd: "10.00",
-      }));
       expect(result.allowed).toBe(true);
+      expect(mockGetStatsBudget).not.toHaveBeenCalled();
     });
 
     it("should auto-stop campaign when total budget is exceeded", async () => {
@@ -255,7 +241,6 @@ describe("Gate Check", () => {
           orgId: "org-1",
           campaignId: "campaign-1",
           windows: expect.arrayContaining([
-            expect.objectContaining({ label: "daily" }),
             expect.objectContaining({ label: "weekly" }),
             expect.objectContaining({ label: "total" }),
           ]),
@@ -265,19 +250,22 @@ describe("Gate Check", () => {
       // Should NOT include appId
       const callArgs = mockGetStatsBudget.mock.calls[0][0];
       expect(callArgs).not.toHaveProperty("appId");
+      expect(callArgs.windows).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ label: "daily" }),
+      ]));
     });
 
     it("should only include windows for configured budgets", async () => {
       await runGateChecks(makeCampaign({
         maxBudgetDailyUsd: "10.00",
-        maxBudgetWeeklyUsd: null,
+        maxBudgetWeeklyUsd: "50.00",
         maxBudgetMonthlyUsd: null,
         maxBudgetTotalUsd: null,
       }));
 
       const call = mockGetStatsBudget.mock.calls[0][0];
       expect(call.windows).toHaveLength(1);
-      expect(call.windows[0].label).toBe("daily");
+      expect(call.windows[0].label).toBe("weekly");
     });
   });
 
@@ -433,11 +421,10 @@ describe("Gate Check", () => {
     beforeEach(() => {
       process.env.BILLING_SERVICE_URL = "https://billing.test.local";
       process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
-      // Default: campaign budget window passes (daily=0) and brand spend is 0 (today=0).
+      // Default: brand spend is 0 (today=0).
       // Per-test overrides drive the "today" window to exercise the cap.
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
-          { label: "daily", totalCostInUsdCents: "0" },
           { label: "today", totalCostInUsdCents: "0" },
         ])
       );
@@ -462,7 +449,6 @@ describe("Gate Check", () => {
       mockDailyBudget("1000"); // ceiling 1000 cents
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
-          { label: "daily", totalCostInUsdCents: "0" },
           { label: "today", totalCostInUsdCents: "1000" }, // spend == ceiling
         ])
       );
@@ -480,7 +466,6 @@ describe("Gate Check", () => {
       mockDailyBudget("1000");
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
-          { label: "daily", totalCostInUsdCents: "0" },
           { label: "today", totalCostInUsdCents: "999" },
         ])
       );
@@ -493,7 +478,6 @@ describe("Gate Check", () => {
       mockDailyBudget(null);
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
-          { label: "daily", totalCostInUsdCents: "0" },
           { label: "today", totalCostInUsdCents: "999999" }, // huge spend, null ceiling → never blocks
         ])
       );
@@ -505,7 +489,6 @@ describe("Gate Check", () => {
     it("re-enables on the next loop once the ceiling is raised", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
-          { label: "daily", totalCostInUsdCents: "0" },
           { label: "today", totalCostInUsdCents: "1000" }, // spend fixed at 1000
         ])
       );
@@ -526,7 +509,6 @@ describe("Gate Check", () => {
       mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
-          { label: "daily", totalCostInUsdCents: "0" },
           { label: "today", totalCostInUsdCents: "999999" },
         ])
       );
@@ -541,15 +523,37 @@ describe("Gate Check", () => {
       mockFetch
         .mockResolvedValueOnce({ ok: true, json: async () => ({ brandId: "brand-1", dailyBudgetCents: "1000", updatedAt: null }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ brandId: "brand-2", dailyBudgetCents: "1000", updatedAt: null }) });
-      // getStatsBudget call order: campaign window, brand-1 spend, brand-2 spend
+      // getStatsBudget call order: brand-1 spend, brand-2 spend
       mockGetStatsBudget
-        .mockResolvedValueOnce(makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "0" }]))
         .mockResolvedValueOnce(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "0" }]))
         .mockResolvedValueOnce(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "2000" }]));
 
       const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1", "brand-2"] }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("Brand daily budget reached");
+    });
+
+    it("aggregates brand-day spend across all campaign work for the brand", async () => {
+      mockDailyBudget("1000");
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1250" }])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        campaignId: "campaign-active",
+        brandIds: ["brand-1"],
+        maxBudgetDailyUsd: "999999.00",
+      }));
+
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand daily budget reached");
+      expect(mockGetStatsBudget).toHaveBeenCalledWith({
+        orgId: "org-1",
+        brandId: "brand-1",
+        windows: [expect.objectContaining({ label: "today" })],
+      });
+      const brandSpendCall = mockGetStatsBudget.mock.calls[0][0];
+      expect(brandSpendCall).not.toHaveProperty("campaignId");
     });
 
     it("calls the locked daily-budget contract with x-api-key + x-brand-id", async () => {
@@ -562,24 +566,11 @@ describe("Gate Check", () => {
       expect(opts.headers["x-api-key"]).toBe("test-billing-key");
       expect(opts.headers["x-org-id"]).toBe("org-1");
       expect(opts.headers["x-brand-id"]).toBe("brand-1");
+      expect(mockGetStatsBudget.mock.calls[0][0]).not.toHaveProperty("campaignId");
     });
   });
 
   describe("nextRunAt on temporal budget exceeded", () => {
-    it("should return nextRunAt when daily budget is exceeded", async () => {
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "1500" }])
-      );
-
-      const result = await runGateChecks(makeCampaign({ maxBudgetDailyUsd: "10.00" }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("daily budget exceeded");
-      expect(result.nextRunAt).toBeInstanceOf(Date);
-      // Should be tomorrow at midnight
-      const expected = nextDayStart();
-      expect(result.nextRunAt!.getTime()).toBe(expected.getTime());
-    });
-
     it("should return nextRunAt when weekly budget is exceeded", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "weekly", totalCostInUsdCents: "6000" }])
@@ -626,11 +617,11 @@ describe("Gate Check", () => {
       expect(result.nextRunAt).toBeUndefined();
     });
 
-    it("should return earliest nextRunAt when daily exceeds before weekly", async () => {
+    it("should ignore legacy daily spend and return weekly nextRunAt when weekly exceeds", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
           { label: "daily", totalCostInUsdCents: "1500" },
-          { label: "weekly", totalCostInUsdCents: "1500" },
+          { label: "weekly", totalCostInUsdCents: "6000" },
         ])
       );
 
@@ -639,22 +630,13 @@ describe("Gate Check", () => {
         maxBudgetWeeklyUsd: "50.00",
       }));
       expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("daily budget exceeded");
-      // Daily is checked first, so nextRunAt should be next day
-      const expected = nextDayStart();
+      expect(result.reason).toBe("weekly budget exceeded");
+      const expected = nextWeekStart();
       expect(result.nextRunAt!.getTime()).toBe(expected.getTime());
     });
   });
 
-  describe("nextDayStart / nextWeekStart / nextMonthStart helpers", () => {
-    it("nextDayStart returns tomorrow at midnight", () => {
-      const result = nextDayStart();
-      expect(result.getHours()).toBe(0);
-      expect(result.getMinutes()).toBe(0);
-      expect(result.getSeconds()).toBe(0);
-      expect(result.getTime()).toBeGreaterThan(Date.now());
-    });
-
+  describe("nextWeekStart / nextMonthStart helpers", () => {
     it("nextWeekStart returns next Monday at midnight", () => {
       const result = nextWeekStart();
       expect(result.getDay()).toBe(1); // Monday

@@ -37,7 +37,7 @@ const RERUN_GRACE_MS = 10_000; // 10s
  * POST /gate-check
  *
  * Checks whether a campaign is allowed to run a new iteration.
- * Validates budget limits, volume limits, consecutive failures,
+ * Validates brand daily budget pacing, legacy non-daily budget limits, volume limits,
  * and campaign status.
  *
  * Called as the first DAG node. Returns { allowed: true } to proceed

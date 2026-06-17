@@ -15,6 +15,8 @@ export interface GateCheckInput {
   brandIds: string[];
   workflowSlug?: string;
   status: string;
+  // Legacy storage/API field. Daily spend is enforced at brand level via billing-service,
+  // not as a campaign-scoped runs window.
   maxBudgetDailyUsd: string | null;
   maxBudgetWeeklyUsd: string | null;
   maxBudgetMonthlyUsd: string | null;
@@ -77,25 +79,13 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     return { allowed: false, reason: "A run is already in progress" };
   }
 
-  // 3. Budget check (fail-closed: no budget defined = blocked)
-  // A campaign with no budget can never run → terminal auto-stop (mirrors the
-  // "Total budget exceeded" / "Max leads reached" blocks). Leaving it ongoing with
-  // no nextRunAt makes the scheduler re-claim + re-fire the Windmill flow every tick.
-  const hasAnyBudget = campaign.maxBudgetDailyUsd || campaign.maxBudgetWeeklyUsd ||
-                       campaign.maxBudgetMonthlyUsd || campaign.maxBudgetTotalUsd;
-  if (!hasAnyBudget) {
-    await autoStopCampaign(campaign.campaignId);
-    return { allowed: false, reason: "No budget defined (fail-closed)", autoStopped: true };
-  }
-
-  // Build windows for configured budgets only
+  // 3. Legacy non-daily campaign budget windows.
+  // maxBudgetDailyUsd is intentionally ignored here: the product's daily cap is now
+  // brand-level, fetched from billing-service below and enforced against brand-day
+  // aggregate spend across all campaign work for that brand.
   const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean; nextRunAt?: Date }> = [];
   const windows: BudgetWindow[] = [];
 
-  if (campaign.maxBudgetDailyUsd) {
-    windows.push({ label: "daily", since: startOfToday().toISOString() });
-    budgetLimits.push({ limit: campaign.maxBudgetDailyUsd, label: "daily", autoStop: false, nextRunAt: nextDayStart() });
-  }
   if (campaign.maxBudgetWeeklyUsd) {
     windows.push({ label: "weekly", since: daysAgo(7).toISOString() });
     budgetLimits.push({ limit: campaign.maxBudgetWeeklyUsd, label: "weekly", autoStop: false, nextRunAt: nextWeekStart() });
@@ -109,24 +99,26 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     budgetLimits.push({ limit: campaign.maxBudgetTotalUsd, label: "total", autoStop: true });
   }
 
-  // Single call to runs-service for all budget windows
-  const budgetResult = await getStatsBudget({
-    orgId: campaign.orgId,
-    campaignId: campaign.campaignId,
-    windows,
-  });
+  if (windows.length > 0) {
+    // Single call to runs-service for all configured legacy campaign budget windows.
+    const budgetResult = await getStatsBudget({
+      orgId: campaign.orgId,
+      campaignId: campaign.campaignId,
+      windows,
+    });
 
-  for (const budgetLimit of budgetLimits) {
-    const limitCents = parseFloat(budgetLimit.limit) * 100;
-    const windowResult = budgetResult.windows.find(w => w.label === budgetLimit.label);
-    const totalCostCents = windowResult ? parseFloat(windowResult.totalCostInUsdCents) || 0 : 0;
+    for (const budgetLimit of budgetLimits) {
+      const limitCents = parseFloat(budgetLimit.limit) * 100;
+      const windowResult = budgetResult.windows.find(w => w.label === budgetLimit.label);
+      const totalCostCents = windowResult ? parseFloat(windowResult.totalCostInUsdCents) || 0 : 0;
 
-    if (totalCostCents >= limitCents) {
-      if (budgetLimit.autoStop) {
-        await autoStopCampaign(campaign.campaignId);
-        return { allowed: false, reason: "Total budget exceeded", autoStopped: true };
+      if (totalCostCents >= limitCents) {
+        if (budgetLimit.autoStop) {
+          await autoStopCampaign(campaign.campaignId);
+          return { allowed: false, reason: "Total budget exceeded", autoStopped: true };
+        }
+        return { allowed: false, reason: `${budgetLimit.label} budget exceeded`, nextRunAt: budgetLimit.nextRunAt };
       }
-      return { allowed: false, reason: `${budgetLimit.label} budget exceeded`, nextRunAt: budgetLimit.nextRunAt };
     }
   }
 
@@ -349,13 +341,6 @@ function startOfMonth(): Date {
 // recharge, long enough not to defeat the scheduler's adaptive-tick Neon scale-to-zero.
 export function nextHalfHour(): Date {
   return new Date(Date.now() + 30 * 60 * 1000);
-}
-
-export function nextDayStart(): Date {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  d.setHours(0, 0, 0, 0);
-  return d;
 }
 
 export function nextWeekStart(): Date {
