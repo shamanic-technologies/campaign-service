@@ -19,6 +19,7 @@ import {
   EndRunResponse,
   TransferBrandBody,
   TransferBrandResponse,
+  DeleteCampaignsByOrgResponse,
   UpdateBrandPauseBody,
   BrandPauseResponse,
 } from "../src/schemas.js";
@@ -312,6 +313,25 @@ registry.registerPath({
     200: { description: "Transfer result", content: { "application/json": { schema: TransferBrandResponse } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/internal/campaigns/by-org/{orgId}",
+  tags: ["Internal"],
+  summary: "Disable campaign-owned state for an org teardown",
+  description: "Idempotently stops org campaigns, clears queued scheduler candidates, and removes campaign-service-owned org state that can affect future campaign scheduling/execution. Called by client-service during org teardown. No cross-service fan-out.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({
+      orgId: z.string().openapi({ description: "Internal org UUID from client-service" }),
+    }),
+  },
+  responses: {
+    200: { description: "Org campaign state disabled", content: { "application/json": { schema: DeleteCampaignsByOrgResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Teardown failed", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 
