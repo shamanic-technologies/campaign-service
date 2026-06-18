@@ -6,6 +6,7 @@ import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/
 import { validateBody } from "../middleware/validate.js";
 import { UpdateBrandPauseBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
+import { ensureRunnableSalesOutreachCampaign } from "../lib/sales-outreach-campaign.js";
 
 const router = Router();
 
@@ -39,8 +40,8 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
 /**
  * PATCH /brands/:brandId/pause — set a brand's pause state (upsert in place).
  *
- * ONE mutable row per brand. Un-pausing wakes the scheduler so the brand's held campaigns
- * resume promptly instead of waiting out the current idle sleep.
+ * ONE mutable row per brand. Un-pausing also ensures the brand has a runnable sales outreach
+ * campaign behind it, then wakes the scheduler so work resumes promptly.
  */
 router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(UpdateBrandPauseBody), async (req: AuthenticatedRequest, res) => {
   try {
@@ -49,17 +50,35 @@ router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(
     const { paused } = req.body as { paused: boolean };
     const now = new Date();
 
-    const [row] = await db
-      .insert(brandPause)
-      .values({ brandId, orgId, paused, updatedAt: now })
-      .onConflictDoUpdate({
-        target: brandPause.brandId,
-        set: { orgId, paused, updatedAt: now },
-      })
-      .returning();
+    const row = await db.transaction(async (tx) => {
+      if (!paused) {
+        await ensureRunnableSalesOutreachCampaign(tx, {
+          orgId,
+          brandId,
+          userId: req.userId,
+          runId: req.runId,
+          now,
+        });
+      }
 
-    // Un-pause → wake the scheduler so the brand's ongoing campaigns are re-claimed on the
-    // next tick rather than waiting out a deep idle sleep. (Pausing needs no wake.)
+      const [updated] = await tx
+        .insert(brandPause)
+        .values({ brandId, orgId, paused, updatedAt: now })
+        .onConflictDoUpdate({
+          target: brandPause.brandId,
+          set: { orgId, paused, updatedAt: now },
+        })
+        .returning();
+
+      if (!updated) {
+        throw new Error(`Cannot update brand pause for brand ${brandId}`);
+      }
+
+      return updated;
+    });
+
+    // Un-pause → wake the scheduler so the brand's sales campaign is claimed on the next tick
+    // rather than waiting out a deep idle sleep. (Pausing needs no wake and does not stop.)
     if (!paused) {
       wakeScheduler();
     }
