@@ -26,6 +26,13 @@ export const campaigns = pgTable(
     // Feature inputs — dynamic key/value inputs declared by the feature
     featureInputs: jsonb("feature_inputs"),
 
+    // Optional real attribution for persona/profile-scoped campaigns.
+    // Null means explicitly unattributed; never infer or distribute by hash.
+    activeGoalId: text("active_goal_id"),
+    brandProfileId: text("brand_profile_id"),
+    customerPersonaId: text("customer_persona_id"),
+    customerProfileId: text("customer_profile_id"),
+
     // Legacy campaign budget limits. Daily spend control is brand-level via billing-service.
     maxBudgetDailyUsd: decimal("max_budget_daily_usd", { precision: 10, scale: 2 }),
     maxBudgetWeeklyUsd: decimal("max_budget_weekly_usd", { precision: 10, scale: 2 }),

@@ -7,12 +7,16 @@ const {
   mockListRuns,
   mockExecute,
   mockGateChecks,
+  mockFetchBrandRuntimeContext,
+  mockFetchBestCustomerPersona,
 } = vi.hoisted(() => ({
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
   mockListRuns: vi.fn(),
   mockExecute: vi.fn(),
   mockGateChecks: vi.fn(),
+  mockFetchBrandRuntimeContext: vi.fn(),
+  mockFetchBestCustomerPersona: vi.fn(),
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -34,6 +38,14 @@ vi.mock("../../src/lib/gate-check.js", () => ({
   runGateChecks: mockGateChecks,
 }));
 
+vi.mock("../../src/lib/brand-runtime-client.js", () => ({
+  fetchBrandRuntimeContext: mockFetchBrandRuntimeContext,
+}));
+
+vi.mock("../../src/lib/features-persona-client.js", () => ({
+  fetchBestCustomerPersona: mockFetchBestCustomerPersona,
+}));
+
 import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
 import { campaigns } from "../../src/db/schema.js";
@@ -41,6 +53,39 @@ import { eq } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
+
+const defaultBrandProfile = {
+  id: "brand-profile-current",
+  brandId: "brand-current",
+  version: 3,
+  fields: {
+    positioning: "Automates outbound sales for B2B teams",
+    targetAudience: ["B2B SaaS founders", "Revenue leaders"],
+  },
+  createdAt: "2026-06-18T00:00:00.000Z",
+};
+
+const defaultCustomerPersona = {
+  customerProfileId: "customer-profile-best",
+  brandProfileId: "brand-profile-current",
+  persona: {
+    id: "customer-profile-best",
+    name: "Revenue leaders",
+    status: "active",
+    filters: {
+      titles: ["VP Sales", "Head of Growth"],
+    },
+  },
+  evidence: {
+    contacted: 120,
+    websiteClicks: 24,
+    positiveReplies: 6,
+  },
+  metrics: {
+    cpcCents: 500,
+    cpprCents: 2000,
+  },
+};
 
 /** All required pipeline headers for a valid DAG request */
 function pipelineHeaders(overrides: Record<string, string> = {}) {
@@ -69,6 +114,12 @@ describe("Pipeline routes", () => {
     mockListRuns.mockResolvedValue({ runs: [] });
     mockGateChecks.mockResolvedValue({ allowed: true });
     mockExecute.mockResolvedValue(undefined);
+    mockFetchBrandRuntimeContext.mockResolvedValue({
+      brand: { id: brandIds[0], name: "Test Brand" },
+      currentGoal: "signup",
+      brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
+    });
+    mockFetchBestCustomerPersona.mockResolvedValue(defaultCustomerPersona);
   });
 
   afterAll(async () => {
@@ -330,8 +381,32 @@ describe("Pipeline routes", () => {
       expect(res.body.orgId).toBe(orgId);
       expect(res.body.brandIds).toEqual(brandIds);
       expect(res.body.workflowSlug).toBe("sales-email-cold-outreach");
+      expect(res.body.activeGoalId).toBeNull();
+      expect(res.body.brandProfileId).toBeNull();
+      expect(res.body.customerPersonaId).toBeNull();
+      expect(res.body.customerProfileId).toBeNull();
       expect(res.body).not.toHaveProperty("appId");
       expect(res.body).not.toHaveProperty("keySource");
+    });
+
+    it("should return persona/profile attribution for attributed campaigns", async () => {
+      const attribution = {
+        activeGoalId: "goal_internal_test",
+        brandProfileId: "brand_profile_internal_test",
+        customerPersonaId: "persona_internal_test",
+        customerProfileId: "customer_profile_internal_test",
+      };
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        ...attribution,
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(res.body).toMatchObject(attribution);
     });
 
     it("should not return sales-specific fields", async () => {
@@ -348,7 +423,7 @@ describe("Pipeline routes", () => {
       expect(res.body).not.toHaveProperty("socialProof");
     });
 
-    it("should have null searchParams when no featureInputs", async () => {
+    it("should include current brand profile and best persona in searchParams when no featureInputs", async () => {
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
@@ -356,7 +431,31 @@ describe("Pipeline routes", () => {
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      expect(res.body.searchParams).toBeNull();
+      expect(res.body.searchParams).toEqual({
+        brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
+        customerPersona: defaultCustomerPersona,
+      });
+      expect(mockFetchBrandRuntimeContext).toHaveBeenCalledWith(
+        brandIds[0],
+        expect.objectContaining({
+          orgId,
+          userId: "user_test",
+          runId: "run-123",
+          campaignId: campaign.id,
+          brandId: brandIds[0],
+          workflowSlug: "sales-email-cold-outreach",
+          featureSlug: "sales-cold-email-v1",
+        }),
+      );
+      expect(mockFetchBestCustomerPersona).toHaveBeenCalledWith(
+        expect.objectContaining({
+          featureSlug: "sales-cold-email-v1",
+          brandId: brandIds[0],
+          goal: "signup",
+          brandProfileId: "brand-profile-current",
+          identity: expect.objectContaining({ runId: "run-123" }),
+        }),
+      );
     });
 
     it("should pass x-run-id header as parentRunId to createRun", async () => {
@@ -466,7 +565,7 @@ describe("Pipeline routes", () => {
       expect(res.body.featureInputs).toEqual({ mediaType: "podcast", region: "US" });
     });
 
-    it("should use featureInputs as searchParams when available", async () => {
+    it("should enrich featureInputs searchParams with current brand profile and best persona", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         featureInputs: { mediaType: "podcast", region: "US" },
@@ -477,7 +576,27 @@ describe("Pipeline routes", () => {
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      expect(res.body.searchParams).toEqual({ mediaType: "podcast", region: "US" });
+      expect(res.body.searchParams).toEqual({
+        mediaType: "podcast",
+        region: "US",
+        brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
+        customerPersona: defaultCustomerPersona,
+      });
+    });
+
+    it("should include customerPersona: null when FeatureService has no persona rows", async () => {
+      mockFetchBestCustomerPersona.mockResolvedValueOnce(null);
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(res.body.searchParams).toEqual({
+        brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
+        customerPersona: null,
+      });
     });
 
     it("should NOT call gate checks (gate check is a separate DAG node)", async () => {

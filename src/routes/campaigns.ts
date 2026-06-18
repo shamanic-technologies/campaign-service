@@ -20,20 +20,7 @@ const router = Router();
 router.get("/campaigns/list", requireApiKey, async (_req, res) => {
   try {
     const allCampaigns = await db
-      .select({
-        id: campaigns.id,
-        orgId: campaigns.orgId,
-        name: campaigns.name,
-        workflowSlug: campaigns.workflowSlug,
-        status: campaigns.status,
-        maxBudgetDailyUsd: campaigns.maxBudgetDailyUsd,
-        maxBudgetWeeklyUsd: campaigns.maxBudgetWeeklyUsd,
-        maxBudgetMonthlyUsd: campaigns.maxBudgetMonthlyUsd,
-        maxBudgetTotalUsd: campaigns.maxBudgetTotalUsd,
-        maxLeads: campaigns.maxLeads,
-        createdAt: campaigns.createdAt,
-        featureSlug: campaigns.featureSlug,
-      })
+      .select()
       .from(campaigns)
       .orderBy(campaigns.createdAt);
 
@@ -117,6 +104,10 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       brandIds,
       featureSlug: bodyFeatureSlug,
       featureInputs,
+      activeGoalId,
+      brandProfileId,
+      customerPersonaId,
+      customerProfileId,
       maxBudgetDailyUsd,
       maxBudgetWeeklyUsd,
       maxBudgetMonthlyUsd,
@@ -176,6 +167,10 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         brandIds,
         featureSlug: resolvedFeatureSlug,
         featureInputs,
+        activeGoalId: activeGoalId ?? null,
+        brandProfileId: brandProfileId ?? null,
+        customerPersonaId: customerPersonaId ?? null,
+        customerProfileId: customerProfileId ?? null,
         maxBudgetDailyUsd,
         maxBudgetWeeklyUsd,
         maxBudgetMonthlyUsd,
@@ -207,6 +202,10 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       userId: req.userId!,
       runId: req.runId!,
       featureSlug: campaign.featureSlug!,
+      activeGoalId: campaign.activeGoalId,
+      brandProfileId: campaign.brandProfileId,
+      customerPersonaId: campaign.customerPersonaId,
+      customerProfileId: campaign.customerProfileId,
     };
     executeCampaignWorkflow(campaign.workflowSlug, workflowInputs).catch((err) => {
       console.error(`[campaign-service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
@@ -296,6 +295,10 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         userId: req.userId!,
         runId: req.runId!,
         featureSlug: req.featureSlug!,
+        activeGoalId: updated.activeGoalId,
+        brandProfileId: updated.brandProfileId,
+        customerPersonaId: updated.customerPersonaId,
+        customerProfileId: updated.customerProfileId,
       };
       executeCampaignWorkflow(updated.workflowSlug, activateInputs).catch((err) => {
         console.error(`[campaign-service] Failed to trigger workflow for campaign ${id}:`, err);

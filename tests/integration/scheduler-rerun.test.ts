@@ -27,6 +27,12 @@ import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.j
 import { reRunDueCampaigns } from "../../src/lib/scheduler.js";
 
 const orgId = "scheduler-test-org";
+const attribution = {
+  activeGoalId: "goal_scheduler_test",
+  brandProfileId: "brand_profile_scheduler_test",
+  customerPersonaId: "persona_scheduler_test",
+  customerProfileId: "customer_profile_scheduler_test",
+};
 
 describe("Scheduler - reRunDueCampaigns (integration)", () => {
   beforeEach(async () => {
@@ -58,6 +64,7 @@ describe("Scheduler - reRunDueCampaigns (integration)", () => {
       nextRunAt: pastDate,
       featureSlug: "sales-cold-email-v1",
       createdByUserId: "user_scheduler_test",
+      ...attribution,
     });
 
     const count = await reRunDueCampaigns();
@@ -75,6 +82,7 @@ describe("Scheduler - reRunDueCampaigns (integration)", () => {
       expect.objectContaining({
         campaignId: campaign.id,
         orgId,
+        ...attribution,
       }),
     );
   });

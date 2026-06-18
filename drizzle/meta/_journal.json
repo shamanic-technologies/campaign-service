@@ -239,6 +239,13 @@
       "when": 1775800000000,
       "tag": "0033_brand_pause",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1775900000000,
+      "tag": "0034_campaign_persona_attribution",
+      "breakpoints": true
     }
   ]
 }

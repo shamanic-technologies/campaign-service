@@ -9,6 +9,9 @@ import { runGateChecks } from "../lib/gate-check.js";
 import { EndRunBody, TransferBrandBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
+import { fetchBrandRuntimeContext } from "../lib/brand-runtime-client.js";
+import { fetchBestCustomerPersona } from "../lib/features-persona-client.js";
+import type { DownstreamIdentity } from "../lib/downstream-headers.js";
 
 const router = Router();
 
@@ -194,9 +197,33 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       workflowSlug: req.workflowSlug || campaign.workflowSlug,
       featureSlug,
     });
-    // Build searchParams from featureInputs
+    const primaryBrandId = campaign.brandIds[0];
+    const workflowSlug = req.workflowSlug || campaign.workflowSlug;
+    const downstreamIdentity: DownstreamIdentity = {
+      orgId,
+      userId: req.userId!,
+      runId: run.id,
+      campaignId,
+      brandId: primaryBrandId,
+      workflowSlug,
+      featureSlug: featureSlug!,
+    };
+    const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, downstreamIdentity);
+    const customerPersona = await fetchBestCustomerPersona({
+      featureSlug: featureSlug!,
+      brandId: primaryBrandId,
+      goal: brandRuntimeContext.currentGoal,
+      brandProfileId: brandRuntimeContext.brandProfile?.id,
+      identity: downstreamIdentity,
+    });
+
+    // Build searchParams from campaign featureInputs, then enrich with current runtime context.
     const featureInputs = campaign.featureInputs as Record<string, unknown> | null;
-    const searchParams = (featureInputs && Object.keys(featureInputs).length > 0) ? featureInputs : null;
+    const searchParams: Record<string, unknown> = {
+      ...(featureInputs ?? {}),
+      brandProfile: brandRuntimeContext.brandProfile,
+      customerPersona,
+    };
 
     if (req.runId) {
       traceEvent(req.runId, {
@@ -217,6 +244,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       userId: campaign.createdByUserId ?? null,
       featureSlug: campaign.featureSlug ?? null,
       featureInputs: featureInputs ?? null,
+      activeGoalId: campaign.activeGoalId ?? null,
+      brandProfileId: campaign.brandProfileId ?? null,
+      customerPersonaId: campaign.customerPersonaId ?? null,
+      customerProfileId: campaign.customerProfileId ?? null,
       searchParams,
     });
   } catch (error) {
