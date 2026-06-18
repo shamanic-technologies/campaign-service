@@ -17,12 +17,13 @@ vi.mock("@distribute/runs-client", () => ({
 }));
 
 import request from "supertest";
-import { eq } from "drizzle-orm";
+import { and, arrayContains, eq } from "drizzle-orm";
 import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
 import { campaigns } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign, setBrandPause } from "../helpers/test-db.js";
 import { reRunDueCampaigns, claimStuckCampaigns } from "../../src/lib/scheduler.js";
+import { SALES_OUTREACH_FEATURE_SLUG } from "../../src/lib/sales-outreach-campaign.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const orgId = "brand-pause-org";
@@ -36,6 +37,8 @@ function patchPause(brandId: string, paused: boolean, org = orgId) {
     .patch(`/brands/${brandId}/pause`)
     .set("x-api-key", API_KEY)
     .set("x-org-id", org)
+    .set("x-user-id", "user-brand-pause")
+    .set("x-run-id", "run-brand-pause")
     .set("Content-Type", "application/json")
     .send({ paused });
 }
@@ -82,6 +85,105 @@ describe("Brand pause routes", () => {
     // Exactly one row exists for the brand.
     const rows = await db.query.brandPause.findMany({ where: (b, { eq: e }) => e(b.brandId, brandId) });
     expect(rows).toHaveLength(1);
+  });
+
+  it("PATCH paused=false resumes the latest stopped sales outreach campaign", async () => {
+    const brandId = crypto.randomUUID();
+    const salesCampaign = await insertTestCampaign(orgId, {
+      status: "stopped",
+      brandIds: [brandId],
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
+      createdByUserId: "user-existing",
+      nextRunAt: null,
+    });
+    const prCampaign = await insertTestCampaign(orgId, {
+      status: "stopped",
+      brandIds: [brandId],
+      featureSlug: "pr-expert-quote-opportunities",
+      createdByUserId: "user-existing",
+      nextRunAt: null,
+    });
+    await setBrandPause(orgId, brandId, true);
+
+    const patched = await patchPause(brandId, false).expect(200);
+    expect(patched.body.paused).toBe(false);
+
+    const resumed = await db.query.campaigns.findFirst({ where: eq(campaigns.id, salesCampaign.id) });
+    expect(resumed!.status).toBe("ongoing");
+    expect(resumed!.nextRunAt).not.toBeNull();
+
+    const untouchedPr = await db.query.campaigns.findFirst({ where: eq(campaigns.id, prCampaign.id) });
+    expect(untouchedPr!.status).toBe("stopped");
+    expect(untouchedPr!.nextRunAt).toBeNull();
+  });
+
+  it("PATCH paused=false does not duplicate or revive another sales campaign when one is already ongoing", async () => {
+    const brandId = crypto.randomUUID();
+    const ongoing = await insertTestCampaign(orgId, {
+      status: "ongoing",
+      brandIds: [brandId],
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
+      createdByUserId: "user-existing",
+      nextRunAt: null,
+    });
+    const stopped = await insertTestCampaign(orgId, {
+      status: "stopped",
+      brandIds: [brandId],
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
+      createdByUserId: "user-existing",
+      nextRunAt: null,
+    });
+    await setBrandPause(orgId, brandId, true);
+
+    await patchPause(brandId, false).expect(200);
+
+    const salesCampaigns = await db.query.campaigns.findMany({
+      where: and(
+        eq(campaigns.orgId, orgId),
+        eq(campaigns.featureSlug, SALES_OUTREACH_FEATURE_SLUG),
+        arrayContains(campaigns.brandIds, [brandId]),
+      ),
+    });
+    expect(salesCampaigns).toHaveLength(2);
+    expect(salesCampaigns.find((c) => c.id === ongoing.id)!.status).toBe("ongoing");
+    expect(salesCampaigns.find((c) => c.id === stopped.id)!.status).toBe("stopped");
+  });
+
+  it("PATCH paused=false creates a default sales outreach campaign when none exists", async () => {
+    const brandId = crypto.randomUUID();
+    await setBrandPause(orgId, brandId, true);
+
+    await patchPause(brandId, false).expect(200);
+
+    const created = await db.query.campaigns.findFirst({
+      where: and(
+        eq(campaigns.orgId, orgId),
+        eq(campaigns.featureSlug, SALES_OUTREACH_FEATURE_SLUG),
+        arrayContains(campaigns.brandIds, [brandId]),
+      ),
+    });
+    expect(created).toBeDefined();
+    expect(created!.status).toBe("ongoing");
+    expect(created!.workflowSlug).toBe("sales-email-cold-outreach");
+    expect(created!.createdByUserId).toBe("user-brand-pause");
+    expect(created!.nextRunAt).not.toBeNull();
+  });
+
+  it("PATCH paused=true only sets the pause flag and does not stop campaigns", async () => {
+    const brandId = crypto.randomUUID();
+    const campaign = await insertTestCampaign(orgId, {
+      status: "ongoing",
+      brandIds: [brandId],
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
+      createdByUserId: "user-existing",
+      nextRunAt: null,
+    });
+
+    await patchPause(brandId, true).expect(200);
+
+    const after = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaign.id) });
+    expect(after!.status).toBe("ongoing");
+    expect(after!.nextRunAt).toBeNull();
   });
 
   it("PATCH rejects a non-boolean paused body (400, fail-loud)", async () => {
