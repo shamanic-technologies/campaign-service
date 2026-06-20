@@ -428,19 +428,21 @@ describe("Pipeline routes", () => {
 
       const res = await request(app)
         .post("/start-run")
-        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id, "x-run-id": "parent-run-1" }))
         .expect(200);
 
       expect(res.body.searchParams).toEqual({
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
         customerPersona: defaultCustomerPersona,
       });
+      // Audience is re-selected BEFORE the run row is created, so these fetches trace
+      // under the parent (workflow/execute-workflow) run, not this campaign-service run.
       expect(mockFetchBrandRuntimeContext).toHaveBeenCalledWith(
         brandIds[0],
         expect.objectContaining({
           orgId,
           userId: "user_test",
-          runId: "run-123",
+          runId: "parent-run-1",
           campaignId: campaign.id,
           brandId: brandIds[0],
           workflowSlug: "sales-email-cold-outreach",
@@ -453,8 +455,38 @@ describe("Pipeline routes", () => {
           brandId: brandIds[0],
           goal: "signup",
           brandProfileId: "brand-profile-current",
-          identity: expect.objectContaining({ runId: "run-123" }),
+          identity: expect.objectContaining({ runId: "parent-run-1" }),
         }),
+      );
+    });
+
+    it("should stamp the selected audience on the run (x-audience-id) and return it", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      // audience.id == the selected persona/profile id (customer-profile-best from the mock)
+      expect(res.body.audienceId).toBe("customer-profile-best");
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ audienceId: "customer-profile-best" }),
+      );
+    });
+
+    it("should return audienceId: null and not stamp the run when no audience is selected", async () => {
+      mockFetchBestCustomerPersona.mockResolvedValueOnce(null);
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(res.body.audienceId).toBeNull();
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ audienceId: undefined }),
       );
     });
 
