@@ -247,7 +247,6 @@ const PipelineHeaders = z.object({
   "x-feature-slug": z.string().openapi({ description: "Feature slug (required)" }),
   "x-active-goal-id": z.string().optional().openapi({ description: "Active goal identity for attributed campaigns. Optional; absent means unattributed." }),
   "x-brand-profile-id": z.string().optional().openapi({ description: "Brand profile identity for attributed campaigns. Optional; absent means unattributed." }),
-  "x-customer-persona-id": z.string().optional().openapi({ description: "Customer persona identity for attributed campaigns. Optional; absent means unattributed." }),
   "x-customer-profile-id": z.string().optional().openapi({ description: "Customer profile identity for attributed campaigns. Optional; absent means unattributed." }),
 }).openapi("PipelineHeaders");
 

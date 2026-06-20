@@ -53,7 +53,6 @@ vi.mock("../../src/db/schema.js", () => ({
     featureSlug: "feature_slug",
     activeGoalId: "active_goal_id",
     brandProfileId: "brand_profile_id",
-    customerPersonaId: "customer_persona_id",
     audienceId: "audience_id",
   },
 }));
@@ -176,7 +175,6 @@ describe("Scheduler - reRunDueCampaigns", () => {
         featureSlug: "sales-cold-email-v1",
         activeGoalId: "goal-1",
         brandProfileId: "brand-profile-1",
-        customerPersonaId: "persona-1",
         audienceId: "customer-profile-1",
       },
     ]);
@@ -188,7 +186,6 @@ describe("Scheduler - reRunDueCampaigns", () => {
       expect.objectContaining({
         activeGoalId: "goal-1",
         brandProfileId: "brand-profile-1",
-        customerPersonaId: "persona-1",
         audienceId: "customer-profile-1",
       }),
     );

@@ -7,7 +7,6 @@ export interface WorkflowExecutionInputs {
   featureSlug: string;
   activeGoalId?: string | null;
   brandProfileId?: string | null;
-  customerPersonaId?: string | null;
   audienceId?: string | null;
 }
 
@@ -69,7 +68,6 @@ export async function executeCampaignWorkflow(
   };
   if (inputs.activeGoalId) headers["x-active-goal-id"] = inputs.activeGoalId;
   if (inputs.brandProfileId) headers["x-brand-profile-id"] = inputs.brandProfileId;
-  if (inputs.customerPersonaId) headers["x-customer-persona-id"] = inputs.customerPersonaId;
   if (inputs.audienceId) headers["x-audience-id"] = inputs.audienceId;
 
   const res = await fetch(executeUrl, {
@@ -83,7 +81,6 @@ export async function executeCampaignWorkflow(
         featureSlug: inputs.featureSlug,
         activeGoalId: inputs.activeGoalId ?? null,
         brandProfileId: inputs.brandProfileId ?? null,
-        customerPersonaId: inputs.customerPersonaId ?? null,
         audienceId: inputs.audienceId ?? null,
       },
     }),

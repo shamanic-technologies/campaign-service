@@ -24,7 +24,6 @@ describe("Campaign CRUD", () => {
   const attribution = {
     activeGoalId: "goal_test_crud",
     brandProfileId: "brand_profile_test_crud",
-    customerPersonaId: "persona_test_crud",
     audienceId: "audience_test_crud",
   };
 
@@ -50,7 +49,6 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign.brandIds).toEqual(validBody.brandIds);
       expect(res.body.campaign.activeGoalId).toBeNull();
       expect(res.body.campaign.brandProfileId).toBeNull();
-      expect(res.body.campaign.customerPersonaId).toBeNull();
       expect(res.body.campaign.audienceId).toBeNull();
     });
 

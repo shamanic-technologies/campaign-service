@@ -40,7 +40,6 @@ export async function insertTestCampaign(
     featureInputs?: Record<string, unknown>;
     activeGoalId?: string | null;
     brandProfileId?: string | null;
-    customerPersonaId?: string | null;
     audienceId?: string | null;
     nextRunAt?: Date | null;
     createdByUserId?: string;
@@ -59,7 +58,6 @@ export async function insertTestCampaign(
       featureInputs: data.featureInputs || null,
       activeGoalId: data.activeGoalId ?? null,
       brandProfileId: data.brandProfileId ?? null,
-      customerPersonaId: data.customerPersonaId ?? null,
       audienceId: data.audienceId ?? null,
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",
       maxBudgetWeeklyUsd: data.maxBudgetWeeklyUsd || null,
