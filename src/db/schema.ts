@@ -30,7 +30,6 @@ export const campaigns = pgTable(
     // Null means explicitly unattributed; never infer or distribute by hash.
     activeGoalId: text("active_goal_id"),
     brandProfileId: text("brand_profile_id"),
-    customerPersonaId: text("customer_persona_id"),
     audienceId: text("audience_id"),
 
     // Legacy campaign budget limits. Daily spend control is brand-level via billing-service.

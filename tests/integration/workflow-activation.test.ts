@@ -39,7 +39,6 @@ const validBody = {
 const attribution = {
   activeGoalId: "goal_activation_test",
   brandProfileId: "brand_profile_activation_test",
-  customerPersonaId: "persona_activation_test",
   audienceId: "audience_activation_test",
 };
 
@@ -141,7 +140,6 @@ describe("Workflow trigger", () => {
           orgId: "org_activation_test",
           activeGoalId: null,
           brandProfileId: null,
-          customerPersonaId: null,
           audienceId: null,
         }),
       );

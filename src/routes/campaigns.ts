@@ -106,7 +106,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       featureInputs,
       activeGoalId,
       brandProfileId,
-      customerPersonaId,
       audienceId,
       maxBudgetDailyUsd,
       maxBudgetWeeklyUsd,
@@ -169,7 +168,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         featureInputs,
         activeGoalId: activeGoalId ?? null,
         brandProfileId: brandProfileId ?? null,
-        customerPersonaId: customerPersonaId ?? null,
         audienceId: audienceId ?? null,
         maxBudgetDailyUsd,
         maxBudgetWeeklyUsd,
@@ -204,7 +202,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       featureSlug: campaign.featureSlug!,
       activeGoalId: campaign.activeGoalId,
       brandProfileId: campaign.brandProfileId,
-      customerPersonaId: campaign.customerPersonaId,
       audienceId: campaign.audienceId,
     };
     executeCampaignWorkflow(campaign.workflowSlug, workflowInputs).catch((err) => {
@@ -297,7 +294,6 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         featureSlug: req.featureSlug!,
         activeGoalId: updated.activeGoalId,
         brandProfileId: updated.brandProfileId,
-        customerPersonaId: updated.customerPersonaId,
         audienceId: updated.audienceId,
       };
       executeCampaignWorkflow(updated.workflowSlug, activateInputs).catch((err) => {

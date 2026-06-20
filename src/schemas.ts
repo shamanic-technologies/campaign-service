@@ -21,7 +21,6 @@ export const CampaignSchema = z.object({
   featureInputs: z.record(z.string(), z.unknown()).nullable(),
   activeGoalId: z.string().nullable(),
   brandProfileId: z.string().nullable(),
-  customerPersonaId: z.string().nullable(),
   audienceId: z.string().nullable(),
   maxBudgetDailyUsd: z.string().nullable(),
   maxBudgetWeeklyUsd: z.string().nullable(),
@@ -50,7 +49,6 @@ export const CreateCampaignBody = z.object({
   featureInputs: z.record(z.string(), z.unknown()).optional(),
   activeGoalId: z.string().min(1).nullable().optional(),
   brandProfileId: z.string().min(1).nullable().optional(),
-  customerPersonaId: z.string().min(1).nullable().optional(),
   audienceId: z.string().min(1).nullable().optional(),
   maxBudgetDailyUsd: z.string().optional(),
   maxBudgetWeeklyUsd: z.string().optional(),
@@ -77,7 +75,6 @@ export const UpdateCampaignBody = z.object({
   featureInputs: z.record(z.string(), z.unknown()).optional(),
   activeGoalId: z.string().min(1).nullable().optional(),
   brandProfileId: z.string().min(1).nullable().optional(),
-  customerPersonaId: z.string().min(1).nullable().optional(),
   audienceId: z.string().min(1).nullable().optional(),
   maxBudgetDailyUsd: z.string().optional(),
   maxBudgetWeeklyUsd: z.string().optional(),
@@ -168,7 +165,6 @@ export const StartRunResponse = z.object({
   featureInputs: z.record(z.string(), z.unknown()).nullable(),
   activeGoalId: z.string().nullable(),
   brandProfileId: z.string().nullable(),
-  customerPersonaId: z.string().nullable(),
   // Priority audience chosen for THIS run (human-service saved filter-set UUID).
   // workflow-service propagates this as x-audience-id to every downstream DAG node
   // so all run costs are attributed to the audience. Null when none is selected.
