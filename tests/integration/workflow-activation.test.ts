@@ -40,7 +40,7 @@ const attribution = {
   activeGoalId: "goal_activation_test",
   brandProfileId: "brand_profile_activation_test",
   customerPersonaId: "persona_activation_test",
-  customerProfileId: "customer_profile_activation_test",
+  audienceId: "audience_activation_test",
 };
 
 /** Helper: create a campaign with all required headers */
@@ -142,7 +142,7 @@ describe("Workflow trigger", () => {
           activeGoalId: null,
           brandProfileId: null,
           customerPersonaId: null,
-          customerProfileId: null,
+          audienceId: null,
         }),
       );
     });

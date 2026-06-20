@@ -11,7 +11,7 @@ export interface AuthenticatedRequest extends Request {
   activeGoalId?: string;
   brandProfileId?: string;
   customerPersonaId?: string;
-  customerProfileId?: string;
+  audienceId?: string;
 }
 
 /** Parse the x-brand-id header as a comma-separated list of UUIDs. */
@@ -82,7 +82,7 @@ export function trackingHeaders(
   const activeGoalId = req.headers["x-active-goal-id"] as string | undefined;
   const brandProfileId = req.headers["x-brand-profile-id"] as string | undefined;
   const customerPersonaId = req.headers["x-customer-persona-id"] as string | undefined;
-  const customerProfileId = req.headers["x-customer-profile-id"] as string | undefined;
+  const audienceId = req.headers["x-audience-id"] as string | undefined;
 
   if (orgId && !req.orgId) req.orgId = orgId;
   if (userId && !req.userId) req.userId = userId;
@@ -94,7 +94,7 @@ export function trackingHeaders(
   if (activeGoalId) req.activeGoalId = activeGoalId;
   if (brandProfileId) req.brandProfileId = brandProfileId;
   if (customerPersonaId) req.customerPersonaId = customerPersonaId;
-  if (customerProfileId) req.customerProfileId = customerProfileId;
+  if (audienceId) req.audienceId = audienceId;
 
   next();
 }

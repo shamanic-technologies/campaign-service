@@ -213,7 +213,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       identity: preRunIdentity,
     });
     // audience.id == the selected persona/profile id (human-service saved filter-set UUID).
-    const audienceId = customerPersona?.customerProfileId ?? null;
+    const audienceId = customerPersona?.audienceId ?? null;
 
     // Create run in runs-service (x-run-id from caller becomes parentRunId), stamping the
     // chosen audience so this run's own costs are attributed too.
@@ -260,7 +260,6 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       activeGoalId: campaign.activeGoalId ?? null,
       brandProfileId: campaign.brandProfileId ?? null,
       customerPersonaId: campaign.customerPersonaId ?? null,
-      customerProfileId: campaign.customerProfileId ?? null,
       audienceId,
       searchParams,
     });

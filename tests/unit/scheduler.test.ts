@@ -54,7 +54,7 @@ vi.mock("../../src/db/schema.js", () => ({
     activeGoalId: "active_goal_id",
     brandProfileId: "brand_profile_id",
     customerPersonaId: "customer_persona_id",
-    customerProfileId: "customer_profile_id",
+    audienceId: "audience_id",
   },
 }));
 
@@ -177,7 +177,7 @@ describe("Scheduler - reRunDueCampaigns", () => {
         activeGoalId: "goal-1",
         brandProfileId: "brand-profile-1",
         customerPersonaId: "persona-1",
-        customerProfileId: "customer-profile-1",
+        audienceId: "customer-profile-1",
       },
     ]);
 
@@ -189,7 +189,7 @@ describe("Scheduler - reRunDueCampaigns", () => {
         activeGoalId: "goal-1",
         brandProfileId: "brand-profile-1",
         customerPersonaId: "persona-1",
-        customerProfileId: "customer-profile-1",
+        audienceId: "customer-profile-1",
       }),
     );
   });

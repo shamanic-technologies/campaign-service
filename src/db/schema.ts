@@ -31,7 +31,7 @@ export const campaigns = pgTable(
     activeGoalId: text("active_goal_id"),
     brandProfileId: text("brand_profile_id"),
     customerPersonaId: text("customer_persona_id"),
-    customerProfileId: text("customer_profile_id"),
+    audienceId: text("audience_id"),
 
     // Legacy campaign budget limits. Daily spend control is brand-level via billing-service.
     maxBudgetDailyUsd: decimal("max_budget_daily_usd", { precision: 10, scale: 2 }),

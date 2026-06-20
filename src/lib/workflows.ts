@@ -8,7 +8,7 @@ export interface WorkflowExecutionInputs {
   activeGoalId?: string | null;
   brandProfileId?: string | null;
   customerPersonaId?: string | null;
-  customerProfileId?: string | null;
+  audienceId?: string | null;
 }
 
 const REQUIRED_FIELDS: (keyof WorkflowExecutionInputs)[] = [
@@ -70,7 +70,7 @@ export async function executeCampaignWorkflow(
   if (inputs.activeGoalId) headers["x-active-goal-id"] = inputs.activeGoalId;
   if (inputs.brandProfileId) headers["x-brand-profile-id"] = inputs.brandProfileId;
   if (inputs.customerPersonaId) headers["x-customer-persona-id"] = inputs.customerPersonaId;
-  if (inputs.customerProfileId) headers["x-customer-profile-id"] = inputs.customerProfileId;
+  if (inputs.audienceId) headers["x-audience-id"] = inputs.audienceId;
 
   const res = await fetch(executeUrl, {
     method: "POST",
@@ -84,7 +84,7 @@ export async function executeCampaignWorkflow(
         activeGoalId: inputs.activeGoalId ?? null,
         brandProfileId: inputs.brandProfileId ?? null,
         customerPersonaId: inputs.customerPersonaId ?? null,
-        customerProfileId: inputs.customerProfileId ?? null,
+        audienceId: inputs.audienceId ?? null,
       },
     }),
   });

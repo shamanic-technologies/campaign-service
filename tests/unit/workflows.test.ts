@@ -74,12 +74,12 @@ describe("Workflow module", () => {
         activeGoalId: null,
         brandProfileId: null,
         customerPersonaId: null,
-        customerProfileId: null,
+        audienceId: null,
       });
       expect(opts.headers).not.toHaveProperty("x-active-goal-id");
       expect(opts.headers).not.toHaveProperty("x-brand-profile-id");
       expect(opts.headers).not.toHaveProperty("x-customer-persona-id");
-      expect(opts.headers).not.toHaveProperty("x-customer-profile-id");
+      expect(opts.headers).not.toHaveProperty("x-audience-id");
     });
 
     it("should send optional persona/profile attribution in headers and body", async () => {
@@ -94,21 +94,21 @@ describe("Workflow module", () => {
         activeGoalId: "goal-1",
         brandProfileId: "brand-profile-1",
         customerPersonaId: "persona-1",
-        customerProfileId: "customer-profile-1",
+        audienceId: "customer-profile-1",
       });
 
       const [, opts] = mockFetch.mock.calls[0];
       expect(opts.headers["x-active-goal-id"]).toBe("goal-1");
       expect(opts.headers["x-brand-profile-id"]).toBe("brand-profile-1");
       expect(opts.headers["x-customer-persona-id"]).toBe("persona-1");
-      expect(opts.headers["x-customer-profile-id"]).toBe("customer-profile-1");
+      expect(opts.headers["x-audience-id"]).toBe("customer-profile-1");
 
       const body = JSON.parse(opts.body);
       expect(body.inputs).toMatchObject({
         activeGoalId: "goal-1",
         brandProfileId: "brand-profile-1",
         customerPersonaId: "persona-1",
-        customerProfileId: "customer-profile-1",
+        audienceId: "customer-profile-1",
       });
     });
 
