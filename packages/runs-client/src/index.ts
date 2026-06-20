@@ -33,6 +33,8 @@ export interface IdentityHeaders {
   brandId?: string;
   workflowSlug?: string;
   featureSlug?: string;
+  /** Priority audience (human-service saved filter-set UUID) → x-audience-id header. */
+  audienceId?: string;
 }
 
 export interface CreateRunParams {
@@ -45,6 +47,8 @@ export interface CreateRunParams {
   parentRunId?: string;
   workflowSlug?: string;
   featureSlug?: string;
+  /** Priority audience (human-service saved filter-set UUID) → x-audience-id header. */
+  audienceId?: string;
 }
 
 export interface ListRunsParams {
@@ -97,6 +101,7 @@ function buildIdentityHeaders(identity?: IdentityHeaders): Record<string, string
   if (identity?.brandId) h["x-brand-id"] = identity.brandId;
   if (identity?.workflowSlug) h["x-workflow-slug"] = identity.workflowSlug;
   if (identity?.featureSlug) h["x-feature-slug"] = identity.featureSlug;
+  if (identity?.audienceId) h["x-audience-id"] = identity.audienceId;
   return h;
 }
 
@@ -134,11 +139,11 @@ async function runsRequest<T>(
  * parentRunId is sent as x-run-id header.
  */
 export async function createRun(params: CreateRunParams): Promise<Run> {
-  const { orgId, userId, parentRunId, brandId, campaignId, workflowSlug, featureSlug, ...body } = params;
+  const { orgId, userId, parentRunId, brandId, campaignId, workflowSlug, featureSlug, audienceId, ...body } = params;
   return runsRequest<Run>("/v1/runs", {
     method: "POST",
     body,
-    identity: { orgId, userId, runId: parentRunId, brandId, campaignId, workflowSlug, featureSlug },
+    identity: { orgId, userId, runId: parentRunId, brandId, campaignId, workflowSlug, featureSlug, audienceId },
   });
 }
 

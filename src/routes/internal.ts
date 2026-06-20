@@ -183,9 +183,40 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       }, req.headers).catch(() => {});
     }
 
-    // Create run in runs-service (x-run-id from caller becomes parentRunId)
     const parentRunId = req.runId;
     const brandIdCsv = campaign.brandIds!.join(",");
+    const primaryBrandId = campaign.brandIds[0];
+    const workflowSlug = req.workflowSlug || campaign.workflowSlug;
+
+    // Re-decide the priority audience for THIS run with fresh cost data, BEFORE creating
+    // the run row — so the chosen audience is stamped on campaign-service's own run AND
+    // returned to workflow-service, which propagates it (x-audience-id) to every downstream
+    // DAG node so the whole execution's costs are attributed to the audience.
+    //
+    // These two fetches run before the campaign-service run row exists, so they trace under
+    // the parent (workflow/execute-workflow) run rather than this run.
+    const preRunIdentity: DownstreamIdentity = {
+      orgId,
+      userId: req.userId!,
+      runId: parentRunId!,
+      campaignId,
+      brandId: primaryBrandId,
+      workflowSlug,
+      featureSlug: featureSlug!,
+    };
+    const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, preRunIdentity);
+    const customerPersona = await fetchBestCustomerPersona({
+      featureSlug: featureSlug!,
+      brandId: primaryBrandId,
+      goal: brandRuntimeContext.currentGoal,
+      brandProfileId: brandRuntimeContext.brandProfile?.id,
+      identity: preRunIdentity,
+    });
+    // audience.id == the selected persona/profile id (human-service saved filter-set UUID).
+    const audienceId = customerPersona?.customerProfileId ?? null;
+
+    // Create run in runs-service (x-run-id from caller becomes parentRunId), stamping the
+    // chosen audience so this run's own costs are attributed too.
     const run = await createRun({
       orgId,
       serviceName: "campaign-service",
@@ -194,27 +225,9 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       brandId: brandIdCsv,
       userId: campaign.createdByUserId || undefined,
       parentRunId: parentRunId || undefined,
-      workflowSlug: req.workflowSlug || campaign.workflowSlug,
-      featureSlug,
-    });
-    const primaryBrandId = campaign.brandIds[0];
-    const workflowSlug = req.workflowSlug || campaign.workflowSlug;
-    const downstreamIdentity: DownstreamIdentity = {
-      orgId,
-      userId: req.userId!,
-      runId: run.id,
-      campaignId,
-      brandId: primaryBrandId,
       workflowSlug,
-      featureSlug: featureSlug!,
-    };
-    const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, downstreamIdentity);
-    const customerPersona = await fetchBestCustomerPersona({
-      featureSlug: featureSlug!,
-      brandId: primaryBrandId,
-      goal: brandRuntimeContext.currentGoal,
-      brandProfileId: brandRuntimeContext.brandProfile?.id,
-      identity: downstreamIdentity,
+      featureSlug,
+      audienceId: audienceId ?? undefined,
     });
 
     // Build searchParams from campaign featureInputs, then enrich with current runtime context.
@@ -229,8 +242,8 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       traceEvent(req.runId, {
         service: "campaign-service",
         event: "run-created",
-        detail: `Run created id=${run.id} for campaign ${campaignId} — parentRunId=${parentRunId ?? "none"}`,
-        data: { runId: run.id, campaignId, parentRunId },
+        detail: `Run created id=${run.id} for campaign ${campaignId} — parentRunId=${parentRunId ?? "none"}, audienceId=${audienceId ?? "none"}`,
+        data: { runId: run.id, campaignId, parentRunId, audienceId },
       }, req.headers).catch(() => {});
     }
 
@@ -248,6 +261,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       brandProfileId: campaign.brandProfileId ?? null,
       customerPersonaId: campaign.customerPersonaId ?? null,
       customerProfileId: campaign.customerProfileId ?? null,
+      audienceId,
       searchParams,
     });
   } catch (error) {

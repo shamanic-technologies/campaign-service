@@ -170,6 +170,10 @@ export const StartRunResponse = z.object({
   brandProfileId: z.string().nullable(),
   customerPersonaId: z.string().nullable(),
   customerProfileId: z.string().nullable(),
+  // Priority audience chosen for THIS run (human-service saved filter-set UUID).
+  // workflow-service propagates this as x-audience-id to every downstream DAG node
+  // so all run costs are attributed to the audience. Null when none is selected.
+  audienceId: z.string().nullable(),
   searchParams: z.record(z.string(), z.unknown()).nullable(),
 }).openapi("StartRunResponse");
 
