@@ -8,7 +8,7 @@ const {
   mockExecute,
   mockGateChecks,
   mockFetchBrandRuntimeContext,
-  mockFetchBestCustomerPersona,
+  mockFetchTopAudience,
 } = vi.hoisted(() => ({
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
@@ -16,7 +16,7 @@ const {
   mockExecute: vi.fn(),
   mockGateChecks: vi.fn(),
   mockFetchBrandRuntimeContext: vi.fn(),
-  mockFetchBestCustomerPersona: vi.fn(),
+  mockFetchTopAudience: vi.fn(),
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -42,8 +42,8 @@ vi.mock("../../src/lib/brand-runtime-client.js", () => ({
   fetchBrandRuntimeContext: mockFetchBrandRuntimeContext,
 }));
 
-vi.mock("../../src/lib/features-persona-client.js", () => ({
-  fetchBestCustomerPersona: mockFetchBestCustomerPersona,
+vi.mock("../../src/lib/features-audience-client.js", () => ({
+  fetchTopAudience: mockFetchTopAudience,
 }));
 
 import app from "../../src/index.js";
@@ -65,10 +65,10 @@ const defaultBrandProfile = {
   createdAt: "2026-06-18T00:00:00.000Z",
 };
 
-const defaultCustomerPersona = {
+const defaultAudience = {
   audienceId: "customer-profile-best",
   brandProfileId: "brand-profile-current",
-  persona: {
+  audience: {
     id: "customer-profile-best",
     name: "Revenue leaders",
     status: "active",
@@ -119,7 +119,7 @@ describe("Pipeline routes", () => {
       currentGoal: "signup",
       brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
     });
-    mockFetchBestCustomerPersona.mockResolvedValue(defaultCustomerPersona);
+    mockFetchTopAudience.mockResolvedValue(defaultAudience);
   });
 
   afterAll(async () => {
@@ -392,7 +392,7 @@ describe("Pipeline routes", () => {
     it("should return persona/profile attribution for attributed campaigns", async () => {
       // Stored campaign attribution surfaced on /start-run. The renamed audience column
       // is NOT round-tripped here — /start-run returns the per-run freshly-selected
-      // audienceId (from persona-stats), not the stored column.
+      // audienceId (from audience-stats), not the stored column.
       const attribution = {
         activeGoalId: "goal_internal_test",
         brandProfileId: "brand_profile_internal_test",
@@ -437,7 +437,8 @@ describe("Pipeline routes", () => {
 
       expect(res.body.searchParams).toEqual({
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
-        customerPersona: defaultCustomerPersona,
+        customerPersona: defaultAudience,
+        audience: defaultAudience,
       });
       // Audience is re-selected BEFORE the run row is created, so these fetches trace
       // under the parent (workflow/execute-workflow) run, not this campaign-service run.
@@ -453,7 +454,7 @@ describe("Pipeline routes", () => {
           featureSlug: "sales-cold-email-v1",
         }),
       );
-      expect(mockFetchBestCustomerPersona).toHaveBeenCalledWith(
+      expect(mockFetchTopAudience).toHaveBeenCalledWith(
         expect.objectContaining({
           featureSlug: "sales-cold-email-v1",
           brandId: brandIds[0],
@@ -480,7 +481,7 @@ describe("Pipeline routes", () => {
     });
 
     it("should return audienceId: null and not stamp the run when no audience is selected", async () => {
-      mockFetchBestCustomerPersona.mockResolvedValueOnce(null);
+      mockFetchTopAudience.mockResolvedValueOnce(null);
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
@@ -616,12 +617,13 @@ describe("Pipeline routes", () => {
         mediaType: "podcast",
         region: "US",
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
-        customerPersona: defaultCustomerPersona,
+        customerPersona: defaultAudience,
+        audience: defaultAudience,
       });
     });
 
     it("should include customerPersona: null when FeatureService has no persona rows", async () => {
-      mockFetchBestCustomerPersona.mockResolvedValueOnce(null);
+      mockFetchTopAudience.mockResolvedValueOnce(null);
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
@@ -632,6 +634,7 @@ describe("Pipeline routes", () => {
       expect(res.body.searchParams).toEqual({
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
         customerPersona: null,
+        audience: null,
       });
     });
 
