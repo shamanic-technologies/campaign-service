@@ -10,7 +10,7 @@ import { EndRunBody, TransferBrandBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext } from "../lib/brand-runtime-client.js";
-import { fetchBestCustomerPersona } from "../lib/features-persona-client.js";
+import { fetchTopAudience } from "../lib/features-audience-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
 
 const router = Router();
@@ -205,15 +205,15 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       featureSlug: featureSlug!,
     };
     const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, preRunIdentity);
-    const customerPersona = await fetchBestCustomerPersona({
+    const audience = await fetchTopAudience({
       featureSlug: featureSlug!,
       brandId: primaryBrandId,
       goal: brandRuntimeContext.currentGoal,
       brandProfileId: brandRuntimeContext.brandProfile?.id,
       identity: preRunIdentity,
     });
-    // audience.id == the selected persona/profile id (human-service saved filter-set UUID).
-    const audienceId = customerPersona?.audienceId ?? null;
+    // audience.audienceId == the selected audience id (human-service saved filter-set UUID).
+    const audienceId = audience?.audienceId ?? null;
 
     // Create run in runs-service (x-run-id from caller becomes parentRunId), stamping the
     // chosen audience so this run's own costs are attributed too.
@@ -235,7 +235,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     const searchParams: Record<string, unknown> = {
       ...(featureInputs ?? {}),
       brandProfile: brandRuntimeContext.brandProfile,
-      customerPersona,
+      // Keep the legacy `customerPersona` key: a windmill workflow prompt template may
+      // reference it (not greppable). `audience` is the forward-named alias for the same value.
+      customerPersona: audience,
+      audience,
     };
 
     if (req.runId) {
