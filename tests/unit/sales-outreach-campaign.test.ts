@@ -21,7 +21,7 @@ function campaign(overrides: Partial<Campaign> = {}): Campaign {
     activeGoalId: null,
     brandProfileId: null,
     customerPersonaId: null,
-    customerProfileId: null,
+    audienceId: null,
     maxBudgetDailyUsd: null,
     maxBudgetWeeklyUsd: null,
     maxBudgetMonthlyUsd: null,

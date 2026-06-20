@@ -246,6 +246,13 @@
       "when": 1775900000000,
       "tag": "0034_campaign_persona_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1776000000000,
+      "tag": "0035_rename_customer_profile_to_audience",
+      "breakpoints": true
     }
   ]
 }

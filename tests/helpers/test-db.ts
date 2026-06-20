@@ -41,7 +41,7 @@ export async function insertTestCampaign(
     activeGoalId?: string | null;
     brandProfileId?: string | null;
     customerPersonaId?: string | null;
-    customerProfileId?: string | null;
+    audienceId?: string | null;
     nextRunAt?: Date | null;
     createdByUserId?: string;
     parentRunId?: string;
@@ -60,7 +60,7 @@ export async function insertTestCampaign(
       activeGoalId: data.activeGoalId ?? null,
       brandProfileId: data.brandProfileId ?? null,
       customerPersonaId: data.customerPersonaId ?? null,
-      customerProfileId: data.customerProfileId ?? null,
+      audienceId: data.audienceId ?? null,
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",
       maxBudgetWeeklyUsd: data.maxBudgetWeeklyUsd || null,
       maxBudgetMonthlyUsd: data.maxBudgetMonthlyUsd || null,

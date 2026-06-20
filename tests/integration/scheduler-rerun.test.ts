@@ -31,7 +31,7 @@ const attribution = {
   activeGoalId: "goal_scheduler_test",
   brandProfileId: "brand_profile_scheduler_test",
   customerPersonaId: "persona_scheduler_test",
-  customerProfileId: "customer_profile_scheduler_test",
+  audienceId: "audience_scheduler_test",
 };
 
 describe("Scheduler - reRunDueCampaigns (integration)", () => {

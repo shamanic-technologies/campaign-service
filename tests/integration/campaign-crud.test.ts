@@ -25,7 +25,7 @@ describe("Campaign CRUD", () => {
     activeGoalId: "goal_test_crud",
     brandProfileId: "brand_profile_test_crud",
     customerPersonaId: "persona_test_crud",
-    customerProfileId: "customer_profile_test_crud",
+    audienceId: "audience_test_crud",
   };
 
   /** Helper: create a campaign with all required headers */
@@ -51,7 +51,7 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign.activeGoalId).toBeNull();
       expect(res.body.campaign.brandProfileId).toBeNull();
       expect(res.body.campaign.customerPersonaId).toBeNull();
-      expect(res.body.campaign.customerProfileId).toBeNull();
+      expect(res.body.campaign.audienceId).toBeNull();
     });
 
     it("should preserve persona/profile attribution through create and read", async () => {
