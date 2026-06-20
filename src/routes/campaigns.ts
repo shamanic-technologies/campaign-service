@@ -107,7 +107,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       activeGoalId,
       brandProfileId,
       customerPersonaId,
-      customerProfileId,
+      audienceId,
       maxBudgetDailyUsd,
       maxBudgetWeeklyUsd,
       maxBudgetMonthlyUsd,
@@ -170,7 +170,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         activeGoalId: activeGoalId ?? null,
         brandProfileId: brandProfileId ?? null,
         customerPersonaId: customerPersonaId ?? null,
-        customerProfileId: customerProfileId ?? null,
+        audienceId: audienceId ?? null,
         maxBudgetDailyUsd,
         maxBudgetWeeklyUsd,
         maxBudgetMonthlyUsd,
@@ -205,7 +205,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       activeGoalId: campaign.activeGoalId,
       brandProfileId: campaign.brandProfileId,
       customerPersonaId: campaign.customerPersonaId,
-      customerProfileId: campaign.customerProfileId,
+      audienceId: campaign.audienceId,
     };
     executeCampaignWorkflow(campaign.workflowSlug, workflowInputs).catch((err) => {
       console.error(`[campaign-service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
@@ -298,7 +298,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         activeGoalId: updated.activeGoalId,
         brandProfileId: updated.brandProfileId,
         customerPersonaId: updated.customerPersonaId,
-        customerProfileId: updated.customerProfileId,
+        audienceId: updated.audienceId,
       };
       executeCampaignWorkflow(updated.workflowSlug, activateInputs).catch((err) => {
         console.error(`[campaign-service] Failed to trigger workflow for campaign ${id}:`, err);

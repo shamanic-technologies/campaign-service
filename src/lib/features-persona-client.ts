@@ -2,7 +2,7 @@ import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-heade
 import type { RuntimeGoal } from "./brand-runtime-client.js";
 
 export interface CustomerPersonaCandidate {
-  customerProfileId: string;
+  audienceId: string;
   brandProfileId: string | null;
   persona: Record<string, unknown>;
   evidence: Record<string, unknown>;

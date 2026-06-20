@@ -66,7 +66,7 @@ const defaultBrandProfile = {
 };
 
 const defaultCustomerPersona = {
-  customerProfileId: "customer-profile-best",
+  audienceId: "customer-profile-best",
   brandProfileId: "brand-profile-current",
   persona: {
     id: "customer-profile-best",
@@ -384,21 +384,24 @@ describe("Pipeline routes", () => {
       expect(res.body.activeGoalId).toBeNull();
       expect(res.body.brandProfileId).toBeNull();
       expect(res.body.customerPersonaId).toBeNull();
-      expect(res.body.customerProfileId).toBeNull();
+      expect(res.body).not.toHaveProperty("customerProfileId");
       expect(res.body).not.toHaveProperty("appId");
       expect(res.body).not.toHaveProperty("keySource");
     });
 
     it("should return persona/profile attribution for attributed campaigns", async () => {
+      // Stored campaign attribution surfaced on /start-run. The renamed audience column
+      // is NOT round-tripped here — /start-run returns the per-run freshly-selected
+      // audienceId (from persona-stats), not the stored column.
       const attribution = {
         activeGoalId: "goal_internal_test",
         brandProfileId: "brand_profile_internal_test",
         customerPersonaId: "persona_internal_test",
-        customerProfileId: "customer_profile_internal_test",
       };
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         ...attribution,
+        audienceId: "stored_audience_internal_test",
       });
 
       const res = await request(app)
@@ -407,6 +410,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(res.body).toMatchObject(attribution);
+      expect(res.body).not.toHaveProperty("customerProfileId");
     });
 
     it("should not return sales-specific fields", async () => {

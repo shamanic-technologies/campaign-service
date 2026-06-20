@@ -75,7 +75,7 @@
             "type": "string",
             "nullable": true
           },
-          "customerProfileId": {
+          "audienceId": {
             "type": "string",
             "nullable": true
           },
@@ -146,7 +146,7 @@
           "activeGoalId",
           "brandProfileId",
           "customerPersonaId",
-          "customerProfileId",
+          "audienceId",
           "maxBudgetDailyUsd",
           "maxBudgetWeeklyUsd",
           "maxBudgetMonthlyUsd",
@@ -222,7 +222,7 @@
             "nullable": true,
             "minLength": 1
           },
-          "customerProfileId": {
+          "audienceId": {
             "type": "string",
             "nullable": true,
             "minLength": 1
@@ -303,7 +303,7 @@
             "nullable": true,
             "minLength": 1
           },
-          "customerProfileId": {
+          "audienceId": {
             "type": "string",
             "nullable": true,
             "minLength": 1
@@ -525,10 +525,6 @@
             "type": "string",
             "nullable": true
           },
-          "customerProfileId": {
-            "type": "string",
-            "nullable": true
-          },
           "audienceId": {
             "type": "string",
             "nullable": true
@@ -553,7 +549,6 @@
           "activeGoalId",
           "brandProfileId",
           "customerPersonaId",
-          "customerProfileId",
           "audienceId",
           "searchParams"
         ]
