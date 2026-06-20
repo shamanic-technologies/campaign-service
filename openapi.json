@@ -529,6 +529,10 @@
             "type": "string",
             "nullable": true
           },
+          "audienceId": {
+            "type": "string",
+            "nullable": true
+          },
           "searchParams": {
             "type": "object",
             "nullable": true,
@@ -550,6 +554,7 @@
           "brandProfileId",
           "customerPersonaId",
           "customerProfileId",
+          "audienceId",
           "searchParams"
         ]
       },
