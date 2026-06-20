@@ -35,6 +35,8 @@ A new Conductor workspace has no built local package and no test DB. Before `pnp
 
 Unit tests (`pnpm test:unit`) need neither — they fully mock db/runs-client.
 
+**`db:push` HANGS on a column RENAME against an existing `campaign_test`.** drizzle-kit `push` can't tell a rename from a drop+create, so it prompts interactively ("is `audience_id` a rename of `customer_profile_id`?") — in a non-interactive/background shell it blocks forever (produces 0B output, never exits). When a schema change RENAMES a column, don't rely on `db:push` to materialize it on the test DB: apply the `ALTER TABLE … RENAME COLUMN` directly (`psql postgresql://test:test@localhost/campaign_test -c '…'`), mirroring the prod migration. `db:push` is still fine for additive changes (new column/table). (Set 2026-06-20, customer_profile_id → audience_id rename.)
+
 ## Architecture
 
 - `src/schemas.ts` — Zod schemas (source of truth for validation + OpenAPI)
