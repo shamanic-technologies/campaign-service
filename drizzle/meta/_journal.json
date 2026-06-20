@@ -253,6 +253,13 @@
       "when": 1776000000000,
       "tag": "0035_rename_customer_profile_to_audience",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1776100000000,
+      "tag": "0036_drop_customer_persona_id",
+      "breakpoints": true
     }
   ]
 }

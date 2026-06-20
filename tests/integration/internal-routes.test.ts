@@ -383,7 +383,7 @@ describe("Pipeline routes", () => {
       expect(res.body.workflowSlug).toBe("sales-email-cold-outreach");
       expect(res.body.activeGoalId).toBeNull();
       expect(res.body.brandProfileId).toBeNull();
-      expect(res.body.customerPersonaId).toBeNull();
+      expect(res.body).not.toHaveProperty("customerPersonaId");
       expect(res.body).not.toHaveProperty("customerProfileId");
       expect(res.body).not.toHaveProperty("appId");
       expect(res.body).not.toHaveProperty("keySource");
@@ -396,7 +396,6 @@ describe("Pipeline routes", () => {
       const attribution = {
         activeGoalId: "goal_internal_test",
         brandProfileId: "brand_profile_internal_test",
-        customerPersonaId: "persona_internal_test",
       };
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
@@ -410,6 +409,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(res.body).toMatchObject(attribution);
+      expect(res.body).not.toHaveProperty("customerPersonaId");
       expect(res.body).not.toHaveProperty("customerProfileId");
     });
 
@@ -437,7 +437,6 @@ describe("Pipeline routes", () => {
 
       expect(res.body.searchParams).toEqual({
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
-        customerPersona: defaultAudience,
         audience: defaultAudience,
       });
       // Audience is re-selected BEFORE the run row is created, so these fetches trace
@@ -617,12 +616,11 @@ describe("Pipeline routes", () => {
         mediaType: "podcast",
         region: "US",
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
-        customerPersona: defaultAudience,
         audience: defaultAudience,
       });
     });
 
-    it("should include customerPersona: null when FeatureService has no persona rows", async () => {
+    it("should include audience: null when FeatureService has no audience rows", async () => {
       mockFetchTopAudience.mockResolvedValueOnce(null);
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
@@ -633,7 +631,6 @@ describe("Pipeline routes", () => {
 
       expect(res.body.searchParams).toEqual({
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
-        customerPersona: null,
         audience: null,
       });
     });

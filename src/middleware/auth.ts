@@ -10,7 +10,6 @@ export interface AuthenticatedRequest extends Request {
   featureSlug?: string;
   activeGoalId?: string;
   brandProfileId?: string;
-  customerPersonaId?: string;
   audienceId?: string;
 }
 
@@ -81,7 +80,6 @@ export function trackingHeaders(
   const featureSlug = req.headers["x-feature-slug"] as string | undefined;
   const activeGoalId = req.headers["x-active-goal-id"] as string | undefined;
   const brandProfileId = req.headers["x-brand-profile-id"] as string | undefined;
-  const customerPersonaId = req.headers["x-customer-persona-id"] as string | undefined;
   const audienceId = req.headers["x-audience-id"] as string | undefined;
 
   if (orgId && !req.orgId) req.orgId = orgId;
@@ -93,7 +91,6 @@ export function trackingHeaders(
   if (featureSlug) req.featureSlug = featureSlug;
   if (activeGoalId) req.activeGoalId = activeGoalId;
   if (brandProfileId) req.brandProfileId = brandProfileId;
-  if (customerPersonaId) req.customerPersonaId = customerPersonaId;
   if (audienceId) req.audienceId = audienceId;
 
   next();

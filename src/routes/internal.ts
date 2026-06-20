@@ -235,9 +235,6 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     const searchParams: Record<string, unknown> = {
       ...(featureInputs ?? {}),
       brandProfile: brandRuntimeContext.brandProfile,
-      // Keep the legacy `customerPersona` key: a windmill workflow prompt template may
-      // reference it (not greppable). `audience` is the forward-named alias for the same value.
-      customerPersona: audience,
       audience,
     };
 
@@ -262,7 +259,6 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       featureInputs: featureInputs ?? null,
       activeGoalId: campaign.activeGoalId ?? null,
       brandProfileId: campaign.brandProfileId ?? null,
-      customerPersonaId: campaign.customerPersonaId ?? null,
       audienceId,
       searchParams,
     });
