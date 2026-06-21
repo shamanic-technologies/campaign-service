@@ -2,12 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 const {
   mockExecuteCampaignWorkflow,
+  mockResolveWorkflowSlug,
   mockDbReturning,
   mockDbFindMany,
   mockListRuns,
 } = vi.hoisted(() => {
   return {
     mockExecuteCampaignWorkflow: vi.fn(),
+    mockResolveWorkflowSlug: vi.fn(),
     mockDbReturning: vi.fn(),
     mockDbFindMany: vi.fn(),
     mockListRuns: vi.fn(),
@@ -16,6 +18,12 @@ const {
 
 vi.mock("../../src/lib/workflows.js", () => ({
   executeCampaignWorkflow: mockExecuteCampaignWorkflow,
+}));
+
+// The workflow bandit resolves to the campaign's configured slug here (the
+// fallback), so the existing executeCampaignWorkflow assertions on slug still hold.
+vi.mock("../../src/lib/features-candidates-client.js", () => ({
+  resolveWorkflowSlugForTrigger: mockResolveWorkflowSlug,
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -85,6 +93,7 @@ describe("Scheduler - reRunDueCampaigns", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
+    mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => a.fallbackSlug);
     mockDbReturning.mockResolvedValue([]);
     mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
   });
@@ -555,6 +564,7 @@ describe("Scheduler - logging hygiene", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
+    mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => a.fallbackSlug);
     mockDbReturning.mockResolvedValue([]);
     mockDbFindMany.mockResolvedValue([]);
     mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
@@ -664,6 +674,7 @@ describe("Scheduler - lifecycle (timers)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
+    mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => a.fallbackSlug);
     mockDbReturning.mockResolvedValue([]);
     mockDbFindMany.mockResolvedValue([]);
     mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });

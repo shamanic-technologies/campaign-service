@@ -8,7 +8,7 @@ const {
   mockExecute,
   mockGateChecks,
   mockFetchBrandRuntimeContext,
-  mockFetchTopAudience,
+  mockSelectAudienceForRun,
 } = vi.hoisted(() => ({
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
@@ -16,7 +16,7 @@ const {
   mockExecute: vi.fn(),
   mockGateChecks: vi.fn(),
   mockFetchBrandRuntimeContext: vi.fn(),
-  mockFetchTopAudience: vi.fn(),
+  mockSelectAudienceForRun: vi.fn(),
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -43,7 +43,7 @@ vi.mock("../../src/lib/brand-runtime-client.js", () => ({
 }));
 
 vi.mock("../../src/lib/features-audience-client.js", () => ({
-  fetchTopAudience: mockFetchTopAudience,
+  selectAudienceForRun: mockSelectAudienceForRun,
 }));
 
 import app from "../../src/index.js";
@@ -119,7 +119,7 @@ describe("Pipeline routes", () => {
       currentGoal: "signup",
       brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
     });
-    mockFetchTopAudience.mockResolvedValue(defaultAudience);
+    mockSelectAudienceForRun.mockResolvedValue(defaultAudience);
   });
 
   afterAll(async () => {
@@ -453,7 +453,7 @@ describe("Pipeline routes", () => {
           featureSlug: "sales-cold-email-v1",
         }),
       );
-      expect(mockFetchTopAudience).toHaveBeenCalledWith(
+      expect(mockSelectAudienceForRun).toHaveBeenCalledWith(
         expect.objectContaining({
           featureSlug: "sales-cold-email-v1",
           brandId: brandIds[0],
@@ -480,7 +480,7 @@ describe("Pipeline routes", () => {
     });
 
     it("should return audienceId: null and not stamp the run when no audience is selected", async () => {
-      mockFetchTopAudience.mockResolvedValueOnce(null);
+      mockSelectAudienceForRun.mockResolvedValueOnce(null);
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
@@ -621,7 +621,7 @@ describe("Pipeline routes", () => {
     });
 
     it("should include audience: null when FeatureService has no audience rows", async () => {
-      mockFetchTopAudience.mockResolvedValueOnce(null);
+      mockSelectAudienceForRun.mockResolvedValueOnce(null);
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
