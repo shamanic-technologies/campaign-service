@@ -2,6 +2,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
+import { resolveWorkflowSlugForTrigger } from "./features-candidates-client.js";
 import { listRuns } from "@distribute/runs-client";
 import { notPausedBrandClause } from "./brand-pause.js";
 
@@ -143,19 +144,38 @@ export async function reRunDueCampaigns(): Promise<number> {
       // invisible to gate-check and never cleaned up.
       const runId = campaign.parentRunId || crypto.randomUUID();
 
-      executeCampaignWorkflow(campaign.workflowSlug, {
-        campaignId: campaign.id,
-        orgId: campaign.orgId,
-        brandId: brandIdCsv,
-        userId,
-        runId,
-        featureSlug,
-        activeGoalId: campaign.activeGoalId,
-        brandProfileId: campaign.brandProfileId,
-        audienceId: campaign.audienceId,
-      }).catch((err) => {
+      // Thompson-pick the workflow for THIS run (varies run-to-run) BEFORE execute.
+      // Falls back to the configured slug on any failure (see
+      // resolveWorkflowSlugForTrigger) — selection never blocks a run.
+      try {
+        const workflowSlug = await resolveWorkflowSlugForTrigger({
+          featureSlug,
+          primaryBrandId: campaign.brandIds![0],
+          identity: {
+            orgId: campaign.orgId,
+            userId,
+            runId,
+            campaignId: campaign.id,
+            brandId: brandIdCsv,
+            workflowSlug: campaign.workflowSlug,
+            featureSlug,
+          },
+          fallbackSlug: campaign.workflowSlug,
+        });
+        await executeCampaignWorkflow(workflowSlug, {
+          campaignId: campaign.id,
+          orgId: campaign.orgId,
+          brandId: brandIdCsv,
+          userId,
+          runId,
+          featureSlug,
+          activeGoalId: campaign.activeGoalId,
+          brandProfileId: campaign.brandProfileId,
+          audienceId: campaign.audienceId,
+        });
+      } catch (err) {
         console.error(`[campaign-service] Failed to re-trigger campaign ${campaign.id}:`, err);
-      });
+      }
     } catch (err) {
       console.error(`[campaign-service] Error processing campaign ${campaign.id}:`, err);
     }

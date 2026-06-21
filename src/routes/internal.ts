@@ -10,7 +10,7 @@ import { EndRunBody, TransferBrandBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext } from "../lib/brand-runtime-client.js";
-import { fetchTopAudience } from "../lib/features-audience-client.js";
+import { selectAudienceForRun } from "../lib/features-audience-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
 
 const router = Router();
@@ -205,7 +205,11 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       featureSlug: featureSlug!,
     };
     const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, preRunIdentity);
-    const audience = await fetchTopAudience({
+    // Cost-aware Thompson sampling over ALL active audiences (not frozen rank #1),
+    // so the contacted audience varies run-to-run. The chosen audienceId is stamped
+    // on this run AND returned to workflow-service, which threads x-audience-id to
+    // every downstream node (lead-serve, …) — so the bandit's choice reaches the serve.
+    const audience = await selectAudienceForRun({
       featureSlug: featureSlug!,
       brandId: primaryBrandId,
       goal: brandRuntimeContext.currentGoal,
