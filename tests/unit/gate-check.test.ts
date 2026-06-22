@@ -85,14 +85,23 @@ function makeRun(overrides: Partial<{ id: string; status: string; startedAt: str
   };
 }
 
-function makeBudgetResponse(windows: Array<{ label: string; totalCostInUsdCents: string }>) {
+function makeBudgetResponse(
+  windows: Array<{ label: string; totalCostInUsdCents: string; actualCostInUsdCents?: string }>,
+) {
   return {
-    windows: windows.map(w => ({
-      label: w.label,
-      totalCostInUsdCents: w.totalCostInUsdCents,
-      actualCostInUsdCents: w.totalCostInUsdCents,
-      provisionedCostInUsdCents: "0",
-    })),
+    windows: windows.map(w => {
+      // Default: actual == total (provisioned 0). Pass actualCostInUsdCents explicitly to
+      // model an in-flight worst-case provisioned hold (total > actual) — the gate must
+      // pace on ACTUAL, so a high total with a low actual should NOT block.
+      const actual = w.actualCostInUsdCents ?? w.totalCostInUsdCents;
+      const provisioned = (parseFloat(w.totalCostInUsdCents) - parseFloat(actual)).toString();
+      return {
+        label: w.label,
+        totalCostInUsdCents: w.totalCostInUsdCents,
+        actualCostInUsdCents: actual,
+        provisionedCostInUsdCents: provisioned,
+      };
+    }),
   };
 }
 
@@ -474,6 +483,22 @@ describe("Gate Check", () => {
       expect(result.allowed).toBe(true);
     });
 
+    it("allows when ACTUAL is under the ceiling even though provisioned pushes total over (regression)", async () => {
+      // The bug: worst-case provisioned holds (~26¢ each, later cancelled to ~0.7¢ actual)
+      // made actual+provisioned cross the $7 ceiling while realized spend was far under,
+      // falsely blocking the campaign for 15min on every re-check. Gate must pace on actual.
+      mockDailyBudget("1000"); // ceiling 1000 cents
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          // actual 999 (< 1000) but total 5999 (provisioned 5000) — must NOT block.
+          { label: "today", totalCostInUsdCents: "5999", actualCostInUsdCents: "999" },
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(true);
+    });
+
     it("treats an unset budget (null) as unbounded — no cap", async () => {
       mockDailyBudget(null);
       mockGetStatsBudget.mockResolvedValue(
@@ -571,6 +596,19 @@ describe("Gate Check", () => {
   });
 
   describe("nextRunAt on temporal budget exceeded", () => {
+    it("paces legacy weekly budget on ACTUAL, not total (regression)", async () => {
+      // actual 4000 (< $50 = 5000) but total 6000 (provisioned 2000) — must NOT block.
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "weekly", totalCostInUsdCents: "6000", actualCostInUsdCents: "4000" }])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        maxBudgetDailyUsd: null,
+        maxBudgetWeeklyUsd: "50.00",
+      }));
+      expect(result.allowed).toBe(true);
+    });
+
     it("should return nextRunAt when weekly budget is exceeded", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "weekly", totalCostInUsdCents: "6000" }])
