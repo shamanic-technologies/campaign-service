@@ -110,9 +110,12 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     for (const budgetLimit of budgetLimits) {
       const limitCents = parseFloat(budgetLimit.limit) * 100;
       const windowResult = budgetResult.windows.find(w => w.label === budgetLimit.label);
-      const totalCostCents = windowResult ? parseFloat(windowResult.totalCostInUsdCents) || 0 : 0;
+      // Pace on ACTUAL (realized) spend, not actual+provisioned — same reasoning as the
+      // per-brand daily cap below: worst-case provisioned reservations get cancelled to a
+      // far smaller actual, so counting them would block on phantom spend.
+      const actualCostCents = windowResult ? parseFloat(windowResult.actualCostInUsdCents) || 0 : 0;
 
-      if (totalCostCents >= limitCents) {
+      if (actualCostCents >= limitCents) {
         if (budgetLimit.autoStop) {
           await autoStopCampaign(campaign.campaignId);
           return { allowed: false, reason: "Total budget exceeded", autoStopped: true };
@@ -132,7 +135,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // Multi-brand tick: blocked if ANY in-scope brand has reached its ceiling (most campaigns
   // are solo-brand; per-brand downstream fan-out is out of scope here).
   //
-  // Units: billing dailyBudgetCents and runs totalCostInUsdCents are BOTH cents → compared
+  // Units: billing dailyBudgetCents and runs actualCostInUsdCents are BOTH cents → compared
   // directly (NO ×100, unlike the maxBudget*Usd columns above which are USD).
   //
   // Read fail-OPEN: getBrandDailyBudget returns null on any billing failure (→ no cap this
@@ -148,7 +151,14 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       windows: [{ label: "today", since: startOfToday().toISOString() }],
     });
     const today = brandSpend.windows.find(w => w.label === "today");
-    const spentCents = today ? parseFloat(today.totalCostInUsdCents) || 0 : 0;
+    // Pace on ACTUAL (realized) spend, NOT actual+provisioned. A provisioned row is a
+    // worst-case affordability RESERVATION (~26¢/LLM call here) held only until the call
+    // reconciles to its real cost (~0.7¢) + the hold is cancelled. Counting those open
+    // worst-case holds made actual+provisioned cross the ceiling while real spend was far
+    // under it — falsely blocking the campaign for ~15min (GATE_BLOCK_BACKOFF_MS) on every
+    // re-check until the day rolled over. checkAffordability below stays the hard money
+    // gate (org credit balance); this is just daily pacing, for which realized cost is right.
+    const spentCents = today ? parseFloat(today.actualCostInUsdCents) || 0 : 0;
 
     if (spentCents >= dailyBudgetCents) {
       return { allowed: false, reason: "Brand daily budget reached" };
