@@ -11,6 +11,7 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext } from "../lib/brand-runtime-client.js";
 import { selectAudienceForRun } from "../lib/features-audience-client.js";
+import { fetchCandidates, audienceIdsForWorkflow } from "../lib/features-candidates-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
 
 const router = Router();
@@ -205,16 +206,40 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       featureSlug: featureSlug!,
     };
     const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, preRunIdentity);
-    // Cost-aware Thompson sampling over ALL active audiences (not frozen rank #1),
-    // so the contacted audience varies run-to-run. The chosen audienceId is stamped
-    // on this run AND returned to workflow-service, which threads x-audience-id to
-    // every downstream node (lead-serve, …) — so the bandit's choice reaches the serve.
+    // Scope the audience exploration to the audiences that have run under THIS run's
+    // workflow (chosen greedily at the trigger), so we explore "the best audiences for
+    // this workflow", not across every audience the brand ever contacted. Derived from
+    // features-service /candidates audience-grain rows. Fail-soft: any error or no audience-
+    // attributed couples for this workflow → no restriction (explore all active
+    // audiences), so audience selection never blocks a run.
+    let eligibleAudienceIds: string[] | undefined;
+    try {
+      const candidates = await fetchCandidates({
+        featureSlug: featureSlug!,
+        brandId: primaryBrandId,
+        goal: brandRuntimeContext.currentGoal,
+        brandProfileId: brandRuntimeContext.brandProfile?.id,
+        identity: preRunIdentity,
+      });
+      const ids = audienceIdsForWorkflow(candidates, workflowSlug);
+      if (ids.length > 0) eligibleAudienceIds = ids;
+    } catch (err) {
+      console.warn(
+        `[campaign-service] workflow-scoped audience candidates failed for brand ${primaryBrandId}, exploring all audiences:`,
+        err,
+      );
+    }
+    // Cost-aware Thompson sampling over the chosen workflow's audiences (not frozen
+    // rank #1), so the contacted audience varies run-to-run. The chosen audienceId is
+    // stamped on this run AND returned to workflow-service, which threads x-audience-id
+    // to every downstream node (lead-serve, …) — so the bandit's choice reaches the serve.
     const audience = await selectAudienceForRun({
       featureSlug: featureSlug!,
       brandId: primaryBrandId,
       goal: brandRuntimeContext.currentGoal,
       brandProfileId: brandRuntimeContext.brandProfile?.id,
       identity: preRunIdentity,
+      eligibleAudienceIds,
     });
     // audience.audienceId == the selected audience id (human-service saved filter-set UUID).
     const audienceId = audience?.audienceId ?? null;

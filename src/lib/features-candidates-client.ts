@@ -1,6 +1,6 @@
 import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-headers.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "./brand-runtime-client.js";
-import { thompsonArgminCost, type Arm, type Rng } from "./bandit.js";
+import { greedyArgminCost, type Arm } from "./bandit.js";
 
 // One (audienceId, workflow) candidate row from features-service /candidates.
 // audienceId is null until features-service populates the audience grain; the
@@ -61,14 +61,18 @@ export async function fetchCandidates({
 }
 
 // Collapse the candidate set to one arm per workflow: aggregate the sample size
-// across that workflow's rows (a workflow may appear once per audience once the
+// across that workflow's rows (a workflow may appear once per audience now that the
 // audience grain is populated). Cost is the per-workflow unit cost (goal-global,
 // identical across the workflow's rows). Success = the goal's outcome — clicks for
 // signup, positive replies otherwise.
-export function selectWorkflowByThompson(
+//
+// Selection is GREEDY (exploit-only): always the workflow with the cheapest EXPECTED
+// cost-per-success, deterministically — NOT Thompson. The workflow leg does not
+// explore; it locks onto the current best workflow each run. (The audience leg,
+// chosen later at /start-run, keeps Thompson exploration — see selectAudienceForRun.)
+export function selectWorkflowGreedy(
   candidates: Candidate[],
   goal: RuntimeGoal,
-  rng?: Rng,
 ): string | null {
   if (candidates.length === 0) return null;
 
@@ -95,16 +99,39 @@ export function selectWorkflowByThompson(
   }
 
   const slugs = [...byWorkflow.keys()];
-  const idx = thompsonArgminCost(slugs.map((s) => byWorkflow.get(s)!.arm), rng);
+  const idx = greedyArgminCost(slugs.map((s) => byWorkflow.get(s)!.arm));
   return idx === null ? null : slugs[idx];
+}
+
+// The set of audiences that have actually run under `workflowSlug`, derived from the
+// /candidates audience-grain rows (audienceId non-null ⟺ grain "audience" ⟺ an
+// audience-attributed (audienceId × workflow) couple — features-service #368). Used to scope
+// the audience Thompson to the chosen workflow: "explore among the best audiences
+// FOR THIS WORKFLOW", not across every audience the brand ever contacted.
+//
+// Returns a de-duplicated list of audienceIds. Empty when this workflow has no
+// audience-attributed couples yet (cold workflow) — the caller then falls back to
+// the unconditioned audience set so a fresh workflow still gets an audience.
+export function audienceIdsForWorkflow(
+  candidates: Candidate[],
+  workflowSlug: string,
+): string[] {
+  const ids = new Set<string>();
+  for (const c of candidates) {
+    if (c.audienceId != null && c.workflow.workflowDynastySlug === workflowSlug) {
+      ids.add(c.audienceId);
+    }
+  }
+  return [...ids];
 }
 
 /**
  * Resolve which workflow to launch for THIS run: resolve the brand's current goal,
- * pull the candidate workflows from features-service, and Thompson-pick one — so a
- * campaign's workflow varies run-to-run instead of being frozen on its configured
- * slug. The workflow MUST be chosen here (at the trigger), because it is the DAG
- * identity in the /execute URL and cannot change once the DAG is running.
+ * pull the candidate workflows from features-service, and greedily pick the best one
+ * (cheapest expected cost-per-success) — so a campaign always runs its strongest
+ * workflow instead of being frozen on its configured slug. The workflow MUST be
+ * chosen here (at the trigger), because it is the DAG identity in the /execute URL
+ * and cannot change once the DAG is running.
  *
  * Falls back to the campaign's configured slug (no behavior change) when there is
  * no candidate evidence yet OR features-service is unavailable — a selection
@@ -126,7 +153,7 @@ export async function resolveWorkflowSlugForTrigger(args: {
       brandProfileId: ctx.brandProfile?.id,
       identity,
     });
-    return selectWorkflowByThompson(candidates, ctx.currentGoal) ?? fallbackSlug;
+    return selectWorkflowGreedy(candidates, ctx.currentGoal) ?? fallbackSlug;
   } catch (err) {
     console.warn(
       `[campaign-service] workflow bandit failed for brand ${primaryBrandId}, using configured workflow ${fallbackSlug}:`,

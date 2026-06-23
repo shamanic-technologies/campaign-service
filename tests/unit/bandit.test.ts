@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { thompsonArgminCost, sampleBeta, type Arm, type Rng } from "../../src/lib/bandit.js";
-import { selectWorkflowByThompson, type Candidate } from "../../src/lib/features-candidates-client.js";
+import { thompsonArgminCost, greedyArgminCost, sampleBeta, type Arm, type Rng } from "../../src/lib/bandit.js";
+import {
+  selectWorkflowGreedy,
+  audienceIdsForWorkflow,
+  type Candidate,
+} from "../../src/lib/features-candidates-client.js";
 
 // Deterministic PRNG so the probabilistic assertions are reproducible.
 function mulberry32(seed: number): Rng {
@@ -74,6 +78,59 @@ describe("thompsonArgminCost", () => {
   });
 });
 
+describe("greedyArgminCost", () => {
+  it("returns null for an empty arm list", () => {
+    expect(greedyArgminCost([])).toBeNull();
+  });
+
+  it("returns the only arm", () => {
+    expect(greedyArgminCost([{ trials: 0, successes: 0, costPerTrial: null }])).toBe(0);
+  });
+
+  it("always picks the cheapest expected-cost-per-success arm (deterministic)", () => {
+    const arms: Arm[] = [
+      { trials: 1000, successes: 300, costPerTrial: 100 }, // ~0.33/contact → cheap
+      { trials: 1000, successes: 30, costPerTrial: 100 }, //  ~0.03/contact → 10x dearer
+    ];
+    // Same answer every call — no exploration.
+    for (let i = 0; i < 50; i++) expect(greedyArgminCost(arms)).toBe(0);
+  });
+
+  it("never explores a zero-evidence arm when a known arm is better (prior mean 0.5)", () => {
+    const arms: Arm[] = [
+      { trials: 1000, successes: 600, costPerTrial: 100 }, // rate 0.6 > prior 0.5
+      { trials: 0, successes: 0, costPerTrial: 100 }, //      cold → scores at 0.5
+    ];
+    for (let i = 0; i < 50; i++) expect(greedyArgminCost(arms)).toBe(0);
+  });
+
+  it("prefers a cheaper arm at equal rate", () => {
+    const arms: Arm[] = [
+      { trials: 1000, successes: 500, costPerTrial: 200 }, // 0.5 rate, dear
+      { trials: 1000, successes: 500, costPerTrial: 100 }, // 0.5 rate, cheap
+    ];
+    expect(greedyArgminCost(arms)).toBe(1);
+  });
+
+  it("resolves ties to the first index", () => {
+    const arms: Arm[] = [
+      { trials: 1000, successes: 500, costPerTrial: 100 },
+      { trials: 1000, successes: 500, costPerTrial: 100 },
+    ];
+    expect(greedyArgminCost(arms)).toBe(0);
+  });
+
+  it("uses the pooled median cost for an arm with no cost signal", () => {
+    // Cold arm has no cost → fallback median (100). Its prior-mean rate 0.5 makes its
+    // expected cost 200, beating the known arm's 100/0.3≈333 → cold arm wins.
+    const arms: Arm[] = [
+      { trials: 1000, successes: 300, costPerTrial: 100 },
+      { trials: 0, successes: 0, costPerTrial: null },
+    ];
+    expect(greedyArgminCost(arms)).toBe(1);
+  });
+});
+
 describe("sampleBeta", () => {
   it("has mean ≈ alpha/(alpha+beta)", () => {
     const rng = mulberry32(42);
@@ -84,9 +141,16 @@ describe("sampleBeta", () => {
   });
 });
 
-describe("selectWorkflowByThompson", () => {
-  const mk = (slug: string, contacted: number, replies: number, clicks: number, cpl: number): Candidate => ({
-    audienceId: null,
+describe("selectWorkflowGreedy", () => {
+  const mk = (
+    slug: string,
+    contacted: number,
+    replies: number,
+    clicks: number,
+    cpl: number,
+    audienceId: string | null = null,
+  ): Candidate => ({
+    audienceId,
     workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
     goal: "meetingBooked",
     costPerOutcomeUsd: null,
@@ -95,18 +159,15 @@ describe("selectWorkflowByThompson", () => {
   });
 
   it("returns null for no candidates", () => {
-    expect(selectWorkflowByThompson([], "meetingBooked")).toBeNull();
+    expect(selectWorkflowGreedy([], "meetingBooked")).toBeNull();
   });
 
-  it("picks the cheaper-per-reply workflow most of the time (cppr goal → replies)", () => {
+  it("always picks the cheaper-per-reply workflow (cppr goal → replies), deterministically", () => {
     const candidates = [
       mk("wf-good", 1000, 200, 5, 100), // 0.2 reply rate
-      mk("wf-bad", 1000, 20, 300, 100), //  0.02 reply rate (but lots of clicks — irrelevant for this goal)
+      mk("wf-bad", 1000, 20, 300, 100), //  0.02 reply rate (lots of clicks — irrelevant for this goal)
     ];
-    const rng = mulberry32(11);
-    let good = 0;
-    for (let i = 0; i < 1000; i++) if (selectWorkflowByThompson(candidates, "meetingBooked", rng) === "wf-good") good++;
-    expect(good / 1000).toBeGreaterThan(0.9);
+    for (let i = 0; i < 50; i++) expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBe("wf-good");
   });
 
   it("uses CLICKS as the success for the signup goal (flips the winner)", () => {
@@ -114,10 +175,7 @@ describe("selectWorkflowByThompson", () => {
       mk("wf-replies", 1000, 300, 10, 100), // great replies, poor clicks
       mk("wf-clicks", 1000, 10, 300, 100), //  poor replies, great clicks
     ];
-    const rng = mulberry32(13);
-    let clicksWins = 0;
-    for (let i = 0; i < 1000; i++) if (selectWorkflowByThompson(candidates, "signup", rng) === "wf-clicks") clicksWins++;
-    expect(clicksWins / 1000).toBeGreaterThan(0.9);
+    expect(selectWorkflowGreedy(candidates, "signup")).toBe("wf-clicks");
   });
 
   it("aggregates a workflow's evidence across its (audience,workflow) rows", () => {
@@ -127,9 +185,37 @@ describe("selectWorkflowByThompson", () => {
       mk("wf-split", 500, 100, 5, 100),
       mk("wf-weak", 1000, 20, 5, 100),
     ];
-    const rng = mulberry32(17);
-    let split = 0;
-    for (let i = 0; i < 1000; i++) if (selectWorkflowByThompson(candidates, "meetingBooked", rng) === "wf-split") split++;
-    expect(split / 1000).toBeGreaterThan(0.9);
+    expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBe("wf-split");
+  });
+});
+
+describe("audienceIdsForWorkflow", () => {
+  const mk = (slug: string, audienceId: string | null): Candidate => ({
+    audienceId,
+    workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
+    goal: "meetingBooked",
+    costPerOutcomeUsd: null,
+    cost: { costPerLeadUsd: 100, clickUsd: null, replyUsd: null },
+    sampleSize: { runs: 1, contacted: 100, clicks: 5, replies: 10 },
+  });
+
+  it("returns only the audience-grain rows (audienceId non-null) for the chosen workflow", () => {
+    const candidates = [
+      mk("wf-a", "aud-1"),
+      mk("wf-a", "aud-2"),
+      mk("wf-a", null), //   coarse fallback row — excluded
+      mk("wf-b", "aud-3"), // other workflow — excluded
+    ];
+    expect(audienceIdsForWorkflow(candidates, "wf-a").sort()).toEqual(["aud-1", "aud-2"]);
+  });
+
+  it("de-duplicates repeated audienceIds", () => {
+    const candidates = [mk("wf-a", "aud-1"), mk("wf-a", "aud-1")];
+    expect(audienceIdsForWorkflow(candidates, "wf-a")).toEqual(["aud-1"]);
+  });
+
+  it("returns empty for a workflow with no audience-attributed couples", () => {
+    const candidates = [mk("wf-a", null), mk("wf-b", "aud-1")];
+    expect(audienceIdsForWorkflow(candidates, "wf-a")).toEqual([]);
   });
 });
