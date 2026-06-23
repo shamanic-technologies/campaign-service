@@ -9,6 +9,7 @@ const {
   mockGateChecks,
   mockFetchBrandRuntimeContext,
   mockSelectAudienceForRun,
+  mockFetchCandidates,
 } = vi.hoisted(() => ({
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
@@ -17,6 +18,7 @@ const {
   mockGateChecks: vi.fn(),
   mockFetchBrandRuntimeContext: vi.fn(),
   mockSelectAudienceForRun: vi.fn(),
+  mockFetchCandidates: vi.fn(),
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -45,6 +47,14 @@ vi.mock("../../src/lib/brand-runtime-client.js", () => ({
 vi.mock("../../src/lib/features-audience-client.js", () => ({
   selectAudienceForRun: mockSelectAudienceForRun,
 }));
+
+vi.mock("../../src/lib/features-candidates-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/features-candidates-client.js")>();
+  return {
+    ...original, // keep the real pure audienceIdsForWorkflow
+    fetchCandidates: mockFetchCandidates,
+  };
+});
 
 import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
@@ -120,6 +130,7 @@ describe("Pipeline routes", () => {
       brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
     });
     mockSelectAudienceForRun.mockResolvedValue(defaultAudience);
+    mockFetchCandidates.mockResolvedValue([]);
   });
 
   afterAll(async () => {
@@ -462,6 +473,60 @@ describe("Pipeline routes", () => {
           identity: expect.objectContaining({ runId: "parent-run-1" }),
         }),
       );
+    });
+
+    it("should scope the audience exploration to the chosen workflow's audiences (persona candidates)", async () => {
+      const mkCandidate = (slug: string, audienceId: string | null) => ({
+        audienceId,
+        workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
+        goal: "signup" as const,
+        costPerOutcomeUsd: null,
+        cost: { costPerLeadUsd: 100, clickUsd: null, replyUsd: null },
+        sampleSize: { runs: 1, contacted: 100, clicks: 5, replies: 2 },
+      });
+      // Two audiences ran the campaign's workflow; one belongs to a different workflow.
+      mockFetchCandidates.mockResolvedValueOnce([
+        mkCandidate("sales-email-cold-outreach", "aud-1"),
+        mkCandidate("sales-email-cold-outreach", "aud-2"),
+        mkCandidate("sales-email-cold-outreach", null), // coarse fallback row — excluded
+        mkCandidate("some-other-workflow", "aud-3"), //      other workflow — excluded
+      ]);
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      const passed = mockSelectAudienceForRun.mock.calls.at(-1)![0];
+      expect([...passed.eligibleAudienceIds].sort()).toEqual(["aud-1", "aud-2"]);
+    });
+
+    it("should not scope audiences when the workflow has no persona candidates (fail-soft)", async () => {
+      mockFetchCandidates.mockResolvedValueOnce([]);
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      const passed = mockSelectAudienceForRun.mock.calls.at(-1)![0];
+      expect(passed.eligibleAudienceIds).toBeUndefined();
+    });
+
+    it("should still select an audience when fetchCandidates throws (fail-soft)", async () => {
+      mockFetchCandidates.mockRejectedValueOnce(new Error("features-service down"));
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(res.body.audienceId).toBe("customer-profile-best");
+      const passed = mockSelectAudienceForRun.mock.calls.at(-1)![0];
+      expect(passed.eligibleAudienceIds).toBeUndefined();
     });
 
     it("should stamp the selected audience on the run (x-audience-id) and return it", async () => {
