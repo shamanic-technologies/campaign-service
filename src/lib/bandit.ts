@@ -103,3 +103,44 @@ export function thompsonArgminCost(arms: Arm[], rng: Rng = Math.random): number 
 
   return bestIdx;
 }
+
+/**
+ * Greedy (exploit-only) cost-aware selection. Returns the index of the arm with
+ * the cheapest EXPECTED cost-per-success, deterministically — no exploration.
+ *
+ * Same scoring as thompsonArgminCost but the rate is each arm's posterior MEAN
+ * (successes+1)/(trials+2) = E[Beta(successes+1, trials-successes+1)] instead of a
+ * random draw. So the same arm is chosen every call for the same evidence. Cold
+ * arms (zero trials) score at the prior mean 0.5; ties resolve to the first index.
+ *
+ * Use when the goal is to always run the current best arm (the workflow leg) rather
+ * than keep exploring (the audience leg, which stays on thompsonArgminCost).
+ */
+export function greedyArgminCost(arms: Arm[]): number | null {
+  if (arms.length === 0) return null;
+  if (arms.length === 1) return 0;
+
+  const knownCosts = arms
+    .map((a) => a.costPerTrial)
+    .filter((c): c is number => c !== null && c > 0);
+  const fallbackCost = median(knownCosts) ?? 1;
+
+  let bestIdx = 0;
+  let bestExpectedCost = Infinity;
+
+  for (let i = 0; i < arms.length; i++) {
+    const n = Math.max(0, arms[i].trials);
+    const k = Math.min(Math.max(0, arms[i].successes), n);
+    const rate = (k + 1) / (n + 2); // posterior mean, strictly in (0,1) — no /0
+    const cost = arms[i].costPerTrial != null && arms[i].costPerTrial! > 0
+      ? arms[i].costPerTrial!
+      : fallbackCost;
+    const expectedCost = cost / rate;
+    if (expectedCost < bestExpectedCost) {
+      bestExpectedCost = expectedCost;
+      bestIdx = i;
+    }
+  }
+
+  return bestIdx;
+}

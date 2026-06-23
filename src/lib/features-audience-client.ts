@@ -40,6 +40,14 @@ interface SelectAudienceInput {
   brandProfileId?: string;
   identity: DownstreamIdentity;
   rng?: Rng;
+  // When provided and non-empty, restrict the Thompson exploration to these
+  // audiences — the audiences that have actually run under the chosen workflow
+  // (from /candidates persona rows). So the audience is explored "for this
+  // workflow", not across every audience the brand ever contacted. If the
+  // intersection with the active audiences is empty (cold workflow), the
+  // restriction is ignored and selection falls back to all active audiences —
+  // a fresh workflow must still get an audience.
+  eligibleAudienceIds?: string[];
 }
 
 // Maps each active audience to a bandit arm: trials = leads contacted, successes
@@ -66,6 +74,7 @@ export async function selectAudienceForRun({
   brandProfileId,
   identity,
   rng,
+  eligibleAudienceIds,
 }: SelectAudienceInput): Promise<AudienceCandidate | null> {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
   const apiKey = process.env.FEATURES_SERVICE_API_KEY;
@@ -92,8 +101,18 @@ export async function selectAudienceForRun({
     throw new Error("[campaign-service] FeatureService audience-stats returned an invalid audiences payload");
   }
 
-  const eligible = body.audiences.filter((a) => a.audience?.status === "active");
-  if (eligible.length === 0) return null;
+  const active = body.audiences.filter((a) => a.audience?.status === "active");
+  if (active.length === 0) return null;
+
+  // Scope to the chosen workflow's audiences when we have them; ignore the
+  // restriction if it would leave nothing (cold workflow) so a fresh workflow
+  // still gets an audience.
+  let eligible = active;
+  if (eligibleAudienceIds && eligibleAudienceIds.length > 0) {
+    const allow = new Set(eligibleAudienceIds);
+    const scoped = active.filter((a) => allow.has(a.audienceId));
+    if (scoped.length > 0) eligible = scoped;
+  }
 
   const sortMetric: SortMetric = body.sortMetric === "cpc" ? "cpc" : "cppr";
   const idx = thompsonArgminCost(eligible.map((a) => toArm(a, sortMetric)), rng);
