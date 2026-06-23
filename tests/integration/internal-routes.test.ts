@@ -475,7 +475,7 @@ describe("Pipeline routes", () => {
       );
     });
 
-    it("should scope the audience exploration to the chosen workflow's audiences (persona candidates)", async () => {
+    it("should scope the audience exploration to the chosen workflow's audiences (audience-grain candidates)", async () => {
       const mkCandidate = (slug: string, audienceId: string | null) => ({
         audienceId,
         workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
@@ -502,7 +502,7 @@ describe("Pipeline routes", () => {
       expect([...passed.eligibleAudienceIds].sort()).toEqual(["aud-1", "aud-2"]);
     });
 
-    it("should not scope audiences when the workflow has no persona candidates (fail-soft)", async () => {
+    it("should not scope audiences when the workflow has no audience-grain candidates (fail-soft)", async () => {
       mockFetchCandidates.mockResolvedValueOnce([]);
       const campaign = await insertTestCampaign(orgId, { brandIds });
 

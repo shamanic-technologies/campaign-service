@@ -104,8 +104,8 @@ export function selectWorkflowGreedy(
 }
 
 // The set of audiences that have actually run under `workflowSlug`, derived from the
-// /candidates persona rows (audienceId non-null ⟺ grain "persona" ⟺ an audience-
-// attributed (audienceId × workflow) couple — features-service #368). Used to scope
+// /candidates audience-grain rows (audienceId non-null ⟺ grain "audience" ⟺ an
+// audience-attributed (audienceId × workflow) couple — features-service #368). Used to scope
 // the audience Thompson to the chosen workflow: "explore among the best audiences
 // FOR THIS WORKFLOW", not across every audience the brand ever contacted.
 //
