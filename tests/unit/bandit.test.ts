@@ -199,7 +199,7 @@ describe("audienceIdsForWorkflow", () => {
     sampleSize: { runs: 1, contacted: 100, clicks: 5, replies: 10 },
   });
 
-  it("returns only the persona audiences (audienceId non-null) for the chosen workflow", () => {
+  it("returns only the audience-grain rows (audienceId non-null) for the chosen workflow", () => {
     const candidates = [
       mk("wf-a", "aud-1"),
       mk("wf-a", "aud-2"),

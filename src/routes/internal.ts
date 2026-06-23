@@ -209,7 +209,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     // Scope the audience exploration to the audiences that have run under THIS run's
     // workflow (chosen greedily at the trigger), so we explore "the best audiences for
     // this workflow", not across every audience the brand ever contacted. Derived from
-    // features-service /candidates persona rows. Fail-soft: any error or no audience-
+    // features-service /candidates audience-grain rows. Fail-soft: any error or no audience-
     // attributed couples for this workflow → no restriction (explore all active
     // audiences), so audience selection never blocks a run.
     let eligibleAudienceIds: string[] | undefined;

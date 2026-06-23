@@ -42,7 +42,7 @@ interface SelectAudienceInput {
   rng?: Rng;
   // When provided and non-empty, restrict the Thompson exploration to these
   // audiences — the audiences that have actually run under the chosen workflow
-  // (from /candidates persona rows). So the audience is explored "for this
+  // (from /candidates audience-grain rows). So the audience is explored "for this
   // workflow", not across every audience the brand ever contacted. If the
   // intersection with the active audiences is empty (cold workflow), the
   // restriction is ignored and selection falls back to all active audiences —
