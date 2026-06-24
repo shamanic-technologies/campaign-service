@@ -54,6 +54,7 @@ function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
     campaignId: "campaign-1",
     orgId: "org-1",
     brandId: "brand-1",
+    featureSlug: "sales-cold-email-outreach",
     // Empty by default so the per-brand daily-budget loop is a no-op in tests that exercise
     // the OTHER gates. The brand-budget describe block sets brandIds explicitly.
     brandIds: [],
@@ -454,7 +455,7 @@ describe("Gate Check", () => {
       });
     }
 
-    it("blocks (paced, not stopped) when today's brand spend reaches the ceiling", async () => {
+    it("blocks (paced, not stopped) when today's feature spend for the brand reaches the ceiling", async () => {
       mockDailyBudget("1000"); // ceiling 1000 cents
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
@@ -558,23 +559,24 @@ describe("Gate Check", () => {
       expect(result.reason).toBe("Brand daily budget reached");
     });
 
-    it("aggregates brand-day spend across all campaign work for the brand", async () => {
+    it("compares the daily cap against same-feature brand-day spend only", async () => {
       mockDailyBudget("1000");
       mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1250" }])
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "750" }])
       );
 
       const result = await runGateChecks(makeCampaign({
         campaignId: "campaign-active",
         brandIds: ["brand-1"],
         maxBudgetDailyUsd: "999999.00",
+        featureSlug: "sales-cold-email-outreach",
       }));
 
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand daily budget reached");
+      expect(result.allowed).toBe(true);
       expect(mockGetStatsBudget).toHaveBeenCalledWith({
         orgId: "org-1",
         brandId: "brand-1",
+        featureSlug: "sales-cold-email-outreach",
         windows: [expect.objectContaining({ label: "today" })],
       });
       const brandSpendCall = mockGetStatsBudget.mock.calls[0][0];

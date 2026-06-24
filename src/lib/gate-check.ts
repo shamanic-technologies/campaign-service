@@ -14,6 +14,7 @@ export interface GateCheckInput {
   brandId: string;
   brandIds: string[];
   workflowSlug?: string;
+  featureSlug?: string;
   status: string;
   // Legacy storage/API field. Daily spend is enforced at brand level via billing-service,
   // not as a campaign-scoped runs window.
@@ -125,13 +126,14 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     }
   }
 
-  // 3c. Per-brand daily budget pacing — the brand is the optimization bucket.
+  // 3c. Per-brand daily budget pacing — scoped to the same feature.
   // billing-service stores + serves each brand's daily spend ceiling (cents); ENFORCEMENT
-  // is ours. For each brand in scope, compare today's platform spend (runs-service,
-  // brandId-keyed) against that ceiling. A brand at/over its ceiling pauses the loop for
-  // now — NOT a terminal stop: the block carries no nextRunAt, so internal.ts backs it off
-  // ~15min and re-checks. Raising the ceiling re-enables work on the next loop, and the day
-  // rollover naturally resets today's spend. An unset ceiling (null) = unbounded (no cap).
+  // is ours. For each brand in scope, compare today's platform spend for THIS campaign's
+  // feature (runs-service, brandId + featureSlug keyed) against that ceiling. A brand at/over
+  // its ceiling pauses that feature loop for now — NOT a terminal stop: the block carries no
+  // nextRunAt, so internal.ts backs it off ~15min and re-checks. Raising the ceiling re-enables
+  // work on the next loop, and the day rollover naturally resets today's spend. An unset
+  // ceiling (null) = unbounded (no cap).
   // Multi-brand tick: blocked if ANY in-scope brand has reached its ceiling (most campaigns
   // are solo-brand; per-brand downstream fan-out is out of scope here).
   //
@@ -148,6 +150,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     const brandSpend = await getStatsBudget({
       orgId: campaign.orgId,
       brandId,
+      featureSlug: campaign.featureSlug,
       windows: [{ label: "today", since: startOfToday().toISOString() }],
     });
     const today = brandSpend.windows.find(w => w.label === "today");
