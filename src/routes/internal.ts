@@ -85,6 +85,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       brandId: resolvedBrandIds.join(","),
       brandIds: resolvedBrandIds,
       workflowSlug: req.workflowSlug || campaign.workflowSlug,
+      featureSlug: req.featureSlug || campaign.featureSlug || undefined,
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
       maxBudgetWeeklyUsd: campaign.maxBudgetWeeklyUsd,
