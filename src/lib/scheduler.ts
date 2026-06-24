@@ -250,10 +250,10 @@ export async function claimStuckCampaigns(): Promise<number> {
  *
  *   - No ongoing campaigns        → IDLE_MAX_MS. Nothing to poll; the Neon
  *     compute can suspend. A new campaign wakes the scheduler via wakeScheduler().
- *   - Any in-flight (nextRunAt=NULL) → ACTIVE_INTERVAL_MS. A run is executing
- *     (or possibly stuck); poll at the active cadence to catch /end-run + stuck.
- *   - All waiting (future nextRunAt) → sleep until the soonest due time, floored
- *     to avoid a busy-spin and capped at IDLE_MAX_MS.
+ *   - Any in-flight (nextRunAt=NULL) → poll at the active cadence to catch
+ *     /end-run + stuck, but never sleep past a sooner scheduled nextRunAt.
+ *   - Waiting campaigns (future nextRunAt) → sleep until the soonest due time,
+ *     floored to avoid a busy-spin and capped at IDLE_MAX_MS.
  *
  * Pure (no DB / no clock side-effect) so the cadence logic is trivially testable.
  */
@@ -262,10 +262,17 @@ export function computeNextDelayMs(
   now: number = Date.now(),
 ): number {
   if (ongoing.length === 0) return IDLE_MAX_MS;
-  if (ongoing.some((c) => c.nextRunAt === null)) return ACTIVE_INTERVAL_MS;
-  const soonest = Math.min(...ongoing.map((c) => c.nextRunAt!.getTime()));
-  const delay = soonest - now;
-  return Math.min(Math.max(delay, 1_000), IDLE_MAX_MS);
+
+  const hasInFlight = ongoing.some((c) => c.nextRunAt === null);
+  const scheduledTimes = ongoing
+    .map((c) => c.nextRunAt?.getTime())
+    .filter((time): time is number => typeof time === "number" && Number.isFinite(time));
+
+  if (scheduledTimes.length === 0) return ACTIVE_INTERVAL_MS;
+
+  const soonest = Math.min(...scheduledTimes);
+  const scheduledDelay = Math.min(Math.max(soonest - now, 1_000), IDLE_MAX_MS);
+  return hasInFlight ? Math.min(scheduledDelay, ACTIVE_INTERVAL_MS) : scheduledDelay;
 }
 
 /** Load the ongoing-campaign snapshot used to pick the next tick delay. */

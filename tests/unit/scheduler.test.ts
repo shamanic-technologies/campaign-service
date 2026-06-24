@@ -635,12 +635,20 @@ describe("Scheduler - computeNextDelayMs (cadence)", () => {
     expect(computeNextDelayMs([], NOW)).toBe(IDLE_MAX_MS);
   });
 
-  it("returns ACTIVE_INTERVAL_MS when any campaign is in-flight (nextRunAt null)", () => {
+  it("returns ACTIVE_INTERVAL_MS when a campaign is in-flight and no scheduled campaign is due sooner", () => {
     const delay = computeNextDelayMs(
       [{ nextRunAt: null }, { nextRunAt: new Date(NOW + 5 * 60_000) }],
       NOW,
     );
     expect(delay).toBe(ACTIVE_INTERVAL_MS);
+  });
+
+  it("sleeps until a sooner scheduled nextRunAt even while another campaign is in-flight", () => {
+    const delay = computeNextDelayMs(
+      [{ nextRunAt: null }, { nextRunAt: new Date(NOW + 10_000) }],
+      NOW,
+    );
+    expect(delay).toBe(10_000);
   });
 
   it("sleeps until the soonest future nextRunAt when all are waiting", () => {

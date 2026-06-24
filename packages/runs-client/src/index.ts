@@ -83,6 +83,7 @@ export interface StatsBudgetParams {
   campaignId?: string;
   brandId?: string;
   workflowSlug?: string;
+  featureSlug?: string;
   windows: BudgetWindow[];
 }
 

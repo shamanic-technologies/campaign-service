@@ -328,6 +328,7 @@ describe("Pipeline routes", () => {
           campaignId: campaign.id,
           orgId,
           brandId: brandIds.join(","),
+          featureSlug: "sales-cold-email-v1",
           status: "ongoing",
           maxBudgetDailyUsd: "50.00",
           maxLeads: 100,
