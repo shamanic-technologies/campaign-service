@@ -480,6 +480,7 @@ describe("Pipeline routes", () => {
         audienceId,
         workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
         goal: "signup" as const,
+        grain: (audienceId ? "audience" : "brand-goal") as const,
         costPerOutcomeUsd: null,
         cost: { costPerLeadUsd: 100, clickUsd: null, replyUsd: null },
         sampleSize: { runs: 1, contacted: 100, clicks: 5, replies: 2 },

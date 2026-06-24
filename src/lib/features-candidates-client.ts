@@ -10,6 +10,13 @@ export interface Candidate {
   audienceId: string | null;
   workflow: { workflowDynastySlug: string; workflowDynastyName: string | null };
   goal: RuntimeGoal;
+  // Finest grain at which THIS candidate's evidence resolved (features-service):
+  //   "audience"    — audience-attributed (brandId×goal×audienceId) — brand-level
+  //   "brand-goal"  — the brand's own economics (brandId×goal)      — brand-level
+  //   "goal-global" — cross-org fallback, NO evidence for this brand
+  // A brand with zero own-evidence gets EVERY active workflow back at "goal-global";
+  // the workflow bandit must NOT explore over that cross-org set (see selectWorkflowGreedy).
+  grain: "audience" | "brand-goal" | "goal-global";
   costPerOutcomeUsd: number | null;
   cost: { costPerLeadUsd: number | null; clickUsd: number | null; replyUsd: number | null };
   sampleSize: { runs: number; contacted: number; clicks: number; replies: number };
@@ -70,14 +77,23 @@ export async function fetchCandidates({
 // cost-per-success, deterministically — NOT Thompson. The workflow leg does not
 // explore; it locks onto the current best workflow each run. (The audience leg,
 // chosen later at /start-run, keeps Thompson exploration — see selectAudienceForRun.)
+//
+// COLD-START GUARD: only consider candidates with BRAND-LEVEL evidence (grain
+// "audience" or "brand-goal"). A brand with no own evidence gets every active
+// workflow back at grain "goal-global" (cross-org fallback); banditting over that
+// set makes a fresh brand's workflow jump run-to-run (greedy picks a drifting
+// cross-org argmin; the pre-greedy Thompson randomised outright). Returning null
+// makes resolveWorkflowSlugForTrigger fall back to the campaign's configured slug,
+// so a fresh brand runs ITS workflow consistently until it accrues its own evidence.
 export function selectWorkflowGreedy(
   candidates: Candidate[],
   goal: RuntimeGoal,
 ): string | null {
-  if (candidates.length === 0) return null;
+  const brandEvidence = candidates.filter((c) => c.grain !== "goal-global");
+  if (brandEvidence.length === 0) return null;
 
   const byWorkflow = new Map<string, { arm: Arm }>();
-  for (const c of candidates) {
+  for (const c of brandEvidence) {
     const slug = c.workflow.workflowDynastySlug;
     const successes = goal === "signup" ? c.sampleSize.clicks : c.sampleSize.replies;
     const existing = byWorkflow.get(slug);
