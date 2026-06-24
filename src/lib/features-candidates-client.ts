@@ -1,6 +1,5 @@
 import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-headers.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "./brand-runtime-client.js";
-import { greedyArgminCost, type Arm } from "./bandit.js";
 
 // One (audienceId, workflow) candidate row from features-service /candidates.
 // audienceId is null until features-service populates the audience grain; the
@@ -10,13 +9,12 @@ export interface Candidate {
   audienceId: string | null;
   workflow: { workflowDynastySlug: string; workflowDynastyName: string | null };
   goal: RuntimeGoal;
-  // Finest grain at which THIS candidate's evidence resolved (features-service):
-  //   "audience"    — audience-attributed (brandId×goal×audienceId) — brand-level
-  //   "brand-goal"  — the brand's own economics (brandId×goal)      — brand-level
-  //   "goal-global" — cross-org fallback, NO evidence for this brand
-  // A brand with zero own-evidence gets EVERY active workflow back at "goal-global";
-  // the workflow bandit must NOT explore over that cross-org set (see selectWorkflowGreedy).
+  // Finest grain at which THIS candidate's evidence resolved (provenance only —
+  // the workflow pick ignores it): "audience" (brandId×goal×audienceId) →
+  // "brand-goal" (brandId×goal) → "goal-global" (cross-org fallback).
   grain: "audience" | "brand-goal" | "goal-global";
+  // Cost per goal-outcome (USD) for the queried goal — THE workflow ranking metric.
+  // Null when the brand has no economics to compute it (row not rankable).
   costPerOutcomeUsd: number | null;
   cost: { costPerLeadUsd: number | null; clickUsd: number | null; replyUsd: number | null };
   sampleSize: { runs: number; contacted: number; clicks: number; replies: number };
@@ -67,56 +65,41 @@ export async function fetchCandidates({
   return body.candidates;
 }
 
-// Collapse the candidate set to one arm per workflow: aggregate the sample size
-// across that workflow's rows (a workflow may appear once per audience now that the
-// audience grain is populated). Cost is the per-workflow unit cost (goal-global,
-// identical across the workflow's rows). Success = the goal's outcome — clicks for
-// signup, positive replies otherwise.
+// Per-run WORKFLOW selection: GREEDY — pick the workflow with the cheapest
+// cost-per-outcome, deterministically. No exploration (the audience leg, chosen
+// later at /start-run, keeps Thompson — see selectAudienceForRun).
 //
-// Selection is GREEDY (exploit-only): always the workflow with the cheapest EXPECTED
-// cost-per-success, deterministically — NOT Thompson. The workflow leg does not
-// explore; it locks onto the current best workflow each run. (The audience leg,
-// chosen later at /start-run, keeps Thompson exploration — see selectAudienceForRun.)
+// features-service already computes `costPerOutcomeUsd` per candidate (cost per
+// goal-outcome — e.g. per signup — over the upgrade chain × the brand's effective
+// economics, for the goal we queried). So the "best" workflow is simply
+// argmin(costPerOutcomeUsd) over the candidate set. GRAIN IS IRRELEVANT: whether the
+// evidence resolved at brand level or cross-org (goal-global), we take the cheapest —
+// "always the best workflow returned by /candidates", per the product decision.
 //
-// COLD-START GUARD: only consider candidates with BRAND-LEVEL evidence (grain
-// "audience" or "brand-goal"). A brand with no own evidence gets every active
-// workflow back at grain "goal-global" (cross-org fallback); banditting over that
-// set makes a fresh brand's workflow jump run-to-run (greedy picks a drifting
-// cross-org argmin; the pre-greedy Thompson randomised outright). Returning null
-// makes resolveWorkflowSlugForTrigger fall back to the campaign's configured slug,
-// so a fresh brand runs ITS workflow consistently until it accrues its own evidence.
+// A workflow can appear in several rows (a brand-goal row + one per audience grain);
+// the global argmin naturally picks its lowest-cost row. Rows with a null
+// costPerOutcomeUsd carry no rankable economics and are skipped. If NO candidate has a
+// costPerOutcomeUsd, return null → resolveWorkflowSlugForTrigger falls back to the
+// campaign's configured slug (only fallback path).
+//
+// Supersedes the prior Laplace-smoothed clicks/contacted recompute (greedyArgminCost
+// in bandit.ts), which inflated the rate of tiny-sample workflows — contacted≈4 with
+// 0 clicks read as a ~16% success rate — so the pick jumped run-to-run as samples grew.
 export function selectWorkflowGreedy(
   candidates: Candidate[],
-  goal: RuntimeGoal,
+  _goal: RuntimeGoal,
 ): string | null {
-  const brandEvidence = candidates.filter((c) => c.grain !== "goal-global");
-  if (brandEvidence.length === 0) return null;
-
-  const byWorkflow = new Map<string, { arm: Arm }>();
-  for (const c of brandEvidence) {
-    const slug = c.workflow.workflowDynastySlug;
-    const successes = goal === "signup" ? c.sampleSize.clicks : c.sampleSize.replies;
-    const existing = byWorkflow.get(slug);
-    if (existing) {
-      existing.arm.trials += c.sampleSize.contacted;
-      existing.arm.successes += successes;
-      if (existing.arm.costPerTrial == null && c.cost.costPerLeadUsd != null) {
-        existing.arm.costPerTrial = c.cost.costPerLeadUsd;
-      }
-    } else {
-      byWorkflow.set(slug, {
-        arm: {
-          trials: c.sampleSize.contacted,
-          successes,
-          costPerTrial: c.cost.costPerLeadUsd,
-        },
-      });
+  let bestSlug: string | null = null;
+  let bestCost = Infinity;
+  for (const c of candidates) {
+    const cpo = c.costPerOutcomeUsd;
+    if (cpo == null || !(cpo > 0)) continue; // no rankable economics for this row
+    if (cpo < bestCost) {
+      bestCost = cpo;
+      bestSlug = c.workflow.workflowDynastySlug;
     }
   }
-
-  const slugs = [...byWorkflow.keys()];
-  const idx = greedyArgminCost(slugs.map((s) => byWorkflow.get(s)!.arm));
-  return idx === null ? null : slugs[idx];
+  return bestSlug;
 }
 
 // The set of audiences that have actually run under `workflowSlug`, derived from the
