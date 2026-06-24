@@ -144,10 +144,7 @@ describe("sampleBeta", () => {
 describe("selectWorkflowGreedy", () => {
   const mk = (
     slug: string,
-    contacted: number,
-    replies: number,
-    clicks: number,
-    cpl: number,
+    costPerOutcomeUsd: number | null,
     audienceId: string | null = null,
     grain: Candidate["grain"] = "brand-goal",
   ): Candidate => ({
@@ -155,60 +152,56 @@ describe("selectWorkflowGreedy", () => {
     workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
     goal: "meetingBooked",
     grain,
-    costPerOutcomeUsd: null,
-    cost: { costPerLeadUsd: cpl, clickUsd: null, replyUsd: null },
-    sampleSize: { runs: 1, contacted, clicks, replies },
+    costPerOutcomeUsd,
+    cost: { costPerLeadUsd: 0.1, clickUsd: null, replyUsd: null },
+    sampleSize: { runs: 1, contacted: 100, clicks: 5, replies: 10 },
   });
 
   it("returns null for no candidates", () => {
     expect(selectWorkflowGreedy([], "meetingBooked")).toBeNull();
   });
 
-  it("returns null when the brand has NO own evidence (all candidates grain 'goal-global')", () => {
-    // Cold-start: features-service hands back every active workflow at the cross-org
-    // fallback grain. The bandit must NOT pick from it — caller falls back to the
-    // configured slug. (Regression: a fresh brand saw its workflow jump run-to-run.)
+  it("picks the workflow with the cheapest costPerOutcomeUsd, deterministically", () => {
     const candidates = [
-      mk("wf-a", 1000, 200, 5, 100, null, "goal-global"),
-      mk("wf-b", 1000, 20, 300, 100, null, "goal-global"),
+      mk("wf-cheap", 40.1),
+      mk("wf-mid", 141.4),
+      mk("wf-expensive", 2197.5),
     ];
-    expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBeNull();
+    for (let i = 0; i < 50; i++) expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBe("wf-cheap");
   });
 
-  it("picks only among BRAND-LEVEL rows, ignoring 'goal-global' fallback rows", () => {
-    // wf-bad looks cheapest cross-org but has no brand evidence; wf-good has the
-    // brand's own evidence and must win even though a goal-global row is present.
+  it("ignores rows with a null costPerOutcomeUsd (no rankable economics)", () => {
+    // The tiny-sample workflows that used to win the Laplace recompute now carry a
+    // null cost-per-outcome and must be skipped — the cheapest RANKABLE one wins.
     const candidates = [
-      mk("wf-good", 1000, 200, 5, 100, "aud-1", "audience"),
-      mk("wf-cheap-global", 1000, 999, 5, 1, null, "goal-global"),
+      mk("wf-null-a", null),
+      mk("wf-good", 43.3),
+      mk("wf-null-b", null),
+      mk("wf-worse", 195.6),
     ];
     expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBe("wf-good");
   });
 
-  it("always picks the cheaper-per-reply workflow (cppr goal → replies), deterministically", () => {
-    const candidates = [
-      mk("wf-good", 1000, 200, 5, 100), // 0.2 reply rate
-      mk("wf-bad", 1000, 20, 300, 100), //  0.02 reply rate (lots of clicks — irrelevant for this goal)
-    ];
-    for (let i = 0; i < 50; i++) expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBe("wf-good");
+  it("returns null when NO candidate has a costPerOutcomeUsd (caller falls back to configured slug)", () => {
+    const candidates = [mk("wf-a", null), mk("wf-b", null, "aud-1", "audience")];
+    expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBeNull();
   });
 
-  it("uses CLICKS as the success for the signup goal (flips the winner)", () => {
+  it("grain is irrelevant — a cross-org 'goal-global' row wins if it is the cheapest", () => {
     const candidates = [
-      mk("wf-replies", 1000, 300, 10, 100), // great replies, poor clicks
-      mk("wf-clicks", 1000, 10, 300, 100), //  poor replies, great clicks
+      mk("wf-brand", 60.0, "aud-1", "audience"),
+      mk("wf-global-cheap", 25.0, null, "goal-global"),
     ];
-    expect(selectWorkflowGreedy(candidates, "signup")).toBe("wf-clicks");
+    expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBe("wf-global-cheap");
   });
 
-  it("aggregates a workflow's evidence across its (audience,workflow) rows", () => {
-    // Same workflow appears twice (two audiences). Combined it has strong replies.
+  it("takes a workflow's lowest-cost row when it appears multiple times", () => {
     const candidates = [
-      mk("wf-split", 500, 100, 5, 100),
-      mk("wf-split", 500, 100, 5, 100),
-      mk("wf-weak", 1000, 20, 5, 100),
+      mk("wf-multi", 80.0, null, "brand-goal"),
+      mk("wf-multi", 30.0, "aud-1", "audience"), // cheaper row for the same workflow
+      mk("wf-other", 50.0),
     ];
-    expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBe("wf-split");
+    expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBe("wf-multi");
   });
 });
 
