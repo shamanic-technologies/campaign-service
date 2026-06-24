@@ -149,10 +149,12 @@ describe("selectWorkflowGreedy", () => {
     clicks: number,
     cpl: number,
     audienceId: string | null = null,
+    grain: Candidate["grain"] = "brand-goal",
   ): Candidate => ({
     audienceId,
     workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
     goal: "meetingBooked",
+    grain,
     costPerOutcomeUsd: null,
     cost: { costPerLeadUsd: cpl, clickUsd: null, replyUsd: null },
     sampleSize: { runs: 1, contacted, clicks, replies },
@@ -160,6 +162,27 @@ describe("selectWorkflowGreedy", () => {
 
   it("returns null for no candidates", () => {
     expect(selectWorkflowGreedy([], "meetingBooked")).toBeNull();
+  });
+
+  it("returns null when the brand has NO own evidence (all candidates grain 'goal-global')", () => {
+    // Cold-start: features-service hands back every active workflow at the cross-org
+    // fallback grain. The bandit must NOT pick from it — caller falls back to the
+    // configured slug. (Regression: a fresh brand saw its workflow jump run-to-run.)
+    const candidates = [
+      mk("wf-a", 1000, 200, 5, 100, null, "goal-global"),
+      mk("wf-b", 1000, 20, 300, 100, null, "goal-global"),
+    ];
+    expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBeNull();
+  });
+
+  it("picks only among BRAND-LEVEL rows, ignoring 'goal-global' fallback rows", () => {
+    // wf-bad looks cheapest cross-org but has no brand evidence; wf-good has the
+    // brand's own evidence and must win even though a goal-global row is present.
+    const candidates = [
+      mk("wf-good", 1000, 200, 5, 100, "aud-1", "audience"),
+      mk("wf-cheap-global", 1000, 999, 5, 1, null, "goal-global"),
+    ];
+    expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBe("wf-good");
   });
 
   it("always picks the cheaper-per-reply workflow (cppr goal → replies), deterministically", () => {
@@ -194,6 +217,7 @@ describe("audienceIdsForWorkflow", () => {
     audienceId,
     workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
     goal: "meetingBooked",
+    grain: audienceId ? "audience" : "brand-goal",
     costPerOutcomeUsd: null,
     cost: { costPerLeadUsd: 100, clickUsd: null, replyUsd: null },
     sampleSize: { runs: 1, contacted: 100, clicks: 5, replies: 10 },
