@@ -47,7 +47,11 @@ vi.mock("drizzle-orm", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { runGateChecks, nextWeekStart, nextMonthStart, type GateCheckInput } from "../../src/lib/gate-check.js";
+import { runGateChecks, nextWeekStart, nextMonthStart, nextDayStart, type GateCheckInput } from "../../src/lib/gate-check.js";
+
+// A feature paced by the CAMPAIGN budget windows (not the brand daily budget). Any slug that
+// isn't sales-cold-email-outreach qualifies.
+const NON_SALES_FEATURE = "pr-expert-quote-opportunities";
 
 function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
   return {
@@ -209,19 +213,78 @@ describe("Gate Check", () => {
       expect(mockGetStatsBudget).not.toHaveBeenCalled();
     });
 
-    it("should ignore legacy campaign daily budget fields", async () => {
+    it("sales feature ignores the campaign budget windows entirely (brand budget governs)", async () => {
+      // Sales is paced by the brand daily budget, NOT the campaign caps. Even with every
+      // campaign window configured and way over, the campaign-window path never runs (and with
+      // brandIds empty the brand loop is a no-op) → allowed, no runs-service window call.
       mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "1500" }])
+        makeBudgetResponse([{ label: "total", totalCostInUsdCents: "999999" }])
       );
 
       const result = await runGateChecks(makeCampaign({
-        maxBudgetDailyUsd: "10.00", // 1000 cents
+        featureSlug: "sales-cold-email-outreach",
+        maxBudgetDailyUsd: "10.00",
+        maxBudgetTotalUsd: "50.00",
       }));
       expect(result.allowed).toBe(true);
       expect(mockGetStatsBudget).not.toHaveBeenCalled();
     });
 
-    it("should auto-stop campaign when total budget is exceeded", async () => {
+    it("non-sales: blocks on the campaign DAILY window when today's spend hits the cap", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "1000" }]) // == 10.00 cap
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
+        maxBudgetDailyUsd: "10.00", // 1000 cents
+      }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("daily budget exceeded");
+      // Paced, not terminal: parks until the next day rollover (resets today's spend).
+      expect(result.autoStopped).toBeUndefined();
+      expect(result.nextRunAt!.getTime()).toBe(nextDayStart().getTime());
+    });
+
+    it("non-sales: allows when today's spend is below the campaign daily cap", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "daily", totalCostInUsdCents: "999" }])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
+        maxBudgetDailyUsd: "10.00",
+      }));
+      expect(result.allowed).toBe(true);
+    });
+
+    it("non-sales: is NEVER gated by the brand daily budget", async () => {
+      // Brand ceiling set far below the brand's spend — must NOT block a non-sales campaign.
+      process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+      process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
+      try {
+        // No campaign windows configured → campaign-window path is a no-op too.
+        const result = await runGateChecks(makeCampaign({
+          featureSlug: NON_SALES_FEATURE,
+          brandIds: ["brand-1"],
+          maxBudgetDailyUsd: null,
+          maxBudgetWeeklyUsd: null,
+          maxBudgetMonthlyUsd: null,
+          maxBudgetTotalUsd: null,
+        }));
+        expect(result.allowed).toBe(true);
+        // Brand daily-budget read must NOT have fired for a non-sales feature.
+        expect(mockFetch).not.toHaveBeenCalledWith(
+          expect.stringContaining("/daily-budget"),
+          expect.anything(),
+        );
+      } finally {
+        delete process.env.BILLING_SERVICE_URL;
+        delete process.env.BILLING_SERVICE_API_KEY;
+      }
+    });
+
+    it("non-sales: auto-stops the campaign when the total budget is exceeded", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
           { label: "daily", totalCostInUsdCents: "500" },
@@ -230,17 +293,20 @@ describe("Gate Check", () => {
       );
 
       const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
         maxBudgetDailyUsd: "100.00",
         maxBudgetTotalUsd: "50.00",
       }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("Total budget exceeded");
       expect(result.autoStopped).toBe(true);
+      expect(result.nextRunAt).toBeUndefined();
       expect(mockDbUpdate).toHaveBeenCalled();
     });
 
-    it("should call getStatsBudget with correct windows (no appId)", async () => {
+    it("non-sales: calls getStatsBudget with all configured windows (daily incl., no appId)", async () => {
       await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
         maxBudgetDailyUsd: "10.00",
         maxBudgetWeeklyUsd: "50.00",
         maxBudgetTotalUsd: "100.00",
@@ -251,6 +317,7 @@ describe("Gate Check", () => {
           orgId: "org-1",
           campaignId: "campaign-1",
           windows: expect.arrayContaining([
+            expect.objectContaining({ label: "daily" }),
             expect.objectContaining({ label: "weekly" }),
             expect.objectContaining({ label: "total" }),
           ]),
@@ -260,13 +327,11 @@ describe("Gate Check", () => {
       // Should NOT include appId
       const callArgs = mockGetStatsBudget.mock.calls[0][0];
       expect(callArgs).not.toHaveProperty("appId");
-      expect(callArgs.windows).not.toEqual(expect.arrayContaining([
-        expect.objectContaining({ label: "daily" }),
-      ]));
     });
 
-    it("should only include windows for configured budgets", async () => {
+    it("non-sales: only includes windows for configured budgets", async () => {
       await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
         maxBudgetDailyUsd: "10.00",
         maxBudgetWeeklyUsd: "50.00",
         maxBudgetMonthlyUsd: null,
@@ -274,8 +339,8 @@ describe("Gate Check", () => {
       }));
 
       const call = mockGetStatsBudget.mock.calls[0][0];
-      expect(call.windows).toHaveLength(1);
-      expect(call.windows[0].label).toBe("weekly");
+      expect(call.windows).toHaveLength(2);
+      expect(call.windows.map((w: { label: string }) => w.label).sort()).toEqual(["daily", "weekly"]);
     });
   });
 
@@ -597,14 +662,15 @@ describe("Gate Check", () => {
     });
   });
 
-  describe("nextRunAt on temporal budget exceeded", () => {
-    it("paces legacy weekly budget on ACTUAL, not total (regression)", async () => {
+  describe("nextRunAt on temporal budget exceeded (non-sales feature)", () => {
+    it("paces the weekly budget on ACTUAL, not total (regression)", async () => {
       // actual 4000 (< $50 = 5000) but total 6000 (provisioned 2000) — must NOT block.
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "weekly", totalCostInUsdCents: "6000", actualCostInUsdCents: "4000" }])
       );
 
       const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
         maxBudgetDailyUsd: null,
         maxBudgetWeeklyUsd: "50.00",
       }));
@@ -617,6 +683,7 @@ describe("Gate Check", () => {
       );
 
       const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
         maxBudgetDailyUsd: null,
         maxBudgetWeeklyUsd: "50.00",
       }));
@@ -633,6 +700,7 @@ describe("Gate Check", () => {
       );
 
       const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
         maxBudgetDailyUsd: null,
         maxBudgetMonthlyUsd: "100.00",
       }));
@@ -649,6 +717,7 @@ describe("Gate Check", () => {
       );
 
       const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
         maxBudgetDailyUsd: null,
         maxBudgetTotalUsd: "50.00",
       }));
@@ -657,7 +726,8 @@ describe("Gate Check", () => {
       expect(result.nextRunAt).toBeUndefined();
     });
 
-    it("should ignore legacy daily spend and return weekly nextRunAt when weekly exceeds", async () => {
+    it("daily window takes precedence: blocks on daily (with day-rollover nextRunAt) before weekly", async () => {
+      // daily over (1500 >= 1000) AND weekly over (6000 >= 5000): daily is enforced first.
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
           { label: "daily", totalCostInUsdCents: "1500" },
@@ -666,13 +736,13 @@ describe("Gate Check", () => {
       );
 
       const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
         maxBudgetDailyUsd: "10.00",
         maxBudgetWeeklyUsd: "50.00",
       }));
       expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("weekly budget exceeded");
-      const expected = nextWeekStart();
-      expect(result.nextRunAt!.getTime()).toBe(expected.getTime());
+      expect(result.reason).toBe("daily budget exceeded");
+      expect(result.nextRunAt!.getTime()).toBe(nextDayStart().getTime());
     });
   });
 
