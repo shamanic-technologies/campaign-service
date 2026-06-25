@@ -6,6 +6,11 @@ import { anyBrandPaused } from "./brand-pause.js";
 
 const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
 
+// The ONE feature paced by the brand daily budget (billing-service brand_daily_budgets).
+// Every other feature is paced by the campaign's own budget windows instead. Keep this byte-equal
+// to the feature_slug.
+const SALES_FEATURE_SLUG = "sales-cold-email-outreach";
+
 export interface GateCheckInput {
   campaignId: string;
   orgId: string;
@@ -16,8 +21,8 @@ export interface GateCheckInput {
   workflowSlug?: string;
   featureSlug?: string;
   status: string;
-  // Legacy storage/API field. Daily spend is enforced at brand level via billing-service,
-  // not as a campaign-scoped runs window.
+  // Daily campaign cap. Enforced as a campaign-scoped runs window (resets at day rollover) for
+  // EVERY feature except the sales feature, which is paced by the brand daily budget instead.
   maxBudgetDailyUsd: string | null;
   maxBudgetWeeklyUsd: string | null;
   maxBudgetMonthlyUsd: string | null;
@@ -80,53 +85,61 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     return { allowed: false, reason: "A run is already in progress" };
   }
 
-  // 3. Legacy non-daily campaign budget windows.
-  // maxBudgetDailyUsd is intentionally ignored here: the product's daily cap is now
-  // brand-level, fetched from billing-service below and enforced against brand-day
-  // aggregate spend across all campaign work for that brand.
-  const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean; nextRunAt?: Date }> = [];
-  const windows: BudgetWindow[] = [];
+  // 3. Campaign budget windows — enforced for EVERY feature EXCEPT the sales feature, which is
+  // paced by the brand daily budget (block 3c below) instead. For non-sales campaigns the
+  // campaign's own configured caps govern at their cadence: daily (today's spend, resets at day
+  // rollover), weekly, monthly, and total (one-off — auto-stops the campaign when hit).
+  const isSalesFeature = campaign.featureSlug === SALES_FEATURE_SLUG;
 
-  if (campaign.maxBudgetWeeklyUsd) {
-    windows.push({ label: "weekly", since: daysAgo(7).toISOString() });
-    budgetLimits.push({ limit: campaign.maxBudgetWeeklyUsd, label: "weekly", autoStop: false, nextRunAt: nextWeekStart() });
-  }
-  if (campaign.maxBudgetMonthlyUsd) {
-    windows.push({ label: "monthly", since: startOfMonth().toISOString() });
-    budgetLimits.push({ limit: campaign.maxBudgetMonthlyUsd, label: "monthly", autoStop: false, nextRunAt: nextMonthStart() });
-  }
-  if (campaign.maxBudgetTotalUsd) {
-    windows.push({ label: "total" });
-    budgetLimits.push({ limit: campaign.maxBudgetTotalUsd, label: "total", autoStop: true });
-  }
+  if (!isSalesFeature) {
+    const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean; nextRunAt?: Date }> = [];
+    const windows: BudgetWindow[] = [];
 
-  if (windows.length > 0) {
-    // Single call to runs-service for all configured legacy campaign budget windows.
-    const budgetResult = await getStatsBudget({
-      orgId: campaign.orgId,
-      campaignId: campaign.campaignId,
-      windows,
-    });
+    if (campaign.maxBudgetDailyUsd) {
+      windows.push({ label: "daily", since: startOfToday().toISOString() });
+      budgetLimits.push({ limit: campaign.maxBudgetDailyUsd, label: "daily", autoStop: false, nextRunAt: nextDayStart() });
+    }
+    if (campaign.maxBudgetWeeklyUsd) {
+      windows.push({ label: "weekly", since: daysAgo(7).toISOString() });
+      budgetLimits.push({ limit: campaign.maxBudgetWeeklyUsd, label: "weekly", autoStop: false, nextRunAt: nextWeekStart() });
+    }
+    if (campaign.maxBudgetMonthlyUsd) {
+      windows.push({ label: "monthly", since: startOfMonth().toISOString() });
+      budgetLimits.push({ limit: campaign.maxBudgetMonthlyUsd, label: "monthly", autoStop: false, nextRunAt: nextMonthStart() });
+    }
+    if (campaign.maxBudgetTotalUsd) {
+      windows.push({ label: "total" });
+      budgetLimits.push({ limit: campaign.maxBudgetTotalUsd, label: "total", autoStop: true });
+    }
 
-    for (const budgetLimit of budgetLimits) {
-      const limitCents = parseFloat(budgetLimit.limit) * 100;
-      const windowResult = budgetResult.windows.find(w => w.label === budgetLimit.label);
-      // Pace on ACTUAL (realized) spend, not actual+provisioned — same reasoning as the
-      // per-brand daily cap below: worst-case provisioned reservations get cancelled to a
-      // far smaller actual, so counting them would block on phantom spend.
-      const actualCostCents = windowResult ? parseFloat(windowResult.actualCostInUsdCents) || 0 : 0;
+    if (windows.length > 0) {
+      // Single call to runs-service for all configured campaign budget windows.
+      const budgetResult = await getStatsBudget({
+        orgId: campaign.orgId,
+        campaignId: campaign.campaignId,
+        windows,
+      });
 
-      if (actualCostCents >= limitCents) {
-        if (budgetLimit.autoStop) {
-          await autoStopCampaign(campaign.campaignId);
-          return { allowed: false, reason: "Total budget exceeded", autoStopped: true };
+      for (const budgetLimit of budgetLimits) {
+        const limitCents = parseFloat(budgetLimit.limit) * 100;
+        const windowResult = budgetResult.windows.find(w => w.label === budgetLimit.label);
+        // Pace on ACTUAL (realized) spend, not actual+provisioned — same reasoning as the
+        // per-brand daily cap below: worst-case provisioned reservations get cancelled to a
+        // far smaller actual, so counting them would block on phantom spend.
+        const actualCostCents = windowResult ? parseFloat(windowResult.actualCostInUsdCents) || 0 : 0;
+
+        if (actualCostCents >= limitCents) {
+          if (budgetLimit.autoStop) {
+            await autoStopCampaign(campaign.campaignId);
+            return { allowed: false, reason: "Total budget exceeded", autoStopped: true };
+          }
+          return { allowed: false, reason: `${budgetLimit.label} budget exceeded`, nextRunAt: budgetLimit.nextRunAt };
         }
-        return { allowed: false, reason: `${budgetLimit.label} budget exceeded`, nextRunAt: budgetLimit.nextRunAt };
       }
     }
   }
 
-  // 3c. Per-brand daily budget pacing — scoped to the same feature.
+  // 3c. Per-brand daily budget pacing — ONLY for the sales feature.
   // billing-service stores + serves each brand's daily spend ceiling (cents); ENFORCEMENT
   // is ours. For each brand in scope, compare today's platform spend for THIS campaign's
   // feature (runs-service, brandId + featureSlug keyed) against that ceiling. A brand at/over
@@ -143,28 +156,33 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // Read fail-OPEN: getBrandDailyBudget returns null on any billing failure (→ no cap this
   // tick), mirroring the affordability pre-filter — a billing blip must never freeze the
   // fleet, and the org-credit affordability gate below stays the hard money gate.
-  for (const brandId of campaign.brandIds) {
-    const dailyBudgetCents = await getBrandDailyBudget(brandId, identity);
-    if (dailyBudgetCents === null) continue; // unset/unreadable → no cap this tick
+  //
+  // Scope: ONLY the sales feature. Non-sales features are paced by the campaign budget windows
+  // (block 3 above) and are NEVER gated by the brand ceiling.
+  if (isSalesFeature) {
+    for (const brandId of campaign.brandIds) {
+      const dailyBudgetCents = await getBrandDailyBudget(brandId, identity);
+      if (dailyBudgetCents === null) continue; // unset/unreadable → no cap this tick
 
-    const brandSpend = await getStatsBudget({
-      orgId: campaign.orgId,
-      brandId,
-      featureSlug: campaign.featureSlug,
-      windows: [{ label: "today", since: startOfToday().toISOString() }],
-    });
-    const today = brandSpend.windows.find(w => w.label === "today");
-    // Pace on ACTUAL (realized) spend, NOT actual+provisioned. A provisioned row is a
-    // worst-case affordability RESERVATION (~26¢/LLM call here) held only until the call
-    // reconciles to its real cost (~0.7¢) + the hold is cancelled. Counting those open
-    // worst-case holds made actual+provisioned cross the ceiling while real spend was far
-    // under it — falsely blocking the campaign for ~15min (GATE_BLOCK_BACKOFF_MS) on every
-    // re-check until the day rolled over. checkAffordability below stays the hard money
-    // gate (org credit balance); this is just daily pacing, for which realized cost is right.
-    const spentCents = today ? parseFloat(today.actualCostInUsdCents) || 0 : 0;
+      const brandSpend = await getStatsBudget({
+        orgId: campaign.orgId,
+        brandId,
+        featureSlug: campaign.featureSlug,
+        windows: [{ label: "today", since: startOfToday().toISOString() }],
+      });
+      const today = brandSpend.windows.find(w => w.label === "today");
+      // Pace on ACTUAL (realized) spend, NOT actual+provisioned. A provisioned row is a
+      // worst-case affordability RESERVATION (~26¢/LLM call here) held only until the call
+      // reconciles to its real cost (~0.7¢) + the hold is cancelled. Counting those open
+      // worst-case holds made actual+provisioned cross the ceiling while real spend was far
+      // under it — falsely blocking the campaign for ~15min (GATE_BLOCK_BACKOFF_MS) on every
+      // re-check until the day rolled over. checkAffordability below stays the hard money
+      // gate (org credit balance); this is just daily pacing, for which realized cost is right.
+      const spentCents = today ? parseFloat(today.actualCostInUsdCents) || 0 : 0;
 
-    if (spentCents >= dailyBudgetCents) {
-      return { allowed: false, reason: "Brand daily budget reached" };
+      if (spentCents >= dailyBudgetCents) {
+        return { allowed: false, reason: "Brand daily budget reached" };
+      }
     }
   }
 
@@ -341,6 +359,15 @@ function startOfToday(): Date {
 
 function daysAgo(n: number): Date {
   return new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+}
+
+// Backoff for the daily campaign-budget window: park until the next day rollover, when today's
+// spend resets to zero and the cap re-opens.
+export function nextDayStart(): Date {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
 function startOfMonth(): Date {
