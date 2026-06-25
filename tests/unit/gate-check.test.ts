@@ -140,7 +140,7 @@ describe("Gate Check", () => {
 
     it("should NOT block when no target brand is paused", async () => {
       mockAnyBrandPaused.mockResolvedValue(false);
-      const result = await runGateChecks(makeCampaign({ brandIds: ["b1", "b2"] }));
+      const result = await runGateChecks(makeCampaign({ brandIds: ["b1", "b2"], featureSlug: NON_SALES_FEATURE }));
       expect(result.allowed).toBe(true);
     });
   });
@@ -595,8 +595,7 @@ describe("Gate Check", () => {
       expect(allowed.allowed).toBe(true);
     });
 
-    it("fail-OPEN (allow) and SILENT when the billing read throws", async () => {
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    it("blocks when the billing read throws (fail-closed spend control)", async () => {
       mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
@@ -605,9 +604,27 @@ describe("Gate Check", () => {
       );
 
       const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(true); // unreadable ceiling → no cap, other gates pass
-      expect(warnSpy).not.toHaveBeenCalled();
-      warnSpy.mockRestore();
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand daily budget unavailable");
+    });
+
+    it("blocks when the billing read returns non-2xx (fail-closed spend control)", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand daily budget unavailable");
+    });
+
+    it("blocks when the billing read returns malformed dailyBudgetCents", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ brandId: "brand-1", dailyBudgetCents: "not-a-number", updatedAt: null }),
+      });
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand daily budget unavailable");
     });
 
     it("blocks the tick if ANY brand in a multi-brand campaign hits its ceiling", async () => {

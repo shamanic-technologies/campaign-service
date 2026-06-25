@@ -37,6 +37,10 @@ export interface GateCheckResult {
   nextRunAt?: Date;
 }
 
+type BrandDailyBudgetRead =
+  | { ok: true; dailyBudgetCents: number | null }
+  | { ok: false };
+
 export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheckResult> {
   // Campaign must be ongoing
   if (campaign.status !== "ongoing") {
@@ -153,16 +157,22 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // Units: billing dailyBudgetCents and runs actualCostInUsdCents are BOTH cents → compared
   // directly (NO ×100, unlike the maxBudget*Usd columns above which are USD).
   //
-  // Read fail-OPEN: getBrandDailyBudget returns null on any billing failure (→ no cap this
-  // tick), mirroring the affordability pre-filter — a billing blip must never freeze the
-  // fleet, and the org-credit affordability gate below stays the hard money gate.
+  // Read fail-CLOSED: if the cap cannot be read or parsed, block this tick. This is spend
+  // control, not an optimization; treating an unreadable cap as "unbounded" lets campaigns
+  // keep spending past a configured daily ceiling. Explicit billing dailyBudgetCents:null
+  // remains the only unbounded signal.
   //
   // Scope: ONLY the sales feature. Non-sales features are paced by the campaign budget windows
   // (block 3 above) and are NEVER gated by the brand ceiling.
   if (isSalesFeature) {
     for (const brandId of campaign.brandIds) {
-      const dailyBudgetCents = await getBrandDailyBudget(brandId, identity);
-      if (dailyBudgetCents === null) continue; // unset/unreadable → no cap this tick
+      const dailyBudget = await getBrandDailyBudget(brandId, identity);
+      if (!dailyBudget.ok) {
+        return { allowed: false, reason: "Brand daily budget unavailable" };
+      }
+
+      const dailyBudgetCents = dailyBudget.dailyBudgetCents;
+      if (dailyBudgetCents === null) continue; // explicitly unset → no cap this tick
 
       const brandSpend = await getStatsBudget({
         orgId: campaign.orgId,
@@ -306,23 +316,19 @@ async function checkAffordability(campaignId: string, identity: IdentityHeaders)
 
 /**
  * Read a brand's current daily spend ceiling from billing-service.
- * Returns the ceiling in CENTS, or null when unset (dailyBudgetCents: null) — null means
- * "no cap this tick" to the caller.
+ * Returns the ceiling in CENTS, or null when billing explicitly stores no cap.
  *
- * Fail-OPEN by design: missing config, network error, non-2xx, or unparseable value all
- * return null (no cap), mirroring checkAffordability. The daily budget is a pacing ceiling,
- * not the hard money gate — a billing outage must never freeze every campaign, and org-credit
- * affordability remains the hard gate. Silent for the same per-tick-per-campaign reason: the
- * fail-open path fires every gate check across the fleet; logging it would spam the logs.
+ * Fail-CLOSED by design: missing config, network error, non-2xx, or unparseable values
+ * return ok:false so the caller blocks the tick instead of spending past an unreadable cap.
  *
  * Contract: GET /internal/brands/{brandId}/daily-budget (x-api-key) ->
  *   { brandId, dailyBudgetCents: string|null, updatedAt: string|null }
  */
-async function getBrandDailyBudget(brandId: string, identity: IdentityHeaders): Promise<number | null> {
+async function getBrandDailyBudget(brandId: string, identity: IdentityHeaders): Promise<BrandDailyBudgetRead> {
   const url = process.env.BILLING_SERVICE_URL;
   const apiKey = process.env.BILLING_SERVICE_API_KEY;
   if (!url || !apiKey) {
-    return null;
+    return { ok: false };
   }
 
   const headers: Record<string, string> = {
@@ -338,16 +344,19 @@ async function getBrandDailyBudget(brandId: string, identity: IdentityHeaders): 
   try {
     const res = await fetch(`${url}/internal/brands/${brandId}/daily-budget`, { headers });
     if (!res.ok) {
-      return null;
+      return { ok: false };
     }
     const data = await res.json() as { dailyBudgetCents?: string | null };
     if (data.dailyBudgetCents === null || data.dailyBudgetCents === undefined) {
-      return null;
+      return { ok: true, dailyBudgetCents: null };
     }
     const cents = parseFloat(data.dailyBudgetCents);
-    return Number.isFinite(cents) ? cents : null;
+    if (!Number.isFinite(cents)) {
+      return { ok: false };
+    }
+    return { ok: true, dailyBudgetCents: cents };
   } catch {
-    return null;
+    return { ok: false };
   }
 }
 
