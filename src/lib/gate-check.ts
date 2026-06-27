@@ -127,21 +127,21 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       for (const budgetLimit of budgetLimits) {
         const limitCents = parseFloat(budgetLimit.limit) * 100;
         const windowResult = budgetResult.windows.find(w => w.label === budgetLimit.label);
-        // Pacing source splits by window type:
-        // - Non-terminal windows (daily/weekly/monthly, autoStop:false) pace on COMMITTED
-        //   spend = actual + provisioned (totalCostInUsdCents). Same committed-pacing decision
-        //   as the per-brand daily cap (block 3c) — count reserved follow-up-send holds so the
-        //   enforced ceiling matches the dashboard's committed "Budget spent today" and a
-        //   campaign stops committing new work above its configured cap. The accepted cost is
-        //   the worst-case-LLM-hold over-block (a ~26¢ reservation reconciles to ~0.7¢ then
-        //   cancels), which only delays a re-check by ~15min until the hold settles or the
-        //   window rolls over — a non-terminal pause, so it self-heals.
-        // - The TOTAL window (autoStop:true) stays on ACTUAL (realized) spend ON PURPOSE: it
-        //   triggers a TERMINAL autoStop, and stopping a campaign permanently on phantom
-        //   worst-case holds is unacceptable. Only realized spend can end a campaign for good.
-        const spentCents = windowResult
-          ? parseFloat(budgetLimit.autoStop ? windowResult.actualCostInUsdCents : windowResult.totalCostInUsdCents) || 0
-          : 0;
+        // ALL campaign budget windows — daily, weekly, monthly AND total — pace on COMMITTED
+        // spend = actual + provisioned (totalCostInUsdCents). Same committed-pacing decision as
+        // the per-brand daily cap (block 3c): count reserved follow-up-send holds so the enforced
+        // ceiling matches the dashboard's committed "Budget spent today" and a campaign stops
+        // committing new work above its configured cap.
+        //
+        // The TOTAL window (autoStop:true) now also uses committed, by product-owner decision.
+        // TRADEOFF (accepted): for the non-terminal windows the worst-case-LLM-hold over-block
+        // (a ~26¢ reservation reconciles to ~0.7¢ then cancels) only causes a ~15min pause that
+        // self-heals; for the TOTAL window the same inflated holds can trigger the TERMINAL
+        // autoStop, so a temporary committed spike near the lifetime cap can stop a campaign for
+        // good before the holds settle. That stop is recoverable (re-activating the campaign
+        // resumes it), and the owner has chosen committed-pacing for the total cap for full
+        // coherence with the dashboard over avoiding that edge.
+        const spentCents = windowResult ? parseFloat(windowResult.totalCostInUsdCents) || 0 : 0;
 
         if (spentCents >= limitCents) {
           if (budgetLimit.autoStop) {
@@ -205,8 +205,8 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       // from committing NEW work above the daily budget while reserved follow-up holds sit
       // uncounted. The worst-case-LLM-hold over-block is the accepted cost of that alignment.
       // checkAffordability below stays the hard money gate (org credit balance); this is daily
-      // pacing. NOTE: the campaign budget WINDOWS (block 3 above) still pace on ACTUAL — only
-      // this brand daily cap moves to committed.
+      // pacing. NOTE: the campaign budget WINDOWS (block 3 above) — daily, weekly, monthly AND
+      // total — now ALL pace on committed too, for full coherence with the dashboard.
       const spentCents = today ? parseFloat(today.totalCostInUsdCents) || 0 : 0;
 
       if (spentCents >= dailyBudgetCents) {
