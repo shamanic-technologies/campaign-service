@@ -96,10 +96,10 @@ function makeBudgetResponse(
   return {
     windows: windows.map(w => {
       // Default: actual == total (provisioned 0). Pass actualCostInUsdCents explicitly to
-      // model an in-flight worst-case provisioned hold (total > actual). Pacing differs by
-      // gate: NON-TERMINAL caps pace on COMMITTED total (the per-brand daily cap AND the
-      // campaign daily/weekly/monthly windows — a high total with low actual DOES block them),
-      // while the TERMINAL total window paces on ACTUAL (it does NOT auto-stop on phantom holds).
+      // model an in-flight worst-case provisioned hold (total > actual). ALL budget caps now
+      // pace on COMMITTED total — the per-brand daily cap AND every campaign window (daily,
+      // weekly, monthly, total) — so a high total with low actual DOES block (and the total
+      // window DOES auto-stop) on committed spend.
       const actual = w.actualCostInUsdCents ?? w.totalCostInUsdCents;
       const provisioned = (parseFloat(w.totalCostInUsdCents) - parseFloat(actual)).toString();
       return {
@@ -702,10 +702,12 @@ describe("Gate Check", () => {
       expect(result.reason).toBe("weekly budget exceeded");
     });
 
-    it("paces the TOTAL (terminal autoStop) window on ACTUAL — does NOT auto-stop on phantom holds", async () => {
-      // The total window stays on actual ON PURPOSE: actual 4000 (< $50 = 5000) but committed
-      // total 9000 (provisioned 5000). A terminal autoStop must never fire on worst-case holds,
-      // so this MUST allow even though committed is over the cap.
+    it("paces the TOTAL (terminal autoStop) window on COMMITTED — auto-stops when committed is over", async () => {
+      // Committed-pacing now applies to the total window too (product-owner decision for full
+      // dashboard coherence): actual 4000 (< $50 = 5000) but committed total 9000 (provisioned
+      // 5000) is over the cap → terminal autoStop fires on committed. (Accepted tradeoff: a
+      // temporary committed spike near the lifetime cap can stop a campaign before holds settle;
+      // recoverable by re-activating.)
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "total", totalCostInUsdCents: "9000", actualCostInUsdCents: "4000" }])
       );
@@ -715,8 +717,9 @@ describe("Gate Check", () => {
         maxBudgetDailyUsd: null,
         maxBudgetTotalUsd: "50.00",
       }));
-      expect(result.allowed).toBe(true);
-      expect(result.autoStopped).toBeUndefined();
+      expect(result.allowed).toBe(false);
+      expect(result.autoStopped).toBe(true);
+      expect(result.nextRunAt).toBeUndefined();
     });
 
     it("should return nextRunAt when weekly budget is exceeded", async () => {
