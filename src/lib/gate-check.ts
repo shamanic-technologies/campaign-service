@@ -181,14 +181,22 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         windows: [{ label: "today", since: startOfToday().toISOString() }],
       });
       const today = brandSpend.windows.find(w => w.label === "today");
-      // Pace on ACTUAL (realized) spend, NOT actual+provisioned. A provisioned row is a
-      // worst-case affordability RESERVATION (~26¢/LLM call here) held only until the call
-      // reconciles to its real cost (~0.7¢) + the hold is cancelled. Counting those open
-      // worst-case holds made actual+provisioned cross the ceiling while real spend was far
-      // under it — falsely blocking the campaign for ~15min (GATE_BLOCK_BACKOFF_MS) on every
-      // re-check until the day rolled over. checkAffordability below stays the hard money
-      // gate (org credit balance); this is just daily pacing, for which realized cost is right.
-      const spentCents = today ? parseFloat(today.actualCostInUsdCents) || 0 : 0;
+      // Pace on COMMITTED spend = actual + provisioned (the window's totalCostInUsdCents).
+      // This DELIBERATELY REVERSES #223 ("pace on actual, not actual+provisioned") FOR THIS
+      // per-brand daily cap ONLY. #223's concern was real: a provisioned row can be a worst-case
+      // affordability RESERVATION (an LLM call reserves ~26¢, reconciles to ~0.7¢, then cancels
+      // the hold), so counting open holds could block on phantom spend for ~15min until the day
+      // rolls over. The product owner has weighed that tradeoff and accepted it: in practice the
+      // bulk of the committed-minus-actual gap is genuine instantly-account-email-sent holds for
+      // already-scheduled follow-up sends (real future spend), and the dashboard already shows
+      // the brand's "Budget spent today" as this same committed number. Pacing the cap on
+      // committed makes the enforced ceiling match what the customer sees and stops a campaign
+      // from committing NEW work above the daily budget while reserved follow-up holds sit
+      // uncounted. The worst-case-LLM-hold over-block is the accepted cost of that alignment.
+      // checkAffordability below stays the hard money gate (org credit balance); this is daily
+      // pacing. NOTE: the campaign budget WINDOWS (block 3 above) still pace on ACTUAL — only
+      // this brand daily cap moves to committed.
+      const spentCents = today ? parseFloat(today.totalCostInUsdCents) || 0 : 0;
 
       if (spentCents >= dailyBudgetCents) {
         return { allowed: false, reason: "Brand daily budget reached" };
