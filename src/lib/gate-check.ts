@@ -127,12 +127,23 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       for (const budgetLimit of budgetLimits) {
         const limitCents = parseFloat(budgetLimit.limit) * 100;
         const windowResult = budgetResult.windows.find(w => w.label === budgetLimit.label);
-        // Pace on ACTUAL (realized) spend, not actual+provisioned — same reasoning as the
-        // per-brand daily cap below: worst-case provisioned reservations get cancelled to a
-        // far smaller actual, so counting them would block on phantom spend.
-        const actualCostCents = windowResult ? parseFloat(windowResult.actualCostInUsdCents) || 0 : 0;
+        // Pacing source splits by window type:
+        // - Non-terminal windows (daily/weekly/monthly, autoStop:false) pace on COMMITTED
+        //   spend = actual + provisioned (totalCostInUsdCents). Same committed-pacing decision
+        //   as the per-brand daily cap (block 3c) — count reserved follow-up-send holds so the
+        //   enforced ceiling matches the dashboard's committed "Budget spent today" and a
+        //   campaign stops committing new work above its configured cap. The accepted cost is
+        //   the worst-case-LLM-hold over-block (a ~26¢ reservation reconciles to ~0.7¢ then
+        //   cancels), which only delays a re-check by ~15min until the hold settles or the
+        //   window rolls over — a non-terminal pause, so it self-heals.
+        // - The TOTAL window (autoStop:true) stays on ACTUAL (realized) spend ON PURPOSE: it
+        //   triggers a TERMINAL autoStop, and stopping a campaign permanently on phantom
+        //   worst-case holds is unacceptable. Only realized spend can end a campaign for good.
+        const spentCents = windowResult
+          ? parseFloat(budgetLimit.autoStop ? windowResult.actualCostInUsdCents : windowResult.totalCostInUsdCents) || 0
+          : 0;
 
-        if (actualCostCents >= limitCents) {
+        if (spentCents >= limitCents) {
           if (budgetLimit.autoStop) {
             await autoStopCampaign(campaign.campaignId);
             return { allowed: false, reason: "Total budget exceeded", autoStopped: true };

@@ -97,8 +97,9 @@ function makeBudgetResponse(
     windows: windows.map(w => {
       // Default: actual == total (provisioned 0). Pass actualCostInUsdCents explicitly to
       // model an in-flight worst-case provisioned hold (total > actual). Pacing differs by
-      // gate: the campaign budget WINDOWS pace on ACTUAL (a high total with low actual does
-      // NOT block them), while the per-brand daily cap paces on COMMITTED total (it DOES block).
+      // gate: NON-TERMINAL caps pace on COMMITTED total (the per-brand daily cap AND the
+      // campaign daily/weekly/monthly windows — a high total with low actual DOES block them),
+      // while the TERMINAL total window paces on ACTUAL (it does NOT auto-stop on phantom holds).
       const actual = w.actualCostInUsdCents ?? w.totalCostInUsdCents;
       const provisioned = (parseFloat(w.totalCostInUsdCents) - parseFloat(actual)).toString();
       return {
@@ -684,8 +685,10 @@ describe("Gate Check", () => {
   });
 
   describe("nextRunAt on temporal budget exceeded (non-sales feature)", () => {
-    it("paces the weekly budget on ACTUAL, not total (regression)", async () => {
-      // actual 4000 (< $50 = 5000) but total 6000 (provisioned 2000) — must NOT block.
+    it("paces the weekly (non-terminal) budget on COMMITTED, not actual", async () => {
+      // Committed-pacing: actual 4000 (< $50 = 5000) but committed total 6000 (provisioned
+      // 2000) is over the cap — the non-terminal weekly window MUST block (matches the
+      // dashboard's committed spend). Reverses the prior actual-pacing regression assertion.
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "weekly", totalCostInUsdCents: "6000", actualCostInUsdCents: "4000" }])
       );
@@ -695,7 +698,25 @@ describe("Gate Check", () => {
         maxBudgetDailyUsd: null,
         maxBudgetWeeklyUsd: "50.00",
       }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("weekly budget exceeded");
+    });
+
+    it("paces the TOTAL (terminal autoStop) window on ACTUAL — does NOT auto-stop on phantom holds", async () => {
+      // The total window stays on actual ON PURPOSE: actual 4000 (< $50 = 5000) but committed
+      // total 9000 (provisioned 5000). A terminal autoStop must never fire on worst-case holds,
+      // so this MUST allow even though committed is over the cap.
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "total", totalCostInUsdCents: "9000", actualCostInUsdCents: "4000" }])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
+        maxBudgetDailyUsd: null,
+        maxBudgetTotalUsd: "50.00",
+      }));
       expect(result.allowed).toBe(true);
+      expect(result.autoStopped).toBeUndefined();
     });
 
     it("should return nextRunAt when weekly budget is exceeded", async () => {
