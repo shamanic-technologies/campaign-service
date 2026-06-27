@@ -96,8 +96,9 @@ function makeBudgetResponse(
   return {
     windows: windows.map(w => {
       // Default: actual == total (provisioned 0). Pass actualCostInUsdCents explicitly to
-      // model an in-flight worst-case provisioned hold (total > actual) — the gate must
-      // pace on ACTUAL, so a high total with a low actual should NOT block.
+      // model an in-flight worst-case provisioned hold (total > actual). Pacing differs by
+      // gate: the campaign budget WINDOWS pace on ACTUAL (a high total with low actual does
+      // NOT block them), while the per-brand daily cap paces on COMMITTED total (it DOES block).
       const actual = w.actualCostInUsdCents ?? w.totalCostInUsdCents;
       const provisioned = (parseFloat(w.totalCostInUsdCents) - parseFloat(actual)).toString();
       return {
@@ -549,20 +550,23 @@ describe("Gate Check", () => {
       expect(result.allowed).toBe(true);
     });
 
-    it("allows when ACTUAL is under the ceiling even though provisioned pushes total over (regression)", async () => {
-      // The bug: worst-case provisioned holds (~26¢ each, later cancelled to ~0.7¢ actual)
-      // made actual+provisioned cross the $7 ceiling while realized spend was far under,
-      // falsely blocking the campaign for 15min on every re-check. Gate must pace on actual.
+    it("blocks when COMMITTED (actual + provisioned) is over the ceiling even though actual alone is under", async () => {
+      // Committed-pacing decision (supersedes #223 for this brand daily cap): the cap now
+      // counts reserved follow-up-send holds toward the daily budget, matching the dashboard's
+      // committed "Budget spent today". Actual alone (999 < 1000) is under the ceiling, but
+      // committed total 5999 (provisioned 5000) is over — so the gate MUST block. This is the
+      // deliberate reversal of the old #223 regression test (which asserted this case allows).
       mockDailyBudget("1000"); // ceiling 1000 cents
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
-          // actual 999 (< 1000) but total 5999 (provisioned 5000) — must NOT block.
+          // actual 999 (< 1000) but committed total 5999 (provisioned 5000) — must BLOCK.
           { label: "today", totalCostInUsdCents: "5999", actualCostInUsdCents: "999" },
         ])
       );
 
       const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(true);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand daily budget reached");
     });
 
     it("treats an unset budget (null) as unbounded — no cap", async () => {
