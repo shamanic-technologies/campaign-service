@@ -1,16 +1,22 @@
 import { sql, and, eq, inArray, type SQL } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { brandPause, campaigns } from "../db/schema.js";
+import { SALES_OUTREACH_FEATURE_SLUG } from "./sales-outreach-campaign.js";
 
 /**
  * SQL predicate: the campaign is NOT held by a brand pause.
  *
- * A campaign is HELD when ANY brandId in its `brand_ids` array belongs to a paused brand
- * (brand_pause.paused = true) in the SAME org. This clause is the negation — true for
- * campaigns that should still run.
+ * A campaign is HELD when it belongs to the sales-outreach feature AND ANY brandId in its
+ * `brand_ids` array belongs to a paused brand (brand_pause.paused = true) in the SAME org.
+ * This clause is the negation — true for campaigns that should still run.
+ *
+ * FEATURE-SCOPED: a brand pause is a sales-cold-email-outreach switch (the pause toggle re-seeds
+ * a sales campaign on un-pause), so it holds ONLY that feature's campaigns. Every other feature
+ * (pr-expert-quote-outreach, pr-expert-quote-opportunities, ai-visibility-scoring, …) keeps
+ * running for a paused brand — pausing sales must not freeze the brand's other features.
  *
  * Injected into every scheduler query that filters status='ongoing' (reRunDueCampaigns claim,
- * claimStuckCampaigns, loadOngoingSnapshot) so a paused brand's campaigns are excluded
+ * claimStuckCampaigns, loadOngoingSnapshot) so a paused brand's sales campaigns are excluded
  * atomically via a LOCAL join — no per-tick HTTP. When the brand un-pauses, the row flips and
  * those campaigns are picked up again on the next tick with zero re-launch.
  *
@@ -24,6 +30,7 @@ export function notPausedBrandClause(): SQL {
       ON bp.org_id = c.org_id
       AND bp.paused = true
       AND bp.brand_id = ANY(c.brand_ids)
+    WHERE c.feature_slug = ${SALES_OUTREACH_FEATURE_SLUG}
   )`;
 }
 

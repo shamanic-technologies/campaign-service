@@ -145,6 +145,15 @@ describe("Gate Check", () => {
       const result = await runGateChecks(makeCampaign({ brandIds: ["b1", "b2"], featureSlug: NON_SALES_FEATURE }));
       expect(result.allowed).toBe(true);
     });
+
+    it("should NOT hold a NON-sales campaign even when its brand is paused (pause is sales-only)", async () => {
+      mockAnyBrandPaused.mockResolvedValue(true); // brand IS paused…
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], featureSlug: NON_SALES_FEATURE }));
+      // …but the pause holds only sales-cold-email-outreach, so a pr-expert run passes the gate.
+      expect(result.reason).not.toBe("Brand paused");
+      // The pause branch must short-circuit for non-sales — never even query the pause table.
+      expect(mockAnyBrandPaused).not.toHaveBeenCalled();
+    });
   });
 
   it("should block if campaign is not ongoing", async () => {
