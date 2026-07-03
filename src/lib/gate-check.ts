@@ -51,7 +51,11 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // scheduler already excludes paused-brand campaigns from its claim, but a run already in
   // flight when the brand was paused still reaches this gate. NOT a terminal stop — the
   // campaign stays 'ongoing'; internal.ts backs it off and the next un-pause resumes it.
-  if (await anyBrandPaused(campaign.orgId, campaign.brandIds)) {
+  //
+  // FEATURE-SCOPED: a brand pause is a sales-cold-email-outreach switch, so it only holds that
+  // feature's runs. Non-sales features (pr-expert-quote-outreach, …) run through even when the
+  // brand is paused — mirrors notPausedBrandClause() on the scheduler side.
+  if (campaign.featureSlug === SALES_FEATURE_SLUG && (await anyBrandPaused(campaign.orgId, campaign.brandIds))) {
     return { allowed: false, reason: "Brand paused" };
   }
 
