@@ -235,7 +235,7 @@ describe("Scheduler holds paused-brand campaigns", () => {
       status: "ongoing",
       nextRunAt: past(),
       brandIds: [brandId],
-      featureSlug: "sales-cold-email-v1",
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
       createdByUserId: "user-x",
     });
     await setBrandPause(orgId, brandId, true);
@@ -249,13 +249,47 @@ describe("Scheduler holds paused-brand campaigns", () => {
     expect(after!.nextRunAt).not.toBeNull(); // nextRunAt untouched (not claimed)
   });
 
+  it("reRunDueCampaigns DOES claim a due NON-sales campaign even when its brand is paused", async () => {
+    // A brand pause is a sales-outreach switch — it must NOT freeze the brand's other features.
+    const brandId = crypto.randomUUID();
+    await insertTestCampaign(orgId, {
+      status: "ongoing",
+      nextRunAt: past(),
+      brandIds: [brandId],
+      featureSlug: "pr-expert-quote-outreach",
+      createdByUserId: "user-x",
+    });
+    await setBrandPause(orgId, brandId, true); // brand paused…
+
+    const count = await reRunDueCampaigns();
+    expect(count).toBe(1); // …but the non-sales campaign still runs
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("claimStuckCampaigns DOES claim a stuck NON-sales campaign even when its brand is paused", async () => {
+    const brandId = crypto.randomUUID();
+    const campaign = await insertTestCampaign(orgId, {
+      status: "ongoing",
+      nextRunAt: null, // stuck shape
+      brandIds: [brandId],
+      featureSlug: "pr-expert-quote-outreach",
+    });
+    await setBrandPause(orgId, brandId, true);
+
+    const claimed = await claimStuckCampaigns();
+    expect(claimed).toBe(1);
+
+    const after = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaign.id) });
+    expect(after!.nextRunAt).not.toBeNull(); // claimed for re-run
+  });
+
   it("reRunDueCampaigns DOES claim a due campaign whose brand is not paused", async () => {
     const brandId = crypto.randomUUID();
     await insertTestCampaign(orgId, {
       status: "ongoing",
       nextRunAt: past(),
       brandIds: [brandId],
-      featureSlug: "sales-cold-email-v1",
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
       createdByUserId: "user-x",
     });
     // No pause row (or paused=false) → unaffected.
@@ -273,7 +307,7 @@ describe("Scheduler holds paused-brand campaigns", () => {
       status: "ongoing",
       nextRunAt: past(),
       brandIds: [b1, b2],
-      featureSlug: "sales-cold-email-v1",
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
       createdByUserId: "user-x",
     });
     await setBrandPause(orgId, b2, true); // only the second brand is paused
@@ -289,7 +323,7 @@ describe("Scheduler holds paused-brand campaigns", () => {
       status: "ongoing",
       nextRunAt: past(),
       brandIds: [brandId],
-      featureSlug: "sales-cold-email-v1",
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
       createdByUserId: "user-x",
     });
     await setBrandPause("some-other-org", brandId, true); // same brandId, wrong org
@@ -304,6 +338,7 @@ describe("Scheduler holds paused-brand campaigns", () => {
       status: "ongoing",
       nextRunAt: null, // stuck shape: ongoing + no nextRunAt
       brandIds: [brandId],
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
     });
     await setBrandPause(orgId, brandId, true);
 
@@ -320,7 +355,7 @@ describe("Scheduler holds paused-brand campaigns", () => {
       status: "ongoing",
       nextRunAt: past(),
       brandIds: [brandId],
-      featureSlug: "sales-cold-email-v1",
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
       createdByUserId: "user-x",
     });
     await setBrandPause(orgId, brandId, true);
