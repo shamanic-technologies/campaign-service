@@ -2,7 +2,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
-import { resolveWorkflowSlugForTrigger } from "./features-candidates-client.js";
+import { resolveWorkflowSlugForTrigger } from "./features-workflow-projection-client.js";
 import { listRuns } from "@distribute/runs-client";
 import { notPausedBrandClause } from "./brand-pause.js";
 
@@ -199,7 +199,7 @@ export async function claimStuckCampaigns(): Promise<number> {
   const now = new Date();
   const freshnessCutoff = new Date(now.getTime() - STUCK_RUN_FRESHNESS_THRESHOLD_MS);
 
-  const candidates = await db.query.campaigns.findMany({
+  const ongoingCampaigns = await db.query.campaigns.findMany({
     where: and(
       eq(campaigns.status, "ongoing"),
       isNull(campaigns.nextRunAt),
@@ -209,14 +209,14 @@ export async function claimStuckCampaigns(): Promise<number> {
     columns: { id: true, orgId: true },
   });
 
-  if (candidates.length === 0) return 0;
+  if (ongoingCampaigns.length === 0) return 0;
 
   let claimedCount = 0;
 
-  for (const candidate of candidates) {
+  for (const campaign of ongoingCampaigns) {
     // Same definition of "alive" as reRunDueCampaigns: ANY running run for the
     // campaign within the freshness window, regardless of which service owns it.
-    const alive = await hasLiveRunForCampaign(candidate.orgId, candidate.id, freshnessCutoff);
+    const alive = await hasLiveRunForCampaign(campaign.orgId, campaign.id, freshnessCutoff);
 
     if (alive) {
       // Fresh run in flight → campaign is alive, not stuck.
@@ -228,7 +228,7 @@ export async function claimStuckCampaigns(): Promise<number> {
       .set({ nextRunAt: now, updatedAt: now })
       .where(
         and(
-          eq(campaigns.id, candidate.id),
+          eq(campaigns.id, campaign.id),
           eq(campaigns.status, "ongoing"),
           isNull(campaigns.nextRunAt),
         ),
@@ -237,7 +237,7 @@ export async function claimStuckCampaigns(): Promise<number> {
 
     if (claimed.length > 0) {
       claimedCount++;
-      console.log(`[campaign-service] Claimed stuck campaign ${candidate.id} (no fresh run in last ${STUCK_RUN_FRESHNESS_THRESHOLD_MS / 60_000}min)`);
+      console.log(`[campaign-service] Claimed stuck campaign ${campaign.id} (no fresh run in last ${STUCK_RUN_FRESHNESS_THRESHOLD_MS / 60_000}min)`);
     }
   }
 
