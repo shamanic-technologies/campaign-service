@@ -3,8 +3,8 @@ import { thompsonArgminCost, greedyArgminCost, sampleBeta, type Arm, type Rng } 
 import {
   selectWorkflowGreedy,
   audienceIdsForWorkflow,
-  type Candidate,
-} from "../../src/lib/features-candidates-client.js";
+  type ProjectionRow,
+} from "../../src/lib/features-workflow-projection-client.js";
 
 // Deterministic PRNG so the probabilistic assertions are reproducible.
 function mulberry32(seed: number): Rng {
@@ -146,15 +146,11 @@ describe("selectWorkflowGreedy", () => {
     slug: string,
     costPerOutcomeUsd: number | null,
     audienceId: string | null = null,
-    grain: Candidate["grain"] = "brand-goal",
-  ): Candidate => ({
+    grain: string = "brand",
+  ): ProjectionRow => ({
     audienceId,
     workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
-    goal: "meetingBooked",
-    grain,
-    costPerOutcomeUsd,
-    cost: { costPerLeadUsd: 0.1, clickUsd: null, replyUsd: null },
-    sampleSize: { runs: 1, contacted: 100, clicks: 5, replies: 10 },
+    resolved: { grain, costPerOutcomeUsd },
   });
 
   it("returns null for no candidates", () => {
@@ -206,14 +202,10 @@ describe("selectWorkflowGreedy", () => {
 });
 
 describe("audienceIdsForWorkflow", () => {
-  const mk = (slug: string, audienceId: string | null): Candidate => ({
+  const mk = (slug: string, audienceId: string | null): ProjectionRow => ({
     audienceId,
     workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
-    goal: "meetingBooked",
-    grain: audienceId ? "audience" : "brand-goal",
-    costPerOutcomeUsd: null,
-    cost: { costPerLeadUsd: 100, clickUsd: null, replyUsd: null },
-    sampleSize: { runs: 1, contacted: 100, clicks: 5, replies: 10 },
+    resolved: { grain: audienceId ? "audience" : "brand", costPerOutcomeUsd: null },
   });
 
   it("returns only the audience-grain rows (audienceId non-null) for the chosen workflow", () => {
