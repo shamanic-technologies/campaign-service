@@ -48,11 +48,11 @@ vi.mock("../../src/lib/features-audience-client.js", () => ({
   selectAudienceForRun: mockSelectAudienceForRun,
 }));
 
-vi.mock("../../src/lib/features-candidates-client.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../src/lib/features-candidates-client.js")>();
+vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/features-workflow-projection-client.js")>();
   return {
     ...original, // keep the real pure audienceIdsForWorkflow
-    fetchCandidates: mockFetchCandidates,
+    fetchWorkflowProjectionRows: mockFetchCandidates,
   };
 });
 
@@ -480,11 +480,10 @@ describe("Pipeline routes", () => {
       const mkCandidate = (slug: string, audienceId: string | null) => ({
         audienceId,
         workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
-        goal: "signup" as const,
-        grain: (audienceId ? "audience" : "brand-goal") as const,
-        costPerOutcomeUsd: null,
-        cost: { costPerLeadUsd: 100, clickUsd: null, replyUsd: null },
-        sampleSize: { runs: 1, contacted: 100, clicks: 5, replies: 2 },
+        resolved: {
+          grain: audienceId ? "audience" : "brand",
+          costPerOutcomeUsd: null,
+        },
       });
       // Two audiences ran the campaign's workflow; one belongs to a different workflow.
       mockFetchCandidates.mockResolvedValueOnce([

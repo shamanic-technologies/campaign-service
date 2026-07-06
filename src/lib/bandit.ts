@@ -1,7 +1,7 @@
 // Cost-aware Thompson sampling — the shared selection engine.
 //
 // Used twice per run by campaign-service: to pick the WORKFLOW (at the trigger,
-// over features-service /candidates) and the AUDIENCE (at /start-run, over
+// over features-service /workflow-projection) and the AUDIENCE (at /start-run, over
 // features-service /audience-stats). Both reduce to the same problem: a set of
 // arms, each with a count of trials, a count of successes, and a cost per trial;
 // pick the arm with the cheapest cost-per-success — but uncertainty-aware, so an

@@ -22,7 +22,7 @@ vi.mock("../../src/lib/workflows.js", () => ({
 
 // The workflow bandit resolves to the campaign's configured slug here (the
 // fallback), so the existing executeCampaignWorkflow assertions on slug still hold.
-vi.mock("../../src/lib/features-candidates-client.js", () => ({
+vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
   resolveWorkflowSlugForTrigger: mockResolveWorkflowSlug,
 }));
 
