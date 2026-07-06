@@ -2,9 +2,8 @@ import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-heade
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "./brand-runtime-client.js";
 
 // One (audienceId, workflow) row from features-service GET /features/:slug/workflow-projection.
-// Mirrors the row the deleted /candidates endpoint used to return: audienceId is null for the
-// brand-level row and non-null for an active audience that ran this workflow dynasty. The
-// workflow ranking metric now lives at resolved.costPerOutcomeUsd (was top-level).
+// audienceId is null for the brand-level row and non-null for an active audience that ran this
+// workflow dynasty. The workflow ranking metric lives at resolved.costPerOutcomeUsd.
 export interface ProjectionRow {
   audienceId: string | null;
   workflow: { workflowDynastySlug: string; workflowDynastyName: string | null };
