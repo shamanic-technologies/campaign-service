@@ -3,6 +3,7 @@ import { thompsonArgminCost, greedyArgminCost, sampleBeta, type Arm, type Rng } 
 import {
   selectWorkflowGreedy,
   audienceIdsForWorkflow,
+  isWorkflowRotationEnabled,
   type ProjectionRow,
 } from "../../src/lib/features-workflow-projection-client.js";
 
@@ -226,5 +227,21 @@ describe("audienceIdsForWorkflow", () => {
   it("returns empty for a workflow with no audience-attributed couples", () => {
     const candidates = [mk("wf-a", null), mk("wf-b", "aud-1")];
     expect(audienceIdsForWorkflow(candidates, "wf-a")).toEqual([]);
+  });
+});
+
+describe("isWorkflowRotationEnabled", () => {
+  it("enables rotation for sales-cold-email-outreach", () => {
+    expect(isWorkflowRotationEnabled("sales-cold-email-outreach")).toBe(true);
+  });
+
+  it("disables rotation for pr-expert features", () => {
+    expect(isWorkflowRotationEnabled("pr-expert-quote-outreach")).toBe(false);
+    expect(isWorkflowRotationEnabled("pr-expert-quote-opportunities")).toBe(false);
+  });
+
+  it("disables rotation for any other feature and the empty slug", () => {
+    expect(isWorkflowRotationEnabled("hiring-cold-email-outreach")).toBe(false);
+    expect(isWorkflowRotationEnabled("")).toBe(false);
   });
 });
