@@ -116,6 +116,20 @@ export function audienceIdsForWorkflow(
   return [...ids];
 }
 
+// Per-run workflow rotation (the greedy bandit) is enabled ONLY for these features.
+// Every other feature always runs its campaign's configured workflowSlug, run after run,
+// with no features-service call and no rotation. Product decision (2026-07-07): only
+// sales-cold-email-outreach should vary its workflow across runs.
+const WORKFLOW_ROTATION_FEATURE_SLUGS = new Set<string>(["sales-cold-email-outreach"]);
+
+/**
+ * Whether the greedy workflow rotation applies to a given feature. When false, the
+ * trigger keeps the campaign's configured workflowSlug (no features-service call).
+ */
+export function isWorkflowRotationEnabled(featureSlug: string): boolean {
+  return WORKFLOW_ROTATION_FEATURE_SLUGS.has(featureSlug);
+}
+
 /**
  * Resolve which workflow to launch for THIS run: resolve the brand's current goal,
  * pull the workflow-projection rows from features-service, and greedily pick the best one
@@ -123,6 +137,9 @@ export function audienceIdsForWorkflow(
  * workflow instead of being frozen on its configured slug. The workflow MUST be
  * chosen here (at the trigger), because it is the DAG identity in the /execute URL
  * and cannot change once the DAG is running.
+ *
+ * Rotation is scoped to the features in WORKFLOW_ROTATION_FEATURE_SLUGS; for any other
+ * feature this returns the configured slug immediately (no rotation, no fetch).
  *
  * Falls back to the campaign's configured slug (no behavior change) when there is
  * no evidence yet OR features-service is unavailable — a selection optimization must
@@ -135,6 +152,8 @@ export async function resolveWorkflowSlugForTrigger(args: {
   fallbackSlug: string;
 }): Promise<string> {
   const { featureSlug, primaryBrandId, identity, fallbackSlug } = args;
+  // Rotation is feature-scoped: non-rotating features keep their configured workflow.
+  if (!isWorkflowRotationEnabled(featureSlug)) return fallbackSlug;
   try {
     const ctx = await fetchBrandRuntimeContext(primaryBrandId, identity);
     const rows = await fetchWorkflowProjectionRows({
