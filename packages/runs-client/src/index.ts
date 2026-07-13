@@ -76,6 +76,13 @@ export interface BudgetWindowResult {
   totalCostInUsdCents: string;
   actualCostInUsdCents: string;
   provisionedCostInUsdCents: string;
+  // Frozen NET (post-usage-discount) twins of the gross committed spend above.
+  // runs-service resolves the per-org usage discount ONCE at cost-write and freezes
+  // net per row; these sum COALESCE(net, gross) so pre-freeze rows fall back to gross.
+  // Optional for backward-compat with runs-service builds that predate the net twins.
+  netTotalCostInUsdCents?: string;
+  netActualCostInUsdCents?: string;
+  netProvisionedCostInUsdCents?: string;
 }
 
 export interface StatsBudgetParams {
