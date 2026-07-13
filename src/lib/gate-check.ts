@@ -145,7 +145,16 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         // good before the holds settle. That stop is recoverable (re-activating the campaign
         // resumes it), and the owner has chosen committed-pacing for the total cap for full
         // coherence with the dashboard over avoiding that edge.
-        const spentCents = windowResult ? parseFloat(windowResult.totalCostInUsdCents) || 0 : 0;
+        // Pace on NET committed spend (post-usage-discount) — what the org actually
+        // PAYS, not list price. A discounted org must be allowed to run until its NET
+        // spend hits the budget; pacing on gross stops it at (1−discount)×budget of real
+        // spend (a 50%-off campaign halted at half its budget). netTotalCostInUsdCents is
+        // runs-service's frozen per-row net (COALESCE(net, gross) for pre-freeze rows).
+        // Fallback to gross only if an older runs-service omits the net twin — safe: it
+        // over-counts → stops earlier, never overspends.
+        const spentCents = windowResult
+          ? parseFloat(windowResult.netTotalCostInUsdCents ?? windowResult.totalCostInUsdCents) || 0
+          : 0;
 
         if (spentCents >= limitCents) {
           if (budgetLimit.autoStop) {
@@ -211,7 +220,15 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       // checkAffordability below stays the hard money gate (org credit balance); this is daily
       // pacing. NOTE: the campaign budget WINDOWS (block 3 above) — daily, weekly, monthly AND
       // total — now ALL pace on committed too, for full coherence with the dashboard.
-      const spentCents = today ? parseFloat(today.totalCostInUsdCents) || 0 : 0;
+      // NET committed (post-usage-discount): the brand daily budget is what the org PAYS,
+      // so pace on the net twin, not gross list price. A 50%-discounted brand must be able
+      // to run until net spend reaches the daily cap; pacing on gross stopped it at half.
+      // The dashboard "Budget spent today" reads features-service /revenue with pricing=net
+      // for the same reason, keeping the enforced ceiling coherent with what the customer sees.
+      // Fallback to gross only if an older runs-service omits the net twin (safe: stops earlier).
+      const spentCents = today
+        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
+        : 0;
 
       if (spentCents >= dailyBudgetCents) {
         return { allowed: false, reason: "Brand daily budget reached" };

@@ -91,7 +91,15 @@ function makeRun(overrides: Partial<{ id: string; status: string; startedAt: str
 }
 
 function makeBudgetResponse(
-  windows: Array<{ label: string; totalCostInUsdCents: string; actualCostInUsdCents?: string }>,
+  windows: Array<{
+    label: string;
+    totalCostInUsdCents: string;
+    actualCostInUsdCents?: string;
+    // NET committed (post-usage-discount) twin. When set, the gate paces on THIS instead of
+    // gross — a discounted org must run until its NET spend hits the budget. Omit to model an
+    // older runs-service (no net twin) → the gate falls back to gross.
+    netTotalCostInUsdCents?: string;
+  }>,
 ) {
   return {
     windows: windows.map(w => {
@@ -107,6 +115,9 @@ function makeBudgetResponse(
         totalCostInUsdCents: w.totalCostInUsdCents,
         actualCostInUsdCents: actual,
         provisionedCostInUsdCents: provisioned,
+        ...(w.netTotalCostInUsdCents !== undefined
+          ? { netTotalCostInUsdCents: w.netTotalCostInUsdCents }
+          : {}),
       };
     }),
   };
@@ -267,6 +278,37 @@ describe("Gate Check", () => {
         maxBudgetDailyUsd: "10.00",
       }));
       expect(result.allowed).toBe(true);
+    });
+
+    it("non-sales: paces the campaign DAILY window on NET, not gross (discounted org not stopped early)", async () => {
+      // 50%-discounted org: gross committed == the cap, but NET (what the org pays) is half.
+      // Must be ALLOWED — pacing on gross would halt the campaign at half its real budget.
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "daily", totalCostInUsdCents: "1000", netTotalCostInUsdCents: "500" },
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
+        maxBudgetDailyUsd: "10.00", // 1000 cents — gross hits it, net (500) does not
+      }));
+      expect(result.allowed).toBe(true);
+    });
+
+    it("non-sales: blocks the campaign DAILY window when NET committed hits the cap", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "daily", totalCostInUsdCents: "2000", netTotalCostInUsdCents: "1000" },
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        featureSlug: NON_SALES_FEATURE,
+        maxBudgetDailyUsd: "10.00", // net 1000 == cap → blocks
+      }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("daily budget exceeded");
     });
 
     it("non-sales: is NEVER gated by the brand daily budget", async () => {
@@ -558,6 +600,50 @@ describe("Gate Check", () => {
 
       const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
       expect(result.allowed).toBe(true);
+    });
+
+    it("paces the brand daily budget on NET, not gross — a 50%-discounted brand runs to its FULL net budget", async () => {
+      // The core bug: a $10 (1000c) brand daily budget with a 50% usage discount. Gross committed
+      // hits 1000 (the cap) while the brand has only PAID 500 net. Pacing on gross halted the
+      // campaign at half its real budget; pacing on net must ALLOW it to keep running.
+      mockDailyBudget("1000"); // ceiling 1000 cents = what the org PAYS
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "today", totalCostInUsdCents: "1000", netTotalCostInUsdCents: "500" },
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(true);
+    });
+
+    it("blocks the brand daily budget when NET committed reaches the ceiling", async () => {
+      mockDailyBudget("1000");
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          // gross 2000 but the ceiling is judged on net 1000 == cap → blocks at the real budget.
+          { label: "today", totalCostInUsdCents: "2000", netTotalCostInUsdCents: "1000" },
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand daily budget reached");
+    });
+
+    it("falls back to gross pacing when runs-service omits the net twin (older build)", async () => {
+      // No netTotalCostInUsdCents on the window → gate uses gross, preserving pre-net behavior
+      // (safe direction: over-counts → stops earlier, never overspends).
+      mockDailyBudget("1000");
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "today", totalCostInUsdCents: "1000" }, // gross only, == ceiling
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand daily budget reached");
     });
 
     it("blocks when COMMITTED (actual + provisioned) is over the ceiling even though actual alone is under", async () => {
