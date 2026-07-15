@@ -1,7 +1,7 @@
 import { Router } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { brandPause } from "../db/schema.js";
+import { brandPause, brandPauseTransitions } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { UpdateBrandPauseBody } from "../schemas.js";
@@ -51,6 +51,12 @@ router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(
     const now = new Date();
 
     const row = await db.transaction(async (tx) => {
+      // Prior state — no row means the brand was effectively un-paused (default false).
+      const existing = await tx.query.brandPause.findFirst({
+        where: and(eq(brandPause.brandId, brandId), eq(brandPause.orgId, orgId)),
+      });
+      const priorPaused = existing?.paused ?? false;
+
       if (!paused) {
         await ensureRunnableSalesOutreachCampaign(tx, {
           orgId,
@@ -74,6 +80,17 @@ router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(
         throw new Error(`Cannot update brand pause for brand ${brandId}`);
       }
 
+      // Append a transition row ONLY on an actual state flip — a no-op PATCH (same value)
+      // records nothing. Forward-only history for the CS health board.
+      if (paused !== priorPaused) {
+        await tx.insert(brandPauseTransitions).values({
+          brandId,
+          orgId,
+          paused,
+          transitionedAt: now,
+        });
+      }
+
       return updated;
     });
 
@@ -91,6 +108,37 @@ router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(
     });
   } catch (error) {
     console.error("[campaign-service] Update brand pause error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /brands/:brandId/pause-history — read the forward-only pause on/off transition timeline.
+ *
+ * Org-scoped (same (brandId, orgId) key as the current-state read). Returns transitions oldest
+ * first so the Customer Success health board can render "paused <date>, resumed <date>". No row →
+ * empty transitions array. Does NOT change the current-state read (GET /brands/:brandId/pause).
+ */
+router.get("/brands/:brandId/pause-history", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { brandId } = req.params;
+    const orgId = req.orgId!;
+
+    const rows = await db.query.brandPauseTransitions.findMany({
+      where: and(eq(brandPauseTransitions.brandId, brandId), eq(brandPauseTransitions.orgId, orgId)),
+      orderBy: asc(brandPauseTransitions.transitionedAt),
+    });
+
+    res.json({
+      brandId,
+      orgId,
+      transitions: rows.map((r) => ({
+        paused: r.paused,
+        transitionedAt: r.transitionedAt.toISOString(),
+      })),
+    });
+  } catch (error) {
+    console.error("[campaign-service] Get brand pause history error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

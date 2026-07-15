@@ -22,6 +22,7 @@ import {
   DeleteCampaignsByOrgResponse,
   UpdateBrandPauseBody,
   BrandPauseResponse,
+  BrandPauseHistoryResponse,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -166,6 +167,21 @@ registry.registerPath({
   responses: {
     200: { description: "Updated brand pause state", content: { "application/json": { schema: BrandPauseResponse } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/brands/{brandId}/pause-history",
+  tags: ["Brands"],
+  summary: "Get a brand's pause on/off transition timeline",
+  description: "Forward-only, per-(org, brand) history of pause/resume flips (oldest first) for the Customer Success health board. Each transition's `paused` is the new state after the flip. No-op PATCHes (same value) record nothing; flips before this shipped are not backfilled. No transitions → empty array. Org-scoped via x-org-id. Does not affect GET /brands/{brandId}/pause.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { params: z.object({ brandId: z.string() }) },
+  responses: {
+    200: { description: "Brand pause transition timeline", content: { "application/json": { schema: BrandPauseHistoryResponse } } },
+    400: { description: "Missing x-org-id", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
