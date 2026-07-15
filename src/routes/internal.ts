@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and, sql, or, ne, isNotNull } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { brandPause, campaigns } from "../db/schema.js";
+import { brandPause, brandPauseTransitions, campaigns } from "../db/schema.js";
 import { requireApiKey, requirePipelineHeaders, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
@@ -514,9 +514,15 @@ router.delete("/internal/campaigns/by-org/:orgId", requireApiKey, async (req, re
         .where(eq(brandPause.orgId, orgId))
         .returning({ brandId: brandPause.brandId });
 
+      const deletedBrandPauseTransitions = await tx
+        .delete(brandPauseTransitions)
+        .where(eq(brandPauseTransitions.orgId, orgId))
+        .returning({ id: brandPauseTransitions.id });
+
       return {
         disabledCampaignCount: disabledCampaigns.length,
         deletedBrandPauseCount: deletedBrandPause.length,
+        deletedBrandPauseTransitionCount: deletedBrandPauseTransitions.length,
       };
     });
 
@@ -524,6 +530,7 @@ router.delete("/internal/campaigns/by-org/:orgId", requireApiKey, async (req, re
       updatedTables: [
         { tableName: "campaigns", count: result.disabledCampaignCount },
         { tableName: "brand_pause", count: result.deletedBrandPauseCount },
+        { tableName: "brand_pause_transitions", count: result.deletedBrandPauseTransitionCount },
       ],
     });
   } catch (error) {
