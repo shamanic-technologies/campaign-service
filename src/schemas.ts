@@ -102,6 +102,19 @@ export const BrandPauseResponse = z.object({
   updatedAt: z.string().nullable(),
 }).openapi("BrandPauseResponse");
 
+// One dated pause/resume flip. paused = the new state after the flip.
+export const BrandPauseTransition = z.object({
+  paused: z.boolean(),
+  transitionedAt: z.string(),
+}).openapi("BrandPauseTransition");
+
+// Forward-only, per-(org, brand) history of pause on/off transitions, oldest first.
+export const BrandPauseHistoryResponse = z.object({
+  brandId: z.string(),
+  orgId: z.string(),
+  transitions: z.array(BrandPauseTransition),
+}).openapi("BrandPauseHistoryResponse");
+
 // --- Stats ---
 
 export const StatsGroupByEnum = z.enum([

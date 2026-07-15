@@ -38,6 +38,9 @@ const past = () => new Date(Date.now() - 60_000);
 function getPause(brandId: string, org = orgId) {
   return request(app).get(`/brands/${brandId}/pause`).set("x-api-key", API_KEY).set("x-org-id", org);
 }
+function getPauseHistory(brandId: string, org = orgId) {
+  return request(app).get(`/brands/${brandId}/pause-history`).set("x-api-key", API_KEY).set("x-org-id", org);
+}
 function patchPause(brandId: string, paused: boolean, org = orgId) {
   return request(app)
     .patch(`/brands/${brandId}/pause`)
@@ -219,6 +222,89 @@ describe("Brand pause routes", () => {
   it("requires a valid api key (401)", async () => {
     const brandId = crypto.randomUUID();
     await request(app).get(`/brands/${brandId}/pause`).set("x-api-key", "wrong").set("x-org-id", orgId).expect(401);
+  });
+});
+
+describe("Brand pause history", () => {
+  beforeEach(async () => {
+    await cleanTestData();
+    vi.clearAllMocks();
+    mockExecute.mockResolvedValue(undefined);
+  });
+
+  it("returns an empty timeline when no transition was ever recorded", async () => {
+    const brandId = crypto.randomUUID();
+    const res = await getPauseHistory(brandId).expect(200);
+    expect(res.body).toEqual({ brandId, orgId, transitions: [] });
+  });
+
+  it("records a dated transition for each pause/resume flip, oldest first", async () => {
+    const brandId = crypto.randomUUID();
+    await patchPause(brandId, true).expect(200);
+    await patchPause(brandId, false).expect(200);
+    await patchPause(brandId, true).expect(200);
+
+    const res = await getPauseHistory(brandId).expect(200);
+    expect(res.body.brandId).toBe(brandId);
+    expect(res.body.orgId).toBe(orgId);
+    expect(res.body.transitions.map((t: { paused: boolean }) => t.paused)).toEqual([true, false, true]);
+    for (const t of res.body.transitions) {
+      expect(typeof t.transitionedAt).toBe("string");
+      expect(Number.isNaN(Date.parse(t.transitionedAt))).toBe(false);
+    }
+    // Timestamps are non-decreasing (oldest first).
+    const times = res.body.transitions.map((t: { transitionedAt: string }) => Date.parse(t.transitionedAt));
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+  });
+
+  it("does NOT record a transition for a no-op PATCH (same value repeated)", async () => {
+    const brandId = crypto.randomUUID();
+    await patchPause(brandId, true).expect(200);
+    await patchPause(brandId, true).expect(200); // no-op
+    await patchPause(brandId, true).expect(200); // no-op
+
+    const res = await getPauseHistory(brandId).expect(200);
+    expect(res.body.transitions).toHaveLength(1);
+    expect(res.body.transitions[0].paused).toBe(true);
+  });
+
+  it("first PATCH paused=false on a never-paused brand records nothing (no real flip)", async () => {
+    const brandId = crypto.randomUUID();
+    await patchPause(brandId, false).expect(200); // prior state is default-false → no flip
+
+    const res = await getPauseHistory(brandId).expect(200);
+    expect(res.body.transitions).toHaveLength(0);
+  });
+
+  it("the current-state read is unchanged by the history feature", async () => {
+    const brandId = crypto.randomUUID();
+    await patchPause(brandId, true).expect(200);
+    await patchPause(brandId, false).expect(200);
+
+    const cur = await getPause(brandId).expect(200);
+    expect(cur.body.paused).toBe(false);
+    expect(cur.body.brandId).toBe(brandId);
+    expect(cur.body.orgId).toBe(orgId);
+    expect(cur.body.updatedAt).not.toBeNull();
+  });
+
+  it("history is org-scoped: org B cannot see org A's transitions", async () => {
+    const brandId = crypto.randomUUID();
+    await patchPause(brandId, true, "org-A").expect(200);
+
+    const other = await getPauseHistory(brandId, "org-B").expect(200);
+    expect(other.body.transitions).toHaveLength(0);
+    expect(other.body.orgId).toBe("org-B");
+  });
+
+  it("requires x-org-id (400)", async () => {
+    const brandId = crypto.randomUUID();
+    await request(app).get(`/brands/${brandId}/pause-history`).set("x-api-key", API_KEY).expect(400);
+  });
+
+  it("requires a valid api key (401)", async () => {
+    const brandId = crypto.randomUUID();
+    await request(app).get(`/brands/${brandId}/pause-history`).set("x-api-key", "wrong").set("x-org-id", orgId).expect(401);
   });
 });
 

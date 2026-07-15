@@ -25,7 +25,7 @@ vi.mock("../../src/lib/gate-check.js", () => ({
 
 import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
-import { brandPause, campaigns } from "../../src/db/schema.js";
+import { brandPause, brandPauseTransitions, campaigns } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestCampaign, setBrandPause } from "../helpers/test-db.js";
 
@@ -70,6 +70,9 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
     });
     await setBrandPause(orgId, orgBrandId, true);
     await setBrandPause(otherOrgId, otherBrandId, true);
+    // A recorded pause transition for this org (cascade target) + one for the other org (survives).
+    await db.insert(brandPauseTransitions).values({ brandId: orgBrandId, orgId, paused: true });
+    await db.insert(brandPauseTransitions).values({ brandId: otherBrandId, orgId: otherOrgId, paused: true });
 
     const res = await request(app)
       .delete(`/internal/campaigns/by-org/${orgId}`)
@@ -79,6 +82,7 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
     expect(res.body.updatedTables).toEqual([
       { tableName: "campaigns", count: 2 },
       { tableName: "brand_pause", count: 1 },
+      { tableName: "brand_pause_transitions", count: 1 },
     ]);
 
     const queuedAfter = await db.query.campaigns.findFirst({ where: eq(campaigns.id, queuedCampaign.id) });
@@ -101,6 +105,11 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
     expect(orgPauseRows).toHaveLength(0);
     const otherPauseRows = await db.query.brandPause.findMany({ where: eq(brandPause.orgId, otherOrgId) });
     expect(otherPauseRows).toHaveLength(1);
+
+    const orgTransitions = await db.query.brandPauseTransitions.findMany({ where: eq(brandPauseTransitions.orgId, orgId) });
+    expect(orgTransitions).toHaveLength(0);
+    const otherTransitions = await db.query.brandPauseTransitions.findMany({ where: eq(brandPauseTransitions.orgId, otherOrgId) });
+    expect(otherTransitions).toHaveLength(1);
   });
 
   it("is idempotent when no org state exists", async () => {
@@ -112,6 +121,7 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
     expect(res.body.updatedTables).toEqual([
       { tableName: "campaigns", count: 0 },
       { tableName: "brand_pause", count: 0 },
+      { tableName: "brand_pause_transitions", count: 0 },
     ]);
   });
 
@@ -135,6 +145,7 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
     expect(retry.body.updatedTables).toEqual([
       { tableName: "campaigns", count: 0 },
       { tableName: "brand_pause", count: 0 },
+      { tableName: "brand_pause_transitions", count: 0 },
     ]);
   });
 
