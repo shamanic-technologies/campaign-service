@@ -249,4 +249,106 @@ describe("Campaign CRUD", () => {
       expect(renameRes.body.error).toBe("A campaign with this name already exists in your organization");
     });
   });
+
+  // === Campaign v2: per-campaign own config (goal / audience subset / services / destination) ===
+  describe("Campaign v2 own config", () => {
+    const ownConfig = {
+      goal: "purchase",
+      audienceIds: ["aud-1", "aud-2"],
+      servicesOffered: ["seo", "ads"],
+      clickDestinationUrl: "https://example.com/landing",
+    };
+
+    function patch(id: string, body: Record<string, unknown>, orgId = "org_test_crud") {
+      return request(app)
+        .patch(`/campaigns/${id}`)
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", orgId)
+        .set("x-user-id", "user_test_crud")
+        .set("x-run-id", crypto.randomUUID())
+        .set("x-feature-slug", "sales-cold-email-v1")
+        .send(body);
+    }
+
+    function get(id: string, orgId = "org_test_crud") {
+      return request(app)
+        .get(`/campaigns/${id}`)
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", orgId);
+    }
+
+    it("persists own config on create and reads it back (single + list)", async () => {
+      const createRes = await createCampaign({ ...validBody, name: "Own Config", ...ownConfig }).expect(201);
+      expect(createRes.body.campaign).toMatchObject(ownConfig);
+
+      const readRes = await get(createRes.body.campaign.id).expect(200);
+      expect(readRes.body.campaign).toMatchObject(ownConfig);
+
+      const listRes = await request(app)
+        .get("/campaigns")
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .expect(200);
+      const listed = listRes.body.campaigns.find((c: any) => c.id === createRes.body.campaign.id);
+      expect(listed).toMatchObject(ownConfig);
+    });
+
+    it("defaults to null (inherit brand) when nothing is set", async () => {
+      const res = await createCampaign({ ...validBody, name: "Inherit" }).expect(201);
+      expect(res.body.campaign.goal).toBeNull();
+      expect(res.body.campaign.audienceIds).toBeNull();
+      expect(res.body.campaign.servicesOffered).toBeNull();
+      expect(res.body.campaign.clickDestinationUrl).toBeNull();
+    });
+
+    it("sets own config via update and clears it back to inherit with null", async () => {
+      const created = await createCampaign({ ...validBody, name: "Editable" }).expect(201);
+      const id = created.body.campaign.id;
+
+      const setRes = await patch(id, ownConfig).expect(200);
+      expect(setRes.body.campaign).toMatchObject(ownConfig);
+
+      const clearRes = await patch(id, {
+        goal: null,
+        audienceIds: null,
+        servicesOffered: null,
+        clickDestinationUrl: null,
+      }).expect(200);
+      expect(clearRes.body.campaign.goal).toBeNull();
+      expect(clearRes.body.campaign.audienceIds).toBeNull();
+      expect(clearRes.body.campaign.servicesOffered).toBeNull();
+      expect(clearRes.body.campaign.clickDestinationUrl).toBeNull();
+    });
+
+    it("targets one OR more audiences (subset) and rejects an empty subset", async () => {
+      const one = await createCampaign({ ...validBody, name: "One Aud", audienceIds: ["aud-only"] }).expect(201);
+      expect(one.body.campaign.audienceIds).toEqual(["aud-only"]);
+
+      await createCampaign({ ...validBody, name: "Empty Aud", audienceIds: [] }).expect(400);
+    });
+
+    it("rejects an unknown goal value", async () => {
+      await createCampaign({ ...validBody, name: "Bad Goal", goal: "worldPeace" }).expect(400);
+    });
+
+    it("does NOT clobber a sibling campaign under the same brand", async () => {
+      const sharedBrand = crypto.randomUUID();
+      const a = await createCampaign({ ...validBody, name: "Sibling A", brandIds: [sharedBrand] }).expect(201);
+      const b = await createCampaign({ ...validBody, name: "Sibling B", brandIds: [sharedBrand] }).expect(201);
+
+      // Configure A only.
+      await patch(a.body.campaign.id, ownConfig).expect(200);
+
+      // Sibling B is untouched — still inheriting (all null).
+      const bRead = await get(b.body.campaign.id).expect(200);
+      expect(bRead.body.campaign.goal).toBeNull();
+      expect(bRead.body.campaign.audienceIds).toBeNull();
+      expect(bRead.body.campaign.servicesOffered).toBeNull();
+      expect(bRead.body.campaign.clickDestinationUrl).toBeNull();
+
+      // A kept its own config.
+      const aRead = await get(a.body.campaign.id).expect(200);
+      expect(aRead.body.campaign).toMatchObject(ownConfig);
+    });
+  });
 });

@@ -150,19 +150,24 @@ export async function resolveWorkflowSlugForTrigger(args: {
   primaryBrandId: string;
   identity: DownstreamIdentity;
   fallbackSlug: string;
+  // Campaign v2: the campaign's OWN goal. When set, the greedy workflow pick paces on it
+  // instead of the brand's currentGoal — so the campaign's own goal drives BOTH the trigger
+  // (workflow) and /start-run (audience) legs. NULL/undefined → pace on the brand goal.
+  goalOverride?: RuntimeGoal | null;
 }): Promise<string> {
-  const { featureSlug, primaryBrandId, identity, fallbackSlug } = args;
+  const { featureSlug, primaryBrandId, identity, fallbackSlug, goalOverride } = args;
   // Rotation is feature-scoped: non-rotating features keep their configured workflow.
   if (!isWorkflowRotationEnabled(featureSlug)) return fallbackSlug;
   try {
     const ctx = await fetchBrandRuntimeContext(primaryBrandId, identity);
+    const goal: RuntimeGoal = goalOverride ?? ctx.currentGoal;
     const rows = await fetchWorkflowProjectionRows({
       featureSlug,
       brandId: primaryBrandId,
-      goal: ctx.currentGoal,
+      goal,
       identity,
     });
-    return selectWorkflowGreedy(rows, ctx.currentGoal) ?? fallbackSlug;
+    return selectWorkflowGreedy(rows, goal) ?? fallbackSlug;
   } catch (err) {
     console.warn(
       `[campaign-service] workflow bandit failed for brand ${primaryBrandId}, using configured workflow ${fallbackSlug}:`,
