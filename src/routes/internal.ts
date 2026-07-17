@@ -91,6 +91,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       maxBudgetWeeklyUsd: campaign.maxBudgetWeeklyUsd,
       maxBudgetMonthlyUsd: campaign.maxBudgetMonthlyUsd,
       maxBudgetTotalUsd: campaign.maxBudgetTotalUsd,
+      dailyBudgetCents: campaign.dailyBudgetCents,
       maxLeads: campaign.maxLeads,
     });
 
@@ -104,6 +105,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       // an intentional, expected hold — not an anomaly.
       const benignBlock = result.reason === "Insufficient credits" ||
                           result.reason === "Brand daily budget reached" ||
+                          result.reason === "Campaign daily budget reached" ||
                           result.reason === "Brand paused";
       traceEvent(req.runId, {
         service: "campaign-service",

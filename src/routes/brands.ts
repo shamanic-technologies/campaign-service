@@ -1,12 +1,17 @@
 import { Router } from "express";
 import { and, asc, eq } from "drizzle-orm";
+import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
-import { brandPause, brandPauseTransitions } from "../db/schema.js";
+import { brandPause, brandPauseTransitions, campaigns } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
-import { UpdateBrandPauseBody } from "../schemas.js";
+import { UpdateBrandPauseBody, SetBrandCampaignsDailyBudgetBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { ensureRunnableSalesOutreachCampaign } from "../lib/sales-outreach-campaign.js";
+
+// The daily budget is a sales-cold-email-outreach pacing lever (the ONLY feature the sales
+// gate enforces it for), so the brand-page propagation targets that feature's campaigns.
+const SALES_FEATURE_SLUG = "sales-cold-email-outreach";
 
 const router = Router();
 
@@ -108,6 +113,45 @@ router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(
     });
   } catch (error) {
     console.error("[campaign-service] Update brand pause error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * PATCH /brands/:brandId/daily-budget — set the daily budget (cents) for EVERY sales campaign
+ * of a brand at once.
+ *
+ * This is the brand-page propagation lever (NEED 5b): when a customer edits their daily budget
+ * on the brand page, that number must flow down to the brand's campaign(s) so per-campaign
+ * pacing enforces it immediately. Org-scoped (only this org's campaigns for the brand are
+ * touched). dailyBudgetCents:null clears each campaign's own budget → they fall back to the
+ * brand daily budget again. Scoped to sales-cold-email-outreach — the only feature the daily
+ * budget paces.
+ */
+router.patch("/brands/:brandId/daily-budget", requireApiKey, serviceAuth, validateBody(SetBrandCampaignsDailyBudgetBody), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { brandId } = req.params;
+    const orgId = req.orgId!;
+    const { dailyBudgetCents } = req.body as { dailyBudgetCents: number | null };
+
+    const updated = await db
+      .update(campaigns)
+      .set({ dailyBudgetCents, updatedAt: new Date() })
+      .where(and(
+        eq(campaigns.orgId, orgId),
+        arrayContains(campaigns.brandIds, [brandId]),
+        eq(campaigns.featureSlug, SALES_FEATURE_SLUG),
+      ))
+      .returning({ id: campaigns.id });
+
+    res.json({
+      brandId,
+      orgId,
+      dailyBudgetCents,
+      updatedCount: updated.length,
+    });
+  } catch (error) {
+    console.error("[campaign-service] Set brand campaigns daily budget error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

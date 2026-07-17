@@ -91,6 +91,10 @@
             "type": "string",
             "nullable": true
           },
+          "dailyBudgetCents": {
+            "type": "integer",
+            "nullable": true
+          },
           "maxLeads": {
             "type": "integer",
             "nullable": true
@@ -146,6 +150,7 @@
           "maxBudgetWeeklyUsd",
           "maxBudgetMonthlyUsd",
           "maxBudgetTotalUsd",
+          "dailyBudgetCents",
           "maxLeads",
           "startDate",
           "endDate",
@@ -229,6 +234,11 @@
           "maxBudgetTotalUsd": {
             "type": "string"
           },
+          "dailyBudgetCents": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          },
           "maxLeads": {
             "type": "integer"
           },
@@ -305,6 +315,11 @@
           "maxBudgetTotalUsd": {
             "type": "string"
           },
+          "dailyBudgetCents": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          },
           "maxLeads": {
             "type": "integer"
           },
@@ -365,6 +380,43 @@
         },
         "required": [
           "paused"
+        ]
+      },
+      "SetBrandCampaignsDailyBudgetResponse": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "dailyBudgetCents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "updatedCount": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "brandId",
+          "orgId",
+          "dailyBudgetCents",
+          "updatedCount"
+        ]
+      },
+      "SetBrandCampaignsDailyBudgetBody": {
+        "type": "object",
+        "properties": {
+          "dailyBudgetCents": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          }
+        },
+        "required": [
+          "dailyBudgetCents"
         ]
       },
       "BrandPauseHistoryResponse": {
@@ -1123,6 +1175,71 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BrandPauseResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/brands/{brandId}/daily-budget": {
+      "patch": {
+        "tags": [
+          "Brands"
+        ],
+        "summary": "Set the daily budget for ALL of a brand's sales campaigns at once",
+        "description": "Propagates a brand-page daily budget edit down to every sales-cold-email-outreach campaign of the brand (cents), so per-campaign pacing enforces it immediately. dailyBudgetCents:null clears each campaign's own budget → they fall back to the brand daily budget. Org-scoped via x-org-id; only this org's campaigns for the brand are touched.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBrandCampaignsDailyBudgetBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated campaigns count + applied budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetBrandCampaignsDailyBudgetResponse"
                 }
               }
             }

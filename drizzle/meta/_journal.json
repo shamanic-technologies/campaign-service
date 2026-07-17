@@ -267,6 +267,13 @@
       "when": 1776200000000,
       "tag": "0037_brand_pause_transitions",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1776300000000,
+      "tag": "0038_campaign_daily_budget",
+      "breakpoints": true
     }
   ]
 }
