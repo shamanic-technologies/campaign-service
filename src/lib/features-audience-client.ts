@@ -48,6 +48,13 @@ interface SelectAudienceInput {
   // restriction is ignored and selection falls back to all active audiences —
   // a fresh workflow must still get an audience.
   eligibleAudienceIds?: string[];
+  // Campaign v2 HARD targeting filter. When set + non-empty, the bandit may ONLY pick from
+  // this subset of the brand's audiences — the campaign's targeted audiences. Unlike
+  // eligibleAudienceIds (a soft workflow-conditioning filter that falls back to all active
+  // audiences when it would leave nothing), this is authoritative: if none of the required
+  // audiences is active, selection returns null (the campaign contacts none of them) rather
+  // than falling back to an untargeted audience. NULL/empty → no restriction (inherit brand).
+  requiredAudienceIds?: string[];
 }
 
 // Maps each active audience to a bandit arm: trials = leads contacted, successes
@@ -75,6 +82,7 @@ export async function selectAudienceForRun({
   identity,
   rng,
   eligibleAudienceIds,
+  requiredAudienceIds,
 }: SelectAudienceInput): Promise<AudienceCandidate | null> {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
   const apiKey = process.env.FEATURES_SERVICE_API_KEY;
@@ -104,13 +112,23 @@ export async function selectAudienceForRun({
   const active = body.audiences.filter((a) => a.audience?.status === "active");
   if (active.length === 0) return null;
 
-  // Scope to the chosen workflow's audiences when we have them; ignore the
-  // restriction if it would leave nothing (cold workflow) so a fresh workflow
-  // still gets an audience.
-  let eligible = active;
+  // Campaign v2 HARD targeting subset: the campaign may only ever be served one of its
+  // targeted audiences. No fallback — if none of the targeted audiences is active, return
+  // null (contact none) rather than reaching outside the subset. NULL/empty → inherit.
+  let candidates = active;
+  if (requiredAudienceIds && requiredAudienceIds.length > 0) {
+    const required = new Set(requiredAudienceIds);
+    candidates = active.filter((a) => required.has(a.audienceId));
+    if (candidates.length === 0) return null;
+  }
+
+  // Scope to the chosen workflow's audiences (within the targeted subset) when we have them;
+  // ignore this SOFT restriction if it would leave nothing (cold workflow) so a fresh
+  // workflow still gets an audience.
+  let eligible = candidates;
   if (eligibleAudienceIds && eligibleAudienceIds.length > 0) {
     const allow = new Set(eligibleAudienceIds);
-    const scoped = active.filter((a) => allow.has(a.audienceId));
+    const scoped = candidates.filter((a) => allow.has(a.audienceId));
     if (scoped.length > 0) eligible = scoped;
   }
 

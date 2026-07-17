@@ -43,6 +43,10 @@ export async function insertTestCampaign(
     activeGoalId?: string | null;
     brandProfileId?: string | null;
     audienceId?: string | null;
+    goal?: string | null;
+    audienceIds?: string[] | null;
+    servicesOffered?: string[] | null;
+    clickDestinationUrl?: string | null;
     nextRunAt?: Date | null;
     createdByUserId?: string;
     parentRunId?: string;
@@ -61,6 +65,10 @@ export async function insertTestCampaign(
       activeGoalId: data.activeGoalId ?? null,
       brandProfileId: data.brandProfileId ?? null,
       audienceId: data.audienceId ?? null,
+      goal: data.goal ?? null,
+      audienceIds: data.audienceIds ?? null,
+      servicesOffered: data.servicesOffered ?? null,
+      clickDestinationUrl: data.clickDestinationUrl ?? null,
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",
       maxBudgetWeeklyUsd: data.maxBudgetWeeklyUsd || null,
       maxBudgetMonthlyUsd: data.maxBudgetMonthlyUsd || null,

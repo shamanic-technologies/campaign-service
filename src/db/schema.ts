@@ -32,6 +32,36 @@ export const campaigns = pgTable(
     brandProfileId: text("brand_profile_id"),
     audienceId: text("audience_id"),
 
+    // === Per-campaign OWN configuration (Campaign v2) ===
+    // A campaign owns each of these independently of its brand and of sibling campaigns.
+    // Every column is nullable and NULL means "inherit the brand": a campaign that sets
+    // nothing keeps the pre-v2 behavior (brand-level goal / audiences / services /
+    // destination), so no existing or running campaign is disrupted.
+
+    // The campaign's OWN optimization goal — a RuntimeGoal value
+    // ('signup' | 'meetingBooked' | 'purchase'). Drives THIS campaign's runtime pacing /
+    // candidate-selection (workflow greedy pick at the trigger + audience Thompson at
+    // /start-run): when set it overrides the brand's currentGoal for this campaign only.
+    // NULL → pace on the brand goal. Distinct from activeGoalId (an opaque attribution id
+    // threaded as x-active-goal-id and never consumed for pacing).
+    goal: text("goal"),
+
+    // The SUBSET (one OR more) of the brand's audiences this campaign targets
+    // (human-service saved-filter-set UUIDs == audience.id). NULL/absent → target the
+    // brand's full active audience set (inherit). When set, the per-run audience bandit is
+    // HARD-restricted to this subset — the campaign never contacts an audience outside it,
+    // regardless of workflow-conditioning. Supersedes the singular audienceId for targeting.
+    audienceIds: text("audience_ids").array(),
+
+    // The services this campaign offers. NULL → inherit the brand's services. Exposed to the
+    // sending runtime on /start-run so downstream nodes read authoritative per-campaign
+    // config rather than the brand default.
+    servicesOffered: text("services_offered").array(),
+
+    // The campaign's OWN click-destination URL. NULL → inherit the brand's. Exposed on
+    // /start-run for the sending runtime.
+    clickDestinationUrl: text("click_destination_url"),
+
     // Legacy campaign budget limits. Daily spend control is brand-level via billing-service.
     maxBudgetDailyUsd: decimal("max_budget_daily_usd", { precision: 10, scale: 2 }),
     maxBudgetWeeklyUsd: decimal("max_budget_weekly_usd", { precision: 10, scale: 2 }),
