@@ -36,6 +36,7 @@ export async function insertTestCampaign(
     maxBudgetWeeklyUsd?: string;
     maxBudgetMonthlyUsd?: string;
     maxBudgetTotalUsd?: string;
+    dailyBudgetCents?: number | null;
     maxLeads?: number;
     featureSlug?: string;
     featureInputs?: Record<string, unknown>;
@@ -64,6 +65,7 @@ export async function insertTestCampaign(
       maxBudgetWeeklyUsd: data.maxBudgetWeeklyUsd || null,
       maxBudgetMonthlyUsd: data.maxBudgetMonthlyUsd || null,
       maxBudgetTotalUsd: data.maxBudgetTotalUsd || null,
+      dailyBudgetCents: data.dailyBudgetCents ?? null,
       maxLeads: data.maxLeads || null,
       nextRunAt: data.nextRunAt ?? null,
       createdByUserId: data.createdByUserId || null,

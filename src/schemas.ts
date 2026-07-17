@@ -26,6 +26,8 @@ export const CampaignSchema = z.object({
   maxBudgetWeeklyUsd: z.string().nullable(),
   maxBudgetMonthlyUsd: z.string().nullable(),
   maxBudgetTotalUsd: z.string().nullable(),
+  // Per-campaign daily budget for the sales feature (cents). Null = fall back to brand daily budget.
+  dailyBudgetCents: z.number().int().nullable(),
   maxLeads: z.number().int().nullable(),
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),
@@ -54,6 +56,8 @@ export const CreateCampaignBody = z.object({
   maxBudgetWeeklyUsd: z.string().optional(),
   maxBudgetMonthlyUsd: z.string().optional(),
   maxBudgetTotalUsd: z.string().optional(),
+  // Per-campaign daily budget for the sales feature (cents). Omit / null = fall back to brand budget.
+  dailyBudgetCents: z.number().int().nonnegative().nullable().optional(),
   maxLeads: z.number().int().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
@@ -80,6 +84,8 @@ export const UpdateCampaignBody = z.object({
   maxBudgetWeeklyUsd: z.string().optional(),
   maxBudgetMonthlyUsd: z.string().optional(),
   maxBudgetTotalUsd: z.string().optional(),
+  // Set / clear this campaign's own daily budget (cents). null clears it → falls back to brand budget.
+  dailyBudgetCents: z.number().int().nonnegative().nullable().optional(),
   maxLeads: z.number().int().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
@@ -101,6 +107,22 @@ export const BrandPauseResponse = z.object({
   paused: z.boolean(),
   updatedAt: z.string().nullable(),
 }).openapi("BrandPauseResponse");
+
+// --- Brand-wide campaign daily budget (propagate the brand-page budget to all campaigns) ---
+
+// Set the daily budget (cents) for EVERY sales campaign of a brand at once. null clears each
+// campaign's own budget → they fall back to the brand daily budget. Used when a customer edits
+// their budget on the brand page and it must propagate down to the brand's campaign(s).
+export const SetBrandCampaignsDailyBudgetBody = z.object({
+  dailyBudgetCents: z.number().int().nonnegative().nullable(),
+}).openapi("SetBrandCampaignsDailyBudgetBody");
+
+export const SetBrandCampaignsDailyBudgetResponse = z.object({
+  brandId: z.string(),
+  orgId: z.string(),
+  dailyBudgetCents: z.number().int().nullable(),
+  updatedCount: z.number().int(),
+}).openapi("SetBrandCampaignsDailyBudgetResponse");
 
 // One dated pause/resume flip. paused = the new state after the flip.
 export const BrandPauseTransition = z.object({

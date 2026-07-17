@@ -22,11 +22,16 @@ export interface GateCheckInput {
   featureSlug?: string;
   status: string;
   // Daily campaign cap. Enforced as a campaign-scoped runs window (resets at day rollover) for
-  // EVERY feature except the sales feature, which is paced by the brand daily budget instead.
+  // EVERY feature except the sales feature, which is paced by the campaign's own daily budget
+  // (dailyBudgetCents below) — falling back to the brand daily budget when unset.
   maxBudgetDailyUsd: string | null;
   maxBudgetWeeklyUsd: string | null;
   maxBudgetMonthlyUsd: string | null;
   maxBudgetTotalUsd: string | null;
+  // Per-CAMPAIGN daily budget for the sales feature (CENTS). When set, the sales gate paces
+  // THIS campaign on its OWN committed spend today vs this ceiling (two campaigns under one
+  // brand pace independently). NULL = no own budget → fall back to the brand daily budget.
+  dailyBudgetCents: number | null;
   maxLeads: number | null;
 }
 
@@ -167,28 +172,51 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     }
   }
 
-  // 3c. Per-brand daily budget pacing — ONLY for the sales feature.
-  // billing-service stores + serves each brand's daily spend ceiling (cents); ENFORCEMENT
-  // is ours. For each brand in scope, compare today's platform spend for THIS campaign's
-  // feature (runs-service, brandId + featureSlug keyed) against that ceiling. A brand at/over
-  // its ceiling pauses that feature loop for now — NOT a terminal stop: the block carries no
-  // nextRunAt, so internal.ts backs it off ~15min and re-checks. Raising the ceiling re-enables
-  // work on the next loop, and the day rollover naturally resets today's spend. An unset
-  // ceiling (null) = unbounded (no cap).
-  // Multi-brand tick: blocked if ANY in-scope brand has reached its ceiling (most campaigns
-  // are solo-brand; per-brand downstream fan-out is out of scope here).
+  // 3c. Daily budget pacing — ONLY for the sales feature. Two paths:
   //
-  // Units: billing dailyBudgetCents and runs actualCostInUsdCents are BOTH cents → compared
-  // directly (NO ×100, unlike the maxBudget*Usd columns above which are USD).
+  //   (a) The campaign has its OWN daily budget (dailyBudgetCents != null): pace THIS campaign
+  //       on its OWN committed spend today (runs-service, campaignId + featureSlug keyed) vs
+  //       that ceiling. Two campaigns under one brand each carry their own budget → one hitting
+  //       its cap does NOT stop the other. Not a terminal stop: no nextRunAt, so internal.ts
+  //       backs it off ~15min; the day rollover resets today's spend and re-opens the cap.
   //
-  // Read fail-CLOSED: if the cap cannot be read or parsed, block this tick. This is spend
-  // control, not an optimization; treating an unreadable cap as "unbounded" lets campaigns
-  // keep spending past a configured daily ceiling. Explicit billing dailyBudgetCents:null
-  // remains the only unbounded signal.
+  //   (b) No own budget (dailyBudgetCents == null): fall back to the BRAND daily budget
+  //       (billing-service brand_daily_budgets), paced on the brand's committed spend today
+  //       (brandId + featureSlug keyed) — byte-identical to the pre-per-campaign behaviour, so
+  //       anything unset behaves exactly as before. This is also why NO deploy backfill is
+  //       needed: an existing running campaign keeps null and its EFFECTIVE ceiling is the
+  //       brand's CURRENT number, live-read here (never a stale copied value).
   //
-  // Scope: ONLY the sales feature. Non-sales features are paced by the campaign budget windows
-  // (block 3 above) and are NEVER gated by the brand ceiling.
+  // Units: dailyBudgetCents (campaign + brand) and runs *CostInUsdCents are BOTH cents →
+  // compared directly (NO ×100, unlike the maxBudget*Usd columns above which are USD).
+  //
+  // Read fail-CLOSED on the brand path: if the brand cap cannot be read or parsed, block this
+  // tick. This is spend control, not an optimization; treating an unreadable cap as "unbounded"
+  // lets campaigns keep spending past a configured ceiling. Explicit billing dailyBudgetCents
+  // :null (and a null campaign budget with a null brand budget) remain the only unbounded signals.
   if (isSalesFeature) {
+    if (campaign.dailyBudgetCents !== null) {
+      // (a) Campaign's OWN daily budget vs its OWN committed spend today.
+      const campaignSpend = await getStatsBudget({
+        orgId: campaign.orgId,
+        campaignId: campaign.campaignId,
+        featureSlug: campaign.featureSlug,
+        windows: [{ label: "today", since: startOfToday().toISOString() }],
+      });
+      const today = campaignSpend.windows.find(w => w.label === "today");
+      // Pace on NET committed spend (post-usage-discount) — the same committed + net decision as
+      // the brand daily cap below and the campaign budget windows (block 3): count reserved
+      // follow-up-send holds and judge the ceiling on what the org actually PAYS, falling back to
+      // gross only if an older runs-service omits the net twin (safe: over-counts → stops earlier).
+      const spentCents = today
+        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
+        : 0;
+      if (spentCents >= campaign.dailyBudgetCents) {
+        return { allowed: false, reason: "Campaign daily budget reached" };
+      }
+    } else {
+    // (b) Fall back to the per-brand daily budget. Multi-brand tick: blocked if ANY in-scope
+    // brand has reached its ceiling (most campaigns are solo-brand).
     for (const brandId of campaign.brandIds) {
       const dailyBudget = await getBrandDailyBudget(brandId, identity);
       if (!dailyBudget.ok) {
@@ -233,6 +261,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       if (spentCents >= dailyBudgetCents) {
         return { allowed: false, reason: "Brand daily budget reached" };
       }
+    }
     }
   }
 

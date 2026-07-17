@@ -67,6 +67,9 @@ function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
     maxBudgetWeeklyUsd: null,
     maxBudgetMonthlyUsd: null,
     maxBudgetTotalUsd: null,
+    // Null by default → the sales gate falls back to the brand daily budget, so the existing
+    // brand-budget describe block exercises unchanged. The campaign-own-budget block sets it.
+    dailyBudgetCents: null,
     maxLeads: null,
     ...overrides,
   };
@@ -776,6 +779,108 @@ describe("Gate Check", () => {
       expect(opts.headers["x-org-id"]).toBe("org-1");
       expect(opts.headers["x-brand-id"]).toBe("brand-1");
       expect(mockGetStatsBudget.mock.calls[0][0]).not.toHaveProperty("campaignId");
+    });
+  });
+
+  describe("Per-campaign daily budget pacing (sales feature, own budget)", () => {
+    // No billing env — the campaign-own path never calls billing; it paces on the campaign's
+    // OWN committed spend today (getStatsBudget, campaignId + featureSlug keyed) vs its own cap.
+    it("blocks when the campaign's OWN committed spend reaches its OWN daily budget", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1000" }]) // spend == cap
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        brandIds: ["brand-1"],
+        dailyBudgetCents: 1000,
+      }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Campaign daily budget reached");
+      // Paced, not terminal — internal.ts applies the 15min backoff.
+      expect(result.nextRunAt).toBeUndefined();
+      expect(result.autoStopped).toBeUndefined();
+    });
+
+    it("allows when the campaign's OWN spend is below its OWN budget", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "999" }])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        brandIds: ["brand-1"],
+        dailyBudgetCents: 1000,
+      }));
+      expect(result.allowed).toBe(true);
+    });
+
+    it("keys the spend query on campaignId (its OWN spend), NEVER the brand — and never reads billing", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "0" }])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        campaignId: "campaign-A",
+        brandIds: ["brand-1"],
+        dailyBudgetCents: 5000,
+      }));
+      expect(result.allowed).toBe(true);
+      expect(mockGetStatsBudget).toHaveBeenCalledWith({
+        orgId: "org-1",
+        campaignId: "campaign-A",
+        featureSlug: "sales-cold-email-outreach",
+        windows: [expect.objectContaining({ label: "today" })],
+      });
+      const spendCall = mockGetStatsBudget.mock.calls[0][0];
+      expect(spendCall).not.toHaveProperty("brandId");
+      // Own-budget path must NOT hit the brand daily-budget billing endpoint.
+      expect(mockFetch).not.toHaveBeenCalledWith(
+        expect.stringContaining("/daily-budget"),
+        expect.anything(),
+      );
+    });
+
+    it("paces on NET committed, not gross — a 50%-discounted campaign runs to its FULL net budget", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "today", totalCostInUsdCents: "1000", netTotalCostInUsdCents: "500" },
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        brandIds: ["brand-1"],
+        dailyBudgetCents: 1000,
+      }));
+      expect(result.allowed).toBe(true);
+    });
+
+    it("blocks on COMMITTED (actual + provisioned) over the cap even when actual alone is under", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([
+          { label: "today", totalCostInUsdCents: "5999", actualCostInUsdCents: "999" },
+        ])
+      );
+
+      const result = await runGateChecks(makeCampaign({
+        brandIds: ["brand-1"],
+        dailyBudgetCents: 1000,
+      }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Campaign daily budget reached");
+    });
+
+    it("one campaign hitting its cap does NOT depend on another — pacing is campaign-scoped", async () => {
+      // Campaign A over its cap → blocked; campaign B (own budget, under) → allowed. Distinct
+      // campaignIds mean distinct spend queries, so A's cap never gates B.
+      mockGetStatsBudget
+        .mockResolvedValueOnce(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1000" }]))
+        .mockResolvedValueOnce(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "10" }]));
+
+      const a = await runGateChecks(makeCampaign({ campaignId: "campaign-A", brandIds: ["brand-1"], dailyBudgetCents: 1000 }));
+      expect(a.allowed).toBe(false);
+      expect(a.reason).toBe("Campaign daily budget reached");
+
+      const b = await runGateChecks(makeCampaign({ campaignId: "campaign-B", brandIds: ["brand-1"], dailyBudgetCents: 1000 }));
+      expect(b.allowed).toBe(true);
     });
   });
 

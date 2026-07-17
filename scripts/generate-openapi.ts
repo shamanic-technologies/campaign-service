@@ -22,6 +22,8 @@ import {
   DeleteCampaignsByOrgResponse,
   UpdateBrandPauseBody,
   BrandPauseResponse,
+  SetBrandCampaignsDailyBudgetBody,
+  SetBrandCampaignsDailyBudgetResponse,
   BrandPauseHistoryResponse,
 } from "../src/schemas.js";
 
@@ -166,6 +168,24 @@ registry.registerPath({
   },
   responses: {
     200: { description: "Updated brand pause state", content: { "application/json": { schema: BrandPauseResponse } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/brands/{brandId}/daily-budget",
+  tags: ["Brands"],
+  summary: "Set the daily budget for ALL of a brand's sales campaigns at once",
+  description: "Propagates a brand-page daily budget edit down to every sales-cold-email-outreach campaign of the brand (cents), so per-campaign pacing enforces it immediately. dailyBudgetCents:null clears each campaign's own budget → they fall back to the brand daily budget. Org-scoped via x-org-id; only this org's campaigns for the brand are touched.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ brandId: z.string() }),
+    body: { content: { "application/json": { schema: SetBrandCampaignsDailyBudgetBody } } },
+  },
+  responses: {
+    200: { description: "Updated campaigns count + applied budget", content: { "application/json": { schema: SetBrandCampaignsDailyBudgetResponse } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
   },
