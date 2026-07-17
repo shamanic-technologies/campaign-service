@@ -38,6 +38,14 @@ export const campaigns = pgTable(
     maxBudgetMonthlyUsd: decimal("max_budget_monthly_usd", { precision: 10, scale: 2 }),
     maxBudgetTotalUsd: decimal("max_budget_total_usd", { precision: 10, scale: 2 }),
 
+    // Per-CAMPAIGN daily budget for the sales feature (cents). This is the campaign's OWN
+    // daily spend ceiling, paced against the campaign's OWN committed spend today — so two
+    // campaigns under one brand pace independently. NULL = no own budget → the sales gate
+    // falls back to the brand daily budget (billing-service brand_daily_budgets), keeping
+    // behaviour identical to the pre-per-campaign world. Cents (not USD) to compare directly
+    // against runs-service *CostInUsdCents and billing's brand dailyBudgetCents — no ×100.
+    dailyBudgetCents: integer("daily_budget_cents"),
+
     // Volume limit (optional, total leads across all runs)
     maxLeads: integer("max_leads"),
 
