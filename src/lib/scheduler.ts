@@ -3,6 +3,7 @@ import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveWorkflowSlugForTrigger } from "./features-workflow-projection-client.js";
+import type { RuntimeGoal } from "./brand-runtime-client.js";
 import { listRuns } from "@distribute/runs-client";
 import { notPausedBrandClause } from "./brand-pause.js";
 
@@ -101,6 +102,7 @@ export async function reRunDueCampaigns(): Promise<number> {
       activeGoalId: campaigns.activeGoalId,
       brandProfileId: campaigns.brandProfileId,
       audienceId: campaigns.audienceId,
+      goal: campaigns.goal,
     });
 
   if (dueCampaigns.length === 0) return 0;
@@ -161,6 +163,8 @@ export async function reRunDueCampaigns(): Promise<number> {
             featureSlug,
           },
           fallbackSlug: campaign.workflowSlug,
+          // Campaign v2: pace the workflow pick on the campaign's own goal when set.
+          goalOverride: campaign.goal as RuntimeGoal | null,
         });
         await executeCampaignWorkflow(workflowSlug, {
           campaignId: campaign.id,

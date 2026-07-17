@@ -9,7 +9,7 @@ import { runGateChecks } from "../lib/gate-check.js";
 import { EndRunBody, TransferBrandBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
-import { fetchBrandRuntimeContext } from "../lib/brand-runtime-client.js";
+import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
 import { selectAudienceForRun } from "../lib/features-audience-client.js";
 import { fetchWorkflowProjectionRows, audienceIdsForWorkflow } from "../lib/features-workflow-projection-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
@@ -209,6 +209,12 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       featureSlug: featureSlug!,
     };
     const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, preRunIdentity);
+    // Campaign v2: the campaign's OWN goal drives THIS campaign's pacing when set —
+    // overriding the brand's currentGoal for both the workflow projection and the audience
+    // bandit. NULL → pace on the brand goal (inherit), unchanged behavior. This is the
+    // single place the runtime goal is resolved, so display (campaign reads expose the same
+    // raw campaign.goal) and runtime agree.
+    const runtimeGoal: RuntimeGoal = (campaign.goal as RuntimeGoal | null) ?? brandRuntimeContext.currentGoal;
     // Scope the audience exploration to the audiences that have run under THIS run's
     // workflow (chosen greedily at the trigger), so we explore "the best audiences for
     // this workflow", not across every audience the brand ever contacted. Derived from
@@ -220,7 +226,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       const rows = await fetchWorkflowProjectionRows({
         featureSlug: featureSlug!,
         brandId: primaryBrandId,
-        goal: brandRuntimeContext.currentGoal,
+        goal: runtimeGoal,
         identity: preRunIdentity,
       });
       const ids = audienceIdsForWorkflow(rows, workflowSlug);
@@ -238,10 +244,14 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     const audience = await selectAudienceForRun({
       featureSlug: featureSlug!,
       brandId: primaryBrandId,
-      goal: brandRuntimeContext.currentGoal,
+      goal: runtimeGoal,
       brandProfileId: brandRuntimeContext.brandProfile?.id,
       identity: preRunIdentity,
       eligibleAudienceIds,
+      // Campaign v2: HARD targeting subset. When the campaign targets a subset of the
+      // brand's audiences, the bandit may ONLY pick from it — the campaign never contacts
+      // an audience it doesn't target. NULL/empty → target the brand's full active set.
+      requiredAudienceIds: campaign.audienceIds ?? undefined,
     });
     // audience.audienceId == the selected audience id (human-service saved filter-set UUID).
     const audienceId = audience?.audienceId ?? null;
@@ -267,6 +277,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       ...(featureInputs ?? {}),
       brandProfile: brandRuntimeContext.brandProfile,
       audience,
+      // Campaign v2: authoritative per-campaign config for the sending runtime. NULL means
+      // inherit the brand (downstream falls back to the brand's services / destination).
+      servicesOffered: campaign.servicesOffered ?? null,
+      clickDestinationUrl: campaign.clickDestinationUrl ?? null,
     };
 
     if (req.runId) {
@@ -291,6 +305,12 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       activeGoalId: campaign.activeGoalId ?? null,
       brandProfileId: campaign.brandProfileId ?? null,
       audienceId,
+      // Campaign v2 own config — the campaign's raw own goal (null = paced on brand goal),
+      // its targeted audience subset, its services, its click-destination.
+      goal: (campaign.goal as RuntimeGoal | null) ?? null,
+      audienceIds: campaign.audienceIds ?? null,
+      servicesOffered: campaign.servicesOffered ?? null,
+      clickDestinationUrl: campaign.clickDestinationUrl ?? null,
       searchParams,
     });
   } catch (error) {

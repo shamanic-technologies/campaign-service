@@ -450,6 +450,9 @@ describe("Pipeline routes", () => {
       expect(res.body.searchParams).toEqual({
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
         audience: defaultAudience,
+        // Campaign v2 authoritative per-campaign config — null = inherit brand.
+        servicesOffered: null,
+        clickDestinationUrl: null,
       });
       // Audience is re-selected BEFORE the run row is created, so these fetches trace
       // under the parent (workflow/execute-workflow) run, not this campaign-service run.
@@ -474,6 +477,103 @@ describe("Pipeline routes", () => {
           identity: expect.objectContaining({ runId: "parent-run-1" }),
         }),
       );
+    });
+
+    // === Campaign v2: per-campaign own config ===
+
+    it("should pace on the campaign's OWN goal (override brand currentGoal) when set", async () => {
+      // Brand runtime goal is 'signup' (mock default). The campaign owns 'purchase' → both
+      // the workflow-projection fetch and the audience bandit must pace on 'purchase'.
+      const campaign = await insertTestCampaign(orgId, { brandIds, goal: "purchase" });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(mockSelectAudienceForRun).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: "purchase" }),
+      );
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: "purchase" }),
+      );
+    });
+
+    it("should pace on the BRAND goal (inherit) when the campaign sets no own goal", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      // Mock brand runtime-context returns currentGoal 'signup'.
+      expect(mockSelectAudienceForRun).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: "signup" }),
+      );
+    });
+
+    it("should HARD-restrict the audience bandit to the campaign's targeted subset", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        audienceIds: ["aud-a", "aud-b"],
+      });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      const passed = mockSelectAudienceForRun.mock.calls.at(-1)![0];
+      expect(passed.requiredAudienceIds).toEqual(["aud-a", "aud-b"]);
+    });
+
+    it("should pass no requiredAudienceIds (inherit) when the campaign targets no subset", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      const passed = mockSelectAudienceForRun.mock.calls.at(-1)![0];
+      expect(passed.requiredAudienceIds).toBeUndefined();
+    });
+
+    it("should expose the campaign's own config on the start-run response + searchParams", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        goal: "meetingBooked",
+        audienceIds: ["aud-x"],
+        servicesOffered: ["seo", "ads"],
+        clickDestinationUrl: "https://example.com/lp",
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(res.body.goal).toBe("meetingBooked");
+      expect(res.body.audienceIds).toEqual(["aud-x"]);
+      expect(res.body.servicesOffered).toEqual(["seo", "ads"]);
+      expect(res.body.clickDestinationUrl).toBe("https://example.com/lp");
+      expect(res.body.searchParams.servicesOffered).toEqual(["seo", "ads"]);
+      expect(res.body.searchParams.clickDestinationUrl).toBe("https://example.com/lp");
+    });
+
+    it("should return null own-config (inherit) when the campaign sets nothing", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(res.body.goal).toBeNull();
+      expect(res.body.audienceIds).toBeNull();
+      expect(res.body.servicesOffered).toBeNull();
+      expect(res.body.clickDestinationUrl).toBeNull();
     });
 
     it("should scope the audience exploration to the chosen workflow's audiences (audience-grain candidates)", async () => {
@@ -683,6 +783,8 @@ describe("Pipeline routes", () => {
         region: "US",
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
         audience: defaultAudience,
+        servicesOffered: null,
+        clickDestinationUrl: null,
       });
     });
 
@@ -698,6 +800,8 @@ describe("Pipeline routes", () => {
       expect(res.body.searchParams).toEqual({
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
         audience: null,
+        servicesOffered: null,
+        clickDestinationUrl: null,
       });
     });
 

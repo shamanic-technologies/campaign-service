@@ -75,6 +75,27 @@
             "type": "string",
             "nullable": true
           },
+          "goal": {
+            "$ref": "#/components/schemas/RuntimeGoal"
+          },
+          "audienceIds": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "servicesOffered": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "clickDestinationUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "maxBudgetDailyUsd": {
             "type": "string",
             "nullable": true
@@ -146,6 +167,10 @@
           "activeGoalId",
           "brandProfileId",
           "audienceId",
+          "goal",
+          "audienceIds",
+          "servicesOffered",
+          "clickDestinationUrl",
           "maxBudgetDailyUsd",
           "maxBudgetWeeklyUsd",
           "maxBudgetMonthlyUsd",
@@ -161,6 +186,16 @@
           "notifyDestination",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "RuntimeGoal": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "signup",
+          "meetingBooked",
+          "purchase",
+          null
         ]
       },
       "ErrorResponse": {
@@ -218,6 +253,31 @@
             "minLength": 1
           },
           "audienceId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
+          },
+          "goal": {
+            "$ref": "#/components/schemas/RuntimeGoal"
+          },
+          "audienceIds": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "servicesOffered": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "clickDestinationUrl": {
             "type": "string",
             "nullable": true,
             "minLength": 1
@@ -299,6 +359,31 @@
             "minLength": 1
           },
           "audienceId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
+          },
+          "goal": {
+            "$ref": "#/components/schemas/RuntimeGoal"
+          },
+          "audienceIds": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "servicesOffered": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "clickDestinationUrl": {
             "type": "string",
             "nullable": true,
             "minLength": 1
@@ -599,6 +684,27 @@
             "type": "string",
             "nullable": true
           },
+          "goal": {
+            "$ref": "#/components/schemas/RuntimeGoal"
+          },
+          "audienceIds": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "servicesOffered": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "clickDestinationUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "searchParams": {
             "type": "object",
             "nullable": true,
@@ -619,6 +725,10 @@
           "activeGoalId",
           "brandProfileId",
           "audienceId",
+          "goal",
+          "audienceIds",
+          "servicesOffered",
+          "clickDestinationUrl",
           "searchParams"
         ]
       },
