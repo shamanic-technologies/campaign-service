@@ -58,8 +58,8 @@ vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOri
 
 import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
-import { campaigns } from "../../src/db/schema.js";
-import { eq } from "drizzle-orm";
+import { campaigns, campaignAudienceExhaustion } from "../../src/db/schema.js";
+import { eq, and } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
@@ -1034,10 +1034,12 @@ describe("Pipeline routes", () => {
       expect(mockExecute).not.toHaveBeenCalled();
     });
 
-    it("should auto-stop campaign and NOT re-trigger when stopCampaign is true", async () => {
+    it("stopCampaign=true marks THIS run's audience exhausted and reschedules (does NOT stop) while other audiences remain serveable", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
+        featureSlug: "sales-cold-email-v1",
+        createdByUserId: "user_test",
       });
 
       mockListRuns.mockResolvedValue({
@@ -1045,23 +1047,68 @@ describe("Pipeline routes", () => {
           { id: "run-789", status: "running", startedAt: new Date().toISOString() },
         ],
       });
+      // A serveable (non-exhausted) audience still exists → the campaign must keep going.
+      mockSelectAudienceForRun.mockResolvedValue(defaultAudience);
 
       const res = await request(app)
         .post("/end-run")
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .set("x-audience-id", "aud-dry")
         .send({ success: true, stopCampaign: true })
         .expect(200);
 
       expect(res.body.status).toBe("completed");
-      expect(mockUpdateRun).toHaveBeenCalledWith("run-789", "completed", expect.objectContaining({ orgId }));
 
-      // Wait for async auto-stop
-      await new Promise((r) => setTimeout(r, 100));
+      // Wait for async handling
+      await new Promise((r) => setTimeout(r, 150));
 
-      // Should NOT re-trigger
+      // The served audience is marked exhausted for this campaign.
+      const marks = await db
+        .select()
+        .from(campaignAudienceExhaustion)
+        .where(and(
+          eq(campaignAudienceExhaustion.campaignId, campaign.id),
+          eq(campaignAudienceExhaustion.audienceId, "aud-dry"),
+        ));
+      expect(marks).toHaveLength(1);
+
+      // Campaign stays ongoing and is rescheduled (NOT stopped) — other audiences remain.
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      expect(updated!.status).toBe("ongoing");
+      expect(updated!.nextRunAt).not.toBeNull();
+    });
+
+    it("stopCampaign=true auto-stops the campaign ONLY when no serveable audience remains (all exhausted)", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        status: "ongoing",
+        featureSlug: "sales-cold-email-v1",
+        createdByUserId: "user_test",
+      });
+
+      mockListRuns.mockResolvedValue({
+        runs: [
+          { id: "run-790", status: "running", startedAt: new Date().toISOString() },
+        ],
+      });
+      // No serveable audience left (every targeted audience is exhausted) → legitimate stop.
+      mockSelectAudienceForRun.mockResolvedValue(null);
+
+      const res = await request(app)
+        .post("/end-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .set("x-audience-id", "aud-last")
+        .send({ success: true, stopCampaign: true })
+        .expect(200);
+
+      expect(res.body.status).toBe("completed");
+
+      await new Promise((r) => setTimeout(r, 150));
+
+      // NOT re-triggered, and stopped with nextRunAt cleared.
       expect(mockExecute).not.toHaveBeenCalled();
-
-      // Should auto-stop in DB and NOT set nextRunAt
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
