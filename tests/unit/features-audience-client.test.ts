@@ -94,3 +94,58 @@ describe("selectAudienceForRun — Campaign v2 hard targeting subset", () => {
     expect(picked?.audienceId).toBe("aud-b");
   });
 });
+
+describe("selectAudienceForRun — excludedAudienceIds (exhausted-audience skip)", () => {
+  beforeEach(() => {
+    process.env.FEATURES_SERVICE_URL = "http://features.test";
+    process.env.FEATURES_SERVICE_API_KEY = "test-key";
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("never picks an excluded (exhausted) audience", async () => {
+    // aud-a is exhausted; only aud-b remains serveable.
+    global.fetch = mockStats([audience("aud-a"), audience("aud-b")]);
+    const picked = await selectAudienceForRun({
+      ...baseInput,
+      excludedAudienceIds: ["aud-a"],
+    });
+    expect(picked?.audienceId).toBe("aud-b");
+  });
+
+  it("returns null when EVERY active audience is excluded (all exhausted → stop signal)", async () => {
+    global.fetch = mockStats([audience("aud-a"), audience("aud-b")]);
+    const picked = await selectAudienceForRun({
+      ...baseInput,
+      excludedAudienceIds: ["aud-a", "aud-b"],
+    });
+    expect(picked).toBeNull();
+  });
+
+  it("applies exclusion WITHIN the hard targeted subset (one exhausted of two targeted → picks the other)", async () => {
+    global.fetch = mockStats([audience("aud-a"), audience("aud-b"), audience("aud-z")]);
+    const picked = await selectAudienceForRun({
+      ...baseInput,
+      requiredAudienceIds: ["aud-a", "aud-b"],
+      excludedAudienceIds: ["aud-a"],
+    });
+    expect(picked?.audienceId).toBe("aud-b");
+  });
+
+  it("returns null when the whole targeted subset is exhausted (no fallback to untargeted)", async () => {
+    global.fetch = mockStats([audience("aud-a"), audience("aud-b"), audience("aud-z")]);
+    const picked = await selectAudienceForRun({
+      ...baseInput,
+      requiredAudienceIds: ["aud-a", "aud-b"],
+      excludedAudienceIds: ["aud-a", "aud-b"],
+    });
+    expect(picked).toBeNull();
+  });
+
+  it("no exclusion when excludedAudienceIds is empty/absent", async () => {
+    global.fetch = mockStats([audience("aud-a")]);
+    const picked = await selectAudienceForRun({ ...baseInput, excludedAudienceIds: [] });
+    expect(picked?.audienceId).toBe("aud-a");
+  });
+});

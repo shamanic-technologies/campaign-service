@@ -1,5 +1,5 @@
 import { db, sql } from "../../src/db/index.js";
-import { campaigns, brandPause, brandPauseTransitions } from "../../src/db/schema.js";
+import { campaigns, brandPause, brandPauseTransitions, campaignAudienceExhaustion } from "../../src/db/schema.js";
 
 /**
  * Clean all test data from the database
@@ -8,6 +8,7 @@ export async function cleanTestData() {
   await db.delete(campaigns);
   await db.delete(brandPause);
   await db.delete(brandPauseTransitions);
+  await db.delete(campaignAudienceExhaustion);
 }
 
 /** Upsert a brand_pause row (mirror the route's upsert-in-place semantics). */

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb, boolean, primaryKey } from "drizzle-orm/pg-core";
 
 // Campaigns table
 export const campaigns = pgTable(
@@ -154,3 +154,26 @@ export const brandPauseTransitions = pgTable(
 
 export type BrandPauseTransition = typeof brandPauseTransitions.$inferSelect;
 export type NewBrandPauseTransition = typeof brandPauseTransitions.$inferInsert;
+
+// Per-(campaign, audience) exhaustion marks. A run narrows to ONE bandit-picked audience;
+// when that audience's serve returns no leads the DAG sends stopCampaign=true — which is
+// AUDIENCE-scoped, not campaign-scoped. We record the audience here so the bandit skips it,
+// and only auto-stop the campaign when EVERY targeted audience is exhausted. The mark expires
+// after a 24h TTL (getFreshExhaustedAudienceIds) so audiences are re-probed daily — Apollo can
+// add new matching leads to an audience over time, so "exhausted" is never permanent.
+export const campaignAudienceExhaustion = pgTable(
+  "campaign_audience_exhaustion",
+  {
+    campaignId: text("campaign_id").notNull(),
+    audienceId: text("audience_id").notNull(),
+    exhaustedAt: timestamp("exhausted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.campaignId, table.audienceId] }),
+    // Serves the per-campaign fresh-within-TTL read directly.
+    index("idx_cae_campaign_exhausted_at").on(table.campaignId, table.exhaustedAt),
+  ]
+);
+
+export type CampaignAudienceExhaustion = typeof campaignAudienceExhaustion.$inferSelect;
+export type NewCampaignAudienceExhaustion = typeof campaignAudienceExhaustion.$inferInsert;
