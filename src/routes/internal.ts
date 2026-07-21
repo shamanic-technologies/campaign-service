@@ -11,6 +11,7 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
 import { selectAudienceForRun } from "../lib/features-audience-client.js";
+import { markAudienceExhausted, getFreshExhaustedAudienceIds } from "../lib/audience-exhaustion.js";
 import { fetchWorkflowProjectionRows, audienceIdsForWorkflow } from "../lib/features-workflow-projection-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
 
@@ -241,6 +242,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     // rank #1), so the contacted audience varies run-to-run. The chosen audienceId is
     // stamped on this run AND returned to workflow-service, which threads x-audience-id
     // to every downstream node (lead-serve, …) — so the bandit's choice reaches the serve.
+    // Skip audiences marked exhausted (their served pool ran dry within the last 24h). A run
+    // whose chosen audience returns no leads records it (see /end-run); excluding it here means
+    // the bandit keeps serving the campaign's OTHER audiences instead of re-picking a dry one.
+    const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaignId);
     const audience = await selectAudienceForRun({
       featureSlug: featureSlug!,
       brandId: primaryBrandId,
@@ -252,6 +257,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       // brand's audiences, the bandit may ONLY pick from it — the campaign never contacts
       // an audience it doesn't target. NULL/empty → target the brand's full active set.
       requiredAudienceIds: campaign.audienceIds ?? undefined,
+      excludedAudienceIds,
     });
     // audience.audienceId == the selected audience id (human-service saved filter-set UUID).
     const audienceId = audience?.audienceId ?? null;
@@ -318,6 +324,53 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+/**
+ * Does the campaign still have at least one serveable, non-exhausted audience?
+ *
+ * Mirrors /start-run's bandit eligibility (active audiences ∩ the campaign's targeted subset)
+ * but drops the workflow soft-filter — an audience serveable under ANY workflow keeps the
+ * campaign alive — and excludes audiences currently marked exhausted. Returns true when the
+ * bandit would find at least one audience to pick, false when every targeted audience is
+ * exhausted (the only legitimate campaign-wide stop condition).
+ *
+ * Throws on a features/brand-service error so the caller can fail SAFE (never stop on an
+ * infra hiccup — a false stop is the bug this whole change fixes).
+ */
+async function hasServeableAudience(
+  campaign: typeof campaigns.$inferSelect,
+  req: AuthenticatedRequest,
+): Promise<boolean> {
+  const primaryBrandId = campaign.brandIds![0];
+  const featureSlug = req.featureSlug || campaign.featureSlug;
+  if (!featureSlug) {
+    // No feature slug to query audience-stats with → cannot prove exhaustion. Fail safe:
+    // treat as still-serveable so we never stop the campaign on missing context.
+    return true;
+  }
+  const identity: DownstreamIdentity = {
+    orgId: campaign.orgId,
+    userId: req.userId!,
+    runId: req.runId!,
+    campaignId: campaign.id,
+    brandId: primaryBrandId,
+    workflowSlug: req.workflowSlug || campaign.workflowSlug,
+    featureSlug,
+  };
+  const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, identity);
+  const runtimeGoal: RuntimeGoal = (campaign.goal as RuntimeGoal | null) ?? brandRuntimeContext.currentGoal;
+  const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
+  const audience = await selectAudienceForRun({
+    featureSlug,
+    brandId: primaryBrandId,
+    goal: runtimeGoal,
+    brandProfileId: brandRuntimeContext.brandProfile?.id,
+    identity,
+    requiredAudienceIds: campaign.audienceIds ?? undefined,
+    excludedAudienceIds,
+  });
+  return audience !== null;
+}
 
 /**
  * POST /end-run
@@ -387,17 +440,45 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
     // Respond immediately, then handle re-trigger asynchronously
     res.json({ status });
 
-    // stopCampaign → auto-stop campaign, no re-trigger
+    // The DAG sends stopCampaign=true when THIS run's single served audience returned no leads
+    // (fetch-lead.found == false). That is AUDIENCE-scoped exhaustion, NOT "the campaign is
+    // done": the bandit narrows each run to one audience, so one audience running dry says
+    // nothing about the campaign's other audiences. Reinterpret it — mark this audience
+    // exhausted (24h TTL; the bandit then skips it) and auto-stop the campaign ONLY when it has
+    // no serveable, non-exhausted audience left. Otherwise fall through to the normal reschedule
+    // so the next tick re-draws from the remaining audiences.
     if (stopCampaign === true) {
       try {
-        await db.update(campaigns)
-          .set({ status: "stopped", updatedAt: new Date() })
-          .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)));
-        console.warn(`[campaign-service] stopCampaign=true — auto-stopped campaign ${campaignId}`);
+        const exhaustedAudienceId = req.audienceId;
+        if (exhaustedAudienceId) {
+          await markAudienceExhausted(campaignId, exhaustedAudienceId);
+        } else {
+          console.warn(`[campaign-service] stopCampaign=true for campaign ${campaignId} with no x-audience-id — cannot mark a specific audience exhausted`);
+        }
+
+        const campaign = await db.query.campaigns.findFirst({
+          where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
+        });
+        // Only decide on a still-ongoing campaign with brands to serve. A serveable audience
+        // remaining → keep going (fall through to reschedule); none → the real all-exhausted stop.
+        const serveable =
+          !!campaign && campaign.status === "ongoing" && !!campaign.brandIds?.length
+            ? await hasServeableAudience(campaign, req)
+            : false;
+
+        if (!serveable) {
+          await db.update(campaigns)
+            .set({ status: "stopped", nextRunAt: null, updatedAt: new Date() })
+            .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)));
+          console.log(`[campaign-service] All targeted audiences exhausted — auto-stopped campaign ${campaignId}`);
+          return;
+        }
+        // Serveable audiences remain → do NOT stop; fall through to the reschedule below.
       } catch (err) {
-        console.error(`[campaign-service] Failed to auto-stop campaign:`, err);
+        // Fail SAFE: a false stop is exactly the bug being fixed, so on ANY error in the
+        // exhaustion handling do NOT stop the campaign — fall through to reschedule and retry.
+        console.error(`[campaign-service] audience-exhaustion handling failed for campaign ${campaignId}, not stopping:`, err);
       }
-      return;
     }
 
     // Schedule re-trigger via nextRunAt — the scheduler picks it up on the next tick.

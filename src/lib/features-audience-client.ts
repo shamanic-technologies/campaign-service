@@ -55,6 +55,12 @@ interface SelectAudienceInput {
   // audiences is active, selection returns null (the campaign contacts none of them) rather
   // than falling back to an untargeted audience. NULL/empty → no restriction (inherit brand).
   requiredAudienceIds?: string[];
+  // Audiences currently marked exhausted for this campaign (their served pool is dry within
+  // the 24h TTL). They are removed from the eligible set so the bandit never re-picks a
+  // known-dry audience. If exclusion empties the set, selection returns null — the caller
+  // treats "no serveable audience" as the real all-audiences-exhausted stop signal (this is
+  // an AUTHORITATIVE filter, no fallback, applied last).
+  excludedAudienceIds?: string[];
 }
 
 // Maps each active audience to a bandit arm: trials = leads contacted, successes
@@ -83,6 +89,7 @@ export async function selectAudienceForRun({
   rng,
   eligibleAudienceIds,
   requiredAudienceIds,
+  excludedAudienceIds,
 }: SelectAudienceInput): Promise<AudienceCandidate | null> {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
   const apiKey = process.env.FEATURES_SERVICE_API_KEY;
@@ -130,6 +137,15 @@ export async function selectAudienceForRun({
     const allow = new Set(eligibleAudienceIds);
     const scoped = candidates.filter((a) => allow.has(a.audienceId));
     if (scoped.length > 0) eligible = scoped;
+  }
+
+  // Drop audiences currently marked exhausted (served pool dry within the TTL). AUTHORITATIVE,
+  // applied last, no fallback: if this empties the set, the campaign has no serveable audience
+  // right now → return null so the caller can stop it only when EVERY audience is exhausted.
+  if (excludedAudienceIds && excludedAudienceIds.length > 0) {
+    const excluded = new Set(excludedAudienceIds);
+    eligible = eligible.filter((a) => !excluded.has(a.audienceId));
+    if (eligible.length === 0) return null;
   }
 
   const sortMetric: SortMetric = body.sortMetric === "cpc" ? "cpc" : "cppr";
