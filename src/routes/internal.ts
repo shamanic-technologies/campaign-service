@@ -10,9 +10,12 @@ import { EndRunBody, TransferBrandBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
-import { selectAudienceForRun } from "../lib/features-audience-client.js";
 import { markAudienceExhausted, getFreshExhaustedAudienceIds } from "../lib/audience-exhaustion.js";
-import { fetchWorkflowProjectionRows, audienceIdsForWorkflow } from "../lib/features-workflow-projection-client.js";
+import {
+  fetchWorkflowProjectionRows,
+  selectAudienceFromProjection,
+  hasServeableAudienceInProjection,
+} from "../lib/features-workflow-projection-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
 
 const router = Router();
@@ -216,51 +219,39 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     // single place the runtime goal is resolved, so display (campaign reads expose the same
     // raw campaign.goal) and runtime agree.
     const runtimeGoal: RuntimeGoal = (campaign.goal as RuntimeGoal | null) ?? brandRuntimeContext.currentGoal;
-    // Scope the audience exploration to the audiences that have run under THIS run's
-    // workflow (chosen greedily at the trigger), so we explore "the best audiences for
-    // this workflow", not across every audience the brand ever contacted. Derived from
-    // features-service /workflow-projection audience-grain rows. Fail-soft: any error or no
-    // audience-attributed couples for this workflow → no restriction (explore all active
-    // audiences), so audience selection never blocks a run.
-    let eligibleAudienceIds: string[] | undefined;
+    // Cost-aware Thompson sampling over the chosen workflow's audiences, straight from
+    // features-service /workflow-projection — which enumerates EVERY active audience of the
+    // brand per dynasty (floored to brand/crossOrg when an audience never ran the workflow),
+    // so those rows already ARE the brand's active-audience candidate set. The pick varies
+    // run-to-run (exploration); its audienceId is stamped on this run AND returned to
+    // workflow-service, which threads x-audience-id to every downstream node (lead-serve, …).
+    // Skip audiences marked exhausted (served pool dry within the last 24h) — a run whose
+    // audience returns no leads records it (see /end-run), so the bandit keeps serving the
+    // campaign's OTHER audiences instead of re-picking a dry one.
+    // Fail-soft: any features-service error → no audience chosen for this run (the run still
+    // proceeds and reschedules); a selection optimization must never hard-fail a run.
+    const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaignId);
+    let audienceId: string | null = null;
     try {
-      const rows = await fetchWorkflowProjectionRows({
+      const projectionRows = await fetchWorkflowProjectionRows({
         featureSlug: featureSlug!,
         brandId: primaryBrandId,
         goal: runtimeGoal,
         identity: preRunIdentity,
       });
-      const ids = audienceIdsForWorkflow(rows, workflowSlug);
-      if (ids.length > 0) eligibleAudienceIds = ids;
+      audienceId = selectAudienceFromProjection(projectionRows, workflowSlug, runtimeGoal, {
+        // Campaign v2: HARD targeting subset. When the campaign targets a subset of the
+        // brand's audiences, the bandit may ONLY pick from it — the campaign never contacts
+        // an audience it doesn't target. NULL/empty → target the brand's full active set.
+        requiredAudienceIds: campaign.audienceIds ?? undefined,
+        excludedAudienceIds,
+      });
     } catch (err) {
       console.warn(
-        `[campaign-service] workflow-scoped audience selection failed for brand ${primaryBrandId}, exploring all audiences:`,
+        `[campaign-service] audience selection failed for brand ${primaryBrandId}, proceeding without a chosen audience:`,
         err,
       );
     }
-    // Cost-aware Thompson sampling over the chosen workflow's audiences (not frozen
-    // rank #1), so the contacted audience varies run-to-run. The chosen audienceId is
-    // stamped on this run AND returned to workflow-service, which threads x-audience-id
-    // to every downstream node (lead-serve, …) — so the bandit's choice reaches the serve.
-    // Skip audiences marked exhausted (their served pool ran dry within the last 24h). A run
-    // whose chosen audience returns no leads records it (see /end-run); excluding it here means
-    // the bandit keeps serving the campaign's OTHER audiences instead of re-picking a dry one.
-    const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaignId);
-    const audience = await selectAudienceForRun({
-      featureSlug: featureSlug!,
-      brandId: primaryBrandId,
-      goal: runtimeGoal,
-      brandProfileId: brandRuntimeContext.brandProfile?.id,
-      identity: preRunIdentity,
-      eligibleAudienceIds,
-      // Campaign v2: HARD targeting subset. When the campaign targets a subset of the
-      // brand's audiences, the bandit may ONLY pick from it — the campaign never contacts
-      // an audience it doesn't target. NULL/empty → target the brand's full active set.
-      requiredAudienceIds: campaign.audienceIds ?? undefined,
-      excludedAudienceIds,
-    });
-    // audience.audienceId == the selected audience id (human-service saved filter-set UUID).
-    const audienceId = audience?.audienceId ?? null;
 
     // Create run in runs-service (x-run-id from caller becomes parentRunId), stamping the
     // chosen audience so this run's own costs are attributed too.
@@ -279,10 +270,13 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
 
     // Build searchParams from campaign featureInputs, then enrich with current runtime context.
     const featureInputs = campaign.featureInputs as Record<string, unknown> | null;
+    // Note: the chosen audience is threaded downstream by AUDIENCE ID (x-audience-id, from the
+    // top-level `audienceId` on this response) — lead-service resolves the audience's filters
+    // from human-service by id and workflow-service reads only `audienceId`, so the full
+    // audience object is NOT passed in searchParams (no downstream consumer reads it).
     const searchParams: Record<string, unknown> = {
       ...(featureInputs ?? {}),
       brandProfile: brandRuntimeContext.brandProfile,
-      audience,
       // Campaign v2: authoritative per-campaign config for the sending runtime. NULL means
       // inherit the brand (downstream falls back to the brand's services / destination).
       servicesOffered: campaign.servicesOffered ?? null,
@@ -344,7 +338,7 @@ async function hasServeableAudience(
   const primaryBrandId = campaign.brandIds![0];
   const featureSlug = req.featureSlug || campaign.featureSlug;
   if (!featureSlug) {
-    // No feature slug to query audience-stats with → cannot prove exhaustion. Fail safe:
+    // No feature slug to query the projection with → cannot prove exhaustion. Fail safe:
     // treat as still-serveable so we never stop the campaign on missing context.
     return true;
   }
@@ -360,16 +354,16 @@ async function hasServeableAudience(
   const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, identity);
   const runtimeGoal: RuntimeGoal = (campaign.goal as RuntimeGoal | null) ?? brandRuntimeContext.currentGoal;
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
-  const audience = await selectAudienceForRun({
+  const rows = await fetchWorkflowProjectionRows({
     featureSlug,
     brandId: primaryBrandId,
     goal: runtimeGoal,
-    brandProfileId: brandRuntimeContext.brandProfile?.id,
     identity,
+  });
+  return hasServeableAudienceInProjection(rows, {
     requiredAudienceIds: campaign.audienceIds ?? undefined,
     excludedAudienceIds,
   });
-  return audience !== null;
 }
 
 /**
