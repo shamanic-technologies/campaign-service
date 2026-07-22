@@ -11,6 +11,7 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
 import { markAudienceExhausted, getFreshExhaustedAudienceIds } from "../lib/audience-exhaustion.js";
+import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import {
   fetchWorkflowProjectionRows,
   selectAudienceFromProjection,
@@ -461,6 +462,13 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
             : false;
 
         if (!serveable) {
+          // Fully contacted: every targeted audience is exhausted and the campaign is
+          // being auto-stopped. Nudge the user to extend an audience so outreach can
+          // resume. Fire-and-forget — never blocks or fails run finalization, and the
+          // 1x/month-per-brand cap is enforced by transactional-email-service dedup.
+          if (campaign) {
+            void maybeSendExtendAudienceEmail(campaign, { runId: req.runId });
+          }
           await db.update(campaigns)
             .set({ status: "stopped", nextRunAt: null, updatedAt: new Date() })
             .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)));
