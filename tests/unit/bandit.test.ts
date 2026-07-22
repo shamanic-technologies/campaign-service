@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import { thompsonArgminCost, greedyArgminCost, sampleBeta, type Arm, type Rng } from "../../src/lib/bandit.js";
 import {
   selectWorkflowGreedy,
-  audienceIdsForWorkflow,
   isWorkflowRotationEnabled,
   type ProjectionRow,
 } from "../../src/lib/features-workflow-projection-client.js";
@@ -151,6 +150,7 @@ describe("selectWorkflowGreedy", () => {
   ): ProjectionRow => ({
     audienceId,
     workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
+    audienceEvidence: null,
     resolved: { grain, costPerOutcomeUsd },
   });
 
@@ -199,34 +199,6 @@ describe("selectWorkflowGreedy", () => {
       mk("wf-other", 50.0),
     ];
     expect(selectWorkflowGreedy(candidates, "meetingBooked")).toBe("wf-multi");
-  });
-});
-
-describe("audienceIdsForWorkflow", () => {
-  const mk = (slug: string, audienceId: string | null): ProjectionRow => ({
-    audienceId,
-    workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
-    resolved: { grain: audienceId ? "audience" : "brand", costPerOutcomeUsd: null },
-  });
-
-  it("returns only the audience-grain rows (audienceId non-null) for the chosen workflow", () => {
-    const candidates = [
-      mk("wf-a", "aud-1"),
-      mk("wf-a", "aud-2"),
-      mk("wf-a", null), //   coarse fallback row — excluded
-      mk("wf-b", "aud-3"), // other workflow — excluded
-    ];
-    expect(audienceIdsForWorkflow(candidates, "wf-a").sort()).toEqual(["aud-1", "aud-2"]);
-  });
-
-  it("de-duplicates repeated audienceIds", () => {
-    const candidates = [mk("wf-a", "aud-1"), mk("wf-a", "aud-1")];
-    expect(audienceIdsForWorkflow(candidates, "wf-a")).toEqual(["aud-1"]);
-  });
-
-  it("returns empty for a workflow with no audience-attributed couples", () => {
-    const candidates = [mk("wf-a", null), mk("wf-b", "aud-1")];
-    expect(audienceIdsForWorkflow(candidates, "wf-a")).toEqual([]);
   });
 });
 

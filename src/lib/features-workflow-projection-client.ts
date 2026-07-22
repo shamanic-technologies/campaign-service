@@ -1,12 +1,30 @@
 import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-headers.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "./brand-runtime-client.js";
+import { thompsonArgminCost, type Arm, type Rng } from "./bandit.js";
+
+// Audience-grain, send-tagged evidence for one (audience × workflow dynasty) couple.
+// Present ONLY on audienceId != null rows whose audience actually spent under this couple
+// (features-service omits the audience grain when audience-level spend is 0). An audience
+// enumerated with NO audience grain has its cost floored to brand/crossOrg in `resolved` —
+// campaign-service treats it as a COLD Thompson arm (zero trials → gets explored).
+export interface ProjectionAudienceEvidence {
+  spentUsd: number;
+  observedContacted: number;
+  observedClicks: number;
+  observedPositiveReplies: number;
+}
 
 // One (audienceId, workflow) row from features-service GET /features/:slug/workflow-projection.
-// audienceId is null for the brand-level row and non-null for an active audience that ran this
-// workflow dynasty. The workflow ranking metric lives at resolved.costPerOutcomeUsd.
+// audienceId is null for the brand-level row and non-null for EVERY active audience of the brand
+// under this workflow dynasty (features-service#638 enumerates all active audiences per dynasty;
+// audiences with no couple floor to brand/crossOrg). The workflow ranking metric lives at
+// resolved.costPerOutcomeUsd; the audience Thompson reads audienceEvidence.
 export interface ProjectionRow {
   audienceId: string | null;
   workflow: { workflowDynastySlug: string; workflowDynastyName: string | null };
+  // Null when this row carries no audience-grain evidence (brand-level row, or a floored
+  // audience with zero audience-level spend under this workflow).
+  audienceEvidence: ProjectionAudienceEvidence | null;
   resolved: {
     // Finest grain at which THIS row's evidence resolved (provenance only — the workflow
     // pick ignores it): "audience" → "brand" → "crossOrg".
@@ -17,8 +35,27 @@ export interface ProjectionRow {
   };
 }
 
+// Raw endpoint row shape — richer than ProjectionRow. We extract only the fields both legs
+// (workflow greedy + audience Thompson) need; the audience grain's raw evidence is folded into
+// the normalized `audienceEvidence` so downstream code never reaches into estimatesByGrain.
+interface RawProjectionRow {
+  audienceId: string | null;
+  workflow: { workflowDynastySlug: string; workflowDynastyName: string | null };
+  estimatesByGrain?: {
+    audience?: {
+      evidence?: {
+        spentUsd: number;
+        observedContacted: number;
+        observedClicks: number;
+        observedPositiveReplies: number;
+      };
+    };
+  };
+  resolved: { grain: string; costPerOutcomeUsd: number | null };
+}
+
 interface WorkflowProjectionResponse {
-  rows: ProjectionRow[];
+  rows: RawProjectionRow[];
 }
 
 interface FetchWorkflowProjectionInput {
@@ -58,12 +95,29 @@ export async function fetchWorkflowProjectionRows({
   if (!Array.isArray(body.rows)) {
     throw new Error("[campaign-service] FeatureService workflow-projection returned an invalid rows payload");
   }
-  return body.rows;
+  // Normalize: fold the audience-grain raw evidence into `audienceEvidence` so the selection
+  // code reads a flat shape and never depends on the estimatesByGrain nesting.
+  return body.rows.map((r): ProjectionRow => {
+    const ev = r.estimatesByGrain?.audience?.evidence;
+    return {
+      audienceId: r.audienceId,
+      workflow: r.workflow,
+      audienceEvidence: ev
+        ? {
+            spentUsd: ev.spentUsd,
+            observedContacted: ev.observedContacted,
+            observedClicks: ev.observedClicks,
+            observedPositiveReplies: ev.observedPositiveReplies,
+          }
+        : null,
+      resolved: r.resolved,
+    };
+  });
 }
 
 // Per-run WORKFLOW selection: GREEDY — pick the workflow with the cheapest
 // cost-per-outcome, deterministically. No exploration (the audience leg, chosen
-// later at /start-run, keeps Thompson — see selectAudienceForRun).
+// later at /start-run, keeps Thompson — see selectAudienceFromProjection).
 //
 // features-service already computes `resolved.costPerOutcomeUsd` per row (cost per
 // goal-outcome — e.g. per signup — over the upgrade chain × the brand's effective
@@ -94,26 +148,118 @@ export function selectWorkflowGreedy(
   return bestSlug;
 }
 
-// The set of audiences that have actually run under `workflowSlug`, derived from the
-// /workflow-projection audience-grain rows (audienceId non-null ⟺ an audience-attributed
-// (audienceId × workflow) couple). Used to scope the audience Thompson to the chosen
-// workflow: "explore among the best audiences FOR THIS WORKFLOW", not across every audience
-// the brand ever contacted.
-//
-// Returns a de-duplicated list of audienceIds. Empty when this workflow has no
-// audience-attributed couples yet (cold workflow) — the caller then falls back to
-// the unconditioned audience set so a fresh workflow still gets an audience.
-export function audienceIdsForWorkflow(
-  rows: ProjectionRow[],
-  workflowSlug: string,
-): string[] {
-  const ids = new Set<string>();
+// The audience leg sorts by CPC (cost-per-click) for click-driven goals and CPPR
+// (cost-per-positive-reply) otherwise — mirroring features-service's own audience-stats
+// ranking rule so the bandit optimizes the same metric the dashboard shows.
+type SortMetric = "cpc" | "cppr";
+function metricForGoal(goal: RuntimeGoal): SortMetric {
+  return goal === "signup" ? "cpc" : "cppr";
+}
+
+// Maps a projection audience row to a Thompson arm: trials = leads contacted, successes =
+// the goal's outcome (clicks for CPC, positive replies for CPPR), costPerTrial = spend per
+// contacted lead (USD — only ordering matters). A row with no audience-grain evidence (a
+// floored / never-run-this-workflow audience) becomes a COLD arm (0 trials, null cost) so it
+// still gets explored instead of vanishing from the candidate set.
+function toArm(ev: ProjectionAudienceEvidence | null, metric: SortMetric): Arm {
+  if (!ev) return { trials: 0, successes: 0, costPerTrial: null };
+  const trials = ev.observedContacted;
+  const successes = metric === "cpc" ? ev.observedClicks : ev.observedPositiveReplies;
+  const costPerTrial = trials > 0 ? ev.spentUsd / trials : null;
+  return { trials, successes, costPerTrial };
+}
+
+// Keep one row per audienceId, preferring the row that carries audience-grain evidence.
+function dedupeByAudience(rows: ProjectionRow[]): ProjectionRow[] {
+  const byId = new Map<string, ProjectionRow>();
   for (const r of rows) {
-    if (r.audienceId != null && r.workflow.workflowDynastySlug === workflowSlug) {
-      ids.add(r.audienceId);
+    if (r.audienceId == null) continue;
+    const existing = byId.get(r.audienceId);
+    if (!existing || (existing.audienceEvidence == null && r.audienceEvidence != null)) {
+      byId.set(r.audienceId, r);
     }
   }
-  return [...ids];
+  return [...byId.values()];
+}
+
+/**
+ * Per-run AUDIENCE selection: cost-aware Thompson sampling over the chosen workflow's audience
+ * rows from /workflow-projection — so the contacted audience varies per run (exploration) and
+ * is scored on THIS workflow's send-tagged evidence.
+ *
+ * features-service#638 enumerates EVERY active audience of the brand for each dynasty (floored
+ * to brand/crossOrg when the audience has no couple), so the chosen-workflow rows already ARE
+ * the brand's active-audience set — no separate audience-stats call is needed. Fallback: if the
+ * chosen workflow has no rows at all (a cold/fallback slug absent from the projection), explore
+ * one row per audience across ALL workflows so a fresh workflow still gets an audience.
+ *
+ * requiredAudienceIds is the Campaign v2 HARD targeting subset (no fallback — empty → null).
+ * excludedAudienceIds is the fresh-exhausted set (no fallback — empty → null = the real
+ * all-audiences-exhausted stop signal). Returns the chosen audienceId, or null.
+ */
+export function selectAudienceFromProjection(
+  rows: ProjectionRow[],
+  workflowSlug: string,
+  goal: RuntimeGoal,
+  opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[]; rng?: Rng } = {},
+): string | null {
+  const metric = metricForGoal(goal);
+
+  let candidates = rows.filter(
+    (r) => r.audienceId != null && r.workflow.workflowDynastySlug === workflowSlug,
+  );
+  if (candidates.length === 0) {
+    // Cold/fallback workflow not present in the projection → explore across all audiences.
+    candidates = dedupeByAudience(rows.filter((r) => r.audienceId != null));
+  } else {
+    candidates = dedupeByAudience(candidates);
+  }
+
+  // HARD targeting subset — the campaign may ONLY ever be served one of its targeted audiences.
+  if (opts.requiredAudienceIds && opts.requiredAudienceIds.length > 0) {
+    const required = new Set(opts.requiredAudienceIds);
+    candidates = candidates.filter((r) => required.has(r.audienceId!));
+    if (candidates.length === 0) return null;
+  }
+
+  // Drop exhausted audiences (24h TTL). No fallback: empty → null (all exhausted = stop).
+  if (opts.excludedAudienceIds && opts.excludedAudienceIds.length > 0) {
+    const excluded = new Set(opts.excludedAudienceIds);
+    candidates = candidates.filter((r) => !excluded.has(r.audienceId!));
+    if (candidates.length === 0) return null;
+  }
+
+  if (candidates.length === 0) return null;
+  const idx = thompsonArgminCost(
+    candidates.map((r) => toArm(r.audienceEvidence, metric)),
+    opts.rng,
+  );
+  return idx === null ? null : candidates[idx].audienceId;
+}
+
+/**
+ * Does the campaign still have at least one serveable, non-exhausted audience?
+ *
+ * Mirrors selectAudienceFromProjection's eligibility but drops the workflow scoping — an
+ * audience serveable under ANY workflow keeps the campaign alive — and ignores the Thompson
+ * draw (a boolean, not a pick). Returns false only when EVERY targeted audience is exhausted
+ * (the sole legitimate campaign-wide stop condition).
+ */
+export function hasServeableAudienceInProjection(
+  rows: ProjectionRow[],
+  opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[] } = {},
+): boolean {
+  let ids = new Set<string>();
+  for (const r of rows) if (r.audienceId != null) ids.add(r.audienceId);
+
+  if (opts.requiredAudienceIds && opts.requiredAudienceIds.length > 0) {
+    const required = new Set(opts.requiredAudienceIds);
+    ids = new Set([...ids].filter((id) => required.has(id)));
+  }
+  if (opts.excludedAudienceIds) {
+    for (const e of opts.excludedAudienceIds) ids.delete(e);
+  }
+  return ids.size > 0;
 }
 
 // Per-run workflow rotation (the greedy bandit) is enabled ONLY for these features.

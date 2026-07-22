@@ -8,7 +8,6 @@ const {
   mockExecute,
   mockGateChecks,
   mockFetchBrandRuntimeContext,
-  mockSelectAudienceForRun,
   mockFetchCandidates,
 } = vi.hoisted(() => ({
   mockCreateRun: vi.fn(),
@@ -17,7 +16,6 @@ const {
   mockExecute: vi.fn(),
   mockGateChecks: vi.fn(),
   mockFetchBrandRuntimeContext: vi.fn(),
-  mockSelectAudienceForRun: vi.fn(),
   mockFetchCandidates: vi.fn(),
 }));
 
@@ -44,14 +42,10 @@ vi.mock("../../src/lib/brand-runtime-client.js", () => ({
   fetchBrandRuntimeContext: mockFetchBrandRuntimeContext,
 }));
 
-vi.mock("../../src/lib/features-audience-client.js", () => ({
-  selectAudienceForRun: mockSelectAudienceForRun,
-}));
-
 vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/features-workflow-projection-client.js")>();
   return {
-    ...original, // keep the real pure audienceIdsForWorkflow
+    ...original, // keep the real pure selectAudienceFromProjection / hasServeableAudienceInProjection
     fetchWorkflowProjectionRows: mockFetchCandidates,
   };
 });
@@ -75,27 +69,28 @@ const defaultBrandProfile = {
   createdAt: "2026-06-18T00:00:00.000Z",
 };
 
-const defaultAudience = {
-  audienceId: "customer-profile-best",
-  brandProfileId: "brand-profile-current",
-  audience: {
-    id: "customer-profile-best",
-    name: "Revenue leaders",
-    status: "active",
-    filters: {
-      titles: ["VP Sales", "Head of Growth"],
-    },
-  },
-  evidence: {
-    contacted: 120,
-    websiteClicks: 24,
-    positiveReplies: 6,
-  },
-  metrics: {
-    cpcCents: 500,
-    cpprCents: 2000,
-  },
-};
+// Audience selection now runs the REAL selectAudienceFromProjection over the rows returned by
+// (mocked) fetchWorkflowProjectionRows. A projection row for the default workflow slug used in
+// pipelineHeaders ("sales-email-cold-outreach"); a single candidate → deterministic pick.
+const DEFAULT_AUDIENCE_ID = "customer-profile-best";
+const DEFAULT_WORKFLOW_SLUG = "sales-email-cold-outreach";
+
+function projectionRow(
+  audienceId: string | null,
+  slug: string = DEFAULT_WORKFLOW_SLUG,
+  withEvidence = true,
+) {
+  return {
+    audienceId,
+    workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
+    audienceEvidence: withEvidence && audienceId
+      ? { spentUsd: 12, observedContacted: 120, observedClicks: 24, observedPositiveReplies: 6 }
+      : null,
+    resolved: { grain: audienceId ? "audience" : "brand", costPerOutcomeUsd: 10 },
+  };
+}
+
+const defaultRows = [projectionRow(DEFAULT_AUDIENCE_ID)];
 
 /** All required pipeline headers for a valid DAG request */
 function pipelineHeaders(overrides: Record<string, string> = {}) {
@@ -129,8 +124,7 @@ describe("Pipeline routes", () => {
       currentGoal: "signup",
       brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
     });
-    mockSelectAudienceForRun.mockResolvedValue(defaultAudience);
-    mockFetchCandidates.mockResolvedValue([]);
+    mockFetchCandidates.mockResolvedValue(defaultRows);
   });
 
   afterAll(async () => {
@@ -404,7 +398,7 @@ describe("Pipeline routes", () => {
     it("should return persona/profile attribution for attributed campaigns", async () => {
       // Stored campaign attribution surfaced on /start-run. The renamed audience column
       // is NOT round-tripped here — /start-run returns the per-run freshly-selected
-      // audienceId (from audience-stats), not the stored column.
+      // audienceId (from the workflow-projection bandit), not the stored column.
       const attribution = {
         activeGoalId: "goal_internal_test",
         brandProfileId: "brand_profile_internal_test",
@@ -449,7 +443,7 @@ describe("Pipeline routes", () => {
 
       expect(res.body.searchParams).toEqual({
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
-        audience: defaultAudience,
+        // The audience object is NOT passed downstream — only its id (top-level audienceId).
         // Campaign v2 authoritative per-campaign config — null = inherit brand.
         servicesOffered: null,
         clickDestinationUrl: null,
@@ -468,22 +462,23 @@ describe("Pipeline routes", () => {
           featureSlug: "sales-cold-email-v1",
         }),
       );
-      expect(mockSelectAudienceForRun).toHaveBeenCalledWith(
+      // The audience is now selected from the workflow-projection rows (single-endpoint).
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
         expect.objectContaining({
           featureSlug: "sales-cold-email-v1",
           brandId: brandIds[0],
           goal: "signup",
-          brandProfileId: "brand-profile-current",
           identity: expect.objectContaining({ runId: "parent-run-1" }),
         }),
       );
+      expect(res.body.audienceId).toBe(DEFAULT_AUDIENCE_ID);
     });
 
     // === Campaign v2: per-campaign own config ===
 
     it("should pace on the campaign's OWN goal (override brand currentGoal) when set", async () => {
-      // Brand runtime goal is 'signup' (mock default). The campaign owns 'purchase' → both
-      // the workflow-projection fetch and the audience bandit must pace on 'purchase'.
+      // Brand runtime goal is 'signup' (mock default). The campaign owns 'purchase' → the
+      // workflow-projection fetch (which now drives both legs) must pace on 'purchase'.
       const campaign = await insertTestCampaign(orgId, { brandIds, goal: "purchase" });
 
       await request(app)
@@ -491,9 +486,6 @@ describe("Pipeline routes", () => {
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      expect(mockSelectAudienceForRun).toHaveBeenCalledWith(
-        expect.objectContaining({ goal: "purchase" }),
-      );
       expect(mockFetchCandidates).toHaveBeenCalledWith(
         expect.objectContaining({ goal: "purchase" }),
       );
@@ -508,36 +500,41 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       // Mock brand runtime-context returns currentGoal 'signup'.
-      expect(mockSelectAudienceForRun).toHaveBeenCalledWith(
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
         expect.objectContaining({ goal: "signup" }),
       );
     });
 
     it("should HARD-restrict the audience bandit to the campaign's targeted subset", async () => {
+      // Rows contain a targeted (aud-a) and an untargeted (aud-z) audience under the workflow.
+      mockFetchCandidates.mockResolvedValueOnce([
+        projectionRow("aud-a"),
+        projectionRow("aud-z"),
+      ]);
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
-        audienceIds: ["aud-a", "aud-b"],
+        audienceIds: ["aud-a", "aud-b"], // targets aud-a (present) + aud-b (absent)
       });
 
-      await request(app)
+      const res = await request(app)
         .post("/start-run")
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      const passed = mockSelectAudienceForRun.mock.calls.at(-1)![0];
-      expect(passed.requiredAudienceIds).toEqual(["aud-a", "aud-b"]);
+      // aud-z is untargeted and aud-b is absent → the only serveable targeted audience is aud-a.
+      expect(res.body.audienceId).toBe("aud-a");
     });
 
-    it("should pass no requiredAudienceIds (inherit) when the campaign targets no subset", async () => {
+    it("should inherit the brand's full active set when the campaign targets no subset", async () => {
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
-      await request(app)
+      const res = await request(app)
         .post("/start-run")
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      const passed = mockSelectAudienceForRun.mock.calls.at(-1)![0];
-      expect(passed.requiredAudienceIds).toBeUndefined();
+      // Default single-row projection → the default audience is picked (no subset restriction).
+      expect(res.body.audienceId).toBe(DEFAULT_AUDIENCE_ID);
     });
 
     it("should expose the campaign's own config on the start-run response + searchParams", async () => {
@@ -576,47 +573,41 @@ describe("Pipeline routes", () => {
       expect(res.body.clickDestinationUrl).toBeNull();
     });
 
-    it("should scope the audience exploration to the chosen workflow's audiences (audience-grain candidates)", async () => {
-      const mkCandidate = (slug: string, audienceId: string | null) => ({
-        audienceId,
-        workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
-        resolved: {
-          grain: audienceId ? "audience" : "brand",
-          costPerOutcomeUsd: null,
-        },
-      });
-      // Two audiences ran the campaign's workflow; one belongs to a different workflow.
+    it("should scope the audience exploration to the chosen workflow's audiences", async () => {
+      // Two audiences under the campaign's workflow; a third belongs to a different workflow.
       mockFetchCandidates.mockResolvedValueOnce([
-        mkCandidate("sales-email-cold-outreach", "aud-1"),
-        mkCandidate("sales-email-cold-outreach", "aud-2"),
-        mkCandidate("sales-email-cold-outreach", null), // coarse fallback row — excluded
-        mkCandidate("some-other-workflow", "aud-3"), //      other workflow — excluded
+        projectionRow("aud-1", "sales-email-cold-outreach"),
+        projectionRow("aud-2", "sales-email-cold-outreach"),
+        projectionRow(null, "sales-email-cold-outreach"), // brand-level row — ignored
+        projectionRow("aud-3", "some-other-workflow"), //     other workflow — excluded
       ]);
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
-      await request(app)
+      const res = await request(app)
         .post("/start-run")
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      const passed = mockSelectAudienceForRun.mock.calls.at(-1)![0];
-      expect([...passed.eligibleAudienceIds].sort()).toEqual(["aud-1", "aud-2"]);
+      // Only aud-1 / aud-2 ran the chosen workflow; aud-3 (other workflow) is never picked.
+      expect(["aud-1", "aud-2"]).toContain(res.body.audienceId);
     });
 
-    it("should not scope audiences when the workflow has no audience-grain candidates (fail-soft)", async () => {
-      mockFetchCandidates.mockResolvedValueOnce([]);
+    it("should fall back to all audiences when the chosen workflow has no rows (cold slug)", async () => {
+      // No row for the chosen workflow → fall back to the audience present under another one.
+      mockFetchCandidates.mockResolvedValueOnce([
+        projectionRow("aud-other", "some-other-workflow"),
+      ]);
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
-      await request(app)
+      const res = await request(app)
         .post("/start-run")
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      const passed = mockSelectAudienceForRun.mock.calls.at(-1)![0];
-      expect(passed.eligibleAudienceIds).toBeUndefined();
+      expect(res.body.audienceId).toBe("aud-other");
     });
 
-    it("should still select an audience when fetchCandidates throws (fail-soft)", async () => {
+    it("should proceed with no audience (fail-soft) when the projection fetch throws", async () => {
       mockFetchCandidates.mockRejectedValueOnce(new Error("features-service down"));
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
@@ -625,9 +616,11 @@ describe("Pipeline routes", () => {
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      expect(res.body.audienceId).toBe("customer-profile-best");
-      const passed = mockSelectAudienceForRun.mock.calls.at(-1)![0];
-      expect(passed.eligibleAudienceIds).toBeUndefined();
+      // A selection failure never hard-fails the run — it proceeds with no chosen audience.
+      expect(res.body.audienceId).toBeNull();
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ audienceId: undefined }),
+      );
     });
 
     it("should stamp the selected audience on the run (x-audience-id) and return it", async () => {
@@ -638,15 +631,14 @@ describe("Pipeline routes", () => {
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      // audience.id == the selected persona/profile id (customer-profile-best from the mock)
-      expect(res.body.audienceId).toBe("customer-profile-best");
+      expect(res.body.audienceId).toBe(DEFAULT_AUDIENCE_ID);
       expect(mockCreateRun).toHaveBeenCalledWith(
-        expect.objectContaining({ audienceId: "customer-profile-best" }),
+        expect.objectContaining({ audienceId: DEFAULT_AUDIENCE_ID }),
       );
     });
 
     it("should return audienceId: null and not stamp the run when no audience is selected", async () => {
-      mockSelectAudienceForRun.mockResolvedValueOnce(null);
+      mockFetchCandidates.mockResolvedValueOnce([]); // no audience rows → null pick
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
@@ -767,7 +759,7 @@ describe("Pipeline routes", () => {
       expect(res.body.featureInputs).toEqual({ mediaType: "podcast", region: "US" });
     });
 
-    it("should enrich featureInputs searchParams with current brand profile and best persona", async () => {
+    it("should enrich featureInputs searchParams with current brand profile", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         featureInputs: { mediaType: "podcast", region: "US" },
@@ -778,18 +770,18 @@ describe("Pipeline routes", () => {
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
+      // The audience object is not in searchParams — it is threaded downstream by id only.
       expect(res.body.searchParams).toEqual({
         mediaType: "podcast",
         region: "US",
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
-        audience: defaultAudience,
         servicesOffered: null,
         clickDestinationUrl: null,
       });
     });
 
-    it("should include audience: null when FeatureService has no audience rows", async () => {
-      mockSelectAudienceForRun.mockResolvedValueOnce(null);
+    it("should not include the audience object in searchParams (threaded by id only)", async () => {
+      mockFetchCandidates.mockResolvedValueOnce([]); // no audience rows → null pick
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
@@ -797,9 +789,10 @@ describe("Pipeline routes", () => {
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
+      expect(res.body.audienceId).toBeNull();
+      expect(res.body.searchParams).not.toHaveProperty("audience");
       expect(res.body.searchParams).toEqual({
         brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
-        audience: null,
         servicesOffered: null,
         clickDestinationUrl: null,
       });
@@ -1048,7 +1041,8 @@ describe("Pipeline routes", () => {
         ],
       });
       // A serveable (non-exhausted) audience still exists → the campaign must keep going.
-      mockSelectAudienceForRun.mockResolvedValue(defaultAudience);
+      // hasServeableAudience reads the projection; aud-alive is present and not exhausted.
+      mockFetchCandidates.mockResolvedValue([projectionRow("aud-alive")]);
 
       const res = await request(app)
         .post("/end-run")
@@ -1093,8 +1087,9 @@ describe("Pipeline routes", () => {
           { id: "run-790", status: "running", startedAt: new Date().toISOString() },
         ],
       });
-      // No serveable audience left (every targeted audience is exhausted) → legitimate stop.
-      mockSelectAudienceForRun.mockResolvedValue(null);
+      // No serveable audience left: the projection's only audience is the one we're marking
+      // exhausted (aud-last) → after exclusion no audience remains → legitimate stop.
+      mockFetchCandidates.mockResolvedValue([projectionRow("aud-last")]);
 
       const res = await request(app)
         .post("/end-run")
