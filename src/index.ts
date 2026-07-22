@@ -16,6 +16,7 @@ import brandsRoutes from "./routes/brands.js";
 import statsRoutes from "./routes/stats.js";
 import internalRoutes from "./routes/internal.js";
 import { startScheduler } from "./lib/scheduler.js";
+import { registerExtendAudienceTemplate } from "./lib/transactional-email.js";
 const app = express();
 const PORT = process.env.PORT || 3003;
 
@@ -70,6 +71,9 @@ if (process.env.NODE_ENV !== "test") {
       startScheduler();
       app.listen(Number(PORT), "::", () => {
         console.log(`[campaign-service] Running on port ${PORT}`);
+        // Register lifecycle email templates AFTER port-bind, fire-and-forget: a slow or
+        // down transactional-email-service must never delay boot or fail the deploy.
+        void registerExtendAudienceTemplate();
       });
     })
     .catch((err) => {
