@@ -239,7 +239,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
         goal: runtimeGoal,
         identity: preRunIdentity,
       });
-      audienceId = selectAudienceFromProjection(projectionRows, workflowSlug, runtimeGoal, {
+      audienceId = selectAudienceFromProjection(projectionRows, workflowSlug, {
         // Campaign v2: HARD targeting subset. When the campaign targets a subset of the
         // brand's audiences, the bandit may ONLY pick from it — the campaign never contacts
         // an audience it doesn't target. NULL/empty → target the brand's full active set.

@@ -84,7 +84,7 @@ function projectionRow(
     audienceId,
     workflow: { workflowDynastySlug: slug, workflowDynastyName: slug },
     audienceEvidence: withEvidence && audienceId
-      ? { spentUsd: 12, observedContacted: 120, observedClicks: 24, observedPositiveReplies: 6 }
+      ? { spentUsd: 12, observedContacted: 120, observedClicks: 24, observedPositiveReplies: 6, resolvedOutcomeCount: 6 }
       : null,
     resolved: { grain: audienceId ? "audience" : "brand", costPerOutcomeUsd: 10 },
   };
