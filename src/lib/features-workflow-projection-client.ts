@@ -12,6 +12,14 @@ export interface ProjectionAudienceEvidence {
   observedContacted: number;
   observedClicks: number;
   observedPositiveReplies: number;
+  // Goal-RESOLVED (expected) outcome count for this audience grain — the numerator behind the
+  // grain's cost-per-outcome, projected from the grain's OWN observed clicks/replies through
+  // the queried goal's funnel (features-service owns the funnel; for the combined `sales` goal
+  // it's the best channel max(clicks·v2pc, replies·r2pc)). Coherent: spentUsd / this ==
+  // cost-per-outcome. 0 when the grain observed 0 of the driving outcome; null only at cold
+  // start (no economics). This is the Thompson success count — campaign-service NEVER re-decides
+  // the CPC-vs-CPPR funnel metric, features-service does.
+  resolvedOutcomeCount: number | null;
 }
 
 // One (audienceId, workflow) row from features-service GET /features/:slug/workflow-projection.
@@ -49,6 +57,8 @@ interface RawProjectionRow {
         observedClicks: number;
         observedPositiveReplies: number;
       };
+      // Goal-resolved outcome numerator for the audience grain (features-service#645).
+      resolvedOutcomeCount?: number | null;
     };
   };
   resolved: { grain: string; costPerOutcomeUsd: number | null };
@@ -108,6 +118,7 @@ export async function fetchWorkflowProjectionRows({
             observedContacted: ev.observedContacted,
             observedClicks: ev.observedClicks,
             observedPositiveReplies: ev.observedPositiveReplies,
+            resolvedOutcomeCount: r.estimatesByGrain?.audience?.resolvedOutcomeCount ?? null,
           }
         : null,
       resolved: r.resolved,
@@ -148,23 +159,21 @@ export function selectWorkflowGreedy(
   return bestSlug;
 }
 
-// The audience leg sorts by CPC (cost-per-click) for click-driven goals and CPPR
-// (cost-per-positive-reply) otherwise — mirroring features-service's own audience-stats
-// ranking rule so the bandit optimizes the same metric the dashboard shows.
-type SortMetric = "cpc" | "cppr";
-function metricForGoal(goal: RuntimeGoal): SortMetric {
-  return goal === "signup" ? "cpc" : "cppr";
-}
-
-// Maps a projection audience row to a Thompson arm: trials = leads contacted, successes =
-// the goal's outcome (clicks for CPC, positive replies for CPPR), costPerTrial = spend per
-// contacted lead (USD — only ordering matters). A row with no audience-grain evidence (a
-// floored / never-run-this-workflow audience) becomes a COLD arm (0 trials, null cost) so it
-// still gets explored instead of vanishing from the candidate set.
-function toArm(ev: ProjectionAudienceEvidence | null, metric: SortMetric): Arm {
+// Maps a projection audience row to a Thompson arm, ranking on the GOAL-RESOLVED economics
+// features-service owns — NOT a locally-chosen CPC-vs-CPPR proxy:
+//   trials       = leads contacted
+//   successes    = the audience grain's goal-resolved outcome count (features-service#645) —
+//                  clicks / replies / combined-`sales`, whatever features resolved for the goal
+//   costPerTrial = spend per contacted lead (USD — only ordering matters)
+// The engine's score = costPerTrial / sampledRate = spend / resolvedOutcomes = cost-per-outcome
+// (== ROI ranking, since a brand's LTR is constant). campaign-service never re-decides whether
+// the funnel is click- or reply-driven; features-service is the guardian of that via the count.
+// A row with no audience-grain evidence (floored / never-run couple) is a COLD arm (0 trials,
+// null cost) so it still gets explored. resolvedOutcomeCount null (cold-start economics) → 0.
+function toArm(ev: ProjectionAudienceEvidence | null): Arm {
   if (!ev) return { trials: 0, successes: 0, costPerTrial: null };
   const trials = ev.observedContacted;
-  const successes = metric === "cpc" ? ev.observedClicks : ev.observedPositiveReplies;
+  const successes = ev.resolvedOutcomeCount ?? 0;
   const costPerTrial = trials > 0 ? ev.spentUsd / trials : null;
   return { trials, successes, costPerTrial };
 }
@@ -200,11 +209,8 @@ function dedupeByAudience(rows: ProjectionRow[]): ProjectionRow[] {
 export function selectAudienceFromProjection(
   rows: ProjectionRow[],
   workflowSlug: string,
-  goal: RuntimeGoal,
   opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[]; rng?: Rng } = {},
 ): string | null {
-  const metric = metricForGoal(goal);
-
   let candidates = rows.filter(
     (r) => r.audienceId != null && r.workflow.workflowDynastySlug === workflowSlug,
   );
@@ -231,7 +237,7 @@ export function selectAudienceFromProjection(
 
   if (candidates.length === 0) return null;
   const idx = thompsonArgminCost(
-    candidates.map((r) => toArm(r.audienceEvidence, metric)),
+    candidates.map((r) => toArm(r.audienceEvidence)),
     opts.rng,
   );
   return idx === null ? null : candidates[idx].audienceId;

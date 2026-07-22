@@ -17,6 +17,7 @@ function ev(overrides: Partial<ProjectionAudienceEvidence> = {}): ProjectionAudi
     observedContacted: 100,
     observedClicks: 20,
     observedPositiveReplies: 5,
+    resolvedOutcomeCount: 5,
     ...overrides,
   };
 }
@@ -37,38 +38,38 @@ function row(
 describe("selectAudienceFromProjection — workflow scoping", () => {
   it("picks only from the chosen workflow's audience rows", () => {
     const rows = [row("aud-1", "wf-a", ev()), row("aud-2", "wf-b", ev())];
-    expect(selectAudienceFromProjection(rows, "wf-a", "signup", { rng: fixedRng })).toBe("aud-1");
+    expect(selectAudienceFromProjection(rows, "wf-a", { rng: fixedRng })).toBe("aud-1");
   });
 
   it("ignores the brand-level (audienceId=null) rows", () => {
     const rows = [row(null, "wf-a", null), row("aud-1", "wf-a", ev())];
-    expect(selectAudienceFromProjection(rows, "wf-a", "signup", { rng: fixedRng })).toBe("aud-1");
+    expect(selectAudienceFromProjection(rows, "wf-a", { rng: fixedRng })).toBe("aud-1");
   });
 
   it("falls back to all audiences when the chosen workflow has no rows (cold/fallback slug)", () => {
     const rows = [row("aud-2", "wf-b", ev())];
-    expect(selectAudienceFromProjection(rows, "wf-a", "signup", { rng: fixedRng })).toBe("aud-2");
+    expect(selectAudienceFromProjection(rows, "wf-a", { rng: fixedRng })).toBe("aud-2");
   });
 
   it("selects a floored audience (no audience-grain evidence) as a cold arm", () => {
     const rows = [row("aud-fresh", "wf-a", null)];
-    expect(selectAudienceFromProjection(rows, "wf-a", "signup", { rng: fixedRng })).toBe("aud-fresh");
+    expect(selectAudienceFromProjection(rows, "wf-a", { rng: fixedRng })).toBe("aud-fresh");
   });
 
   it("de-duplicates repeated audienceIds into a single candidate", () => {
     const rows = [row("aud-1", "wf-a", null), row("aud-1", "wf-a", ev())];
-    expect(selectAudienceFromProjection(rows, "wf-a", "signup", { rng: fixedRng })).toBe("aud-1");
+    expect(selectAudienceFromProjection(rows, "wf-a", { rng: fixedRng })).toBe("aud-1");
   });
 
   it("returns null when there are no audience rows at all", () => {
-    expect(selectAudienceFromProjection([row(null, "wf-a")], "wf-a", "signup", { rng: fixedRng })).toBeNull();
+    expect(selectAudienceFromProjection([row(null, "wf-a")], "wf-a", { rng: fixedRng })).toBeNull();
   });
 });
 
 describe("selectAudienceFromProjection — hard targeting subset (requiredAudienceIds)", () => {
   it("only picks an audience inside the targeted subset", () => {
     const rows = [row("aud-a", "wf-a", ev()), row("aud-z", "wf-a", ev())];
-    const picked = selectAudienceFromProjection(rows, "wf-a", "signup", {
+    const picked = selectAudienceFromProjection(rows, "wf-a", {
       requiredAudienceIds: ["aud-a", "aud-b"],
       rng: fixedRng,
     });
@@ -77,7 +78,7 @@ describe("selectAudienceFromProjection — hard targeting subset (requiredAudien
 
   it("returns null (contacts none) when no targeted audience is present — NO fallback", () => {
     const rows = [row("aud-z", "wf-a", ev())];
-    const picked = selectAudienceFromProjection(rows, "wf-a", "signup", {
+    const picked = selectAudienceFromProjection(rows, "wf-a", {
       requiredAudienceIds: ["aud-a", "aud-b"],
       rng: fixedRng,
     });
@@ -88,7 +89,7 @@ describe("selectAudienceFromProjection — hard targeting subset (requiredAudien
 describe("selectAudienceFromProjection — exhausted-audience exclusion", () => {
   it("never picks an excluded (exhausted) audience", () => {
     const rows = [row("aud-a", "wf-a", ev()), row("aud-b", "wf-a", ev())];
-    const picked = selectAudienceFromProjection(rows, "wf-a", "signup", {
+    const picked = selectAudienceFromProjection(rows, "wf-a", {
       excludedAudienceIds: ["aud-a"],
       rng: fixedRng,
     });
@@ -97,7 +98,7 @@ describe("selectAudienceFromProjection — exhausted-audience exclusion", () => 
 
   it("returns null when every audience is excluded (all exhausted → stop signal)", () => {
     const rows = [row("aud-a", "wf-a", ev()), row("aud-b", "wf-a", ev())];
-    const picked = selectAudienceFromProjection(rows, "wf-a", "signup", {
+    const picked = selectAudienceFromProjection(rows, "wf-a", {
       excludedAudienceIds: ["aud-a", "aud-b"],
       rng: fixedRng,
     });
@@ -106,12 +107,24 @@ describe("selectAudienceFromProjection — exhausted-audience exclusion", () => 
 
   it("applies exclusion WITHIN the targeted subset (one exhausted of two targeted → picks the other)", () => {
     const rows = [row("aud-a", "wf-a", ev()), row("aud-b", "wf-a", ev()), row("aud-z", "wf-a", ev())];
-    const picked = selectAudienceFromProjection(rows, "wf-a", "signup", {
+    const picked = selectAudienceFromProjection(rows, "wf-a", {
       requiredAudienceIds: ["aud-a", "aud-b"],
       excludedAudienceIds: ["aud-a"],
       rng: fixedRng,
     });
     expect(picked).toBe("aud-b");
+  });
+});
+
+describe("selectAudienceFromProjection — ranks on the goal-resolved outcome, not clicks/replies", () => {
+  it("prefers the audience with the better goal-resolved cost-per-outcome", () => {
+    // Identical raw clicks/replies, but features resolved very different outcome counts +
+    // spend → very different cost-per-outcome. If the bandit still used clicks/replies (old
+    // CPC/CPPR) the two would tie; ranking on resolvedOutcomeCount makes `good` win decisively.
+    const good = ev({ observedContacted: 100, observedClicks: 5, observedPositiveReplies: 5, spentUsd: 10, resolvedOutcomeCount: 50 });
+    const bad = ev({ observedContacted: 100, observedClicks: 5, observedPositiveReplies: 5, spentUsd: 100, resolvedOutcomeCount: 1 });
+    const rows = [row("aud-good", "wf-a", good), row("aud-bad", "wf-a", bad)];
+    expect(selectAudienceFromProjection(rows, "wf-a", { rng: fixedRng })).toBe("aud-good");
   });
 });
 
