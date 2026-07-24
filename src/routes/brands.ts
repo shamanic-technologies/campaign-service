@@ -47,7 +47,8 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
  * PATCH /brands/:brandId/pause — set a brand's pause state (upsert in place).
  *
  * ONE mutable row per brand. Un-pausing also ensures the brand has a runnable sales outreach
- * campaign behind it, then wakes the scheduler so work resumes promptly.
+ * campaign behind it (for the resumed feature — forwarded as x-feature-slug, defaulting to
+ * sales-cold-email-outreach when absent), then wakes the scheduler so work resumes promptly.
  */
 router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(UpdateBrandPauseBody), async (req: AuthenticatedRequest, res) => {
   try {
@@ -69,6 +70,10 @@ router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(
           brandId,
           userId: req.userId,
           runId: req.runId,
+          // Feature-agnostic un-pause: seed the feature the caller is resuming (forwarded as
+          // x-feature-slug), NOT a hardcoded cold. Absent (brand-level dashboard un-pause carries
+          // no feature) → defaults to sales-cold-email-outreach inside ensureRunnable.
+          featureSlug: req.featureSlug,
           now,
         });
       }
