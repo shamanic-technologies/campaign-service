@@ -1,7 +1,7 @@
 import { sql, and, eq, inArray, type SQL } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { brandPause, campaigns } from "../db/schema.js";
-import { SALES_OUTREACH_FEATURE_SLUG } from "./sales-outreach-campaign.js";
+import { SALES_OUTREACH_FEATURE_SLUGS } from "./sales-outreach-campaign.js";
 
 /**
  * SQL predicate: the campaign is NOT held by a brand pause.
@@ -10,8 +10,9 @@ import { SALES_OUTREACH_FEATURE_SLUG } from "./sales-outreach-campaign.js";
  * `brand_ids` array belongs to a paused brand (brand_pause.paused = true) in the SAME org.
  * This clause is the negation — true for campaigns that should still run.
  *
- * FEATURE-SCOPED: a brand pause is a sales-cold-email-outreach switch (the pause toggle re-seeds
- * a sales campaign on un-pause), so it holds ONLY that feature's campaigns. Every other feature
+ * FEATURE-SCOPED: a brand pause is a sales-outreach switch (the pause toggle re-seeds a sales
+ * campaign on un-pause), so it holds ONLY the sales-outreach feature family's campaigns
+ * (sales-cold-email-outreach + sales-crm-email-outreach). Every other feature
  * (pr-expert-quote-outreach, pr-expert-quote-opportunities, ai-visibility-scoring, …) keeps
  * running for a paused brand — pausing sales must not freeze the brand's other features.
  *
@@ -30,7 +31,10 @@ export function notPausedBrandClause(): SQL {
       ON bp.org_id = c.org_id
       AND bp.paused = true
       AND bp.brand_id = ANY(c.brand_ids)
-    WHERE c.feature_slug = ${SALES_OUTREACH_FEATURE_SLUG}
+    WHERE c.feature_slug IN (${sql.join(
+      [...SALES_OUTREACH_FEATURE_SLUGS].map((slug) => sql`${slug}`),
+      sql`, `,
+    )})
   )`;
 }
 

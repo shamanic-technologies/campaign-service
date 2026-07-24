@@ -203,8 +203,9 @@ describe("selectWorkflowGreedy", () => {
 });
 
 describe("isWorkflowRotationEnabled", () => {
-  it("enables rotation for sales-cold-email-outreach", () => {
+  it("enables rotation for the sales-outreach feature family (cold + CRM)", () => {
     expect(isWorkflowRotationEnabled("sales-cold-email-outreach")).toBe(true);
+    expect(isWorkflowRotationEnabled("sales-crm-email-outreach")).toBe(true);
   });
 
   it("disables rotation for pr-expert features", () => {
