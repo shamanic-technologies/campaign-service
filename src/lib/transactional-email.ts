@@ -8,7 +8,7 @@
 // loop / run finalization. Every path swallows its error (logged, not thrown).
 import type { Campaign } from "../db/schema.js";
 import { anyBrandPaused } from "./brand-pause.js";
-import { SALES_OUTREACH_FEATURE_SLUG } from "./sales-outreach-campaign.js";
+import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
 
 // eventType == template name. transactional-email-service maps a send's eventType to the
 // template of the same name and applies its monthly-per-brand dedup to this eventType.
@@ -179,7 +179,7 @@ async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId
  * exhausted, the campaign is being auto-stopped), email the user to extend an audience.
  *
  * Sends ONLY when EVERY condition holds:
- *   - sales-cold-email-outreach feature (the audience/extend concept applies)
+ *   - a sales-outreach feature (cold or CRM — the audience/extend concept applies)
  *   - the campaign has an owning user (createdByUserId) to resolve as recipient
  *   - the brand is ACTIVE (not paused)
  *   - a daily budget is configured (> 0)
@@ -190,7 +190,7 @@ async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId
  */
 export async function maybeSendExtendAudienceEmail(campaign: Campaign, opts: { runId?: string }): Promise<void> {
   try {
-    if (campaign.featureSlug !== SALES_OUTREACH_FEATURE_SLUG) return;
+    if (!isSalesOutreachFeature(campaign.featureSlug)) return;
 
     const userId = campaign.createdByUserId;
     if (!userId) return;

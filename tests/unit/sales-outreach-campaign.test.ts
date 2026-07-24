@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ensureRunnableSalesOutreachCampaign,
+  isSalesOutreachFeature,
+  SALES_CRM_FEATURE_SLUG,
   SALES_OUTREACH_FEATURE_SLUG,
   SALES_OUTREACH_WORKFLOW_SLUG,
 } from "../../src/lib/sales-outreach-campaign.js";
@@ -50,6 +52,23 @@ function mutation(returned: Campaign[]) {
     fns: { set, where, values, returning },
   };
 }
+
+describe("isSalesOutreachFeature", () => {
+  it("includes both cold and CRM sales-outreach features (full parity)", () => {
+    expect(isSalesOutreachFeature(SALES_OUTREACH_FEATURE_SLUG)).toBe(true);
+    expect(isSalesOutreachFeature(SALES_CRM_FEATURE_SLUG)).toBe(true);
+    expect(isSalesOutreachFeature("sales-cold-email-outreach")).toBe(true);
+    expect(isSalesOutreachFeature("sales-crm-email-outreach")).toBe(true);
+  });
+
+  it("excludes non-sales features and empty/nullish slugs", () => {
+    expect(isSalesOutreachFeature("pr-expert-quote-outreach")).toBe(false);
+    expect(isSalesOutreachFeature("hiring-cold-email-outreach")).toBe(false);
+    expect(isSalesOutreachFeature("")).toBe(false);
+    expect(isSalesOutreachFeature(null)).toBe(false);
+    expect(isSalesOutreachFeature(undefined)).toBe(false);
+  });
+});
 
 describe("ensureRunnableSalesOutreachCampaign", () => {
   it("reuses an existing ongoing sales campaign", async () => {

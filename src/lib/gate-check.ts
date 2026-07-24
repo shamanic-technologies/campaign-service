@@ -3,13 +3,14 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { anyBrandPaused } from "./brand-pause.js";
+import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
 
 const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
 
-// The ONE feature paced by the brand daily budget (billing-service brand_daily_budgets).
-// Every other feature is paced by the campaign's own budget windows instead. Keep this byte-equal
-// to the feature_slug.
-const SALES_FEATURE_SLUG = "sales-cold-email-outreach";
+// The sales-outreach feature family (sales-cold-email-outreach + sales-crm-email-outreach) is
+// paced by the brand daily budget (billing-service brand_daily_budgets) and held on brand pause.
+// Every other feature is paced by the campaign's own budget windows and runs through a pause.
+// See isSalesOutreachFeature (sales-outreach-campaign.ts) for membership.
 
 export interface GateCheckInput {
   campaignId: string;
@@ -57,10 +58,10 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // flight when the brand was paused still reaches this gate. NOT a terminal stop — the
   // campaign stays 'ongoing'; internal.ts backs it off and the next un-pause resumes it.
   //
-  // FEATURE-SCOPED: a brand pause is a sales-cold-email-outreach switch, so it only holds that
-  // feature's runs. Non-sales features (pr-expert-quote-outreach, …) run through even when the
-  // brand is paused — mirrors notPausedBrandClause() on the scheduler side.
-  if (campaign.featureSlug === SALES_FEATURE_SLUG && (await anyBrandPaused(campaign.orgId, campaign.brandIds))) {
+  // FEATURE-SCOPED: a brand pause is a sales-outreach switch, so it only holds that feature
+  // family's runs (cold + CRM). Non-sales features (pr-expert-quote-outreach, …) run through even
+  // when the brand is paused — mirrors notPausedBrandClause() on the scheduler side.
+  if (isSalesOutreachFeature(campaign.featureSlug) && (await anyBrandPaused(campaign.orgId, campaign.brandIds))) {
     return { allowed: false, reason: "Brand paused" };
   }
 
@@ -102,7 +103,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // paced by the brand daily budget (block 3c below) instead. For non-sales campaigns the
   // campaign's own configured caps govern at their cadence: daily (today's spend, resets at day
   // rollover), weekly, monthly, and total (one-off — auto-stops the campaign when hit).
-  const isSalesFeature = campaign.featureSlug === SALES_FEATURE_SLUG;
+  const isSalesFeature = isSalesOutreachFeature(campaign.featureSlug);
 
   if (!isSalesFeature) {
     const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean; nextRunAt?: Date }> = [];

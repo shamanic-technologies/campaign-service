@@ -10,6 +10,9 @@ vi.mock("../../src/lib/brand-pause.js", () => ({
 
 vi.mock("../../src/lib/sales-outreach-campaign.js", () => ({
   SALES_OUTREACH_FEATURE_SLUG: "sales-cold-email-outreach",
+  SALES_CRM_FEATURE_SLUG: "sales-crm-email-outreach",
+  isSalesOutreachFeature: (s?: string | null) =>
+    s === "sales-cold-email-outreach" || s === "sales-crm-email-outreach",
 }));
 
 const mockFetch = vi.fn();
