@@ -105,9 +105,15 @@ export async function fetchWorkflowProjectionRows({
   if (!Array.isArray(body.rows)) {
     throw new Error("[campaign-service] FeatureService workflow-projection returned an invalid rows payload");
   }
-  // Normalize: fold the audience-grain raw evidence into `audienceEvidence` so the selection
-  // code reads a flat shape and never depends on the estimatesByGrain nesting.
-  return body.rows.map((r): ProjectionRow => {
+  return normalizeProjectionRows(body.rows);
+}
+
+// Fold the audience-grain raw evidence into `audienceEvidence` so the selection code reads a
+// flat shape and never depends on the estimatesByGrain nesting. Shared by /workflow-projection
+// and /goal-arbitration — both serve the SAME row shape, so both normalize identically and the
+// audience bandit cannot behave differently depending on which endpoint fed it.
+function normalizeProjectionRows(rows: RawProjectionRow[]): ProjectionRow[] {
+  return rows.map((r): ProjectionRow => {
     const ev = r.estimatesByGrain?.audience?.evidence;
     return {
       audienceId: r.audienceId,
@@ -124,6 +130,91 @@ export async function fetchWorkflowProjectionRows({
       resolved: r.resolved,
     };
   });
+}
+
+// ── Goal arbitration (features-service GET /features/:slug/goal-arbitration) ────────────────
+//
+// The GOAL is the third selection lever, and it is arbitrated by features-service, not here.
+// It answers, in ONE call: which of the goals the brand AUTHORIZES returns the most per dollar,
+// that goal's best workflow, and the pairing's audience rows (same `ProjectionRow` shape the
+// audience bandit already parses). campaign-service greedily takes the first two and
+// Thompson-samples the third — it decides none of them and never issues one request per goal.
+//
+// Why features-service and not us: a cost-per-outcome is denominated in each goal's OWN outcome
+// (a click, a reply, a booked meeting), so comparing two goals' cost-per-outcome compares two
+// different things. Only features-service can normalise each goal through its own funnel to the
+// same terminal unit. Ranking goals here would be re-deriving their economics.
+export interface GoalArbitration {
+  /** The elected goal, canonical camel spelling — forwarded verbatim, never rewritten. */
+  goal: RuntimeGoal;
+  /** The elected goal's best workflow dynasty slug. */
+  workflowSlug: string;
+  /** The winning (goal × workflow) pairing's rows, for the audience Thompson. */
+  rows: ProjectionRow[];
+}
+
+interface RawGoalArbitrationResponse {
+  arbitration?: { status?: string; goal?: string | null };
+  workflow?: { workflowDynastySlug?: string } | null;
+  rows?: RawProjectionRow[];
+}
+
+// features-service 502s with this reason for as long as brand-service has not declared the
+// brand's authorized goal set. That is their fail-loud (they refuse to substitute a default
+// set), but for US it is an EXPECTED business state, not a fault: it means "this brand has no
+// arbitration yet", and it fires on EVERY tick for EVERY campaign of EVERY client until
+// brand-service ships. Per the log discipline in CLAUDE.md that is exactly the routine
+// high-frequency event that must not be logged at all — a warn here would bury real signal
+// fleet-wide. Any OTHER failure is a genuine anomaly and still warns.
+const EXPECTED_NO_ARBITRATION_REASON = "authorized_goals_unavailable";
+
+/**
+ * Ask features-service to elect the goal (and its best workflow) for this brand.
+ *
+ * Returns null when nothing could be elected — the brand authorizes no set yet, every
+ * authorized goal is unrankable, or features-service is unreachable. The caller then paces on
+ * the campaign's own goal or the brand's goal, i.e. exactly the pre-arbitration behaviour: a
+ * selection optimization must never block a campaign from running.
+ */
+export async function fetchGoalArbitration({
+  featureSlug,
+  brandId,
+  identity,
+}: {
+  featureSlug: string;
+  brandId: string;
+  identity: DownstreamIdentity;
+}): Promise<GoalArbitration | null> {
+  const baseUrl = process.env.FEATURES_SERVICE_URL;
+  const apiKey = process.env.FEATURES_SERVICE_API_KEY;
+  if (!baseUrl || !apiKey) {
+    throw new Error("[campaign-service] FEATURES_SERVICE_URL or FEATURES_SERVICE_API_KEY not configured");
+  }
+
+  const url = new URL(`${baseUrl.replace(/\/$/, "")}/features/${encodeURIComponent(featureSlug)}/goal-arbitration`);
+  url.searchParams.set("brandId", brandId);
+
+  const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
+  if (!res.ok) {
+    const body = await res.text();
+    if (body.includes(EXPECTED_NO_ARBITRATION_REASON)) return null;
+    throw new Error(`[campaign-service] FeatureService goal-arbitration failed (${res.status}): ${body}`);
+  }
+
+  const body = await res.json() as RawGoalArbitrationResponse;
+  // "unrankable" is a real 200 answer, not an error: the brand authorizes an empty set, or every
+  // goal it authorizes has no defined return. Nothing to elect → the caller keeps its own goal.
+  if (body.arbitration?.status !== "resolved") return null;
+
+  const goal = body.arbitration.goal;
+  const workflowSlug = body.workflow?.workflowDynastySlug;
+  if (!goal || !workflowSlug) {
+    throw new Error(
+      "[campaign-service] FeatureService goal-arbitration returned status=resolved without a goal or workflow",
+    );
+  }
+
+  return { goal, workflowSlug, rows: normalizeProjectionRows(body.rows ?? []) };
 }
 
 // Per-run WORKFLOW selection: GREEDY — pick the workflow with the cheapest
@@ -311,6 +402,15 @@ export async function resolveWorkflowSlugForTrigger(args: {
   // Rotation is feature-scoped: non-rotating features keep their configured workflow.
   if (!isWorkflowRotationEnabled(featureSlug)) return fallbackSlug;
   try {
+    // A campaign that states its OWN goal is a manual override and is NOT arbitrated — the
+    // customer picked that goal on purpose. Arbitration only fills the inherit case.
+    if (!goalOverride) {
+      const arbitration = await fetchGoalArbitration({ featureSlug, brandId: primaryBrandId, identity });
+      // The elected goal already determined this workflow (features-service ranks the goal's
+      // workflows on the same cost-per-outcome our greedy uses), so there is nothing left to
+      // pick here. Null → no arbitration for this brand yet, fall through to the brand goal.
+      if (arbitration) return arbitration.workflowSlug;
+    }
     const ctx = await fetchBrandRuntimeContext(primaryBrandId, identity);
     const goal: RuntimeGoal = goalOverride ?? ctx.currentGoal;
     const rows = await fetchWorkflowProjectionRows({
