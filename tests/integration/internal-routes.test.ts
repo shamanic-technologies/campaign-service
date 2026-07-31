@@ -505,6 +505,41 @@ describe("Pipeline routes", () => {
       );
     });
 
+    // The goal vocabulary is brand-service's, not ours. brand-service's own check constraint
+    // already allows values this service never had a name for; a campaign paces on whatever
+    // the brand says, forwarded verbatim, and features-service is the one that fails loud on
+    // a goal it cannot resolve.
+    it("should forward a brand goal this service has no enum for, verbatim", async () => {
+      mockFetchBrandRuntimeContext.mockResolvedValueOnce({
+        brand: { id: brandIds[0] },
+        currentGoal: "combinedSales",
+        brandProfile: null,
+      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: "combinedSales" }),
+      );
+    });
+
+    it("should pace on a campaign goal outside the legacy three values", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds, goal: "positiveReply" });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: "positiveReply" }),
+      );
+    });
+
     it("should HARD-restrict the audience bandit to the campaign's targeted subset", async () => {
       // Rows contain a targeted (aud-a) and an untargeted (aud-z) audience under the workflow.
       mockFetchCandidates.mockResolvedValueOnce([

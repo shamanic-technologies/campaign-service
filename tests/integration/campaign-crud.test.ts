@@ -327,8 +327,35 @@ describe("Campaign CRUD", () => {
       await createCampaign({ ...validBody, name: "Empty Aud", audienceIds: [] }).expect(400);
     });
 
-    it("rejects an unknown goal value", async () => {
-      await createCampaign({ ...validBody, name: "Bad Goal", goal: "worldPeace" }).expect(400);
+    // campaign-service does NOT own the goal vocabulary. brand-service owns which goals a
+    // brand authorizes; features-service owns the spelling and fails loud (400) on a goal it
+    // cannot resolve. So any non-empty goal is accepted here and forwarded verbatim —
+    // including the goals the old three-value enum made unreachable per campaign.
+    it.each(["positiveReply", "combinedSales", "formSubmission", "websiteVisit"])(
+      "accepts the goal %s, which the previous three-value enum rejected",
+      async (goal) => {
+        const res = await createCampaign({ ...validBody, name: `Goal ${goal}`, goal }).expect(201);
+        expect(res.body.campaign.goal).toBe(goal);
+
+        const read = await get(res.body.campaign.id).expect(200);
+        expect(read.body.campaign.goal).toBe(goal);
+      },
+    );
+
+    it("still accepts the legacy goal values", async () => {
+      const res = await createCampaign({ ...validBody, name: "Legacy Goal", goal: "meetingBooked" }).expect(201);
+      expect(res.body.campaign.goal).toBe("meetingBooked");
+    });
+
+    it("rejects an EMPTY goal — an absent goal is a default downstream, so '' would become a silent default", async () => {
+      await createCampaign({ ...validBody, name: "Empty Goal", goal: "" }).expect(400);
+    });
+
+    it("sets a non-legacy goal via update", async () => {
+      const created = await createCampaign({ ...validBody, name: "Update Goal" }).expect(201);
+
+      const res = await patch(created.body.campaign.id, { goal: "formSubmission" }).expect(200);
+      expect(res.body.campaign.goal).toBe("formSubmission");
     });
 
     it("does NOT clobber a sibling campaign under the same brand", async () => {

@@ -9,11 +9,22 @@ export const ErrorResponse = z.object({
   error: z.string(),
 }).openapi("ErrorResponse");
 
-// The runtime optimization goal a campaign paces against. Byte-equal to
-// brand-service's RuntimeGoal (the brand's currentGoal) — a campaign's own goal, when
-// set, overrides the brand goal for that campaign's pacing/candidate-selection. Renderable:
-// the dashboard maps each value to a human label.
-export const RuntimeGoalEnum = z.enum(["signup", "meetingBooked", "purchase"]).openapi("RuntimeGoal");
+// The runtime optimization goal a campaign paces against — an OPAQUE string, deliberately
+// not an enum. campaign-service does NOT own this vocabulary: brand-service owns which goals
+// a brand authorizes (its own column already permits values this service never had a name
+// for), and features-service owns the spelling and fails loud on a goal it cannot resolve.
+// A campaign's own goal, when set, overrides the brand goal for that campaign's
+// pacing/candidate-selection; NULL inherits the brand.
+//
+// This used to be z.enum(["signup", "meetingBooked", "purchase"]), which capped a campaign to
+// three of the goals the fleet supports and made the brand's own goal unrepresentable per
+// campaign. The brand-goal path never went through this schema (it is read straight off
+// brand-service), so the enum constrained nothing except what a caller could ASK for.
+//
+// Non-empty is the one constraint we keep, and it is a fail-loud rule rather than a taste:
+// features-service reads an ABSENT goal as "default to meeting-booked", so an empty string
+// would forward as a silent default instead of an error.
+export const RuntimeGoalSchema = z.string().min(1).openapi("RuntimeGoal");
 
 export const CampaignSchema = z.object({
   id: z.string().uuid(),
@@ -30,7 +41,7 @@ export const CampaignSchema = z.object({
   audienceId: z.string().nullable(),
   // Per-campaign OWN config (Campaign v2). Null = inherit the brand. `goal` is renderable
   // and drives this campaign's runtime pacing; audienceIds is the targeted subset.
-  goal: RuntimeGoalEnum.nullable(),
+  goal: RuntimeGoalSchema.nullable(),
   audienceIds: z.array(z.string()).nullable(),
   servicesOffered: z.array(z.string()).nullable(),
   clickDestinationUrl: z.string().nullable(),
@@ -67,7 +78,7 @@ export const CreateCampaignBody = z.object({
   // Per-campaign OWN config (Campaign v2). Omit / null = inherit the brand. audienceIds is the
   // targeted SUBSET (one or more) of the brand's audiences; an empty array is rejected — use
   // null to clear back to inherit.
-  goal: RuntimeGoalEnum.nullable().optional(),
+  goal: RuntimeGoalSchema.nullable().optional(),
   audienceIds: z.array(z.string().min(1)).min(1, "audienceIds must contain at least one audience (use null to inherit the brand)").nullable().optional(),
   servicesOffered: z.array(z.string().min(1)).nullable().optional(),
   clickDestinationUrl: z.string().min(1).nullable().optional(),
@@ -102,7 +113,7 @@ export const UpdateCampaignBody = z.object({
   // Set / clear this campaign's OWN config (Campaign v2). null clears a field → inherit the
   // brand. Updating these never touches the brand or any sibling campaign. audienceIds must be
   // non-empty when present; use null to clear back to inherit.
-  goal: RuntimeGoalEnum.nullable().optional(),
+  goal: RuntimeGoalSchema.nullable().optional(),
   audienceIds: z.array(z.string().min(1)).min(1, "audienceIds must contain at least one audience (use null to inherit the brand)").nullable().optional(),
   servicesOffered: z.array(z.string().min(1)).nullable().optional(),
   clickDestinationUrl: z.string().min(1).nullable().optional(),
@@ -234,7 +245,7 @@ export const StartRunResponse = z.object({
   // optimization goal (null = paced on the brand goal); the sending runtime reads
   // servicesOffered / clickDestinationUrl as authoritative per-campaign config (null =
   // inherit the brand). audienceIds is the campaign's targeted subset.
-  goal: RuntimeGoalEnum.nullable(),
+  goal: RuntimeGoalSchema.nullable(),
   audienceIds: z.array(z.string()).nullable(),
   servicesOffered: z.array(z.string()).nullable(),
   clickDestinationUrl: z.string().nullable(),

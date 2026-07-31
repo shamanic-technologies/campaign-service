@@ -17,8 +17,22 @@ A gate block caused by a **normal, expected** business state — out of credits,
 ## Two distinct "goal" concepts — `activeGoalId` (attribution) vs `campaigns.goal` (pacing). Do NOT conflate.
 
 - **`activeGoalId`** (text, nullable) is an OPAQUE attribution id, threaded downstream as the `x-active-goal-id` header and returned on reads. It **never drives pacing** — no gate-check, workflow pick, or audience selection reads it.
-- **`campaigns.goal`** (RuntimeGoal `signup|meetingBooked|purchase`, nullable — added Campaign v2, migration 0039) is the campaign's OWN optimization goal and IS the pacing lever. At `/start-run` and in the scheduler's workflow greedy pick, the runtime goal is `campaign.goal ?? brandRuntimeContext.currentGoal` — the campaign's own goal overrides the brand's `currentGoal` when set, else inherits it (NULL). It's also renderable (3 known values → human labels) and exposed on reads + `/start-run`, so display and runtime agree.
+- **`campaigns.goal`** (nullable — added Campaign v2, migration 0039) is the campaign's OWN optimization goal and IS the pacing lever. At `/start-run` and in the scheduler's workflow greedy pick, the runtime goal is `campaign.goal ?? brandRuntimeContext.currentGoal` — the campaign's own goal overrides the brand's `currentGoal` when set, else inherits it (NULL). Exposed on reads + `/start-run`, so display and runtime agree.
 - The brief for Campaign v2 asserted "per-campaign goal runtime is already implemented" — it was NOT. Before 0039, ALL pacing used the brand `currentGoal`; there was no per-campaign goal override. If a future task claims per-campaign goal already paces, verify against `runtimeGoal` resolution in `src/routes/internal.ts` /start-run, not the presence of `activeGoalId`. (Set 2026-07-17, Campaign v2 PR #276.)
+
+## The goal is an OPAQUE STRING — this service does NOT own the goal vocabulary, and must never re-introduce an enum for it
+
+`RuntimeGoal` is `string` (`src/lib/brand-runtime-client.ts`) and `RuntimeGoalSchema` is `z.string().min(1)` (`src/schemas.ts`). Not an oversight — a deliberate removal of `z.enum(["signup","meetingBooked","purchase"])`.
+
+Two services own this concept and neither is this one: **brand-service** owns which goals a brand authorizes (its `brands.current_goal` check constraint already permits `websiteVisit`, `positiveReply`, `whatsappConversation`, `combinedSales` on top of the three we had names for), and **features-service** owns the spelling — it normalises every fleet spelling and returns **400 on a goal it cannot resolve**, which is the fail-loud boundary. campaign-service only carries the value from one to the other.
+
+The enum was never a real constraint, and that is the point: **the brand-goal path never passed through it.** `fetchBrandRuntimeContext` returns `await res.json() as BrandRuntimeContext` — a bare cast, no Zod — so a brand set to `combinedSales` already flowed end-to-end untouched. The enum only capped what a CALLER could ask for on `campaign.goal`, i.e. it made the brand's own goal unrepresentable per-campaign while the brand-level path carried it fine.
+
+**Non-empty is the one rule that stays, and it is fail-loud, not taste**: features-service reads an ABSENT goal as "default to meeting-booked", so `""` would forward as a silent default instead of an error. Never relax `.min(1)`.
+
+Forward the value VERBATIM. Do not map, alias, collapse or "normalise" a goal on the way through — features-service ranks workflows and audiences on the goal it is given, so rewriting one silently returns a different outcome's winner. (Related trap, dashboard side: `runtimeGoalForOptimizationGoal` in distribute.you squashes 8 brand goals into the old 3 — lossy, and currently uncalled. Do not mirror that mapping here.)
+
+(Set 2026-07-31, T1 of the per-run goal arbitration. Next: features-service returns the best goal among the brand's authorized set, and campaign-service greedy-picks goal + workflow and Thompson-picks the audience.)
 
 The per-campaign audience SUBSET (`campaigns.audience_ids`, Campaign v2) is a HARD filter on the audience bandit (`requiredAudienceIds` in `selectAudienceFromProjection`): a campaign never contacts an audience outside its targeted subset (no fallback). NULL/empty → inherit the brand's full active audience set. (The old workflow-conditioning `eligibleAudienceIds` soft-filter was REMOVED in v0.44.1 — see the single-endpoint note below.) Distinct from the singular `audienceId` column (per-campaign attribution; the per-RUN chosen audience is re-selected fresh at /start-run).
 
