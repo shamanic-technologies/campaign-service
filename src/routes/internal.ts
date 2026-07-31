@@ -218,8 +218,9 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     // overriding the brand's currentGoal for both the workflow projection and the audience
     // bandit. NULL → pace on the brand goal (inherit), unchanged behavior. This is the
     // single place the runtime goal is resolved, so display (campaign reads expose the same
-    // raw campaign.goal) and runtime agree.
-    const runtimeGoal: RuntimeGoal = (campaign.goal as RuntimeGoal | null) ?? brandRuntimeContext.currentGoal;
+    // raw campaign.goal) and runtime agree. Whatever the value is, it is forwarded verbatim —
+    // this service does not own the goal vocabulary and never rewrites it.
+    const runtimeGoal: RuntimeGoal = campaign.goal ?? brandRuntimeContext.currentGoal;
     // Cost-aware Thompson sampling over the chosen workflow's audiences, straight from
     // features-service /workflow-projection — which enumerates EVERY active audience of the
     // brand per dynasty (floored to brand/crossOrg when an audience never ran the workflow),
@@ -308,7 +309,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       audienceId,
       // Campaign v2 own config — the campaign's raw own goal (null = paced on brand goal),
       // its targeted audience subset, its services, its click-destination.
-      goal: (campaign.goal as RuntimeGoal | null) ?? null,
+      goal: campaign.goal ?? null,
       audienceIds: campaign.audienceIds ?? null,
       servicesOffered: campaign.servicesOffered ?? null,
       clickDestinationUrl: campaign.clickDestinationUrl ?? null,
@@ -353,7 +354,7 @@ async function hasServeableAudience(
     featureSlug,
   };
   const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, identity);
-  const runtimeGoal: RuntimeGoal = (campaign.goal as RuntimeGoal | null) ?? brandRuntimeContext.currentGoal;
+  const runtimeGoal: RuntimeGoal = campaign.goal ?? brandRuntimeContext.currentGoal;
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
   const rows = await fetchWorkflowProjectionRows({
     featureSlug,

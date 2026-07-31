@@ -1,6 +1,18 @@
 import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-headers.js";
 
-export type RuntimeGoal = "signup" | "meetingBooked" | "purchase";
+/**
+ * The brand's runtime optimization goal, as brand-service reports it.
+ *
+ * Deliberately a bare string, not a union. brand-service owns this vocabulary and its own
+ * column already permits values this service has no name for; features-service owns the
+ * spelling and fails loud on a goal it cannot resolve. campaign-service only carries the
+ * value from one to the other, so narrowing it here bought nothing and silently capped what
+ * a campaign could pace on.
+ *
+ * Kept as a named alias rather than inlining `string` so every call site still reads as "this
+ * string is a goal" — the name is documentation, not a constraint.
+ */
+export type RuntimeGoal = string;
 
 export interface BrandProfile {
   id: string;

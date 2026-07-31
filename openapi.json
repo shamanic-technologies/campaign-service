@@ -191,12 +191,7 @@
       "RuntimeGoal": {
         "type": "string",
         "nullable": true,
-        "enum": [
-          "signup",
-          "meetingBooked",
-          "purchase",
-          null
-        ]
+        "minLength": 1
       },
       "ErrorResponse": {
         "type": "object",

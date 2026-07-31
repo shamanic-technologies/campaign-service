@@ -38,12 +38,20 @@ export const campaigns = pgTable(
     // nothing keeps the pre-v2 behavior (brand-level goal / audiences / services /
     // destination), so no existing or running campaign is disrupted.
 
-    // The campaign's OWN optimization goal — a RuntimeGoal value
-    // ('signup' | 'meetingBooked' | 'purchase'). Drives THIS campaign's runtime pacing /
-    // candidate-selection (workflow greedy pick at the trigger + audience Thompson at
-    // /start-run): when set it overrides the brand's currentGoal for this campaign only.
-    // NULL → pace on the brand goal. Distinct from activeGoalId (an opaque attribution id
-    // threaded as x-active-goal-id and never consumed for pacing).
+    // The campaign's OWN optimization goal — an OPAQUE string, no enum. Drives THIS
+    // campaign's runtime pacing / candidate-selection (workflow greedy pick at the trigger +
+    // audience Thompson at /start-run): when set it overrides the brand's currentGoal for
+    // this campaign only. NULL → pace on the brand goal.
+    //
+    // Deliberately unconstrained here: brand-service owns which goals a brand authorizes and
+    // features-service owns the spelling (and fails loud on one it cannot resolve). The
+    // previous three-value enum on the API schema capped a campaign to a subset of the goals
+    // the fleet supports while the brand-goal path — which never passes through this column —
+    // already carried the wider set. Non-empty is enforced at the API boundary: an absent
+    // goal means "default" downstream, so an empty string would be a silent default.
+    //
+    // Distinct from activeGoalId (an opaque attribution id threaded as x-active-goal-id and
+    // never consumed for pacing).
     goal: text("goal"),
 
     // The SUBSET (one OR more) of the brand's audiences this campaign targets
