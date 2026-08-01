@@ -130,6 +130,14 @@ describe("Scheduler - reRunDueCampaigns", () => {
         featureSlug: "sales-cold-email-v1",
       }),
     );
+    // The trigger leg reads brand-service (goal arbitration / runtime context) through this
+    // identity. Per-brand configuration is per (org, brand), so the campaign's org must ride
+    // along — a brand several orgs claim has no single answer without it.
+    expect(mockResolveWorkflowSlug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        identity: expect.objectContaining({ orgId: "org-ext-1" }),
+      }),
+    );
   });
 
   it("should NOT create a run — let the workflow's start-run do it", async () => {

@@ -1196,6 +1196,13 @@ describe("Pipeline routes", () => {
       });
       expect(updated!.status).toBe("ongoing");
       expect(updated!.nextRunAt).not.toBeNull();
+
+      // The stop-guard's brand read names the campaign's org: per-brand configuration is
+      // per (org, brand), so a brand several orgs claim is only answerable with an org.
+      expect(mockFetchBrandRuntimeContext).toHaveBeenCalledWith(
+        brandIds[0],
+        expect.objectContaining({ orgId }),
+      );
     });
 
     it("stopCampaign=true auto-stops the campaign ONLY when no serveable audience remains (all exhausted)", async () => {
