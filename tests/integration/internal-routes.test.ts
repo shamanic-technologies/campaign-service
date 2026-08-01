@@ -9,6 +9,7 @@ const {
   mockGateChecks,
   mockFetchBrandRuntimeContext,
   mockFetchCandidates,
+  mockFetchArbitration,
 } = vi.hoisted(() => ({
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
@@ -17,6 +18,7 @@ const {
   mockGateChecks: vi.fn(),
   mockFetchBrandRuntimeContext: vi.fn(),
   mockFetchCandidates: vi.fn(),
+  mockFetchArbitration: vi.fn(),
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -47,6 +49,7 @@ vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOri
   return {
     ...original, // keep the real pure selectAudienceFromProjection / hasServeableAudienceInProjection
     fetchWorkflowProjectionRows: mockFetchCandidates,
+    fetchGoalArbitration: mockFetchArbitration,
   };
 });
 
@@ -125,6 +128,9 @@ describe("Pipeline routes", () => {
       brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
     });
     mockFetchCandidates.mockResolvedValue(defaultRows);
+    // No arbitration by default: brand-service has not declared an authorized goal set, so every
+    // existing expectation keeps the pre-arbitration behaviour (campaign goal, else brand goal).
+    mockFetchArbitration.mockResolvedValue(null);
   });
 
   afterAll(async () => {
@@ -503,6 +509,124 @@ describe("Pipeline routes", () => {
       expect(mockFetchCandidates).toHaveBeenCalledWith(
         expect.objectContaining({ goal: "signup" }),
       );
+    });
+
+    // The goal vocabulary is brand-service's, not ours. brand-service's own check constraint
+    // already allows values this service never had a name for; a campaign paces on whatever
+    // the brand says, forwarded verbatim, and features-service is the one that fails loud on
+    // a goal it cannot resolve.
+    it("should forward a brand goal this service has no enum for, verbatim", async () => {
+      mockFetchBrandRuntimeContext.mockResolvedValueOnce({
+        brand: { id: brandIds[0] },
+        currentGoal: "combinedSales",
+        brandProfile: null,
+      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: "combinedSales" }),
+      );
+    });
+
+    it("should pace on a campaign goal outside the legacy three values", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds, goal: "positiveReply" });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: "positiveReply" }),
+      );
+    });
+
+    // === Goal arbitration: features-service elects the goal, we do not deduce it ===
+
+    it("should use the ARBITRATED goal's rows when its workflow is the one running", async () => {
+      mockFetchArbitration.mockResolvedValueOnce({
+        goal: "formSubmission",
+        workflowSlug: DEFAULT_WORKFLOW_SLUG,
+        rows: [projectionRow("aud-arbitrated")],
+      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      // One answer carried both the goal and the rows → no second projection call.
+      expect(mockFetchCandidates).not.toHaveBeenCalled();
+      expect(res.body.audienceId).toBe("aud-arbitrated");
+    });
+
+    it("should keep the arbitrated GOAL but re-read rows when the elected workflow is not the one running", async () => {
+      // The shared evidence snapshot rolled between the trigger and now, so the elected workflow
+      // is no longer the DAG that is executing. Picking an audience from those rows would pick
+      // for the wrong workflow.
+      mockFetchArbitration.mockResolvedValueOnce({
+        goal: "formSubmission",
+        workflowSlug: "some-other-dynasty",
+        rows: [projectionRow("aud-stale", "some-other-dynasty")],
+      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: "formSubmission" }),
+      );
+      expect(res.body.audienceId).toBe(DEFAULT_AUDIENCE_ID);
+    });
+
+    it("should NOT arbitrate a campaign that states its own goal", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds, goal: "websiteVisit" });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(mockFetchArbitration).not.toHaveBeenCalled();
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: "websiteVisit" }),
+      );
+    });
+
+    it("should fall back to the brand goal when nothing is arbitrated", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(mockFetchArbitration).toHaveBeenCalled();
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: "signup" }),
+      );
+    });
+
+    it("should still start the run when arbitration throws", async () => {
+      mockFetchArbitration.mockRejectedValueOnce(new Error("features-service unavailable"));
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      // Fail-soft: a selection optimization never hard-fails a run.
+      expect(res.body.audienceId).toBeNull();
     });
 
     it("should HARD-restrict the audience bandit to the campaign's targeted subset", async () => {

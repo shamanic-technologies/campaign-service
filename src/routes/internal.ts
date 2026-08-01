@@ -14,8 +14,10 @@ import { markAudienceExhausted, getFreshExhaustedAudienceIds } from "../lib/audi
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import {
   fetchWorkflowProjectionRows,
+  fetchGoalArbitration,
   selectAudienceFromProjection,
   hasServeableAudienceInProjection,
+  type ProjectionRow,
 } from "../lib/features-workflow-projection-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
 
@@ -218,8 +220,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     // overriding the brand's currentGoal for both the workflow projection and the audience
     // bandit. NULL → pace on the brand goal (inherit), unchanged behavior. This is the
     // single place the runtime goal is resolved, so display (campaign reads expose the same
-    // raw campaign.goal) and runtime agree.
-    const runtimeGoal: RuntimeGoal = (campaign.goal as RuntimeGoal | null) ?? brandRuntimeContext.currentGoal;
+    // raw campaign.goal) and runtime agree. Whatever the value is, it is forwarded verbatim —
+    // this service does not own the goal vocabulary and never rewrites it.
+    // Arbitration may replace this below when the campaign states no own goal.
+    let runtimeGoal: RuntimeGoal = campaign.goal ?? brandRuntimeContext.currentGoal;
     // Cost-aware Thompson sampling over the chosen workflow's audiences, straight from
     // features-service /workflow-projection — which enumerates EVERY active audience of the
     // brand per dynasty (floored to brand/crossOrg when an audience never ran the workflow),
@@ -234,7 +238,27 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaignId);
     let audienceId: string | null = null;
     try {
-      const projectionRows = await fetchWorkflowProjectionRows({
+      // The GOAL is arbitrated by features-service, on the same evidence the trigger used and
+      // by the same deterministic rule, so both legs land on the same goal without threading
+      // anything through the DAG. Only when the campaign states no own goal — an explicit
+      // per-campaign goal is a manual override and is never arbitrated away.
+      let projectionRows: ProjectionRow[] | null = null;
+      if (!campaign.goal) {
+        const arbitration = await fetchGoalArbitration({
+          featureSlug: featureSlug!,
+          brandId: primaryBrandId,
+          identity: preRunIdentity,
+        });
+        if (arbitration) {
+          runtimeGoal = arbitration.goal;
+          // Normally the elected workflow IS the one now running (the trigger elected it from
+          // the same shared snapshot). If that snapshot rolled in between, the rows we were
+          // handed describe a workflow that is NOT executing — re-read the rows for the one
+          // that is, on the elected goal, rather than picking an audience for the wrong DAG.
+          if (arbitration.workflowSlug === workflowSlug) projectionRows = arbitration.rows;
+        }
+      }
+      projectionRows ??= await fetchWorkflowProjectionRows({
         featureSlug: featureSlug!,
         brandId: primaryBrandId,
         goal: runtimeGoal,
@@ -308,7 +332,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       audienceId,
       // Campaign v2 own config — the campaign's raw own goal (null = paced on brand goal),
       // its targeted audience subset, its services, its click-destination.
-      goal: (campaign.goal as RuntimeGoal | null) ?? null,
+      goal: campaign.goal ?? null,
       audienceIds: campaign.audienceIds ?? null,
       servicesOffered: campaign.servicesOffered ?? null,
       clickDestinationUrl: campaign.clickDestinationUrl ?? null,
@@ -331,6 +355,13 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
  *
  * Throws on a features/brand-service error so the caller can fail SAFE (never stop on an
  * infra hiccup — a false stop is the bug this whole change fixes).
+ *
+ * Deliberately does NOT arbitrate the goal, unlike /start-run. Audience MEMBERSHIP is
+ * goal-independent — features-service enumerates every active audience of the brand per dynasty
+ * whatever the goal, and the goal only changes the cost metric attached to each row — so asking
+ * on the brand goal returns the same audience set. If that ever stopped holding, this guard
+ * would see a SUPERSET of what the picker considers, which is the safe direction for a
+ * fail-safe stop condition: it can only keep a campaign alive, never stop one wrongly.
  */
 async function hasServeableAudience(
   campaign: typeof campaigns.$inferSelect,
@@ -353,7 +384,7 @@ async function hasServeableAudience(
     featureSlug,
   };
   const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, identity);
-  const runtimeGoal: RuntimeGoal = (campaign.goal as RuntimeGoal | null) ?? brandRuntimeContext.currentGoal;
+  const runtimeGoal: RuntimeGoal = campaign.goal ?? brandRuntimeContext.currentGoal;
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
   const rows = await fetchWorkflowProjectionRows({
     featureSlug,
