@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ensureRunnableSalesOutreachCampaign,
+  isSalesOutreachFeature,
+  SALES_CRM_FEATURE_SLUG,
   SALES_OUTREACH_FEATURE_SLUG,
   SALES_OUTREACH_WORKFLOW_SLUG,
 } from "../../src/lib/sales-outreach-campaign.js";
@@ -50,6 +52,23 @@ function mutation(returned: Campaign[]) {
     fns: { set, where, values, returning },
   };
 }
+
+describe("isSalesOutreachFeature", () => {
+  it("includes both cold and CRM sales-outreach features (full parity)", () => {
+    expect(isSalesOutreachFeature(SALES_OUTREACH_FEATURE_SLUG)).toBe(true);
+    expect(isSalesOutreachFeature(SALES_CRM_FEATURE_SLUG)).toBe(true);
+    expect(isSalesOutreachFeature("sales-cold-email-outreach")).toBe(true);
+    expect(isSalesOutreachFeature("sales-crm-email-outreach")).toBe(true);
+  });
+
+  it("excludes non-sales features and empty/nullish slugs", () => {
+    expect(isSalesOutreachFeature("pr-expert-quote-outreach")).toBe(false);
+    expect(isSalesOutreachFeature("hiring-cold-email-outreach")).toBe(false);
+    expect(isSalesOutreachFeature("")).toBe(false);
+    expect(isSalesOutreachFeature(null)).toBe(false);
+    expect(isSalesOutreachFeature(undefined)).toBe(false);
+  });
+});
 
 describe("ensureRunnableSalesOutreachCampaign", () => {
   it("reuses an existing ongoing sales campaign", async () => {
@@ -146,6 +165,58 @@ describe("ensureRunnableSalesOutreachCampaign", () => {
       featureSlug: SALES_OUTREACH_FEATURE_SLUG,
       status: "ongoing",
       nextRunAt: now,
+    }));
+  });
+
+  it("creates a CRM campaign (feature-agnostic) when featureSlug is sales-crm-email-outreach", async () => {
+    const now = new Date("2026-06-18T12:00:00.000Z");
+    const created = campaign({ id: "campaign-crm", featureSlug: SALES_CRM_FEATURE_SLUG, nextRunAt: now, updatedAt: now });
+    const mut = mutation([created]);
+    const store = {
+      query: { campaigns: { findFirst: vi.fn().mockResolvedValue(undefined) } },
+      update: mut.update,
+      insert: mut.insert,
+    };
+
+    await expect(ensureRunnableSalesOutreachCampaign(store as never, {
+      orgId: "org-1",
+      brandId: "brand-1",
+      userId: "user-1",
+      featureSlug: SALES_CRM_FEATURE_SLUG,
+      now,
+    })).resolves.toEqual({ action: "created", campaign: created });
+
+    // The seeded row carries the CRM feature + its own slug as the (scheduler-overridden) nominal
+    // workflow — NOT the hardcoded cold feature/workflow.
+    expect(mut.fns.values).toHaveBeenCalledWith(expect.objectContaining({
+      featureSlug: SALES_CRM_FEATURE_SLUG,
+      workflowSlug: SALES_CRM_FEATURE_SLUG,
+      brandIds: ["brand-1"],
+      status: "ongoing",
+    }));
+  });
+
+  it("defaults to cold when a non-sales feature slug is passed", async () => {
+    const now = new Date("2026-06-18T12:00:00.000Z");
+    const created = campaign({ id: "campaign-created", nextRunAt: now, updatedAt: now });
+    const mut = mutation([created]);
+    const store = {
+      query: { campaigns: { findFirst: vi.fn().mockResolvedValue(undefined) } },
+      update: mut.update,
+      insert: mut.insert,
+    };
+
+    await ensureRunnableSalesOutreachCampaign(store as never, {
+      orgId: "org-1",
+      brandId: "brand-1",
+      userId: "user-1",
+      featureSlug: "pr-expert-quote-outreach",
+      now,
+    });
+
+    expect(mut.fns.values).toHaveBeenCalledWith(expect.objectContaining({
+      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
+      workflowSlug: SALES_OUTREACH_WORKFLOW_SLUG,
     }));
   });
 

@@ -1,6 +1,7 @@
 import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-headers.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "./brand-runtime-client.js";
 import { thompsonArgminCost, type Arm, type Rng } from "./bandit.js";
+import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
 
 // Audience-grain, send-tagged evidence for one (audience × workflow dynasty) couple.
 // Present ONLY on audienceId != null rows whose audience actually spent under this couple
@@ -359,18 +360,18 @@ export function hasServeableAudienceInProjection(
   return ids.size > 0;
 }
 
-// Per-run workflow rotation (the greedy bandit) is enabled ONLY for these features.
-// Every other feature always runs its campaign's configured workflowSlug, run after run,
-// with no features-service call and no rotation. Product decision (2026-07-07): only
-// sales-cold-email-outreach should vary its workflow across runs.
-const WORKFLOW_ROTATION_FEATURE_SLUGS = new Set<string>(["sales-cold-email-outreach"]);
-
 /**
  * Whether the greedy workflow rotation applies to a given feature. When false, the
  * trigger keeps the campaign's configured workflowSlug (no features-service call).
+ *
+ * Scoped to the sales-outreach feature family (sales-cold-email-outreach +
+ * sales-crm-email-outreach) — those vary their workflow across runs. Every other feature
+ * always runs its campaign's configured workflowSlug, run after run, with no
+ * features-service call and no rotation. (Product decision 2026-07-07: rotation is a
+ * sales-outreach lever; extended to sales-crm-email-outreach 2026-07-24 for full parity.)
  */
 export function isWorkflowRotationEnabled(featureSlug: string): boolean {
-  return WORKFLOW_ROTATION_FEATURE_SLUGS.has(featureSlug);
+  return isSalesOutreachFeature(featureSlug);
 }
 
 /**

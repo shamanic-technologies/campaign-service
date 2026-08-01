@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
 import { brandPause, brandPauseTransitions, campaigns } from "../db/schema.js";
@@ -7,11 +7,12 @@ import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/
 import { validateBody } from "../middleware/validate.js";
 import { UpdateBrandPauseBody, SetBrandCampaignsDailyBudgetBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
-import { ensureRunnableSalesOutreachCampaign } from "../lib/sales-outreach-campaign.js";
+import { ensureRunnableSalesOutreachCampaign, SALES_OUTREACH_FEATURE_SLUGS } from "../lib/sales-outreach-campaign.js";
 
-// The daily budget is a sales-cold-email-outreach pacing lever (the ONLY feature the sales
-// gate enforces it for), so the brand-page propagation targets that feature's campaigns.
-const SALES_FEATURE_SLUG = "sales-cold-email-outreach";
+// The daily budget is a sales-outreach pacing lever (the ONLY feature family the sales gate
+// enforces it for), so the brand-page propagation targets that family's campaigns
+// (sales-cold-email-outreach + sales-crm-email-outreach).
+const SALES_FEATURE_SLUGS = [...SALES_OUTREACH_FEATURE_SLUGS];
 
 const router = Router();
 
@@ -46,7 +47,8 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
  * PATCH /brands/:brandId/pause — set a brand's pause state (upsert in place).
  *
  * ONE mutable row per brand. Un-pausing also ensures the brand has a runnable sales outreach
- * campaign behind it, then wakes the scheduler so work resumes promptly.
+ * campaign behind it (for the resumed feature — forwarded as x-feature-slug, defaulting to
+ * sales-cold-email-outreach when absent), then wakes the scheduler so work resumes promptly.
  */
 router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(UpdateBrandPauseBody), async (req: AuthenticatedRequest, res) => {
   try {
@@ -68,6 +70,10 @@ router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(
           brandId,
           userId: req.userId,
           runId: req.runId,
+          // Feature-agnostic un-pause: seed the feature the caller is resuming (forwarded as
+          // x-feature-slug), NOT a hardcoded cold. Absent (brand-level dashboard un-pause carries
+          // no feature) → defaults to sales-cold-email-outreach inside ensureRunnable.
+          featureSlug: req.featureSlug,
           now,
         });
       }
@@ -125,8 +131,8 @@ router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(
  * on the brand page, that number must flow down to the brand's campaign(s) so per-campaign
  * pacing enforces it immediately. Org-scoped (only this org's campaigns for the brand are
  * touched). dailyBudgetCents:null clears each campaign's own budget → they fall back to the
- * brand daily budget again. Scoped to sales-cold-email-outreach — the only feature the daily
- * budget paces.
+ * brand daily budget again. Scoped to the sales-outreach feature family
+ * (sales-cold-email-outreach + sales-crm-email-outreach) — the only features the daily budget paces.
  */
 router.patch("/brands/:brandId/daily-budget", requireApiKey, serviceAuth, validateBody(SetBrandCampaignsDailyBudgetBody), async (req: AuthenticatedRequest, res) => {
   try {
@@ -140,7 +146,7 @@ router.patch("/brands/:brandId/daily-budget", requireApiKey, serviceAuth, valida
       .where(and(
         eq(campaigns.orgId, orgId),
         arrayContains(campaigns.brandIds, [brandId]),
-        eq(campaigns.featureSlug, SALES_FEATURE_SLUG),
+        inArray(campaigns.featureSlug, SALES_FEATURE_SLUGS),
       ))
       .returning({ id: campaigns.id });
 
