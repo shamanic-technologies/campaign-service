@@ -34,6 +34,30 @@ Forward the value VERBATIM. Do not map, alias, collapse or "normalise" a goal on
 
 (Set 2026-07-31, T1 of the per-run goal arbitration.)
 
+## Per-brand configuration is per (org, brand) — every brand-service read NAMES the org
+
+A `brands` row is a shared global identity: any org claiming the same domain gets the same
+brand id. Everything a customer configures on top of it — the goal, the confirmed profile
+fields, the sales economics, the funnels, the click destination — belongs to the **(org,
+brand)** pair, not to the brand. So "the runtime context of brand X" has no single answer.
+
+brand-service resolves the org from **`x-org-id`**: that header when sent, else the single
+claiming org when exactly one exists, else `400 ORG_REQUIRED`. 21 production brands are
+claimed by more than one org.
+
+`fetchBrandRuntimeContext` (`src/lib/brand-runtime-client.ts`) — this service's ONLY
+brand-service read — therefore treats `identity.orgId` as **load-bearing, not tracking**,
+and throws before the call when it is missing rather than let brand-service pick an org for
+us. The org is always the CAMPAIGN's org (`req.orgId` / `campaign.orgId`) on all three legs:
+`/start-run`, the `/end-run` stop-guard, and the scheduler's trigger. A stand-in org would be
+the cross-org read this scoping closes. Pinned by `tests/unit/brand-runtime-client.test.ts`
+(header on the wire) plus per-leg identity assertions in the scheduler + internal-routes
+tests, so the header cannot be dropped silently by a refactor of the shared header builder.
+
+Billing's `/internal/brands/:id/daily-budget` reads (`gate-check.ts`,
+`transactional-email.ts`) are a different service and already carry `x-org-id` too.
+(Set 2026-08-01.)
+
 ## The GOAL is arbitrated by features-service — three levers, and we deduce none of them
 
 `GET /features/:slug/goal-arbitration?brandId=` answers, in ONE call: which of the goals the brand AUTHORIZES returns the most per dollar, that goal's best workflow, and the pairing's audience rows. `fetchGoalArbitration` consumes it and the two decision points take their share:
