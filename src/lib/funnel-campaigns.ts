@@ -1,19 +1,17 @@
-import { and, arrayContains, desc, eq } from "drizzle-orm";
+import { and, arrayContains, asc, desc, eq, isNull } from "drizzle-orm";
 import { getStatsBudget, listRuns, type IdentityHeaders } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { fetchFunnelBudgets, fundedFunnels, type FunnelBudget } from "./funnel-budget-client.js";
 import { fetchDeclaredSalesFunnels, type DeclaredSalesFunnel } from "./brand-sales-funnels-client.js";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
+import { readBrandGoal, resolveCampaignFunnelKey } from "./funnel-adoption.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
-// re-ranked from scratch every tick, so this is a "wait your turn", not a backoff.
+// re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
+// campaign of the brand is in the running every tick: none is ever held out because another one
+// covers its funnel.
 export const FUNNEL_TURN_DEFER_MS = 60_000; // 1 min
-
-// A campaign superseded by the brand's funnel campaigns (the pre-funnel, funnelKey=NULL one) is
-// not deleted or stopped — the customer may clear their per-funnel ceilings at any moment and
-// fall back to one brand-level pot. It just re-checks lazily instead of every minute.
-export const SUPERSEDED_DEFER_MS = 15 * 60_000; // 15 min
 
 /**
  * The campaign columns the turn planner reads. Structurally a subset of what the scheduler's
@@ -27,6 +25,7 @@ export interface ClaimedFunnelCampaign {
   brandIds: string[] | null;
   featureSlug: string | null;
   funnelKey: string | null;
+  goal?: string | null;
 }
 
 /** One funnel campaign in the running to take the brand's next turn. */
@@ -164,45 +163,48 @@ async function planOneBrand(
 
   const ceilingByFunnel = new Map(funded.map((f) => [f.funnelKey, f.dailyBudgetCents]));
 
-  // The pre-funnel campaign is superseded while funded funnels exist: its money has been
-  // allocated per funnel, so letting it run on the brand-level sum would let one campaign spend
-  // the whole day's allowance across every funnel at once.
-  const contenders: ClaimedFunnelCampaign[] = [];
-  for (const c of group) {
-    if (c.funnelKey && ceilingByFunnel.has(c.funnelKey)) contenders.push(c);
-    else deferred.set(c.id, new Date(now.getTime() + SUPERSEDED_DEFER_MS));
-  }
-  if (contenders.length === 0) return;
+  // The ceiling a campaign that states no funnel is paced on: the brand-level daily budget,
+  // which is exactly what gate-check enforces for it. Billing answers that total as the SUM of
+  // the per-funnel ceilings, so the sum is the honest stand-in when the total cannot be read.
+  const brandCeilingCents =
+    budgets.brandDailyBudgetCents ?? funded.reduce((sum, f) => sum + f.dailyBudgetCents, 0);
 
+  // EVERY alive campaign of the brand is in the running, every tick. There is no campaign held
+  // out because another one covers its funnel: each is ranked on what IT has already spent today
+  // against the ceiling that actually binds IT, so nothing starves and nothing overspends.
   const candidates: FunnelTurnCandidate[] = [];
-  for (const c of contenders) {
+  for (const c of group) {
     candidates.push({
       campaignId: c.id,
-      funnelKey: c.funnelKey!,
+      funnelKey: c.funnelKey ?? "",
       spentCents: await spentTodayCents(orgId, c.id, featureSlug),
-      ceilingCents: ceilingByFunnel.get(c.funnelKey!)!,
+      // A campaign on a funnel the customer does not fund gets a zero ceiling and yields its
+      // turn — that is the customer's funding decision, enforced fail-closed in the gate, and
+      // it re-checks every tick because funding can change at any minute.
+      ceilingCents: c.funnelKey ? (ceilingByFunnel.get(c.funnelKey) ?? 0) : brandCeilingCents,
     });
   }
 
   const winner = selectLowestFillRatio(candidates);
+  // Every funded funnel is at its ceiling — nothing runs until they reset at the day rollover.
+  const reset = winner === null ? nextDayStart(now) : null;
 
-  if (winner === null) {
-    // Every funded funnel is at its ceiling — nothing runs until the ceilings reset.
-    const reset = nextDayStart(now);
-    for (const c of contenders) deferred.set(c.id, reset);
-    return;
-  }
-
-  for (const c of contenders) {
-    if (c.id !== winner) deferred.set(c.id, new Date(now.getTime() + FUNNEL_TURN_DEFER_MS));
+  for (const c of candidates) {
+    if (c.campaignId === winner) continue;
+    const at =
+      reset && c.ceilingCents > 0 ? reset : new Date(now.getTime() + FUNNEL_TURN_DEFER_MS);
+    deferred.set(c.campaignId, at);
   }
 }
 
 /**
- * Give every funded funnel of the brand its own campaign, so the money spent on a funnel is
- * attributable to it. A campaign already carries a goal and already has costs attributed to it,
- * which is why one campaign per funnel answers "how much did this funnel spend today" without
- * inventing a new attribution dimension.
+ * Make sure every funded funnel of the brand HAS a campaign — the one that is already doing that
+ * funnel's work whenever there is one, and a new one only when there is not.
+ *
+ * A brand that has been running outreach for months keeps THAT campaign when it funds the funnel
+ * that campaign was already working: it becomes the funnel's campaign, keeping its id, its
+ * months of runs and every cost attributed to it. Standing up a second, empty campaign beside it
+ * left the working one looking dead and the live one looking like it had produced nothing.
  *
  * The campaign carries the funnel's OWN goal, which is also what stops it being goal-arbitrated:
  * a campaign that states its own goal is never arbitrated, so features-service keeps answering
@@ -234,6 +236,22 @@ async function ensureFundedFunnelCampaigns({
 
   const goalByFunnel = new Map(declared.map((f) => [f.funnelKey, f.goal]));
 
+  // The brand's goal is what tells us which funnel a campaign that states none is already
+  // working. Read at most once per brand per tick, and only when there is something to adopt.
+  let brandGoal: string | null | undefined;
+  const brandGoalOnce = async (): Promise<string | null> => {
+    if (brandGoal === undefined) {
+      brandGoal = await readBrandGoal(brandId, {
+        orgId: seed.orgId,
+        userId: seed.createdByUserId,
+        campaignId: seed.id,
+        workflowSlug: seed.workflowSlug,
+        featureSlug,
+      });
+    }
+    return brandGoal;
+  };
+
   for (const f of funded) {
     const goal = goalByFunnel.get(f.funnelKey);
     if (!goal) continue;
@@ -247,6 +265,39 @@ async function ensureFundedFunnelCampaigns({
       ),
       orderBy: [desc(campaigns.createdAt)],
     });
+
+    // Whichever alive campaign is already doing this funnel's work owns the funnel — the oldest
+    // one, i.e. the one carrying the history. Checked even when a funnel campaign exists, so a
+    // brand that already grew an empty duplicate is repaired rather than left with two.
+    const incumbent = await findIncumbentForFunnel({
+      orgId: seed.orgId,
+      brandId,
+      featureSlug,
+      funnelKey: f.funnelKey,
+      excludeId: existing?.id,
+      brandGoalOnce,
+    });
+
+    if (incumbent) {
+      await db
+        .update(campaigns)
+        .set({ funnelKey: f.funnelKey, goal, updatedAt: now })
+        .where(and(eq(campaigns.id, incumbent.id), eq(campaigns.orgId, seed.orgId)));
+      // An empty campaign this service stood up for a funnel its incumbent was already working
+      // is this bug's own leftover: it never ran and never spent, and leaving it would keep two
+      // campaigns on one funnel. Nothing that ever ran is ever removed — see isRemovableStandIn.
+      if (existing && (await isRemovableStandIn(existing, seed.orgId, brandId, featureSlug))) {
+        await db
+          .delete(campaigns)
+          .where(and(eq(campaigns.id, existing.id), eq(campaigns.orgId, seed.orgId)));
+        console.log(
+          `[campaign-service] funnel ${f.funnelKey} of brand ${brandId}: kept campaign ${incumbent.id} ` +
+          `(its own history) and dropped the empty stand-in ${existing.id} (never ran, never spent)`,
+        );
+      }
+      continue;
+    }
+
     if (existing) {
       // A funnel the customer re-funded after switching it off resumes rather than duplicating.
       if (existing.status !== "ongoing") {
@@ -291,6 +342,94 @@ async function ensureFundedFunnelCampaigns({
 
 export function funnelCampaignName(featureSlug: string, brandId: string, funnelKey: string): string {
   return `${featureSlug} - ${brandId} - ${funnelKey}`;
+}
+
+/**
+ * The alive campaign already doing this funnel's work and not yet stating it.
+ *
+ * "Already doing this funnel's work" is decided by the goal the campaign runs on — its own when
+ * it states one, the brand's otherwise — read through the funnel vocabulary. The OLDEST match
+ * wins: it is the one carrying the history, the spend and the results.
+ *
+ * Only `ongoing` campaigns are adopted. A stopped campaign is not doing the funnel's work, and
+ * adopting one would restart something the customer switched off.
+ */
+async function findIncumbentForFunnel({
+  orgId,
+  brandId,
+  featureSlug,
+  funnelKey,
+  excludeId,
+  brandGoalOnce,
+}: {
+  orgId: string;
+  brandId: string;
+  featureSlug: string;
+  funnelKey: string;
+  excludeId?: string;
+  brandGoalOnce: () => Promise<string | null>;
+}): Promise<{ id: string } | null> {
+  const funnelless = await db.query.campaigns.findMany({
+    where: and(
+      eq(campaigns.orgId, orgId),
+      eq(campaigns.featureSlug, featureSlug),
+      eq(campaigns.status, "ongoing"),
+      isNull(campaigns.funnelKey),
+      arrayContains(campaigns.brandIds, [brandId]),
+    ),
+    orderBy: [asc(campaigns.createdAt)],
+  });
+
+  const candidates = funnelless.filter((c) => c.id !== excludeId);
+  if (candidates.length === 0) return null;
+
+  const brandGoal = await brandGoalOnce();
+  for (const c of candidates) {
+    if (resolveCampaignFunnelKey(c.goal, brandGoal) === funnelKey) return { id: c.id };
+  }
+  return null;
+}
+
+/**
+ * True only for a campaign THIS service stood up for a funnel and that has never done anything:
+ * the name it was provisioned under, no run of its own in runs-service, and no cost attributed
+ * to it. Such a row is this bug's own leftover, created within hours of the incumbent being
+ * parked, and removing it is undoing our write — never a customer's campaign.
+ *
+ * Every condition is required and every read fails CLOSED: an unreadable run list or spend
+ * figure answers "not removable", so nothing is ever removed on a blind guess.
+ */
+async function isRemovableStandIn(
+  existing: { id: string; name: string },
+  orgId: string,
+  brandId: string,
+  featureSlug: string,
+): Promise<boolean> {
+  const provisionedNames = new Set(
+    ["reply_meeting", "visit_meeting", "visit_signup", "visit_form"].map((k) =>
+      funnelCampaignName(featureSlug, brandId, k),
+    ),
+  );
+  if (!provisionedNames.has(existing.name)) return false;
+
+  try {
+    const { runs } = await listRuns({ orgId, campaignId: existing.id, limit: 1 });
+    if (runs.length > 0) return false;
+
+    const budget = await getStatsBudget({
+      orgId,
+      campaignId: existing.id,
+      featureSlug,
+      windows: [{ label: "lifetime", since: new Date(0).toISOString() }],
+    });
+    const lifetime = budget.windows.find((w) => w.label === "lifetime");
+    const spent = lifetime
+      ? parseFloat(lifetime.netTotalCostInUsdCents ?? lifetime.totalCostInUsdCents) || 0
+      : 0;
+    return spent === 0;
+  } catch {
+    return false;
+  }
 }
 
 /**

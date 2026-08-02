@@ -58,7 +58,7 @@ export const campaigns = pgTable(
     // (human-service saved-filter-set UUIDs == audience.id). NULL/absent → target the
     // brand's full active audience set (inherit). When set, the per-run audience bandit is
     // HARD-restricted to this subset — the campaign never contacts an audience outside it,
-    // regardless of workflow-conditioning. Supersedes the singular audienceId for targeting.
+    // regardless of workflow-conditioning. Replaces the singular audienceId for targeting.
     audienceIds: text("audience_ids").array(),
 
     // The services this campaign offers. NULL → inherit the brand's services. Exposed to the
