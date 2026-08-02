@@ -248,6 +248,16 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         if (!budgets.ok) {
           return { allowed: false, reason: "Funnel daily budget unavailable" };
         }
+        // This brand funds NO funnel separately. Every campaign states the funnel it runs so no
+        // consumer has to infer it from a goal — but for a brand with one pot that statement is
+        // a LABEL, not a ceiling: the money is still the brand-level daily budget, and this
+        // campaign paces on it exactly as it did before it stated a funnel. Nothing about how a
+        // FUNDED funnel's ceiling is enforced changes.
+        if (budgets.funnels.length === 0) {
+          const blocked = await brandDailyBudgetBlock(campaign, identity, brandId);
+          if (blocked) return blocked;
+          continue;
+        }
         const ceilingCents = budgets.funnels.find(f => f.funnelKey === campaign.funnelKey)?.dailyBudgetCents ?? null;
         // A funnel funded at zero — or no longer funded at all — is never run. That is a
         // deliberate customer decision, not a missing value, so it is not a fallback to the
@@ -260,53 +270,12 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         }
       }
     } else {
-    // (b) Fall back to the per-brand daily budget. Multi-brand tick: blocked if ANY in-scope
-    // brand has reached its ceiling (most campaigns are solo-brand).
-    for (const brandId of campaign.brandIds) {
-      const dailyBudget = await getBrandDailyBudget(brandId, identity);
-      if (!dailyBudget.ok) {
-        return { allowed: false, reason: "Brand daily budget unavailable" };
+      // (b) Fall back to the per-brand daily budget. Multi-brand tick: blocked if ANY in-scope
+      // brand has reached its ceiling (most campaigns are solo-brand).
+      for (const brandId of campaign.brandIds) {
+        const blocked = await brandDailyBudgetBlock(campaign, identity, brandId);
+        if (blocked) return blocked;
       }
-
-      const dailyBudgetCents = dailyBudget.dailyBudgetCents;
-      if (dailyBudgetCents === null) continue; // explicitly unset → no cap this tick
-
-      const brandSpend = await getStatsBudget({
-        orgId: campaign.orgId,
-        brandId,
-        featureSlug: campaign.featureSlug,
-        windows: [{ label: "today", since: startOfToday().toISOString() }],
-      });
-      const today = brandSpend.windows.find(w => w.label === "today");
-      // Pace on COMMITTED spend = actual + provisioned (the window's totalCostInUsdCents).
-      // This DELIBERATELY REVERSES #223 ("pace on actual, not actual+provisioned") FOR THIS
-      // per-brand daily cap ONLY. #223's concern was real: a provisioned row can be a worst-case
-      // affordability RESERVATION (an LLM call reserves ~26¢, reconciles to ~0.7¢, then cancels
-      // the hold), so counting open holds could block on phantom spend for ~15min until the day
-      // rolls over. The product owner has weighed that tradeoff and accepted it: in practice the
-      // bulk of the committed-minus-actual gap is genuine instantly-account-email-sent holds for
-      // already-scheduled follow-up sends (real future spend), and the dashboard already shows
-      // the brand's "Budget spent today" as this same committed number. Pacing the cap on
-      // committed makes the enforced ceiling match what the customer sees and stops a campaign
-      // from committing NEW work above the daily budget while reserved follow-up holds sit
-      // uncounted. The worst-case-LLM-hold over-block is the accepted cost of that alignment.
-      // checkAffordability below stays the hard money gate (org credit balance); this is daily
-      // pacing. NOTE: the campaign budget WINDOWS (block 3 above) — daily, weekly, monthly AND
-      // total — now ALL pace on committed too, for full coherence with the dashboard.
-      // NET committed (post-usage-discount): the brand daily budget is what the org PAYS,
-      // so pace on the net twin, not gross list price. A 50%-discounted brand must be able
-      // to run until net spend reaches the daily cap; pacing on gross stopped it at half.
-      // The dashboard "Budget spent today" reads features-service /revenue with pricing=net
-      // for the same reason, keeping the enforced ceiling coherent with what the customer sees.
-      // Fallback to gross only if an older runs-service omits the net twin (safe: stops earlier).
-      const spentCents = today
-        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
-        : 0;
-
-      if (spentCents >= dailyBudgetCents) {
-        return { allowed: false, reason: "Brand daily budget reached" };
-      }
-    }
     }
   }
 
@@ -521,4 +490,62 @@ export function nextMonthStart(): Date {
   d.setDate(1);
   d.setHours(0, 0, 0, 0);
   return d;
+}
+
+/**
+ * The per-brand daily budget check, for a campaign that is not paced on a ceiling of its own.
+ *
+ * Returns the blocking result, or null when this brand does not stop the tick. Fail-CLOSED on an
+ * unreadable cap: spend control must never read "cannot tell" as "unbounded".
+ */
+async function brandDailyBudgetBlock(
+  campaign: GateCheckInput,
+  identity: IdentityHeaders,
+  brandId: string,
+): Promise<GateCheckResult | null> {
+  const dailyBudget = await getBrandDailyBudget(brandId, identity);
+  if (!dailyBudget.ok) {
+    return { allowed: false, reason: "Brand daily budget unavailable" };
+  }
+
+  const dailyBudgetCents = dailyBudget.dailyBudgetCents;
+  if (dailyBudgetCents === null) return null; // explicitly unset → no cap this tick
+
+  const brandSpend = await getStatsBudget({
+    orgId: campaign.orgId,
+    brandId,
+    featureSlug: campaign.featureSlug,
+    windows: [{ label: "today", since: startOfToday().toISOString() }],
+  });
+  const today = brandSpend.windows.find(w => w.label === "today");
+  // Pace on COMMITTED spend = actual + provisioned (the window's totalCostInUsdCents).
+  // This DELIBERATELY REVERSES #223 ("pace on actual, not actual+provisioned") FOR THIS
+  // per-brand daily cap ONLY. #223's concern was real: a provisioned row can be a worst-case
+  // affordability RESERVATION (an LLM call reserves ~26¢, reconciles to ~0.7¢, then cancels
+  // the hold), so counting open holds could block on phantom spend for ~15min until the day
+  // rolls over. The product owner has weighed that tradeoff and accepted it: in practice the
+  // bulk of the committed-minus-actual gap is genuine instantly-account-email-sent holds for
+  // already-scheduled follow-up sends (real future spend), and the dashboard already shows
+  // the brand's "Budget spent today" as this same committed number. Pacing the cap on
+  // committed makes the enforced ceiling match what the customer sees and stops a campaign
+  // from committing NEW work above the daily budget while reserved follow-up holds sit
+  // uncounted. The worst-case-LLM-hold over-block is the accepted cost of that alignment.
+  // checkAffordability below stays the hard money gate (org credit balance); this is daily
+  // pacing. NOTE: the campaign budget WINDOWS (block 3 above) — daily, weekly, monthly AND
+  // total — now ALL pace on committed too, for full coherence with the dashboard.
+  // NET committed (post-usage-discount): the brand daily budget is what the org PAYS,
+  // so pace on the net twin, not gross list price. A 50%-discounted brand must be able
+  // to run until net spend reaches the daily cap; pacing on gross stopped it at half.
+  // The dashboard "Budget spent today" reads features-service /revenue with pricing=net
+  // for the same reason, keeping the enforced ceiling coherent with what the customer sees.
+  // Fallback to gross only if an older runs-service omits the net twin (safe: stops earlier).
+  const spentCents = today
+    ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
+    : 0;
+
+  if (spentCents >= dailyBudgetCents) {
+    return { allowed: false, reason: "Brand daily budget reached" };
+  }
+
+  return null;
 }

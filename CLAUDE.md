@@ -92,15 +92,39 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
 
 - **One campaign per funded funnel** (`campaigns.funnel_key`, migration 0041). The cost ledger is
   already keyed on campaignId, so a funnel's spend today IS its campaign's spend today — no new
-  attribution dimension. Provisioned by the scheduler (`src/lib/funnel-campaigns.ts`) from
+  attribution dimension. Reconciled by the scheduler (`src/lib/funnel-campaigns.ts`) from
   billing's `GET /internal/brands/:id/funnel-budgets` ∩ brand-service's
   `GET /internal/brands/:id/sales-funnels` (which carries the goal each funnel optimizes for,
   forwarded verbatim onto `campaigns.goal`). A funnel billing funds but brand-service does not
   declare ACTIVE is never provisioned.
+- **The campaign ALREADY doing a funnel's work becomes that funnel's campaign — a second one is
+  never stood up beside it.** `findIncumbentForFunnel` looks for the OLDEST `ongoing` campaign of
+  the same (org, brand, feature) that states no funnel and whose goal (its own, else the brand's)
+  names this funnel, and adopts it: same id, same months of runs, same attributed costs, now
+  stating the funnel + its goal. Standing up an empty twin left the working campaign reading as
+  dead and the live one as having produced nothing (prod, brand `6e21bb6c`, 2026-08-02). An empty
+  campaign THIS service provisioned for a funnel its incumbent was already working is dropped in
+  the same step — and only then: `isRemovableStandIn` requires the provisioned name, zero runs in
+  runs-service AND zero lifetime cost, and fails CLOSED on any unreadable read. Nothing that ever
+  ran is ever removed.
+- **Every campaign STATES its funnel, persisted — no consumer infers it from a goal.** Migration
+  0042 rewrites the goal vocabulary of every campaign that states a goal; `src/lib/funnel-backfill.ts`
+  (boot, after `listen`, fire-and-forget, idempotent) does the rest by reading each (org, brand)
+  pair's goal from brand-service once. The goal→funnel map lives in ONE place,
+  `src/lib/sales-funnel-vocabulary.ts`: form submissions → `visit_form`, booked meeting →
+  `reply_meeting` (these campaigns are cold email, so the chain that ran is reply→meeting, never
+  the website one — owner-decided 2026-08-02), website purchase / signup → `visit_signup`. A goal
+  naming no single funnel (`combinedSales`, `websiteVisit`, `positiveReply`,
+  `whatsappConversation`) keeps a NULL funnel: a funnel is a stored fact, never a guess.
 - **The gate paces on that funnel's own ceiling** (`gate-check.ts`, block a2), fail-CLOSED like
   the brand ceiling. Precedence: campaign's own `dailyBudgetCents` → `funnelKey` ceiling → brand
-  daily budget. A funnel funded at ZERO, or absent from billing, blocks (`Funnel not funded`) —
-  it NEVER falls back to the brand total, which would let it spend another funnel's money.
+  daily budget. A funnel funded at ZERO, or absent from billing while the brand funds OTHER
+  funnels, blocks (`Funnel not funded`) — it NEVER falls back to the brand total, which would let
+  it spend another funnel's money. The ONE case that reads the funnel as a label rather than a
+  ceiling: a brand billing reports NO per-funnel ceilings for at all (`funnels: []`) still has one
+  pot, so the campaign paces on the brand daily budget exactly as it did before every campaign
+  stated a funnel. Without that, stamping the funnel fleet-wide would have blocked every brand
+  that never split its budget.
 - **Serial, for now: one run in flight per BRAND** (`hasLiveRunForBrand` in funnel-campaigns.ts).
   Running funnels concurrently needs an audit of lead de-duplication and of sending-account load
   that nobody has done. Deleting that one block is what unlocks parallelism; nothing else has to
@@ -109,15 +133,18 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
   never a fixed order and never "the primary first". A fixed order starves whatever sits last —
   if the first funnel can absorb the whole day the others never run, and that shows up in no log
   at all. A funnel at its ceiling yields with no special case (ratio ≥ 1 → not a candidate); all
-  funnels full → parked until the day rollover.
+  funnels full → parked until the day rollover. EVERY alive campaign of the brand is a candidate
+  every tick — one that states no funnel is ranked on the brand daily budget, the ceiling the gate
+  actually binds it to. No campaign is ever held out of the running because another one covers its
+  funnel; there is no superseded state, and `tests/unit/no-legacy.test.ts` fails if the concept
+  returns.
 - **Fail-SOFT in the scheduler, fail-CLOSED in the gate.** An unreadable budget/funnel set leaves
   the brand on today's behaviour (turn-taking is an optimization); the gate is what refuses to
   spend past a cap it cannot read.
 - A brand that never set per-funnel ceilings grows no funnel campaigns and behaves exactly as
-  before. The pre-funnel (`funnel_key` NULL) campaign is SUPERSEDED — not stopped — while funded
-  funnels exist, and resumes if the customer clears them.
+  before: its campaigns state their funnel (a label) and keep pacing on the brand-level pot.
 - The brand-level PAUSE is untouched: the dashboard still reads and renders it.
-(Set 2026-08-02.)
+(Set 2026-08-02; adoption + fleet-wide funnel statement, same day.)
 
 The per-campaign audience SUBSET (`campaigns.audience_ids`, Campaign v2) is a HARD filter on the audience bandit (`requiredAudienceIds` in `selectAudienceFromProjection`): a campaign never contacts an audience outside its targeted subset (no fallback). NULL/empty → inherit the brand's full active audience set. (The old workflow-conditioning `eligibleAudienceIds` soft-filter was REMOVED in v0.44.1 — see the single-endpoint note below.) Distinct from the singular `audienceId` column (per-campaign attribution; the per-RUN chosen audience is re-selected fresh at /start-run).
 

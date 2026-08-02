@@ -635,6 +635,39 @@ describe("Gate Check", () => {
       expect(result.reason).toBe("Funnel not funded");
     });
 
+    it("a brand that funds no funnel separately paces on its brand budget, funnel or not", async () => {
+      // Every campaign states the funnel it runs so no consumer has to infer it. For a brand
+      // with ONE pot that statement is a label, not a ceiling: the money is still the brand
+      // daily budget, exactly as before the campaign stated anything.
+      mockFunnelBudgets([], "3000");
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ brandId: "brand-1", dailyBudgetCents: "1000", updatedAt: null }),
+      });
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1500" }]),
+      );
+
+      const result = await runGateChecks(funnelCampaign());
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand daily budget reached");
+    });
+
+    it("allows a funnel-stating campaign under its brand budget when no funnel is funded", async () => {
+      mockFunnelBudgets([], "3000");
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ brandId: "brand-1", dailyBudgetCents: "1000", updatedAt: null }),
+      });
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "10" }]),
+      );
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
+
+      const result = await runGateChecks(funnelCampaign());
+      expect(result.allowed).toBe(true);
+    });
+
     it("fails CLOSED when the per-funnel ceilings cannot be read", async () => {
       mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
 

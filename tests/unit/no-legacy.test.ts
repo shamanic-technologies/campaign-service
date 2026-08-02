@@ -26,6 +26,32 @@ describe('No Legacy Patterns - CRITICAL', () => {
     return files;
   }
 
+  it('should NOT carry a superseded-campaign concept anywhere in src', () => {
+    // A campaign is never parked, deferred on a slow re-check loop, or held out of the running
+    // because another campaign covers its funnel. Every alive campaign is re-ranked from scratch
+    // every tick. The concept — and the word — must not come back.
+    const files = getAllTsFiles(srcDir);
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const file of files) {
+      const content = fs.readFileSync(file, 'utf-8');
+      content.split('\n').forEach((line, index) => {
+        if (/supersed/i.test(line)) {
+          violations.push({
+            file: path.relative(srcDir, file),
+            line: index + 1,
+            code: line.trim().substring(0, 80),
+          });
+        }
+      });
+    }
+
+    expect(
+      violations,
+      `A campaign is never superseded:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`
+    ).toHaveLength(0);
+  });
+
   it('should NOT have brandUrl query parameter filtering in routes', () => {
     const routesDir = path.join(srcDir, 'routes');
     const files = getAllTsFiles(routesDir);
