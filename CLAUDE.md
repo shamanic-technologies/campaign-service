@@ -81,7 +81,43 @@ START-RUN (internal.ts): elected goal → Thompson over the pairing rows ← exp
 
 `hasServeableAudience` (the `/end-run` stop-guard) deliberately does NOT arbitrate: audience membership is goal-independent (every active audience is enumerated per dynasty whatever the goal), so it returns the same set, and if that ever stopped holding the guard would see a SUPERSET — the safe direction for a fail-safe stop.
 
-STILL TO DO (T4b, gated on brand-service declaring the authorized set): `findOrCreate` a campaign per `(org, brand, feature, goal)` so the elected goal selects WHICH campaign runs, which moves the scheduler's claim grain from campaign to brand. Three known snags: `brandIds` is a `text[]` (no unique index can span it), `uniq_campaigns_org_name` forces a deterministic generated name, and the lazy create must be `INSERT ... ON CONFLICT DO NOTHING` then `SELECT`. (Set 2026-07-31, T4a.)
+**Arbitration now only decides for a brand with ONE pot.** A customer who funds each sales funnel separately has decided which funnels run — see the per-funnel section below. A funnel campaign carries the funnel's own goal, so it is a stated-goal campaign and is never arbitrated. (Set 2026-07-31, T4a; scoped 2026-08-02.)
+
+## Per-funnel funding: every funded funnel runs, each paced on its OWN ceiling
+
+billing-service lets a customer fund each of a brand's SALES FUNNELS separately. Its brand-level
+`GET /internal/brands/:id/daily-budget` still answers the SUM, so nothing reading the brand total
+changes — but "which funnel is best by ROI, run that one" is no longer the right question. Both
+funded funnels get worked, each spending up to its own ceiling and stopping there.
+
+- **One campaign per funded funnel** (`campaigns.funnel_key`, migration 0041). The cost ledger is
+  already keyed on campaignId, so a funnel's spend today IS its campaign's spend today — no new
+  attribution dimension. Provisioned by the scheduler (`src/lib/funnel-campaigns.ts`) from
+  billing's `GET /internal/brands/:id/funnel-budgets` ∩ brand-service's
+  `GET /internal/brands/:id/sales-funnels` (which carries the goal each funnel optimizes for,
+  forwarded verbatim onto `campaigns.goal`). A funnel billing funds but brand-service does not
+  declare ACTIVE is never provisioned.
+- **The gate paces on that funnel's own ceiling** (`gate-check.ts`, block a2), fail-CLOSED like
+  the brand ceiling. Precedence: campaign's own `dailyBudgetCents` → `funnelKey` ceiling → brand
+  daily budget. A funnel funded at ZERO, or absent from billing, blocks (`Funnel not funded`) —
+  it NEVER falls back to the brand total, which would let it spend another funnel's money.
+- **Serial, for now: one run in flight per BRAND** (`hasLiveRunForBrand` in funnel-campaigns.ts).
+  Running funnels concurrently needs an audit of lead de-duplication and of sending-account load
+  that nobody has done. Deleting that one block is what unlocks parallelism; nothing else has to
+  be undone.
+- **The turn goes to the lowest spent-today ÷ own-ceiling ratio** (`selectLowestFillRatio`),
+  never a fixed order and never "the primary first". A fixed order starves whatever sits last —
+  if the first funnel can absorb the whole day the others never run, and that shows up in no log
+  at all. A funnel at its ceiling yields with no special case (ratio ≥ 1 → not a candidate); all
+  funnels full → parked until the day rollover.
+- **Fail-SOFT in the scheduler, fail-CLOSED in the gate.** An unreadable budget/funnel set leaves
+  the brand on today's behaviour (turn-taking is an optimization); the gate is what refuses to
+  spend past a cap it cannot read.
+- A brand that never set per-funnel ceilings grows no funnel campaigns and behaves exactly as
+  before. The pre-funnel (`funnel_key` NULL) campaign is SUPERSEDED — not stopped — while funded
+  funnels exist, and resumes if the customer clears them.
+- The brand-level PAUSE is untouched: the dashboard still reads and renders it.
+(Set 2026-08-02.)
 
 The per-campaign audience SUBSET (`campaigns.audience_ids`, Campaign v2) is a HARD filter on the audience bandit (`requiredAudienceIds` in `selectAudienceFromProjection`): a campaign never contacts an audience outside its targeted subset (no fallback). NULL/empty → inherit the brand's full active audience set. (The old workflow-conditioning `eligibleAudienceIds` soft-filter was REMOVED in v0.44.1 — see the single-endpoint note below.) Distinct from the singular `audienceId` column (per-campaign attribution; the per-RUN chosen audience is re-selected fresh at /start-run).
 

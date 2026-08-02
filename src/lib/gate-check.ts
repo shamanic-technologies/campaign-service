@@ -4,6 +4,7 @@ import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { anyBrandPaused } from "./brand-pause.js";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
+import { fetchFunnelBudgets } from "./funnel-budget-client.js";
 
 const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
 
@@ -33,6 +34,11 @@ export interface GateCheckInput {
   // THIS campaign on its OWN committed spend today vs this ceiling (two campaigns under one
   // brand pace independently). NULL = no own budget → fall back to the brand daily budget.
   dailyBudgetCents: number | null;
+  // The sales funnel this campaign works (brand-service vocabulary), or null when the campaign
+  // is not funnel-scoped. When set, the sales gate paces THIS campaign on THAT funnel's own
+  // daily ceiling read from billing — so a brand funding two funnels has each worked up to its
+  // own ceiling, and the brand's total for the day cannot exceed the sum.
+  funnelKey: string | null;
   maxLeads: number | null;
 }
 
@@ -214,6 +220,44 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         : 0;
       if (spentCents >= campaign.dailyBudgetCents) {
         return { allowed: false, reason: "Campaign daily budget reached" };
+      }
+    } else if (campaign.funnelKey) {
+      // (a2) The campaign works ONE sales funnel: pace it on THAT funnel's own daily ceiling
+      // (billing-service brand_funnel_budgets), not on the brand-level total. The brand total
+      // is still exactly the SUM of those ceilings, so a brand funding two funnels has both
+      // worked, neither exceeds its own ceiling, and the day's total cannot exceed the sum.
+      //
+      // The funnel's spend today IS this campaign's spend today: one campaign per funnel, and
+      // the cost ledger is already keyed on campaignId — no per-funnel spend figure is invented
+      // here. Read once (campaign-scoped), then compared against each in-scope brand's ceiling.
+      const campaignSpend = await getStatsBudget({
+        orgId: campaign.orgId,
+        campaignId: campaign.campaignId,
+        featureSlug: campaign.featureSlug,
+        windows: [{ label: "today", since: startOfToday().toISOString() }],
+      });
+      const today = campaignSpend.windows.find(w => w.label === "today");
+      const spentCents = today
+        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
+        : 0;
+
+      for (const brandId of campaign.brandIds) {
+        const budgets = await fetchFunnelBudgets(brandId, identity);
+        // Fail-CLOSED, same stance as the brand ceiling below: an unreadable cap must never be
+        // read as "unbounded".
+        if (!budgets.ok) {
+          return { allowed: false, reason: "Funnel daily budget unavailable" };
+        }
+        const ceilingCents = budgets.funnels.find(f => f.funnelKey === campaign.funnelKey)?.dailyBudgetCents ?? null;
+        // A funnel funded at zero — or no longer funded at all — is never run. That is a
+        // deliberate customer decision, not a missing value, so it is not a fallback to the
+        // brand total: falling back would let an unfunded funnel spend another funnel's money.
+        if (ceilingCents === null || ceilingCents <= 0) {
+          return { allowed: false, reason: "Funnel not funded" };
+        }
+        if (spentCents >= ceilingCents) {
+          return { allowed: false, reason: "Funnel daily budget reached" };
+        }
       }
     } else {
     // (b) Fall back to the per-brand daily budget. Multi-brand tick: blocked if ANY in-scope
