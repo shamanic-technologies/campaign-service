@@ -234,3 +234,32 @@ export const campaignAudienceExhaustion = pgTable(
 
 export type CampaignAudienceExhaustion = typeof campaignAudienceExhaustion.$inferSelect;
 export type NewCampaignAudienceExhaustion = typeof campaignAudienceExhaustion.$inferInsert;
+
+// The funnel a campaign runs is a stored fact, derived from what the campaign itself said. When
+// what it said names no single funnel — a brand selling through several under one `combinedSales`
+// goal — the funnel stays NULL rather than being guessed, and only the OWNER can answer it.
+//
+// This table is the record of those answers: one row per campaign an owner decision wrote, holding
+// the value it replaced. It is what makes such a write auditable and reversible — an operator reads
+// back exactly which rows a decision touched and can restore `previous_funnel_key` — and what makes
+// re-running one a no-op. Nothing in the runtime reads it: the funnel itself lives on the campaign
+// row, as it does for every other campaign.
+export const campaignFunnelOwnerDecisions = pgTable(
+  "campaign_funnel_owner_decisions",
+  {
+    campaignId: text("campaign_id").primaryKey(),
+    orgId: text("org_id").notNull(),
+    brandId: text("brand_id"),
+    previousFunnelKey: text("previous_funnel_key"),
+    funnelKey: text("funnel_key").notNull(),
+    decidedBy: text("decided_by").notNull(),
+    decidedOn: date("decided_on").notNull(),
+    // The migration (or script) that applied the decision — the handle an operator undoes by.
+    source: text("source").notNull(),
+    appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_cfod_source").on(table.source)]
+);
+
+export type CampaignFunnelOwnerDecision = typeof campaignFunnelOwnerDecisions.$inferSelect;
+export type NewCampaignFunnelOwnerDecision = typeof campaignFunnelOwnerDecisions.$inferInsert;

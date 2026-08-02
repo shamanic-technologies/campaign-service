@@ -210,6 +210,20 @@ incumbent's, which paces on the brand-level pot billing answers as the SUM of ex
 Prod, brand `f4d73dab` 2026-08-02: goal `combinedSales`, two funded funnels, two empty campaigns
 provisioned at 09:53 beside a campaign carrying six weeks and 69,442 runs.
 
+**Only the OWNER lifts that unknown, per (org, brand), and every such answer is written through
+`campaign_funnel_owner_decisions`** — one row per campaign it wrote, holding the value it replaced
+and the migration tag that wrote it, so the write is auditable, re-runnable and undoable by that
+tag. Nothing in the runtime reads the table: the funnel lives on the campaign row like every other
+one. First answer, migration 0045 (org `f0420eb5` / brand `f4d73dab`, Kevin 2026-08-02): the live
+campaign `d5a759bf` states `sales_meetings_from_conversation`, its 51 stopped sales campaigns state
+`website_purchases`. The brand switched funnel on 19 July WITHOUT creating a campaign, so no row
+marks the transition; a run-date split was declined — a campaign's history is not cut in two — and
+the accepted cost is that 33,229 of `d5a759bf`'s 54,809 runs predate the switch and sit under the
+meeting funnel (one-directional: a meeting reads MORE expensive than it was, never less). Do NOT
+"fix" it. Do NOT extend the answer to any other brand in the same state, and note that a brand row
+is claimed by several orgs — three stopped campaigns other orgs hold on `f4d73dab` are other
+customers' and keep a NULL funnel.
+
 ## Brand serialization counts SALES runs only — a brand's PR run is not its sales outreach's business
 
 `hasLiveSalesRunForBrand` asks runs-service campaign by campaign, over the brand's `ongoing`
@@ -317,8 +331,6 @@ The campaign picks, per run, WHICH audience to contact and WHICH workflow to run
 
 **Downstream honors the choice — already correct, don't rebuild:** lead-service `buffer/next` uses the passed `x-audience-id` and does NOT re-select; human-service suppression is **per-brand atomic, cross-audience** (the serve cursor is per-audience) so overlapping audiences never double-contact. `workflowSlug == workflowDynastySlug` (v1) so the projection row's dynasty slug is executable by `/by-slug/{slug}/execute`.
 
-**Per-workflow outcome tagging + full active-audience enumeration SHIPPED (features-service#638, prod v0.101.2, 2026-07-22).** The projection audience grain is now per `(audienceId × workflowDynastySlug)`, send-tagged (real per-workflow outcomes — the old "byte-identical to `/audience-stats`, same across couples" caveat is DEAD), AND the handler emits a row for EVERY active audience × every active dynasty (audiences with no couple floor brand→crossOrg via the cascade). This is what enables the single-endpoint audience Thompson above: the chosen workflow's rows already ARE the brand's active-audience candidate set with workflow-discriminated evidence, so campaign-service needs no separate `/audience-stats` call. Coverage is forward-only (send-tags from workflow-service#333 / email-gateway#168-170); the cascade floors history.
+**The projection's audience grain is `(audienceId × workflowDynastySlug)`, send-tagged, and it emits a row for EVERY active audience × every active dynasty** (features-service#638) — audiences with no couple floor brand→crossOrg via the cascade. That is what makes the single-endpoint Thompson above possible: the chosen workflow's rows already ARE the brand's active-audience candidate set with workflow-discriminated evidence. `/features/:slug/candidates` no longer exists; its evidence lives in the reshaped `workflow-projection` (`rows[]` grain-ladder + `resolved`), read via `src/lib/features-workflow-projection-client.ts`, which sends `brandId` + `goal` only.
 
-**Endpoint migration (2026-07-06):** features-service DELETED `/features/:slug/candidates` and folded its evidence into the reshaped `GET /features/:slug/workflow-projection` (`rows[]` grain-ladder + `resolved`). campaign-service reads `rows[]`, ranks on `row.resolved.costPerOutcomeUsd`, scopes audiences via `row.audienceId`. Client: `src/lib/features-workflow-projection-client.ts` (was `features-candidates-client.ts`). Sends `brandId` + `goal` only (brandProfileId dropped — the new endpoint derives economics from brandId).
-
-**Spin deadlock fixed by the single-endpoint move (v0.44.1, 2026-07-22).** BEFORE: the workflow-conditioning soft-filter narrowed the audience candidate set (from `/audience-stats`) to the audiences that had RUN the chosen workflow. When the greedy workflow locked onto a dynasty whose only run-attributed audience was exhausted (prod brand `75d7e3e8`, workflow `granite` → sole audience `729e06f0`, exhausted), the soft-filter collapsed the set to that one exhausted audience, then the exhaustion exclusion emptied it → `/start-run` picked NO audience (`audience_id` NULL) → empty `lead-serve` → ~20s spin, while the stop-guard `hasServeableAudience` (which used a DIFFERENT, unscoped eligibility) saw the brand's OTHER active audiences and refused to stop. The two legs used mismatched eligibility, so they never agreed. The producer-side enumeration fix (features#638) + the consumer-side single-endpoint move (this repo) both close it: the chosen workflow's rows now include every active audience, so exhausting one leaves the others serveable and `selectAudienceFromProjection` picks among them. Do NOT reintroduce a workflow-scoped candidate filter that can collapse to a subset the stop-guard doesn't see.
+**Never reintroduce a workflow-scoped audience filter that can collapse to a subset the stop-guard doesn't see.** The removed soft-filter narrowed the candidates to audiences that had RUN the chosen workflow; when greedy locked onto a dynasty whose only run-attributed audience was exhausted, the exhaustion exclusion then emptied the set → `/start-run` picked NO audience → empty `lead-serve` → ~20s spin, while `hasServeableAudience` (unscoped) saw the brand's other audiences and refused to stop. Two legs on mismatched eligibility never agree.
