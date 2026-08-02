@@ -164,6 +164,63 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
 - The brand-level PAUSE is untouched: the dashboard still reads and renders it.
 (Set 2026-08-02; adoption + fleet-wide funnel statement, same day.)
 
+## A campaign is unique on (org, brand, sales funnel, acquisition channel) — the WORKFLOW is not part of it
+
+Nothing else is part of that identity. A campaign changes workflow whenever selection picks a
+better one; it is not replaced by a second campaign each time it does. Treating the workflow as
+identity is what grew brand `f4d73dab` **137 stopped rows**, one per workflow version (`Aurora`,
+`Aurora V2`, `V3`, `Hassium` ×12, `Tributary` ×5 …), each holding a slice of a history nobody could
+read as one campaign.
+
+- **Two of the four were not stored facts** until migration 0044. `brand_id` (scalar) exists
+  because no unique index can span `brand_ids text[]` — the reality is one brand per campaign, and
+  every `ongoing` row in prod carries exactly one. `acquisition_channel` exists because consumers
+  derived the channel from the WORKFLOW SLUG, i.e. from the one attribute that legitimately
+  changes. Both are written once at creation by `campaignIdentityColumns`
+  (`src/lib/campaign-identity.ts`) — every `insert(campaigns)` goes through it, so a new write site
+  cannot leave a row Postgres will not police. Nothing re-derives either at read time.
+- **The channel is named per FEATURE FAMILY, not per medium alone.** `cold_email` for the sales
+  funnels; every other product family names its own (`pr_cold_email`, `expert_quote_outreach`, …).
+  A bare `cold_email` for all of them would make a brand's PR cold-email campaign and its SALES
+  cold-email campaign one identity, so the second could never exist. An unknown feature gets its
+  own slug with `-` as `_` — a feature shipped later can never silently share another's identity.
+- **`uniq_campaigns_org_brand_funnel_channel`** enforces it, partial on `status='ongoing'`: a
+  stopped row is history, not a competitor for the brand's turn. `coalesce(funnel_key,'')` is
+  load-bearing — Postgres treats NULLs as distinct, so without it a brand could grow unlimited
+  funnel-less campaigns on one channel.
+- **`POST /campaigns` on an identity already alive UPDATES that campaign** to the requested
+  workflow + configuration and returns it `200`, instead of inserting a second row. The NAME is
+  deliberately left alone (it is the campaign's own label, unique per org, not a restatement of
+  which workflow runs). A create that loses a race on the index gets the winner back, not an error.
+- **Still open**: the 134 historical stopped rows that DO carry runs cannot be collapsed from here
+  — their history lives in runs-service, keyed on `campaign_id`, and repointing it is runs-service's
+  own ledger to move. Deleting them would orphan the history, which is the one thing never allowed.
+
+## The funnel of a brand that sells through several is UNKNOWN, and unknown never costs the working campaign its turn
+
+A funnel-less campaign is attributed to a funnel by reading the goal it runs on (its own, else the
+brand's) through `funnelForGoal`. A goal that spans several funnels — `combinedSales` — names none,
+by design: a stated funnel is a fact, never a guess.
+
+**While such a campaign is alive, the brand grows NO funnel campaigns** (`ensureFundedFunnelCampaigns`),
+and an empty stand-in already provisioned for one is dropped (`isRemovableStandIn` — provisioned
+name, zero runs, zero lifetime cost, fails CLOSED on any unreadable read). Standing one up beside an
+unattributable incumbent duplicates its work AND lets the pair spend both ceilings on top of the
+incumbent's, which paces on the brand-level pot billing answers as the SUM of exactly those funnels.
+Prod, brand `f4d73dab` 2026-08-02: goal `combinedSales`, two funded funnels, two empty campaigns
+provisioned at 09:53 beside a campaign carrying six weeks and 69,442 runs.
+
+## Brand serialization counts SALES runs only — a brand's PR run is not its sales outreach's business
+
+`hasLiveSalesRunForBrand` asks runs-service campaign by campaign, over the brand's `ongoing`
+sales-family campaigns. It must NOT be a brand-wide `listRuns({ brandId })`: runs of the brand's PR,
+AI-visibility, hiring and VC campaigns carry the same brand, so a brand whose PR outreach ticks
+continuously (736 completed runs in one morning, one always in flight) reads as permanently busy and
+EVERY sales campaign of that brand is deferred 60s, every tick, forever. That is a full stop, and it
+appears in no log at all because the defer is the routine path. The candidate set is read from the
+DB, not from the campaigns claimed this tick — the one actually running is precisely the one NOT
+claimed (its `nextRunAt` is null while in flight). (Set 2026-08-02.)
+
 The per-campaign audience SUBSET (`campaigns.audience_ids`, Campaign v2) is a HARD filter on the audience bandit (`requiredAudienceIds` in `selectAudienceFromProjection`): a campaign never contacts an audience outside its targeted subset (no fallback). NULL/empty → inherit the brand's full active audience set. (The old workflow-conditioning `eligibleAudienceIds` soft-filter was REMOVED in v0.44.1 — see the single-endpoint note below.) Distinct from the singular `audienceId` column (per-campaign attribution; the per-RUN chosen audience is re-selected fresh at /start-run).
 
 ## Commands

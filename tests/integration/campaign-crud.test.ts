@@ -28,15 +28,24 @@ describe("Campaign CRUD", () => {
   };
 
   /** Helper: create a campaign with all required headers */
-  function createCampaign(body: Record<string, unknown> = validBody, orgId = "org_test_crud") {
+  function createCampaign(
+    body: Record<string, unknown> = validBody,
+    orgId = "org_test_crud",
+    featureSlug = "sales-cold-email-v1",
+  ) {
     return request(app)
       .post("/campaigns")
       .set("x-api-key", API_KEY)
       .set("x-org-id", orgId)
       .set("x-user-id", "user_test_crud")
       .set("x-run-id", crypto.randomUUID())
-      .set("x-feature-slug", "sales-cold-email-v1")
+      .set("x-feature-slug", featureSlug)
       .send(body);
+  }
+
+  /** A brand nothing else in this test file is using — a fresh campaign identity. */
+  function freshBrand() {
+    return [crypto.randomUUID()];
   }
 
   describe("POST /campaigns", () => {
@@ -173,8 +182,31 @@ describe("Campaign CRUD", () => {
     it("should reject duplicate campaign name within same org with 409", async () => {
       await createCampaign().expect(201);
 
-      const res = await createCampaign().expect(409);
+      // A DIFFERENT identity (another brand) reusing the name — the name is what conflicts here.
+      // Re-posting the SAME identity is not a conflict at all; it switches that campaign's
+      // workflow, which is what the next test covers.
+      const res = await createCampaign({ ...validBody, brandIds: freshBrand() }).expect(409);
       expect(res.body.error).toBe("A campaign with this name already exists in your organization");
+    });
+
+    it("switches the workflow of the campaign that already IS this identity, never creating a second", async () => {
+      // (org, brand, funnel, channel) is the identity. The WORKFLOW is not part of it: a campaign
+      // changes workflow whenever selection picks a better one. Creating one per workflow is what
+      // grew a single brand 137 stopped rows, one per workflow version.
+      const brandIds = freshBrand();
+      const first = await createCampaign({ ...validBody, name: "Identity", brandIds }).expect(201);
+
+      const again = await createCampaign({
+        ...validBody,
+        name: "Identity — a later workflow",
+        brandIds,
+        workflowSlug: "sales-cold-email-outreach-osprey",
+      }).expect(200);
+
+      expect(again.body.campaign.id).toBe(first.body.campaign.id);
+      expect(again.body.campaign.workflowSlug).toBe("sales-cold-email-outreach-osprey");
+      // The name is the campaign's own label, not a restatement of which workflow runs.
+      expect(again.body.campaign.name).toBe("Identity");
     });
 
     it("should allow same campaign name in different orgs", async () => {
@@ -237,7 +269,7 @@ describe("Campaign CRUD", () => {
     it("should reject renaming to a name that already exists in the same org", async () => {
       await createCampaign().expect(201);
 
-      const res2 = await createCampaign({ ...validBody, name: "Other Campaign" }).expect(201);
+      const res2 = await createCampaign({ ...validBody, name: "Other Campaign", brandIds: freshBrand() }).expect(201);
 
       const renameRes = await request(app)
         .patch(`/campaigns/${res2.body.campaign.id}`)
@@ -361,7 +393,13 @@ describe("Campaign CRUD", () => {
     it("does NOT clobber a sibling campaign under the same brand", async () => {
       const sharedBrand = crypto.randomUUID();
       const a = await createCampaign({ ...validBody, name: "Sibling A", brandIds: [sharedBrand] }).expect(201);
-      const b = await createCampaign({ ...validBody, name: "Sibling B", brandIds: [sharedBrand] }).expect(201);
+      // Two campaigns CAN share a brand — on different acquisition channels. Same brand, same
+      // channel and same funnel would be one identity, so B runs a different feature.
+      const b = await createCampaign(
+        { ...validBody, name: "Sibling B", brandIds: [sharedBrand] },
+        "org_test_crud",
+        "sales-crm-email-outreach",
+      ).expect(201);
 
       // Configure A only.
       await patch(a.body.campaign.id, ownConfig).expect(200);
