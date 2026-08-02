@@ -5,6 +5,7 @@ import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveWorkflowSlugForTrigger } from "./features-workflow-projection-client.js";
 import { listRuns } from "@distribute/runs-client";
 import { notPausedBrandClause } from "./brand-pause.js";
+import { planFunnelTurns } from "./funnel-campaigns.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -102,12 +103,30 @@ export async function reRunDueCampaigns(): Promise<number> {
       brandProfileId: campaigns.brandProfileId,
       audienceId: campaigns.audienceId,
       goal: campaigns.goal,
+      funnelKey: campaigns.funnelKey,
     });
 
   if (dueCampaigns.length === 0) return 0;
 
+  // Per-funnel turn-taking. Provisions a campaign for every funded funnel of each brand,
+  // holds the brand to ONE run in flight, and hands the turn to the funded funnel with the
+  // lowest spent-today/ceiling ratio. Campaigns absent from the map fire as they always have —
+  // every non-sales campaign, and every brand with no per-funnel funding, is untouched.
+  const funnelDefers = await planFunnelTurns(dueCampaigns, now);
+
   for (const campaign of dueCampaigns) {
     try {
+      const funnelDefer = funnelDefers.get(campaign.id);
+      if (funnelDefer) {
+        await db
+          .update(campaigns)
+          .set({ nextRunAt: funnelDefer, updatedAt: new Date() })
+          .where(eq(campaigns.id, campaign.id));
+        // Not logged: this fires every tick for every funnel that did not take its brand's
+        // turn, across every client. The decision is observable in the persisted nextRunAt.
+        continue;
+      }
+
       const missingFields: string[] = [];
       if (!campaign.brandIds || campaign.brandIds.length === 0) missingFields.push("brandIds");
       if (!campaign.createdByUserId) missingFields.push("createdByUserId");
