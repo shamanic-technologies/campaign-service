@@ -5,9 +5,11 @@ import { funnelForGoal } from "./sales-funnel-vocabulary.js";
 /**
  * Which funnel a campaign that states none is already running.
  *
- * A campaign's goal is its own when it states one, and the brand's otherwise — the same
- * resolution the runtime uses at /start-run. Read once here so the funnel can be WRITTEN onto
- * the campaign row; nothing downstream re-derives it.
+ * The ONE place a goal is still read as a funnel, and only for campaigns that predate funnels:
+ * a campaign's goal is its own when it states one, and the brand's otherwise — the same
+ * resolution the runtime uses at /start-run. Read once here so the canonical funnel can be
+ * WRITTEN onto the campaign row; nothing downstream re-derives it, and after the row states its
+ * funnel this function is never consulted for it again.
  *
  * Returns null when the goal names no single funnel. A campaign whose funnel cannot be
  * determined keeps a NULL funnel: a stated funnel is a fact, never a guess.

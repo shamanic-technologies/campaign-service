@@ -81,7 +81,7 @@ describe("backfillCampaignFunnelKeys", () => {
 
     const result = await backfillCampaignFunnelKeys();
 
-    expect(mockUpdateSet).toHaveBeenCalledWith({ funnelKey: "visit_form" });
+    expect(mockUpdateSet).toHaveBeenCalledWith({ funnelKey: "form_magnet" });
     expect(result).toEqual({ scanned: 1, stamped: 1, undetermined: 0 });
   });
 
@@ -91,7 +91,7 @@ describe("backfillCampaignFunnelKeys", () => {
 
     await backfillCampaignFunnelKeys();
 
-    expect(mockUpdateSet).toHaveBeenCalledWith({ funnelKey: "reply_meeting" });
+    expect(mockUpdateSet).toHaveBeenCalledWith({ funnelKey: "sales_meetings_from_conversation" });
   });
 
   it("reads brand-service ONCE per (org, brand) pair, not once per campaign", async () => {
