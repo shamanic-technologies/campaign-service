@@ -52,6 +52,35 @@ describe('No Legacy Patterns - CRITICAL', () => {
     ).toHaveLength(0);
   });
 
+  it('should NOT read a goal off brand-service, except the brand-level currentGoal', () => {
+    // brand-service retired the goal set: the funnel is the only word it emits for what a brand
+    // sells. Reading a goal off a DECLARED FUNNEL is what silently stopped every funnel campaign
+    // being provisioned. The one goal-shaped read that survives is the brand's own currentGoal on
+    // /runtime-context, which brand-service deliberately still serves for brands with one pot.
+    const client = fs.readFileSync(
+      path.join(srcDir, 'lib/brand-sales-funnels-client.ts'),
+      'utf-8',
+    );
+    const code = client
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('*') && !l.trimStart().startsWith('/*') && !l.trimStart().startsWith('//'))
+      .join('\n');
+
+    expect(code).not.toMatch(/\bgoal\b/);
+    expect(code).not.toMatch(/\bcurrentGoal\b/);
+  });
+
+  it('should emit only the canonical funnel vocabulary from the funnel map', () => {
+    // The pre-rename spellings are ACCEPTED forever on the way in (billing still sends them) and
+    // never emitted. A canonical key is what gets stored and what a consumer reads.
+    const vocab = fs.readFileSync(path.join(srcDir, 'lib/sales-funnel-vocabulary.ts'), 'utf-8');
+    const maps = vocab.slice(vocab.indexOf('const FUNNEL_BY_GOAL'));
+
+    for (const preRename of ['visit_form', 'reply_meeting', 'visit_meeting', 'visit_signup']) {
+      expect(maps).not.toContain(`"${preRename}"`);
+    }
+  });
+
   it('should NOT have brandUrl query parameter filtering in routes', () => {
     const routesDir = path.join(srcDir, 'routes');
     const files = getAllTsFiles(routesDir);

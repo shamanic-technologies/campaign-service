@@ -6,6 +6,7 @@ import { fetchFunnelBudgets, fundedFunnels, type FunnelBudget } from "./funnel-b
 import { fetchDeclaredSalesFunnels, type DeclaredSalesFunnel } from "./brand-sales-funnels-client.js";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
 import { readBrandGoal, resolveCampaignFunnelKey } from "./funnel-adoption.js";
+import { acceptedFunnelKeys, goalForFunnel, toFunnelKey } from "./sales-funnel-vocabulary.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
 // re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
@@ -174,14 +175,18 @@ async function planOneBrand(
   // against the ceiling that actually binds IT, so nothing starves and nothing overspends.
   const candidates: FunnelTurnCandidate[] = [];
   for (const c of group) {
+    // A row written before the rename still carries the pre-rename spelling until migration 0043
+    // reaches it — and a mixed fleet must rank on one vocabulary or a funnel silently loses its
+    // ceiling and never takes a turn.
+    const canonical = toFunnelKey(c.funnelKey);
     candidates.push({
       campaignId: c.id,
-      funnelKey: c.funnelKey ?? "",
+      funnelKey: canonical ?? "",
       spentCents: await spentTodayCents(orgId, c.id, featureSlug),
       // A campaign on a funnel the customer does not fund gets a zero ceiling and yields its
       // turn — that is the customer's funding decision, enforced fail-closed in the gate, and
       // it re-checks every tick because funding can change at any minute.
-      ceilingCents: c.funnelKey ? (ceilingByFunnel.get(c.funnelKey) ?? 0) : brandCeilingCents,
+      ceilingCents: canonical ? (ceilingByFunnel.get(canonical) ?? 0) : brandCeilingCents,
     });
   }
 
@@ -206,13 +211,15 @@ async function planOneBrand(
  * months of runs and every cost attributed to it. Standing up a second, empty campaign beside it
  * left the working one looking dead and the live one looking like it had produced nothing.
  *
- * The campaign carries the funnel's OWN goal, which is also what stops it being goal-arbitrated:
- * a campaign that states its own goal is never arbitrated, so features-service keeps answering
- * the best workflow and the per-audience evidence — scoped to the funnel being run — and stops
- * being the thing that chooses which funnel runs. The customer's funding decides that.
+ * The campaign STATES its funnel, and that is the whole statement of what it sells. It also
+ * carries the goal that funnel corresponds to — a legacy alias for consumers still reading a goal
+ * off our rows, and what stops the campaign being goal-arbitrated: a campaign that states its own
+ * goal is never arbitrated, so features-service keeps answering the best workflow and the
+ * per-audience evidence and stops being the thing that chooses which funnel runs. The customer's
+ * funding decides that.
  *
- * A funnel billing funds but brand-service does not declare (or declares inactive) is skipped:
- * there is no goal to pace it on, and a switched-off funnel must never be worked.
+ * A funnel billing funds but brand-service does not declare (or declares inactive) is skipped: a
+ * switched-off funnel must never be worked, whatever ceiling billing still holds for it.
  */
 async function ensureFundedFunnelCampaigns({
   seed,
@@ -229,12 +236,12 @@ async function ensureFundedFunnelCampaigns({
   declared: DeclaredSalesFunnel[] | null;
   now: Date;
 }): Promise<void> {
-  // No readable funnel declaration → no goal to pace a new campaign on. Provisioning waits;
-  // whatever campaigns already exist keep running.
+  // No readable funnel declaration → nothing says the brand still sells through these funnels.
+  // Provisioning waits; whatever campaigns already exist keep running.
   if (!declared || declared.length === 0) return;
   if (!seed.createdByUserId) return; // no recipient/owner to attribute a new campaign to
 
-  const goalByFunnel = new Map(declared.map((f) => [f.funnelKey, f.goal]));
+  const declaredKeys = new Set(declared.map((f) => f.funnelKey));
 
   // The brand's goal is what tells us which funnel a campaign that states none is already
   // working. Read at most once per brand per tick, and only when there is something to adopt.
@@ -253,8 +260,10 @@ async function ensureFundedFunnelCampaigns({
   };
 
   for (const f of funded) {
-    const goal = goalByFunnel.get(f.funnelKey);
-    if (!goal) continue;
+    if (!declaredKeys.has(f.funnelKey)) continue;
+    // The goal the funnel corresponds to — a legacy alias for consumers still reading one, and
+    // what keeps this campaign out of goal arbitration. Never read back to find the funnel.
+    const goal = goalForFunnel(f.funnelKey);
 
     const existing = await db.query.campaigns.findFirst({
       where: and(
@@ -323,7 +332,8 @@ async function ensureFundedFunnelCampaigns({
         brandIds: [brandId],
         featureSlug,
         funnelKey: f.funnelKey,
-        // The funnel's own goal — forwarded verbatim from brand-service, never mapped.
+        // The funnel says what this campaign sells. `goal` is the legacy alias of that same
+        // statement, kept for consumers still reading one.
         goal,
         featureInputs: null,
         status: "ongoing",
@@ -405,10 +415,12 @@ async function isRemovableStandIn(
   brandId: string,
   featureSlug: string,
 ): Promise<boolean> {
+  // Both vocabularies: a stand-in provisioned before the funnel rename carries the pre-rename
+  // spelling in its NAME, and migration 0043 rewrites those names — but a replica running the old
+  // code between the two would recreate one. Accepting both costs nothing and never widens what
+  // is removable: every other condition still has to hold.
   const provisionedNames = new Set(
-    ["reply_meeting", "visit_meeting", "visit_signup", "visit_form"].map((k) =>
-      funnelCampaignName(featureSlug, brandId, k),
-    ),
+    acceptedFunnelKeys().map((k) => funnelCampaignName(featureSlug, brandId, k)),
   );
   if (!provisionedNames.has(existing.name)) return false;
 

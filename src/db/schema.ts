@@ -84,20 +84,29 @@ export const campaigns = pgTable(
     // against runs-service *CostInUsdCents and billing's brand dailyBudgetCents — no ×100.
     dailyBudgetCents: integer("daily_budget_cents"),
 
-    // The sales funnel this campaign works, in brand-service's funnel vocabulary
-    // (reply_meeting | visit_meeting | visit_signup | visit_form). A customer funds each of a
-    // brand's funnels separately (billing-service brand_funnel_budgets), so a funded funnel gets
-    // its OWN campaign: the cost ledger is already keyed on campaignId, which makes "how much did
-    // this funnel spend today" answerable without a new attribution dimension.
+    // The sales funnel this campaign works — the ONE word for what this campaign sells, in
+    // brand-service's canonical vocabulary (sales_meetings_from_conversation |
+    // sales_meetings_from_website | website_purchases | form_magnet). A consumer reads what a
+    // campaign buys HERE and needs no translation table: `goal` above cannot tell a meeting won
+    // from a reply apart from one won on the website, and that is why the goal set was retired.
+    //
+    // A customer funds each of a brand's funnels separately (billing-service
+    // brand_funnel_budgets), so a funded funnel gets its OWN campaign: the cost ledger is already
+    // keyed on campaignId, which makes "how much did this funnel spend today" answerable without
+    // a new attribution dimension.
     //
     // NULL = not funnel-scoped. Every campaign that predates per-funnel funding keeps NULL and
     // paces exactly as before (own dailyBudgetCents, else the brand-level daily budget — which
     // billing still answers as the SUM of the per-funnel ceilings). A brand that never declares
     // per-funnel ceilings never grows funnel campaigns.
     //
-    // A funnel campaign carries the funnel's OWN goal in `goal`, which is why it is never
-    // goal-arbitrated: the customer's funding decided which funnel runs, so features-service is
-    // asked only for the best workflow and the audience evidence FOR THAT funnel's goal.
+    // A funnel campaign also carries that funnel's goal in `goal` — a legacy alias of the same
+    // statement, for consumers that have not migrated — which is why it is never goal-arbitrated:
+    // the customer's funding decided which funnel runs, so features-service is asked only for the
+    // best workflow and the audience evidence.
+    //
+    // Values are canonical past migration 0043; `toFunnelKey` in sales-funnel-vocabulary.ts still
+    // resolves the pre-rename spellings, because billing-service emits them to this day.
     funnelKey: text("funnel_key"),
 
     // Volume limit (optional, total leads across all runs)

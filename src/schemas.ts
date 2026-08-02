@@ -51,8 +51,11 @@ export const CampaignSchema = z.object({
   maxBudgetTotalUsd: z.string().nullable(),
   // Per-campaign daily budget for the sales feature (cents). Null = fall back to brand daily budget.
   dailyBudgetCents: z.number().int().nullable(),
-  // The sales funnel this campaign works, in brand-service's vocabulary (reply_meeting |
-  // visit_meeting | visit_signup | visit_form). Null = not funnel-scoped: the campaign paces on
+  // The sales funnel this campaign works — the ONE word for what it sells, in brand-service's
+  // vocabulary (sales_meetings_from_conversation | sales_meetings_from_website |
+  // website_purchases | form_magnet). A consumer reads what a campaign buys HERE; it never has to
+  // consult `goal`, which survives only as a legacy alias of the same statement and cannot tell
+  // the two meeting funnels apart. Null = not funnel-scoped: the campaign paces on
   // the brand-level daily budget as it always has. Set = the campaign is paced on THAT funnel's
   // own daily ceiling in billing, which is what makes a funnel's spend attributable to it.
   // Provisioned by this service from the funnels the customer funds — never set by a caller.

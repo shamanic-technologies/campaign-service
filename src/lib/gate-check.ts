@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { anyBrandPaused } from "./brand-pause.js";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
 import { fetchFunnelBudgets } from "./funnel-budget-client.js";
+import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 
 const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
 
@@ -258,7 +259,13 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
           if (blocked) return blocked;
           continue;
         }
-        const ceilingCents = budgets.funnels.find(f => f.funnelKey === campaign.funnelKey)?.dailyBudgetCents ?? null;
+        // Both sides are canonicalised — billing still names these funnels the pre-rename way and
+        // a campaign row written before migration 0043 does too, so comparing raw tokens would
+        // find no ceiling for a funnel that is fully funded and block it as unfunded.
+        const funnelKey = toFunnelKey(campaign.funnelKey);
+        const ceilingCents = funnelKey
+          ? budgets.funnels.find(f => f.funnelKey === funnelKey)?.dailyBudgetCents ?? null
+          : null;
         // A funnel funded at zero — or no longer funded at all — is never run. That is a
         // deliberate customer decision, not a missing value, so it is not a fallback to the
         // brand total: falling back would let an unfunded funnel spend another funnel's money.

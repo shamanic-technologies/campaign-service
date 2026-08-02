@@ -1,4 +1,5 @@
 import type { IdentityHeaders } from "@distribute/runs-client";
+import { toFunnelKey, type SalesFunnelKey } from "./sales-funnel-vocabulary.js";
 
 /**
  * Per-funnel daily spend ceilings, as billing-service holds them for ONE org's view of a brand.
@@ -14,8 +15,13 @@ import type { IdentityHeaders } from "@distribute/runs-client";
  * value — billing never fabricates a split, and neither do we.
  */
 export interface FunnelBudget {
-  /** brand-service's funnel vocabulary: reply_meeting | visit_meeting | visit_signup | visit_form. */
-  funnelKey: string;
+  /**
+   * Canonical funnel key. billing-service still names these funnels the pre-rename way
+   * (`reply_meeting`, `visit_meeting`, `visit_signup`, `visit_form`) while brand-service has moved
+   * to the canonical four — so this read canonicalises, and the two sets intersect again. Without
+   * that, every funnel would read as unfunded and the gate would stop the whole fleet.
+   */
+  funnelKey: SalesFunnelKey;
   /** This funnel's own daily ceiling, in CENTS (directly comparable to runs *CostInUsdCents). */
   dailyBudgetCents: number;
 }
@@ -81,7 +87,12 @@ export async function fetchFunnelBudgets(
       // An unparseable ceiling is not "no ceiling" — refuse the whole read rather than let one
       // funnel silently pace on nothing.
       if (!Number.isFinite(cents)) return { ok: false };
-      funnels.push({ funnelKey: raw.funnelKey, dailyBudgetCents: cents });
+      // A funnel neither catalogue names is one no campaign of ours can be on, so it is dropped
+      // rather than refused: refusing would fail the read CLOSED and stop the funnels we DO run
+      // because billing named a fifth one we have not heard of yet.
+      const funnelKey = toFunnelKey(raw.funnelKey);
+      if (!funnelKey) continue;
+      funnels.push({ funnelKey, dailyBudgetCents: cents });
     }
 
     return { ok: true, brandDailyBudgetCents, funnels };
