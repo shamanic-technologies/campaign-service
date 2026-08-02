@@ -7,6 +7,7 @@ import { fetchDeclaredSalesFunnels, type DeclaredSalesFunnel } from "./brand-sal
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
 import { readBrandGoal, resolveCampaignFunnelKey } from "./funnel-adoption.js";
 import { acceptedFunnelKeys, goalForFunnel, toFunnelKey } from "./sales-funnel-vocabulary.js";
+import { campaignIdentityColumns } from "./campaign-identity.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
 // re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
@@ -81,10 +82,13 @@ export function selectLowestFillRatio(candidates: FunnelTurnCandidate[]): string
  * Three things happen per brand, in this order:
  *   1. Provision — every funded funnel of the brand gets its own campaign (created on the spot,
  *      due immediately, so the next tick can claim it).
- *   2. Serialize — at most ONE run in flight per BRAND. This is the deliberate constraint that
- *      keeps funnels from running concurrently; removing it is what unlocks parallelism later,
- *      and nothing else has to be undone for that. It is not a lock: the same runs-service
- *      liveness read the per-campaign guard already uses, widened to the brand.
+ *   2. Serialize — at most ONE run in flight per brand ACROSS ITS SALES CAMPAIGNS. This is the
+ *      deliberate constraint that keeps funnels from running concurrently; removing it is what
+ *      unlocks parallelism later, and nothing else has to be undone for that. It is not a lock:
+ *      the same runs-service liveness read the per-campaign guard already uses, asked of each of
+ *      the brand's sales campaigns. It deliberately does NOT count the brand's PR / AI-visibility
+ *      / hiring / VC runs — those share neither leads nor sending accounts, and counting them
+ *      stopped a brand's sales outreach outright (see hasLiveSalesRunForBrand).
  *   3. Rank — the funded funnel with the lowest spent/ceiling ratio takes the turn.
  *
  * Fail-SOFT throughout: any unreadable budget, funnel set or spend leaves the brand on today's
@@ -154,10 +158,10 @@ async function planOneBrand(
   const declared = await fetchDeclaredSalesFunnels(brandId, identity);
   await ensureFundedFunnelCampaigns({ seed, brandId, featureSlug, funded, declared, now });
 
-  // Serial, for now: at most one run in flight per brand. Running funnels concurrently needs an
-  // audit of lead de-duplication and of sending-account load that nobody has done, so it is
+  // Serial, for now: at most one SALES run in flight per brand. Running funnels concurrently needs
+  // an audit of lead de-duplication and of sending-account load that nobody has done, so it is
   // deliberately out of scope — delete this block and the funnels run in parallel.
-  if (await hasLiveRunForBrand(orgId, brandId, now)) {
+  if (await hasLiveSalesRunForBrand(orgId, brandId, now)) {
     for (const c of group) deferred.set(c.id, new Date(now.getTime() + FUNNEL_TURN_DEFER_MS));
     return;
   }
@@ -243,21 +247,46 @@ async function ensureFundedFunnelCampaigns({
 
   const declaredKeys = new Set(declared.map((f) => f.funnelKey));
 
+  // Every alive campaign of this (org, brand, feature) that has not yet stated a funnel, oldest
+  // first — the oldest is the one carrying the history, the spend and the results.
+  const funnelless = await db.query.campaigns.findMany({
+    where: and(
+      eq(campaigns.orgId, seed.orgId),
+      eq(campaigns.featureSlug, featureSlug),
+      eq(campaigns.status, "ongoing"),
+      isNull(campaigns.funnelKey),
+      arrayContains(campaigns.brandIds, [brandId]),
+    ),
+    orderBy: [asc(campaigns.createdAt)],
+  });
+
   // The brand's goal is what tells us which funnel a campaign that states none is already
   // working. Read at most once per brand per tick, and only when there is something to adopt.
-  let brandGoal: string | null | undefined;
-  const brandGoalOnce = async (): Promise<string | null> => {
-    if (brandGoal === undefined) {
-      brandGoal = await readBrandGoal(brandId, {
+  const brandGoal = funnelless.length > 0
+    ? await readBrandGoal(brandId, {
         orgId: seed.orgId,
         userId: seed.createdByUserId,
         campaignId: seed.id,
         workflowSlug: seed.workflowSlug,
         featureSlug,
-      });
+      })
+    : null;
+
+  const incumbentByFunnel = new Map<string, { id: string }>();
+  // A funnel-less campaign whose goal names no single funnel — the brand sells through several
+  // (`combinedSales`), or the goal stops short of a paid client. We do NOT guess which funnel it
+  // works: the funnel is a stored fact, not an inference. But "unknown" must not mean the working
+  // campaign loses its turn to an empty one, so while such a campaign is alive this brand grows NO
+  // new funnel campaigns — see the provisioning branch below.
+  let hasUnattributableIncumbent = false;
+  for (const c of funnelless) {
+    const key = resolveCampaignFunnelKey(c.goal, brandGoal);
+    if (!key) {
+      hasUnattributableIncumbent = true;
+      continue;
     }
-    return brandGoal;
-  };
+    if (!incumbentByFunnel.has(key)) incumbentByFunnel.set(key, c);
+  }
 
   for (const f of funded) {
     if (!declaredKeys.has(f.funnelKey)) continue;
@@ -278,14 +307,7 @@ async function ensureFundedFunnelCampaigns({
     // Whichever alive campaign is already doing this funnel's work owns the funnel — the oldest
     // one, i.e. the one carrying the history. Checked even when a funnel campaign exists, so a
     // brand that already grew an empty duplicate is repaired rather than left with two.
-    const incumbent = await findIncumbentForFunnel({
-      orgId: seed.orgId,
-      brandId,
-      featureSlug,
-      funnelKey: f.funnelKey,
-      excludeId: existing?.id,
-      brandGoalOnce,
-    });
+    const incumbent = incumbentByFunnel.get(f.funnelKey) ?? null;
 
     if (incumbent) {
       await db
@@ -302,6 +324,26 @@ async function ensureFundedFunnelCampaigns({
         console.log(
           `[campaign-service] funnel ${f.funnelKey} of brand ${brandId}: kept campaign ${incumbent.id} ` +
           `(its own history) and dropped the empty stand-in ${existing.id} (never ran, never spent)`,
+        );
+      }
+      continue;
+    }
+
+    // The brand sells through several funnels and the campaign already doing the work does not say
+    // which. Standing a funnel campaign up beside it would duplicate its work AND let the pair
+    // spend both ceilings on top of each other — the incumbent paces on the brand-level pot, which
+    // billing answers as the SUM of exactly these funnels. So nothing new is provisioned while the
+    // ambiguity lasts; the working campaign keeps running on that pot, exactly as it did before
+    // per-funnel funding existed. An empty stand-in this bug already produced is dropped here.
+    if (hasUnattributableIncumbent) {
+      if (existing && (await isRemovableStandIn(existing, seed.orgId, brandId, featureSlug))) {
+        await db
+          .delete(campaigns)
+          .where(and(eq(campaigns.id, existing.id), eq(campaigns.orgId, seed.orgId)));
+        console.log(
+          `[campaign-service] funnel ${f.funnelKey} of brand ${brandId}: dropped the empty stand-in ` +
+          `${existing.id} (never ran, never spent) — the brand's alive campaign states no funnel and ` +
+          `its goal names no single one, so nothing is provisioned beside it`,
         );
       }
       continue;
@@ -330,6 +372,7 @@ async function ensureFundedFunnelCampaigns({
         name,
         workflowSlug: seed.workflowSlug,
         brandIds: [brandId],
+        ...campaignIdentityColumns({ brandIds: [brandId], featureSlug }),
         featureSlug,
         funnelKey: f.funnelKey,
         // The funnel says what this campaign sells. `goal` is the legacy alias of that same
@@ -352,52 +395,6 @@ async function ensureFundedFunnelCampaigns({
 
 export function funnelCampaignName(featureSlug: string, brandId: string, funnelKey: string): string {
   return `${featureSlug} - ${brandId} - ${funnelKey}`;
-}
-
-/**
- * The alive campaign already doing this funnel's work and not yet stating it.
- *
- * "Already doing this funnel's work" is decided by the goal the campaign runs on — its own when
- * it states one, the brand's otherwise — read through the funnel vocabulary. The OLDEST match
- * wins: it is the one carrying the history, the spend and the results.
- *
- * Only `ongoing` campaigns are adopted. A stopped campaign is not doing the funnel's work, and
- * adopting one would restart something the customer switched off.
- */
-async function findIncumbentForFunnel({
-  orgId,
-  brandId,
-  featureSlug,
-  funnelKey,
-  excludeId,
-  brandGoalOnce,
-}: {
-  orgId: string;
-  brandId: string;
-  featureSlug: string;
-  funnelKey: string;
-  excludeId?: string;
-  brandGoalOnce: () => Promise<string | null>;
-}): Promise<{ id: string } | null> {
-  const funnelless = await db.query.campaigns.findMany({
-    where: and(
-      eq(campaigns.orgId, orgId),
-      eq(campaigns.featureSlug, featureSlug),
-      eq(campaigns.status, "ongoing"),
-      isNull(campaigns.funnelKey),
-      arrayContains(campaigns.brandIds, [brandId]),
-    ),
-    orderBy: [asc(campaigns.createdAt)],
-  });
-
-  const candidates = funnelless.filter((c) => c.id !== excludeId);
-  if (candidates.length === 0) return null;
-
-  const brandGoal = await brandGoalOnce();
-  for (const c of candidates) {
-    if (resolveCampaignFunnelKey(c.goal, brandGoal) === funnelKey) return { id: c.id };
-  }
-  return null;
 }
 
 /**
@@ -470,19 +467,50 @@ async function spentTodayCents(orgId: string, campaignId: string, featureSlug: s
 }
 
 // Same "alive" definition the per-campaign guard uses (any running run within the freshness
-// window, whichever service owns it), widened from the campaign to the BRAND. Runs are tagged
-// with the campaign's brandId CSV, which for a funnel campaign is the single brand.
+// window, whichever service owns it), widened from the campaign to the brand's SALES campaigns.
 const LIVE_RUN_FRESHNESS_MS = 15 * 60_000;
 
-async function hasLiveRunForBrand(orgId: string, brandId: string, now: Date): Promise<boolean> {
-  const { runs } = await listRuns({
-    orgId,
-    brandId,
-    status: "running",
-    startedAfter: new Date(now.getTime() - LIVE_RUN_FRESHNESS_MS).toISOString(),
-    limit: 1,
+/**
+ * Is one of this brand's SALES campaigns running right now?
+ *
+ * Asked campaign by campaign, and that is the whole point: a brand-wide `listRuns({ brandId })`
+ * also counts the runs of the brand's PR, AI-visibility, hiring and VC campaigns, which are tagged
+ * with the same brand. A brand whose PR outreach ticks continuously — 736 completed runs in one
+ * morning, one always in flight — then reads as permanently busy, so EVERY sales campaign of that
+ * brand is deferred 60s, every tick, forever. That is not a slowdown: it is a full stop, and it
+ * shows up in no log at all because the defer is the routine path. It halted brand
+ * f4d73dab-1f9d-49b2-b16e-63ecde76a5eb outright (prod, 2026-08-02).
+ *
+ * The constraint this serialization exists for is about SALES funnels sharing leads and sending
+ * accounts. A PR pitch shares neither, so it was never meant to hold a sales funnel back.
+ *
+ * The candidate set is read from the DB rather than from the campaigns claimed this tick: the one
+ * that is actually running is precisely the one NOT claimed (its nextRunAt is null while in
+ * flight), so a group-scoped check would be blind to it.
+ */
+async function hasLiveSalesRunForBrand(orgId: string, brandId: string, now: Date): Promise<boolean> {
+  const alive = await db.query.campaigns.findMany({
+    where: and(
+      eq(campaigns.orgId, orgId),
+      eq(campaigns.status, "ongoing"),
+      arrayContains(campaigns.brandIds, [brandId]),
+    ),
+    columns: { id: true, featureSlug: true },
   });
-  return runs.length > 0;
+
+  const startedAfter = new Date(now.getTime() - LIVE_RUN_FRESHNESS_MS).toISOString();
+  for (const c of alive) {
+    if (!isSalesOutreachFeature(c.featureSlug)) continue;
+    const { runs } = await listRuns({
+      orgId,
+      campaignId: c.id,
+      status: "running",
+      startedAfter,
+      limit: 1,
+    });
+    if (runs.length > 0) return true;
+  }
+  return false;
 }
 
 function startOfToday(): Date {

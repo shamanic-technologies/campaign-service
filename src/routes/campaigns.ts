@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, desc, inArray, isNull } from "drizzle-orm";
 import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
@@ -9,6 +9,7 @@ import { CreateCampaignBody, UpdateCampaignBody, CampaignsFilterQuery } from "..
 import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
+import { campaignIdentityColumns } from "../lib/campaign-identity.js";
 
 const router = Router();
 
@@ -160,9 +161,89 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       }, req.headers).catch(() => {});
     }
 
+    // A campaign is unique on (org, brand, sales funnel, acquisition channel). The WORKFLOW is not
+    // part of that identity: a campaign changes workflow whenever selection picks a better one, and
+    // it is not replaced by a new campaign each time it does. Creating one per workflow is what grew
+    // a single brand 137 rows — one per workflow version — each holding a slice of a history nobody
+    // could read as one campaign. So a create that names an identity already alive UPDATES that
+    // campaign to the requested workflow and configuration and hands it back.
+    const identity = campaignIdentityColumns({ brandIds, featureSlug: resolvedFeatureSlug });
+    const incumbent = identity.brandId && identity.acquisitionChannel
+      ? await db.query.campaigns.findFirst({
+          where: and(
+            eq(campaigns.orgId, req.orgId!),
+            eq(campaigns.status, "ongoing"),
+            eq(campaigns.brandId, identity.brandId),
+            eq(campaigns.acquisitionChannel, identity.acquisitionChannel),
+            // This route never states a funnel, so the identity it names is the funnel-less one.
+            isNull(campaigns.funnelKey),
+          ),
+          orderBy: [campaigns.createdAt],
+        })
+      : null;
+
+    if (incumbent) {
+      // Only what the caller actually sent moves. The NAME is deliberately left alone: it is the
+      // campaign's own label (and unique per org), not a restatement of which workflow is running.
+      const [updated] = await db
+        .update(campaigns)
+        .set({
+          workflowSlug,
+          ...(featureInputs !== undefined ? { featureInputs } : {}),
+          ...(activeGoalId !== undefined ? { activeGoalId } : {}),
+          ...(brandProfileId !== undefined ? { brandProfileId } : {}),
+          ...(audienceId !== undefined ? { audienceId } : {}),
+          ...(goal !== undefined ? { goal } : {}),
+          ...(audienceIds !== undefined ? { audienceIds } : {}),
+          ...(servicesOffered !== undefined ? { servicesOffered } : {}),
+          ...(clickDestinationUrl !== undefined ? { clickDestinationUrl } : {}),
+          ...(maxBudgetDailyUsd !== undefined ? { maxBudgetDailyUsd } : {}),
+          ...(maxBudgetWeeklyUsd !== undefined ? { maxBudgetWeeklyUsd } : {}),
+          ...(maxBudgetMonthlyUsd !== undefined ? { maxBudgetMonthlyUsd } : {}),
+          ...(maxBudgetTotalUsd !== undefined ? { maxBudgetTotalUsd } : {}),
+          ...(dailyBudgetCents !== undefined ? { dailyBudgetCents } : {}),
+          ...(maxLeads !== undefined ? { maxLeads } : {}),
+          ...(startDate !== undefined ? { startDate } : {}),
+          ...(endDate !== undefined ? { endDate } : {}),
+          ...(notifyFrequency !== undefined ? { notifyFrequency } : {}),
+          ...(notifyChannel !== undefined ? { notifyChannel } : {}),
+          ...(notifyDestination !== undefined ? { notifyDestination } : {}),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(campaigns.id, incumbent.id), eq(campaigns.orgId, req.orgId!)))
+        .returning();
+
+      if (req.runId) {
+        traceEvent(req.runId, {
+          service: "campaign-service",
+          event: "campaign-workflow-changed",
+          detail: `Campaign ${updated.id} already runs this (brand, funnel, channel) — switched its workflow to "${workflowSlug}" instead of creating a second campaign`,
+          data: { campaignId: updated.id, workflowSlug, brandId: identity.brandId, acquisitionChannel: identity.acquisitionChannel },
+        }, req.headers).catch(() => {});
+      }
+
+      executeCampaignWorkflow(updated.workflowSlug, {
+        campaignId: updated.id,
+        orgId: req.orgId!,
+        brandId: (updated.brandIds ?? []).join(","),
+        userId: req.userId!,
+        runId: req.runId!,
+        featureSlug: updated.featureSlug!,
+        activeGoalId: updated.activeGoalId,
+        brandProfileId: updated.brandProfileId,
+        audienceId: updated.audienceId,
+      }).catch((err) => {
+        console.error(`[campaign-service] Failed to trigger workflow for campaign ${updated.id}:`, err);
+      });
+
+      wakeScheduler();
+      return res.status(200).json({ campaign: updated });
+    }
+
     const [campaign] = await db
       .insert(campaigns)
       .values({
+        ...identity,
         orgId: req.orgId!,
         createdByUserId: req.userId ?? null,
         parentRunId: req.runId ?? null,
@@ -223,8 +304,23 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
 
     res.status(201).json({ campaign });
   } catch (error: any) {
-    if (error?.code === "23505" && (error?.constraint === "uniq_campaigns_org_name" || error?.constraint_name === "uniq_campaigns_org_name")) {
+    const constraint = error?.constraint ?? error?.constraint_name;
+    if (error?.code === "23505" && constraint === "uniq_campaigns_org_name") {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
+    }
+    // Two creates raced the same identity. The loser does not get a second campaign for it — the
+    // one that won IS this identity's campaign, so hand that one back rather than an error.
+    if (error?.code === "23505" && constraint === "uniq_campaigns_org_brand_funnel_channel") {
+      const winner = await db.query.campaigns.findFirst({
+        where: and(
+          eq(campaigns.orgId, req.orgId!),
+          eq(campaigns.status, "ongoing"),
+          eq(campaigns.brandId, (req.body.brandIds as string[])[0]),
+          isNull(campaigns.funnelKey),
+        ),
+        orderBy: [campaigns.createdAt],
+      });
+      if (winner) return res.status(200).json({ campaign: winner });
     }
     console.error("[campaign-service] Create campaign error:", error);
     res.status(500).json({ error: "Internal server error" });

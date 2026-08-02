@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb, boolean, primaryKey } from "drizzle-orm/pg-core";
 
 // Campaigns table
@@ -19,6 +20,19 @@ export const campaigns = pgTable(
     // Brand IDs from brand-service (CSV in x-brand-id header, stored as array)
     // Nullable initially, populated when brands are created/found in brand-service
     brandIds: text("brand_ids").array(),
+
+    // The brand this campaign works — HALF THE IDENTITY KEY, and the reason it exists beside the
+    // array above: no unique index can span a `text[]`, so Postgres could not police
+    // one-campaign-per-(org, brand, funnel, channel) at all while the brand was only ever an array.
+    // The reality is one brand per campaign; this states it. Written once at creation from
+    // brandIds[0] (see campaignIdentityColumns) — the historical multi-brand rows are all stopped.
+    brandId: text("brand_id"),
+
+    // The medium this campaign acquires through — the OTHER half of the key that was not a stored
+    // fact: consumers derived it from the workflow slug, i.e. from the one attribute that
+    // legitimately changes under a campaign. Derived ONCE from the feature at creation
+    // (`acquisitionChannelForFeature`) and read here afterwards; nothing re-derives it.
+    acquisitionChannel: text("acquisition_channel"),
 
     // Feature slug — references features-service catalogue (e.g. "sales-cold-email-outreach")
     featureSlug: text("feature_slug"),
@@ -132,6 +146,15 @@ export const campaigns = pgTable(
     index("idx_campaigns_org").on(table.orgId),
     uniqueIndex("uniq_campaigns_org_name").on(table.orgId, table.name),
     index("idx_campaigns_org_feature_funnel").on(table.orgId, table.featureSlug, table.funnelKey),
+    // A campaign is unique on (org, brand, sales funnel, acquisition channel) — see migration 0044.
+    // Scoped to `ongoing`: a stopped row is history, not a competitor for the brand's turn.
+    // `coalesce(funnel_key, '')` is load-bearing — Postgres treats NULLs as distinct, so without it
+    // a brand could grow unlimited funnel-less campaigns on one channel.
+    uniqueIndex("uniq_campaigns_org_brand_funnel_channel")
+      .on(table.orgId, table.brandId, sql`coalesce(${table.funnelKey}, '')`, table.acquisitionChannel)
+      .where(
+        sql`${table.status} = 'ongoing' and ${table.brandId} is not null and ${table.acquisitionChannel} is not null`,
+      ),
   ]
 );
 
