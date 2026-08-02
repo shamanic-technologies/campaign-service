@@ -581,7 +581,11 @@ describe("Gate Check", () => {
       });
     }
 
-    function funnelCampaign(funnelKey = "visit_signup") {
+    // The campaign row states its funnel in the CANONICAL vocabulary while billing-service still
+    // names the same funnels the pre-rename way. Every case below therefore crosses that gap: if
+    // the two spellings stopped resolving to one key, a fully-funded funnel would read as
+    // unfunded and the campaign would stop sending.
+    function funnelCampaign(funnelKey = "website_purchases") {
       return makeCampaign({ brandIds: ["brand-1"], funnelKey });
     }
 
@@ -612,6 +616,19 @@ describe("Gate Check", () => {
       mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
 
       const result = await runGateChecks(funnelCampaign());
+      expect(result.allowed).toBe(true);
+    });
+
+    it("finds its ceiling for a row still on a pre-rename key", async () => {
+      // Both directions of the gap: this row has not met migration 0043 yet, and billing names
+      // the funnel the old way too. It is funded, so it must be allowed to spend.
+      mockFunnelBudgets([{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }]);
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "10" }]),
+      );
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
+
+      const result = await runGateChecks(funnelCampaign("visit_signup"));
       expect(result.allowed).toBe(true);
     });
 

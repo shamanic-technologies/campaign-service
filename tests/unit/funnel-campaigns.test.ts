@@ -87,6 +87,9 @@ function claimed(overrides: Partial<ClaimedFunnelCampaign> = {}): ClaimedFunnelC
   };
 }
 
+// billing-service still names these funnels the PRE-RENAME way, so every test below feeds this
+// mock the legacy spellings on purpose: the two producers disagree in production today, and the
+// canonicalisation is what keeps a fully-funded funnel from reading as unfunded.
 function mockFunnelBudgets(funnels: Array<{ funnelKey: string; dailyBudgetCents: string }>) {
   mockFetch.mockResolvedValueOnce({
     ok: true,
@@ -98,12 +101,23 @@ function mockFunnelBudgets(funnels: Array<{ funnelKey: string; dailyBudgetCents:
   });
 }
 
-function mockDeclaredFunnels(funnels: Array<{ funnelKey: string; goal: string; active?: boolean }>) {
+// brand-service has retired the goal set: a declared funnel carries its KEY and nothing that
+// names a goal. This mock emits exactly that shape, so a re-introduced goal read would fail here.
+function mockDeclaredFunnels(funnels: Array<{ funnelKey: string; active?: boolean }>) {
   mockFetch.mockResolvedValueOnce({
     ok: true,
     json: async () => ({
-      declared: funnels.length > 0,
-      funnels: funnels.map(f => ({ ...f, active: f.active ?? true, currentGoal: f.goal })),
+      funnels: funnels.map(f => ({
+        funnelKey: f.funnelKey,
+        active: f.active ?? true,
+        name: f.funnelKey,
+        steps: [],
+        rates: {},
+        lifetimeRevenueUsd: null,
+        destinationUrl: null,
+        bookingUrl: null,
+        updatedAt: "2026-08-02T00:00:00.000Z",
+      })),
     }),
   });
 }
@@ -125,8 +139,8 @@ describe("selectLowestFillRatio", () => {
   it("hands the turn to the funnel that has filled the least of its own ceiling", () => {
     // The bigger absolute spend is the EMPTIER funnel relative to what it can absorb.
     const winner = selectLowestFillRatio([
-      { campaignId: "a", funnelKey: "reply_meeting", spentCents: 800, ceilingCents: 1000 },
-      { campaignId: "b", funnelKey: "visit_signup", spentCents: 900, ceilingCents: 5000 },
+      { campaignId: "a", funnelKey: "sales_meetings_from_conversation", spentCents: 800, ceilingCents: 1000 },
+      { campaignId: "b", funnelKey: "website_purchases", spentCents: 900, ceilingCents: 5000 },
     ]);
     expect(winner).toBe("b");
   });
@@ -134,16 +148,16 @@ describe("selectLowestFillRatio", () => {
   it("is not a fixed order — a funnel that can absorb the whole day never starves the others", () => {
     // First in the list, huge ceiling, nothing spent: under a fixed order it would take every
     // turn. It takes this one, and once it has filled 10% the smaller funnel wins the next.
-    const big = { campaignId: "big", funnelKey: "reply_meeting", spentCents: 0, ceilingCents: 100_000 };
-    const small = { campaignId: "small", funnelKey: "visit_signup", spentCents: 0, ceilingCents: 100 };
+    const big = { campaignId: "big", funnelKey: "sales_meetings_from_conversation", spentCents: 0, ceilingCents: 100_000 };
+    const small = { campaignId: "small", funnelKey: "website_purchases", spentCents: 0, ceilingCents: 100 };
     expect(selectLowestFillRatio([big, small])).toBe("big"); // tie at 0 → funnelKey order
     expect(selectLowestFillRatio([{ ...big, spentCents: 10_000 }, small])).toBe("small");
   });
 
   it("a funnel at its ceiling yields to another funded one, with no special case", () => {
     const winner = selectLowestFillRatio([
-      { campaignId: "full", funnelKey: "reply_meeting", spentCents: 1000, ceilingCents: 1000 },
-      { campaignId: "open", funnelKey: "visit_signup", spentCents: 990, ceilingCents: 1000 },
+      { campaignId: "full", funnelKey: "sales_meetings_from_conversation", spentCents: 1000, ceilingCents: 1000 },
+      { campaignId: "open", funnelKey: "website_purchases", spentCents: 990, ceilingCents: 1000 },
     ]);
     expect(winner).toBe("open");
   });
@@ -151,8 +165,8 @@ describe("selectLowestFillRatio", () => {
   it("returns null when every funded funnel is at its ceiling", () => {
     expect(
       selectLowestFillRatio([
-        { campaignId: "a", funnelKey: "reply_meeting", spentCents: 1000, ceilingCents: 1000 },
-        { campaignId: "b", funnelKey: "visit_signup", spentCents: 2500, ceilingCents: 2000 },
+        { campaignId: "a", funnelKey: "sales_meetings_from_conversation", spentCents: 1000, ceilingCents: 1000 },
+        { campaignId: "b", funnelKey: "website_purchases", spentCents: 2500, ceilingCents: 2000 },
       ]),
     ).toBeNull();
   });
@@ -160,15 +174,15 @@ describe("selectLowestFillRatio", () => {
   it("never runs a funnel funded at zero", () => {
     expect(
       selectLowestFillRatio([
-        { campaignId: "zero", funnelKey: "visit_signup", spentCents: 0, ceilingCents: 0 },
+        { campaignId: "zero", funnelKey: "website_purchases", spentCents: 0, ceilingCents: 0 },
       ]),
     ).toBeNull();
   });
 
   it("breaks ties deterministically on funnelKey, not insertion order", () => {
     const rows = [
-      { campaignId: "v", funnelKey: "visit_signup", spentCents: 50, ceilingCents: 100 },
-      { campaignId: "r", funnelKey: "reply_meeting", spentCents: 50, ceilingCents: 100 },
+      { campaignId: "v", funnelKey: "website_purchases", spentCents: 50, ceilingCents: 100 },
+      { campaignId: "r", funnelKey: "sales_meetings_from_conversation", spentCents: 50, ceilingCents: 100 },
     ];
     expect(selectLowestFillRatio(rows)).toBe("r");
     expect(selectLowestFillRatio([...rows].reverse())).toBe("r");
@@ -215,8 +229,8 @@ describe("planFunnelTurns", () => {
       { funnelKey: "reply_meeting", dailyBudgetCents: "2000" },
     ]);
     mockDeclaredFunnels([
-      { funnelKey: "visit_signup", goal: "signup" },
-      { funnelKey: "reply_meeting", goal: "meetingBooked" },
+      { funnelKey: "website_purchases" },
+      { funnelKey: "sales_meetings_from_conversation" },
     ]);
     mockFindFirst.mockResolvedValue(undefined); // neither funnel has a campaign yet
 
@@ -224,11 +238,12 @@ describe("planFunnelTurns", () => {
 
     expect(mockInsertValues).toHaveBeenCalledTimes(2);
     const inserted = mockInsertValues.mock.calls.map(c => c[0]);
-    expect(inserted.map(v => v.funnelKey).sort()).toEqual(["reply_meeting", "visit_signup"]);
-    // The campaign carries the funnel's OWN goal, forwarded verbatim — that is what keeps it
-    // out of goal arbitration.
-    expect(inserted.find(v => v.funnelKey === "reply_meeting").goal).toBe("meetingBooked");
-    expect(inserted.find(v => v.funnelKey === "visit_signup").goal).toBe("signup");
+    expect(inserted.map(v => v.funnelKey).sort()).toEqual(["sales_meetings_from_conversation", "website_purchases"]);
+    // The campaign STATES its funnel in the canonical vocabulary even though billing named those
+    // same two funnels the pre-rename way. It also carries the goal that funnel corresponds to —
+    // a legacy alias for consumers still reading one, and what keeps it out of goal arbitration.
+    expect(inserted.find(v => v.funnelKey === "sales_meetings_from_conversation").goal).toBe("meetingBooked");
+    expect(inserted.find(v => v.funnelKey === "website_purchases").goal).toBe("signup");
     expect(inserted[0].name).toBe(funnelCampaignName(SALES, "brand-1", inserted[0].funnelKey));
   });
 
@@ -238,15 +253,43 @@ describe("planFunnelTurns", () => {
       { funnelKey: "visit_form", dailyBudgetCents: "500" },
     ]);
     mockDeclaredFunnels([
-      { funnelKey: "visit_signup", goal: "signup" },
-      { funnelKey: "visit_form", goal: "formSubmission", active: false },
+      { funnelKey: "website_purchases" },
+      { funnelKey: "form_magnet", active: false },
     ]);
     mockFindFirst.mockResolvedValue(undefined);
 
     await planFunnelTurns([claimed()]);
 
     expect(mockInsertValues).toHaveBeenCalledTimes(1);
-    expect(mockInsertValues.mock.calls[0][0].funnelKey).toBe("visit_signup");
+    expect(mockInsertValues.mock.calls[0][0].funnelKey).toBe("website_purchases");
+  });
+
+  it("ranks a campaign row still on a pre-rename key on its funnel's real ceiling", async () => {
+    // The row has not met migration 0043 yet — or a replica is mid-deploy. It must still find its
+    // own ceiling: reading it as unfunded would give it a zero ceiling, drop it out of the running
+    // and starve the funnel it was provisioned for, silently.
+    mockFunnelBudgets([
+      { funnelKey: "visit_signup", dailyBudgetCents: "1000" },
+      { funnelKey: "reply_meeting", dailyBudgetCents: "1000" },
+    ]);
+    mockDeclaredFunnels([
+      { funnelKey: "website_purchases" },
+      { funnelKey: "sales_meetings_from_conversation" },
+    ]);
+    mockSpend("900"); // c-canonical is 90% full
+    mockSpend("100"); // c-preRename is 10% full — it must be allowed to win on that
+
+    const now = new Date("2026-08-02T10:00:00Z");
+    const deferred = await planFunnelTurns(
+      [
+        claimed({ id: "c-canonical", funnelKey: "website_purchases" }),
+        claimed({ id: "c-preRename", funnelKey: "reply_meeting" }),
+      ],
+      now,
+    );
+
+    expect(deferred.has("c-preRename")).toBe(false); // takes the turn on its own ceiling
+    expect(deferred.get("c-canonical")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
   });
 
   it("holds the whole brand while a run is in flight — one run per brand", async () => {
@@ -255,16 +298,16 @@ describe("planFunnelTurns", () => {
       { funnelKey: "reply_meeting", dailyBudgetCents: "2000" },
     ]);
     mockDeclaredFunnels([
-      { funnelKey: "visit_signup", goal: "signup" },
-      { funnelKey: "reply_meeting", goal: "meetingBooked" },
+      { funnelKey: "website_purchases" },
+      { funnelKey: "sales_meetings_from_conversation" },
     ]);
     mockListRuns.mockResolvedValue({ runs: [{ id: "live" }] });
 
     const now = new Date("2026-08-02T10:00:00Z");
     const deferred = await planFunnelTurns(
       [
-        claimed({ id: "c-visit", funnelKey: "visit_signup" }),
-        claimed({ id: "c-reply", funnelKey: "reply_meeting" }),
+        claimed({ id: "c-visit", funnelKey: "website_purchases" }),
+        claimed({ id: "c-reply", funnelKey: "sales_meetings_from_conversation" }),
       ],
       now,
     );
@@ -283,8 +326,8 @@ describe("planFunnelTurns", () => {
       { funnelKey: "reply_meeting", dailyBudgetCents: "1000" },
     ]);
     mockDeclaredFunnels([
-      { funnelKey: "visit_signup", goal: "signup" },
-      { funnelKey: "reply_meeting", goal: "meetingBooked" },
+      { funnelKey: "website_purchases" },
+      { funnelKey: "sales_meetings_from_conversation" },
     ]);
     mockSpend("900"); // c-visit is 90% full
     mockSpend("100"); // c-reply is 10% full
@@ -292,8 +335,8 @@ describe("planFunnelTurns", () => {
     const now = new Date("2026-08-02T10:00:00Z");
     const deferred = await planFunnelTurns(
       [
-        claimed({ id: "c-visit", funnelKey: "visit_signup" }),
-        claimed({ id: "c-reply", funnelKey: "reply_meeting" }),
+        claimed({ id: "c-visit", funnelKey: "website_purchases" }),
+        claimed({ id: "c-reply", funnelKey: "sales_meetings_from_conversation" }),
       ],
       now,
     );
@@ -308,8 +351,8 @@ describe("planFunnelTurns", () => {
       { funnelKey: "reply_meeting", dailyBudgetCents: "1000" },
     ]);
     mockDeclaredFunnels([
-      { funnelKey: "visit_signup", goal: "signup" },
-      { funnelKey: "reply_meeting", goal: "meetingBooked" },
+      { funnelKey: "website_purchases" },
+      { funnelKey: "sales_meetings_from_conversation" },
     ]);
     mockSpend("1000");
     mockSpend("1200");
@@ -317,8 +360,8 @@ describe("planFunnelTurns", () => {
     const now = new Date("2026-08-02T10:00:00Z");
     const deferred = await planFunnelTurns(
       [
-        claimed({ id: "c-visit", funnelKey: "visit_signup" }),
-        claimed({ id: "c-reply", funnelKey: "reply_meeting" }),
+        claimed({ id: "c-visit", funnelKey: "website_purchases" }),
+        claimed({ id: "c-reply", funnelKey: "sales_meetings_from_conversation" }),
       ],
       now,
     );
@@ -329,7 +372,7 @@ describe("planFunnelTurns", () => {
 
   it("keeps the campaign already doing the funnel's work instead of standing up a second one", async () => {
     mockFunnelBudgets([{ funnelKey: "visit_form", dailyBudgetCents: "1000" }]);
-    mockDeclaredFunnels([{ funnelKey: "visit_form", goal: "formSubmission" }]);
+    mockDeclaredFunnels([{ funnelKey: "form_magnet" }]);
     mockFindFirst.mockResolvedValue(undefined); // no campaign states this funnel yet
     mockFindMany.mockResolvedValue([
       // The months-old campaign, running on the brand's goal, carrying all the history.
@@ -343,13 +386,13 @@ describe("planFunnelTurns", () => {
     // Adopted, not duplicated: same campaign id, now stating the funnel and its goal.
     expect(mockInsertValues).not.toHaveBeenCalled();
     expect(mockUpdateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ funnelKey: "visit_form", goal: "formSubmission" }),
+      expect.objectContaining({ funnelKey: "form_magnet" }),
     );
   });
 
   it("adopts the OLDEST match — the one carrying the history", async () => {
     mockFunnelBudgets([{ funnelKey: "visit_form", dailyBudgetCents: "1000" }]);
-    mockDeclaredFunnels([{ funnelKey: "visit_form", goal: "formSubmission" }]);
+    mockDeclaredFunnels([{ funnelKey: "form_magnet" }]);
     mockFindFirst.mockResolvedValue(undefined);
     mockFindMany.mockResolvedValue([
       { id: "c-oldest", name: "the one with the history", goal: null, status: "ongoing" },
@@ -362,7 +405,7 @@ describe("planFunnelTurns", () => {
 
     expect(mockUpdateWhere).toHaveBeenCalled();
     expect(mockUpdateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ funnelKey: "visit_form" }),
+      expect.objectContaining({ funnelKey: "form_magnet" }),
     );
     // findMany is ordered by createdAt asc, so the first match is the oldest.
     expect(mockFindMany).toHaveBeenCalled();
@@ -370,7 +413,7 @@ describe("planFunnelTurns", () => {
 
   it("never adopts a campaign whose goal names a different funnel", async () => {
     mockFunnelBudgets([{ funnelKey: "visit_form", dailyBudgetCents: "1000" }]);
-    mockDeclaredFunnels([{ funnelKey: "visit_form", goal: "formSubmission" }]);
+    mockDeclaredFunnels([{ funnelKey: "form_magnet" }]);
     mockFindFirst.mockResolvedValue(undefined);
     mockFindMany.mockResolvedValue([
       { id: "c-meetings", name: "meetings", goal: "meetingBooked", status: "ongoing" },
@@ -381,15 +424,15 @@ describe("planFunnelTurns", () => {
     await planFunnelTurns([claimed({ id: "c-meetings" })], new Date("2026-08-02T10:00:00Z"));
 
     expect(mockInsertValues).toHaveBeenCalledTimes(1);
-    expect(mockInsertValues.mock.calls[0][0].funnelKey).toBe("visit_form");
+    expect(mockInsertValues.mock.calls[0][0].funnelKey).toBe("form_magnet");
   });
 
   it("drops the empty stand-in it created for a funnel the incumbent was already working", async () => {
     mockFunnelBudgets([{ funnelKey: "visit_form", dailyBudgetCents: "1000" }]);
-    mockDeclaredFunnels([{ funnelKey: "visit_form", goal: "formSubmission" }]);
+    mockDeclaredFunnels([{ funnelKey: "form_magnet" }]);
     mockFindFirst.mockResolvedValue({
       id: "c-standin",
-      name: funnelCampaignName(SALES, "brand-1", "visit_form"),
+      name: funnelCampaignName(SALES, "brand-1", "form_magnet"),
       status: "ongoing",
     });
     mockFindMany.mockResolvedValue([
@@ -405,17 +448,17 @@ describe("planFunnelTurns", () => {
     await planFunnelTurns([claimed({ id: "c-incumbent" })], new Date("2026-08-02T10:00:00Z"));
 
     expect(mockUpdateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ funnelKey: "visit_form", goal: "formSubmission" }),
+      expect.objectContaining({ funnelKey: "form_magnet" }),
     );
     expect(mockDeleteWhere).toHaveBeenCalledTimes(1);
   });
 
   it("never drops a stand-in that has ever run", async () => {
     mockFunnelBudgets([{ funnelKey: "visit_form", dailyBudgetCents: "1000" }]);
-    mockDeclaredFunnels([{ funnelKey: "visit_form", goal: "formSubmission" }]);
+    mockDeclaredFunnels([{ funnelKey: "form_magnet" }]);
     mockFindFirst.mockResolvedValue({
       id: "c-standin",
-      name: funnelCampaignName(SALES, "brand-1", "visit_form"),
+      name: funnelCampaignName(SALES, "brand-1", "form_magnet"),
       status: "ongoing",
     });
     mockFindMany.mockResolvedValue([
@@ -432,7 +475,7 @@ describe("planFunnelTurns", () => {
 
   it("holds no campaign out of the running — one that states no funnel still takes turns", async () => {
     mockFunnelBudgets([{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }]);
-    mockDeclaredFunnels([{ funnelKey: "visit_signup", goal: "signup" }]);
+    mockDeclaredFunnels([{ funnelKey: "website_purchases" }]);
     mockFindFirst.mockResolvedValue({ id: "c-visit", name: "x", status: "ongoing" });
     mockFindMany.mockResolvedValue([]);
     mockSpend("900"); // c-legacy: 90% of the brand total
@@ -442,7 +485,7 @@ describe("planFunnelTurns", () => {
     const deferred = await planFunnelTurns(
       [
         claimed({ id: "c-legacy", funnelKey: null }),
-        claimed({ id: "c-visit", funnelKey: "visit_signup" }),
+        claimed({ id: "c-visit", funnelKey: "website_purchases" }),
       ],
       now,
     );
@@ -455,7 +498,7 @@ describe("planFunnelTurns", () => {
 
   it("a campaign that states no funnel can win the turn", async () => {
     mockFunnelBudgets([{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }]);
-    mockDeclaredFunnels([{ funnelKey: "visit_signup", goal: "signup" }]);
+    mockDeclaredFunnels([{ funnelKey: "website_purchases" }]);
     mockFindFirst.mockResolvedValue({ id: "c-visit", name: "x", status: "ongoing" });
     mockFindMany.mockResolvedValue([]);
     mockSpend("0");   // c-legacy: nothing spent
@@ -465,7 +508,7 @@ describe("planFunnelTurns", () => {
     const deferred = await planFunnelTurns(
       [
         claimed({ id: "c-legacy", funnelKey: null }),
-        claimed({ id: "c-visit", funnelKey: "visit_signup" }),
+        claimed({ id: "c-visit", funnelKey: "website_purchases" }),
       ],
       now,
     );
@@ -476,7 +519,7 @@ describe("planFunnelTurns", () => {
 
   it("re-checks a campaign on an unfunded funnel every tick, never parks it for the day", async () => {
     mockFunnelBudgets([{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }]);
-    mockDeclaredFunnels([{ funnelKey: "visit_signup", goal: "signup" }]);
+    mockDeclaredFunnels([{ funnelKey: "website_purchases" }]);
     mockFindFirst.mockResolvedValue({ id: "c-visit", name: "x", status: "ongoing" });
     mockFindMany.mockResolvedValue([]);
     mockSpend("1200"); // the funded funnel is over its ceiling
@@ -485,8 +528,8 @@ describe("planFunnelTurns", () => {
     const now = new Date("2026-08-02T10:00:00Z");
     const deferred = await planFunnelTurns(
       [
-        claimed({ id: "c-visit", funnelKey: "visit_signup" }),
-        claimed({ id: "c-unfunded", funnelKey: "reply_meeting" }),
+        claimed({ id: "c-visit", funnelKey: "website_purchases" }),
+        claimed({ id: "c-unfunded", funnelKey: "sales_meetings_from_conversation" }),
       ],
       now,
     );

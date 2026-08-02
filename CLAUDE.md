@@ -26,7 +26,7 @@ A gate block caused by a **normal, expected** business state — out of credits,
 
 Two services own this concept and neither is this one: **brand-service** owns which goals a brand authorizes (its `brands.current_goal` check constraint already permits `websiteVisit`, `positiveReply`, `whatsappConversation`, `combinedSales` on top of the three we had names for), and **features-service** owns the spelling — it normalises every fleet spelling and returns **400 on a goal it cannot resolve**, which is the fail-loud boundary. campaign-service only carries the value from one to the other.
 
-The enum was never a real constraint, and that is the point: **the brand-goal path never passed through it.** `fetchBrandRuntimeContext` returns `await res.json() as BrandRuntimeContext` — a bare cast, no Zod — so a brand set to `combinedSales` already flowed end-to-end untouched. The enum only capped what a CALLER could ask for on `campaign.goal`, i.e. it made the brand's own goal unrepresentable per-campaign while the brand-level path carried it fine.
+The enum never constrained the brand-goal path (`fetchBrandRuntimeContext` is a bare cast, no Zod), only what a CALLER could ask for on `campaign.goal` — which made the brand's own goal unrepresentable per-campaign. **A funnel campaign's `goal` is now DERIVED from its funnel** (`goalForFunnel`) rather than forwarded from brand-service, which no longer emits one per funnel; the brand-level `currentGoal` it still serves is unchanged and still the fallback everywhere.
 
 **Non-empty is the one rule that stays, and it is fail-loud, not taste**: features-service reads an ABSENT goal as "default to meeting-booked", so `""` would forward as a silent default instead of an error. Never relax `.min(1)`.
 
@@ -94,8 +94,7 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
   already keyed on campaignId, so a funnel's spend today IS its campaign's spend today — no new
   attribution dimension. Reconciled by the scheduler (`src/lib/funnel-campaigns.ts`) from
   billing's `GET /internal/brands/:id/funnel-budgets` ∩ brand-service's
-  `GET /internal/brands/:id/sales-funnels` (which carries the goal each funnel optimizes for,
-  forwarded verbatim onto `campaigns.goal`). A funnel billing funds but brand-service does not
+  `GET /internal/brands/:id/sales-funnels`. A funnel billing funds but brand-service does not
   declare ACTIVE is never provisioned.
 - **The campaign ALREADY doing a funnel's work becomes that funnel's campaign — a second one is
   never stood up beside it.** `findIncumbentForFunnel` looks for the OLDEST `ongoing` campaign of
@@ -107,15 +106,34 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
   the same step — and only then: `isRemovableStandIn` requires the provisioned name, zero runs in
   runs-service AND zero lifetime cost, and fails CLOSED on any unreadable read. Nothing that ever
   ran is ever removed.
-- **Every campaign STATES its funnel, persisted — no consumer infers it from a goal.** Migration
-  0042 rewrites the goal vocabulary of every campaign that states a goal; `src/lib/funnel-backfill.ts`
-  (boot, after `listen`, fire-and-forget, idempotent) does the rest by reading each (org, brand)
-  pair's goal from brand-service once. The goal→funnel map lives in ONE place,
-  `src/lib/sales-funnel-vocabulary.ts`: form submissions → `visit_form`, booked meeting →
-  `reply_meeting` (these campaigns are cold email, so the chain that ran is reply→meeting, never
-  the website one — owner-decided 2026-08-02), website purchase / signup → `visit_signup`. A goal
-  naming no single funnel (`combinedSales`, `websiteVisit`, `positiveReply`,
-  `whatsappConversation`) keeps a NULL funnel: a funnel is a stored fact, never a guess.
+- **THE FUNNEL IS THE ONLY WORD. A campaign STATES it, persisted, and a consumer names what the
+  campaign buys without a translation table.** The four canonical keys are
+  `sales_meetings_from_conversation`, `sales_meetings_from_website`, `website_purchases`,
+  `form_magnet`. brand-service retired the goal set and renamed the keys (#434, 2026-08-02): its
+  funnel reads carry NO goal, so reading one is what silently stops every funnel campaign being
+  provisioned — pinned by `tests/unit/no-legacy.test.ts`. `campaigns.goal` survives as a DERIVED
+  LEGACY ALIAS of the same statement (`goalForFunnel`, byte-equal with what brand-service's
+  catalogue used to emit per funnel), so a consumer still reading a goal keeps working and none has
+  to change in lockstep — but it cannot tell the two meeting funnels apart, which is why nothing
+  here reads it back. It is also what keeps a funnel campaign out of goal arbitration.
+- **Every spelling in, one canonical token out** — `toFunnelKey` in
+  `src/lib/sales-funnel-vocabulary.ts`, the ONE place the vocabulary lives. Load-bearing on THREE
+  boundaries, not just history: **billing-service still emits the pre-rename keys today**
+  (`reply_meeting`, `visit_meeting`, `visit_signup`, `visit_form`), brand-service emits the
+  canonical four, and a campaign row can carry either. Compare raw tokens on any of the three and a
+  fully-funded funnel reads as UNFUNDED — the gate blocks it and it silently stops sending. Never
+  delete a legacy entry.
+- **Two migrations, then the goal is never read for a funnel again.** 0042 wrote the funnel of
+  every campaign stating a goal; 0043 renames those stored keys (and the provisioned campaign NAME,
+  which carries the same token) to the canonical four. `src/lib/funnel-backfill.ts` (boot, after
+  `listen`, fire-and-forget, idempotent) covers the rest by reading each (org, brand) pair's
+  `currentGoal` once — the one goal-shaped read brand-service deliberately kept. `funnelForGoal`
+  exists for exactly those two: booked meeting → `sales_meetings_from_conversation` (these
+  campaigns are cold email, so the chain that ran is reply→meeting, never the website one —
+  owner-decided 2026-08-02), form submissions → `form_magnet`, website purchase / signup →
+  `website_purchases`. A goal naming no single funnel (`combinedSales`, `websiteVisit`,
+  `positiveReply`, `whatsappConversation`) keeps a NULL funnel: a funnel is a stored fact, never a
+  guess.
 - **The gate paces on that funnel's own ceiling** (`gate-check.ts`, block a2), fail-CLOSED like
   the brand ceiling. Precedence: campaign's own `dailyBudgetCents` → `funnelKey` ceiling → brand
   daily budget. A funnel funded at ZERO, or absent from billing while the brand funds OTHER
