@@ -316,6 +316,13 @@
       "when": 1776900000000,
       "tag": "0044_campaign_identity_key",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1777000000000,
+      "tag": "0045_owner_funnel_decision_f4d73dab",
+      "breakpoints": true
     }
   ]
 }
