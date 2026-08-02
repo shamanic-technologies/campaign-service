@@ -1,6 +1,7 @@
 import { and, arrayContains, desc, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, type Campaign } from "../db/schema.js";
+import { campaignIdentityColumns } from "./campaign-identity.js";
 
 export const SALES_OUTREACH_FEATURE_SLUG = "sales-cold-email-outreach";
 export const SALES_CRM_FEATURE_SLUG = "sales-crm-email-outreach";
@@ -141,6 +142,7 @@ export async function ensureRunnableSalesOutreachCampaign(
       name: defaultSalesOutreachCampaignName(resolvedFeatureSlug, brandId),
       workflowSlug: seedWorkflowSlugForFeature(resolvedFeatureSlug),
       brandIds: [brandId],
+      ...campaignIdentityColumns({ brandIds: [brandId], featureSlug: resolvedFeatureSlug }),
       featureSlug: resolvedFeatureSlug,
       featureInputs: null,
       status: "ongoing",
