@@ -70,6 +70,9 @@ function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
     // Null by default → the sales gate falls back to the brand daily budget, so the existing
     // brand-budget describe block exercises unchanged. The campaign-own-budget block sets it.
     dailyBudgetCents: null,
+    // Null by default → not funnel-scoped, so the sales gate keeps falling back to the brand
+    // daily budget and every block below exercises unchanged. The funnel block sets it.
+    funnelKey: null,
     maxLeads: null,
     ...overrides,
   };
@@ -542,6 +545,144 @@ describe("Gate Check", () => {
       expect(opts.headers["x-api-key"]).toBe("test-billing-key");
       expect(opts.headers["x-org-id"]).toBe("org-1");
       expect(opts.headers["x-campaign-id"]).toBe("campaign-1");
+    });
+  });
+
+  describe("Per-funnel daily budget pacing", () => {
+    const ORIG_URL = process.env.BILLING_SERVICE_URL;
+    const ORIG_KEY = process.env.BILLING_SERVICE_API_KEY;
+
+    beforeEach(() => {
+      process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+      process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "0" }]),
+      );
+    });
+
+    afterEach(() => {
+      if (ORIG_URL === undefined) delete process.env.BILLING_SERVICE_URL;
+      else process.env.BILLING_SERVICE_URL = ORIG_URL;
+      if (ORIG_KEY === undefined) delete process.env.BILLING_SERVICE_API_KEY;
+      else process.env.BILLING_SERVICE_API_KEY = ORIG_KEY;
+    });
+
+    function mockFunnelBudgets(
+      funnels: Array<{ funnelKey: string; dailyBudgetCents: string }>,
+      dailyBudgetCents: string | null = "3000",
+    ) {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          brandId: "brand-1",
+          dailyBudgetCents,
+          funnels: funnels.map(f => ({ ...f, updatedAt: null })),
+        }),
+      });
+    }
+
+    function funnelCampaign(funnelKey = "visit_signup") {
+      return makeCampaign({ brandIds: ["brand-1"], funnelKey });
+    }
+
+    it("paces on THIS funnel's own ceiling, not the brand-level total", async () => {
+      mockFunnelBudgets([
+        { funnelKey: "visit_signup", dailyBudgetCents: "1000" },
+        { funnelKey: "reply_meeting", dailyBudgetCents: "2000" },
+      ]);
+      mockGetStatsBudget.mockResolvedValue(
+        // 1500 is under the 3000 brand-level SUM but at 150% of this funnel's own 1000.
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1500" }]),
+      );
+
+      const result = await runGateChecks(funnelCampaign());
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Funnel daily budget reached");
+      // Paced, not terminal — the ceiling re-opens at the day rollover.
+      expect(result.autoStopped).toBeUndefined();
+      expect(result.nextRunAt).toBeUndefined();
+    });
+
+    it("allows while this funnel is under its own ceiling", async () => {
+      mockFunnelBudgets([{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }]);
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "999" }]),
+      );
+      // affordability + lead-stats fetches after the billing read
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
+
+      const result = await runGateChecks(funnelCampaign());
+      expect(result.allowed).toBe(true);
+    });
+
+    it("never runs a funnel funded at zero", async () => {
+      mockFunnelBudgets([
+        { funnelKey: "visit_signup", dailyBudgetCents: "0" },
+        { funnelKey: "reply_meeting", dailyBudgetCents: "2000" },
+      ]);
+
+      const result = await runGateChecks(funnelCampaign());
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Funnel not funded");
+    });
+
+    it("never falls back to the brand total when this funnel has no ceiling at all", async () => {
+      // A funnel absent from billing must not spend another funnel's money.
+      mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }]);
+
+      const result = await runGateChecks(funnelCampaign());
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Funnel not funded");
+    });
+
+    it("fails CLOSED when the per-funnel ceilings cannot be read", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+
+      const result = await runGateChecks(funnelCampaign());
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Funnel daily budget unavailable");
+    });
+
+    it("reads the funnel ceilings from billing's locked contract", async () => {
+      mockFunnelBudgets([{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }]);
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
+
+      await runGateChecks(funnelCampaign());
+
+      const [calledUrl, calledInit] = mockFetch.mock.calls[0];
+      expect(calledUrl).toBe("https://billing.test.local/internal/brands/brand-1/funnel-budgets");
+      expect(calledInit.headers["x-api-key"]).toBe("test-billing-key");
+      expect(calledInit.headers["x-org-id"]).toBe("org-1");
+    });
+
+    it("a campaign's OWN daily budget still wins over its funnel ceiling", async () => {
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "500" }]),
+      );
+
+      const result = await runGateChecks(
+        makeCampaign({ brandIds: ["brand-1"], funnelKey: "visit_signup", dailyBudgetCents: 500 }),
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Campaign daily budget reached");
+      expect(mockFetch).not.toHaveBeenCalledWith(
+        expect.stringContaining("/funnel-budgets"),
+        expect.anything(),
+      );
+    });
+
+    it("a campaign with no funnel keeps reading the brand-level daily budget", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ brandId: "brand-1", dailyBudgetCents: "1000", updatedAt: null }),
+      });
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(true);
+      expect(mockFetch.mock.calls[0][0]).toBe(
+        "https://billing.test.local/internal/brands/brand-1/daily-budget",
+      );
     });
   });
 

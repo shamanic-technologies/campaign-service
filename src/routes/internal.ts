@@ -99,6 +99,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       maxBudgetMonthlyUsd: campaign.maxBudgetMonthlyUsd,
       maxBudgetTotalUsd: campaign.maxBudgetTotalUsd,
       dailyBudgetCents: campaign.dailyBudgetCents,
+      funnelKey: campaign.funnelKey,
       maxLeads: campaign.maxLeads,
     });
 
@@ -113,6 +114,10 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       const benignBlock = result.reason === "Insufficient credits" ||
                           result.reason === "Brand daily budget reached" ||
                           result.reason === "Campaign daily budget reached" ||
+                          // A funnel hitting its own ceiling — or the customer having funded it
+                          // at zero — is an expected pacing outcome, not a fault.
+                          result.reason === "Funnel daily budget reached" ||
+                          result.reason === "Funnel not funded" ||
                           result.reason === "Brand paused";
       traceEvent(req.runId, {
         service: "campaign-service",
@@ -333,6 +338,9 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       // Campaign v2 own config — the campaign's raw own goal (null = paced on brand goal),
       // its targeted audience subset, its services, its click-destination.
       goal: campaign.goal ?? null,
+      // The sales funnel this campaign works (null = not funnel-scoped). Exposed so the run's
+      // downstream nodes and any reader can see which funnel's money this execution spends.
+      funnelKey: campaign.funnelKey ?? null,
       audienceIds: campaign.audienceIds ?? null,
       servicesOffered: campaign.servicesOffered ?? null,
       clickDestinationUrl: campaign.clickDestinationUrl ?? null,
