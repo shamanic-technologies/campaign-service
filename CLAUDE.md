@@ -299,6 +299,37 @@ So `/end-run` REINTERPRETS `stopCampaign=true` as audience-scoped: it marks `req
 
 At that all-audiences-exhausted auto-stop point (and ONLY there) `/end-run` also fires a **fire-and-forget extend-audience lifecycle email** (`maybeSendExtendAudienceEmail`, `src/lib/transactional-email.ts`) nudging the user to extend an audience so outreach can resume. It sends via **transactional-email-service** (`POST /send`, eventType `audience_fully_contacted`; template registered at boot via `PUT /platform-templates`) ONLY when ALL hold: sales-cold-email-outreach feature, `campaign.createdByUserId` present (recipient), brand not paused, a daily budget `> 0` (campaign `dailyBudgetCents` else the brand's billing daily budget), and org `has_auto_topup` (billing `GET /internal/accounts/by-org/{orgId}/balance`, user-less). The **1×/month-per-brand cap is owned by transactional-email dedup** (its `audience_fully_contacted` monthly-per-brand cadence), NOT a local table. Every guard read is **fail-SAFE** (any error/absent field → treat as OFF → no email) and the whole call is fire-and-forget after the response, so it NEVER blocks or fails run finalization. When refactoring `/end-run`, keep this call at the exhausted-stop branch — do not drop it. (Set 2026-07-22, PR #292.)
 
+## EVERY `listRuns` states a status AND a bound — an unfiltered read costs more with every run the campaign has ever done
+
+runs-service serves `runs` as a VIEW over `run_lifecycle_events` (6.2M rows), so a `listRuns` with no
+bound replays the whole event log, LEFT JOINs a second view and GROUP BYs 19 columns — no index can
+help. The row count is the campaign's entire history, `workflow_context` JSONB included. Because
+gate-check is the FIRST node of EVERY run, that made each new run raise the price of every run after
+it: 83,064 calls / month at **21,216 rows per call** = 1.76 BILLION rows, essentially the whole Neon
+bill's public network transfer plus a large share of its compute, on a curve that had gone
+$139 → $204 → $337 → $476 → $701.
+
+The gate needs three things and each is now asked for on its own terms (`src/lib/gate-check.ts`):
+
+- **Stale cleanup + the one-run-at-a-time guard** read `status: "running"` with `RUNNING_RUNS_LIMIT`.
+  The invariant is ONE live run per campaign, so 200 is not a tuning knob — it exists so an
+  unbounded read can never come back. Rows arrive newest-first: past the bound the newest still
+  block the tick (guard correct) and the oldest are cleaned on a later pass.
+- **The `completed` count is a LIFETIME total** — `Math.max(leadStats.totalServed, completedRuns.length)`
+  is what enforces `maxLeads`, so a recency window would let a campaign run past its cap forever.
+  It is bounded by the CAP instead: the count is only ever compared `>= maxLeads`, so asking for at
+  most `maxLeads` rows answers that question EXACTLY (fewer back → exact count; exactly `maxLeads`
+  back → the cap is reached whatever the true total). Read only when a cap exists.
+
+runs-service exposes **no per-campaign run COUNT** (`GET /v1/runs` returns rows, `/public/stats/runs`
+is cross-tenant), which is why the lifetime total is still read as bounded rows rather than a scalar.
+Do not reconstruct a count locally — a counting/`total` capability is runs-service's to add.
+
+The other three call sites were already bounded (`scheduler.ts hasLiveRunForCampaign`,
+`funnel-campaigns.ts` ×2, all `limit: 1`); `/end-run` carries one too. A new `listRuns` without a
+status and a limit is a regression, and `tests/unit/gate-check.test.ts` fails on one.
+(Set 2026-08-07.)
+
 ## Scheduler in-flight guard — check ANY live run for the campaign, never the campaign-service marker
 
 The `campaign-service / <campaignId>` parent run (created by the workflow DAG's start-run) is an **ephemeral ~2s marker** — `start-run → end-run` within seconds — NOT an enclosing span. The genuinely-long work (lead-service `buffer/next`, observed up to **755s**) runs in a separate `lead-service / lead-serve` run that is **not linked** under the marker via `parent_run_id`. So `src/lib/scheduler.ts`'s "is a flow still alive?" check MUST query `listRuns` scoped to **`campaignId` + `status=running` + `startedAfter=freshnessCutoff`** (any service) via `hasLiveRunForCampaign()` — **never** `(serviceName="campaign-service", taskName=campaignId)`, which only sees the 2s corpse and re-fires mid-fill → `lead-service` `409 Concurrent buffer/next` storm. `STUCK_RUN_FRESHNESS_THRESHOLD_MS` must stay **strictly greater than** lead-service's max fill (`PULL_NEXT_TIMEOUT` 600s; observed 755s) — currently 15min. `reRunDueCampaigns` and `claimStuckCampaigns` MUST share the same helper. (Set 2026-06-13, v0.25.1 / DIS-277.)

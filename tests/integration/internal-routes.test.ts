@@ -1063,6 +1063,9 @@ describe("Pipeline routes", () => {
           status: "running",
         }),
       );
+      // Bounded like every other runs read in this service — one marker row per parent run, and
+      // no path can regress into pulling the campaign's history.
+      expect(mockListRuns.mock.calls[0][0].limit).toBeGreaterThan(0);
       expect(mockUpdateRun).toHaveBeenCalledTimes(1);
       expect(mockUpdateRun).toHaveBeenCalledWith("run-own", "failed", expect.objectContaining({ orgId }));
     });

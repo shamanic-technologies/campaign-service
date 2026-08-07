@@ -96,6 +96,25 @@ function makeRun(overrides: Partial<{ id: string; status: string; startedAt: str
   };
 }
 
+/**
+ * The gate reads runs-service TWICE and each read states what it wants: the campaign's RUNNING
+ * rows (stale cleanup + the one-run-at-a-time guard) and — only under a maxLeads cap — its
+ * COMPLETED rows, bounded by that cap. Answer each call by the status it asked for, so a test
+ * that stages completed runs cannot accidentally also stage them as live.
+ */
+function mockRuns(
+  { running = [], completed = [] }: { running?: unknown[]; completed?: unknown[] } = {},
+) {
+  mockListRuns.mockImplementation(async (params: { status?: string; limit?: number }) => {
+    if (params.status === "running") return { runs: running };
+    if (params.status === "completed") {
+      // runs-service honours the bound; a caller asking for N never receives more than N.
+      return { runs: params.limit != null ? completed.slice(0, params.limit) : completed };
+    }
+    return { runs: [] };
+  });
+}
+
 function makeBudgetResponse(
   windows: Array<{
     label: string;
@@ -132,7 +151,7 @@ function makeBudgetResponse(
 describe("Gate Check", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockListRuns.mockResolvedValue({ runs: [] });
+    mockRuns();
     mockGetStatsBudget.mockResolvedValue({ windows: [] });
     mockUpdateRun.mockResolvedValue({});
     mockAnyBrandPaused.mockResolvedValue(false);
@@ -191,7 +210,7 @@ describe("Gate Check", () => {
         status: "running",
         startedAt: new Date(Date.now() - (3 * 60 + 1) * 60 * 1000).toISOString(),
       });
-      mockListRuns.mockResolvedValue({ runs: [staleRun] });
+      mockRuns({ running: [staleRun] });
 
       await runGateChecks(makeCampaign());
 
@@ -204,7 +223,7 @@ describe("Gate Check", () => {
         status: "running",
         startedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
       });
-      mockListRuns.mockResolvedValue({ runs: [recentRun] });
+      mockRuns({ running: [recentRun] });
 
       const result = await runGateChecks(makeCampaign());
 
@@ -220,7 +239,7 @@ describe("Gate Check", () => {
         status: "running",
         startedAt: new Date(Date.now() - 1000).toISOString(),
       });
-      mockListRuns.mockResolvedValue({ runs: [runningRun] });
+      mockRuns({ running: [runningRun] });
 
       const result = await runGateChecks(makeCampaign());
       expect(result.allowed).toBe(false);
@@ -403,14 +422,59 @@ describe("Gate Check", () => {
     });
   });
 
+  describe("Bounded runs reads", () => {
+    it("never asks runs-service for the campaign's whole history", async () => {
+      await runGateChecks(makeCampaign({ maxLeads: 3 }));
+
+      expect(mockListRuns).toHaveBeenCalled();
+      for (const [params] of mockListRuns.mock.calls) {
+        // Every read states the status it wants AND a bound. An unfiltered, unbounded read
+        // replayed ~21k rows per gate check — i.e. per campaign per tick, fleet-wide.
+        expect(params.status).toBeDefined();
+        expect(params.limit).toBeGreaterThan(0);
+      }
+    });
+
+    it("reads only the RUNNING rows for stale cleanup + the in-progress guard", async () => {
+      await runGateChecks(makeCampaign());
+
+      const statuses = mockListRuns.mock.calls.map(([p]: [{ status?: string }]) => p.status);
+      expect(statuses).toEqual(["running"]);
+      const [params] = mockListRuns.mock.calls[0];
+      expect(params).toMatchObject({
+        orgId: "org-1",
+        serviceName: "campaign-service",
+        taskName: "campaign-1",
+        status: "running",
+      });
+    });
+
+    it("does not read completed runs at all when the campaign has no maxLeads cap", async () => {
+      await runGateChecks(makeCampaign({ maxLeads: null }));
+
+      const statuses = mockListRuns.mock.calls.map(([p]: [{ status?: string }]) => p.status);
+      expect(statuses).not.toContain("completed");
+    });
+
+    it("bounds the completed-run read by the cap it is compared against", async () => {
+      await runGateChecks(makeCampaign({ maxLeads: 3 }));
+
+      const completedCall = mockListRuns.mock.calls
+        .map(([p]: [{ status?: string; limit?: number }]) => p)
+        .find(p => p.status === "completed");
+      expect(completedCall).toMatchObject({ status: "completed", limit: 3 });
+    });
+  });
+
   describe("Volume check", () => {
     it("should auto-stop when maxLeads is reached", async () => {
-      const runs = [
-        makeRun({ id: "r1", status: "completed" }),
-        makeRun({ id: "r2", status: "completed" }),
-        makeRun({ id: "r3", status: "completed" }),
-      ];
-      mockListRuns.mockResolvedValue({ runs });
+      mockRuns({
+        completed: [
+          makeRun({ id: "r1", status: "completed" }),
+          makeRun({ id: "r2", status: "completed" }),
+          makeRun({ id: "r3", status: "completed" }),
+        ],
+      });
 
       // Mock lead stats
       mockFetch.mockResolvedValueOnce({
@@ -425,8 +489,7 @@ describe("Gate Check", () => {
     });
 
     it("should allow when maxLeads is not reached", async () => {
-      const runs = [makeRun({ id: "r1", status: "completed" })];
-      mockListRuns.mockResolvedValue({ runs });
+      mockRuns({ completed: [makeRun({ id: "r1", status: "completed" })] });
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -438,11 +501,12 @@ describe("Gate Check", () => {
     });
 
     it("should fallback to completed run count on 404 from lead-service", async () => {
-      const runs = [
-        makeRun({ id: "r1", status: "completed" }),
-        makeRun({ id: "r2", status: "completed" }),
-      ];
-      mockListRuns.mockResolvedValue({ runs });
+      mockRuns({
+        completed: [
+          makeRun({ id: "r1", status: "completed" }),
+          makeRun({ id: "r2", status: "completed" }),
+        ],
+      });
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -453,8 +517,43 @@ describe("Gate Check", () => {
       expect(result.allowed).toBe(true); // 2 completed < 5 maxLeads
     });
 
+    it("still reaches maxLeads for a campaign whose history dwarfs the bound", async () => {
+      // 50 lifetime completed runs against a cap of 3. The gate only ever receives the first 3
+      // (that is the whole point of the bound) — a count capped at the cap must still satisfy
+      // `>= maxLeads`, or a long-running campaign would never stop.
+      mockRuns({
+        completed: Array.from({ length: 50 }, (_, i) =>
+          makeRun({ id: `r${i}`, status: "completed" }),
+        ),
+      });
+
+      // lead-service 404 → the completed-run count IS totalServed, no other source.
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+
+      const result = await runGateChecks(makeCampaign({ maxLeads: 3 }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Max leads reached");
+      expect(result.autoStopped).toBe(true);
+    });
+
+    it("still reaches maxLeads via the history when lead-service under-reports", async () => {
+      mockRuns({
+        completed: Array.from({ length: 50 }, (_, i) =>
+          makeRun({ id: `r${i}`, status: "completed" }),
+        ),
+      });
+
+      // lead-service answers below the cap; the run history is what carries the campaign over it.
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ totalServed: 1 }) });
+
+      const result = await runGateChecks(makeCampaign({ maxLeads: 5 }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Max leads reached");
+      expect(result.autoStopped).toBe(true);
+    });
+
     it("should block on non-404 lead-service error (fail-closed)", async () => {
-      mockListRuns.mockResolvedValue({ runs: [] });
+      mockRuns();
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
