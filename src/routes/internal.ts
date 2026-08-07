@@ -462,6 +462,9 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
           taskName: campaignId,
           parentRunId: req.runId,
           status: "running",
+          // Already narrow — one marker row per parent run — but every listRuns in this service
+          // states a bound, so an unfiltered history read can never come back by accident.
+          limit: 10,
         });
         for (const run of runs) {
           await updateRun(run.id, status, identity);

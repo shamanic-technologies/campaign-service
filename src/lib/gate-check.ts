@@ -9,6 +9,14 @@ import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 
 const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
 
+// How many of the campaign's running rows the gate reads. The invariant is ONE run in flight per
+// campaign, and a row only stays `running` until its DAG ends or block 1 marks it stale, so this
+// is orders of magnitude above what a healthy campaign holds. It exists so an unbounded history
+// can never be pulled again — not as a tuning knob. Rows come back newest-first, so if a campaign
+// ever exceeded it the newest still block the tick (the guard stays correct) and the oldest are
+// cleaned on a later pass once the newer ones finish.
+const RUNNING_RUNS_LIMIT = 200;
+
 // The sales-outreach feature family (sales-cold-email-outreach + sales-crm-email-outreach) is
 // paced by the brand daily budget (billing-service brand_daily_budgets) and held on brand pause.
 // Every other feature is paced by the campaign's own budget windows and runs through a pause.
@@ -81,16 +89,24 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     workflowSlug: campaign.workflowSlug,
   };
 
-  // Fetch all runs for this campaign (needed for stale cleanup, running check, consecutive failures)
-  const { runs } = await listRuns({
+  // The campaign's RUNNING rows — all this gate needs for stale cleanup (block 1) and the
+  // one-run-at-a-time guard (block 2). Asking for the campaign's whole history instead was the
+  // single most expensive query in the fleet: runs-service serves `runs` as a VIEW over its
+  // event log, so every gate check replayed ~21k rows (workflow_context JSONB included) for a
+  // campaign that only ever has one live run — and every new run made the next one dearer.
+  // Filter + bound at the source; the lifetime count block 4 needs is read separately, and only
+  // when a maxLeads cap actually exists.
+  const { runs: runningRuns } = await listRuns({
     orgId: campaign.orgId,
     serviceName: "campaign-service",
     taskName: campaign.campaignId,
+    status: "running",
+    limit: RUNNING_RUNS_LIMIT,
   });
 
   // 1. Stale run cleanup — mark runs running > 30 min as failed
   const now = Date.now();
-  for (const run of runs) {
+  for (const run of runningRuns) {
     if (run.status === "running" && (now - new Date(run.startedAt).getTime()) > STALE_THRESHOLD_MS) {
       try {
         await updateRun(run.id, "failed", identity);
@@ -102,7 +118,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   }
 
   // 2. Running run check — only 1 run at a time per campaign
-  if (runs.some((r: Run) => r.status === "running")) {
+  if (runningRuns.some((r: Run) => r.status === "running")) {
     return { allowed: false, reason: "A run is already in progress" };
   }
 
@@ -300,7 +316,24 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
 
   // 4. Volume check
   if (campaign.maxLeads != null) {
-    const completedRuns = runs.filter((r: Run) => r.status === "completed");
+    // The completed-run count is a LIFETIME total, and it is the fallback for totalServed — so
+    // it cannot be bounded by a recency window without letting a campaign run past its cap
+    // forever. It CAN be bounded by the cap itself: the only thing done with the number is
+    // `>= campaign.maxLeads`, so asking for at most maxLeads rows answers that question exactly.
+    // Fewer than maxLeads rows come back → the count is exact; exactly maxLeads come back → the
+    // cap is reached whatever the true total is. Same decision, bounded by a configured number
+    // (1–5 in every campaign that ever set one) instead of by the campaign's whole history.
+    //
+    // runs-service exposes no per-campaign run COUNT, so this is the cheapest honest read of a
+    // lifetime total from here. A counting endpoint there would make it a single scalar — filed
+    // as a feature request rather than reconstructed locally.
+    const { runs: completedRuns } = await listRuns({
+      orgId: campaign.orgId,
+      serviceName: "campaign-service",
+      taskName: campaign.campaignId,
+      status: "completed",
+      limit: campaign.maxLeads,
+    });
     let totalServed: number;
     try {
       const leadStats = await fetchLeadStats(campaign.orgId, campaign.campaignId, campaign.brandId, identity);
