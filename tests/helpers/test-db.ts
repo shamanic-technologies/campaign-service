@@ -51,6 +51,15 @@ export async function insertTestCampaign(
     nextRunAt?: Date | null;
     createdByUserId?: string;
     parentRunId?: string;
+    // WHY it stopped — only `audience_exhausted` is resumable (src/lib/stop-reason.ts).
+    stopReason?: string | null;
+    funnelKey?: string | null;
+    // The two identity columns the partial unique index is built on. Written at creation by
+    // campaignIdentityColumns in the routes; stated explicitly here so a test can build the
+    // (org, brand, funnel, channel) collision the resume must refuse.
+    brandId?: string | null;
+    acquisitionChannel?: string | null;
+    updatedAt?: Date;
   } = {}
 ) {
   const [campaign] = await db
@@ -79,6 +88,11 @@ export async function insertTestCampaign(
       nextRunAt: data.nextRunAt ?? null,
       createdByUserId: data.createdByUserId || null,
       parentRunId: data.parentRunId || null,
+      stopReason: data.stopReason ?? null,
+      funnelKey: data.funnelKey ?? null,
+      brandId: data.brandId ?? null,
+      acquisitionChannel: data.acquisitionChannel ?? null,
+      ...(data.updatedAt ? { updatedAt: data.updatedAt } : {}),
     })
     .returning();
   return campaign;

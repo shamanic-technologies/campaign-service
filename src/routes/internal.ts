@@ -12,11 +12,12 @@ import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
 import { markAudienceExhausted, getFreshExhaustedAudienceIds } from "../lib/audience-exhaustion.js";
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
+import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
+import { STOP_REASONS } from "../lib/stop-reason.js";
 import {
   fetchWorkflowProjectionRows,
   fetchGoalArbitration,
   selectAudienceFromProjection,
-  hasServeableAudienceInProjection,
   type ProjectionRow,
 } from "../lib/features-workflow-projection-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
@@ -391,19 +392,11 @@ async function hasServeableAudience(
     workflowSlug: req.workflowSlug || campaign.workflowSlug,
     featureSlug,
   };
-  const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, identity);
-  const runtimeGoal: RuntimeGoal = campaign.goal ?? brandRuntimeContext.currentGoal;
-  const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
-  const rows = await fetchWorkflowProjectionRows({
-    featureSlug,
-    brandId: primaryBrandId,
-    goal: runtimeGoal,
-    identity,
-  });
-  return hasServeableAudienceInProjection(rows, {
-    requiredAudienceIds: campaign.audienceIds ?? undefined,
-    excludedAudienceIds,
-  });
+  // Same definition the resume sweep reads. The two must agree: the leg that stops a campaign
+  // for having nobody left and the leg that brings it back once it has somebody cannot each
+  // carry their own idea of what "somebody" means.
+  const ids = await serveableAudienceIdsForCampaign(campaign, featureSlug, identity);
+  return ids.length > 0;
 }
 
 /**
@@ -512,9 +505,18 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
             void maybeSendExtendAudienceEmail(campaign, { runId: req.runId });
           }
           await db.update(campaigns)
-            .set({ status: "stopped", nextRunAt: null, updatedAt: new Date() })
+            // States WHY it stopped, and it is the ONE reason a campaign comes back by itself:
+            // the customer was just asked to extend an audience, so their doing it has to be
+            // enough to restart the campaign. Without the reason on the row, "resume the ones
+            // that ran out of people" could not be told from "resume the ones a person stopped".
+            .set({
+              status: "stopped",
+              stopReason: STOP_REASONS.AUDIENCE_EXHAUSTED,
+              nextRunAt: null,
+              updatedAt: new Date(),
+            })
             .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)));
-          console.log(`[campaign-service] All targeted audiences exhausted — auto-stopped campaign ${campaignId}`);
+          console.log(`[campaign-service] All targeted audiences exhausted — auto-stopped campaign ${campaignId} (stopReason=${STOP_REASONS.AUDIENCE_EXHAUSTED}; resumes on its own once the brand has a serveable audience again)`);
           return;
         }
         // Serveable audiences remain → do NOT stop; fall through to the reschedule below.
@@ -646,7 +648,8 @@ router.delete("/internal/campaigns/by-org/:orgId", requireApiKey, async (req, re
     const result = await db.transaction(async (tx) => {
       const disabledCampaigns = await tx
         .update(campaigns)
-        .set({ status: "stopped", nextRunAt: null, updatedAt: new Date() })
+        // The org is gone. Stating it keeps these rows out of the resume sweep for good.
+        .set({ status: "stopped", stopReason: STOP_REASONS.ORG_TEARDOWN, nextRunAt: null, updatedAt: new Date() })
         .where(and(
           eq(campaigns.orgId, orgId),
           or(

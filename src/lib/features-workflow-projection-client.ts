@@ -347,6 +347,19 @@ export function hasServeableAudienceInProjection(
   rows: ProjectionRow[],
   opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[] } = {},
 ): boolean {
+  return serveableAudienceIdsInProjection(rows, opts).length > 0;
+}
+
+/**
+ * WHICH audiences are serveable — the same set hasServeableAudienceInProjection reduces to a
+ * boolean. Named separately because a resume has to SAY what made the campaign serveable again:
+ * "campaign X came back because audience Y is now reachable" is the only way the fleet number can
+ * be checked afterwards, and a boolean cannot say it. Sorted so the log line is stable.
+ */
+export function serveableAudienceIdsInProjection(
+  rows: ProjectionRow[],
+  opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[] } = {},
+): string[] {
   let ids = new Set<string>();
   for (const r of rows) if (r.audienceId != null) ids.add(r.audienceId);
 
@@ -357,7 +370,7 @@ export function hasServeableAudienceInProjection(
   if (opts.excludedAudienceIds) {
     for (const e of opts.excludedAudienceIds) ids.delete(e);
   }
-  return ids.size > 0;
+  return [...ids].sort();
 }
 
 /**

@@ -107,7 +107,9 @@ describe("ensureRunnableSalesOutreachCampaign", () => {
       now,
     })).resolves.toEqual({ action: "resumed", campaign: resumed });
 
-    expect(mut.fns.set).toHaveBeenCalledWith({ status: "ongoing", nextRunAt: now, updatedAt: now });
+    // stopReason clears with the resume: the stop it described is over, and an ongoing campaign
+    // must never read as a resume candidate.
+    expect(mut.fns.set).toHaveBeenCalledWith({ status: "ongoing", stopReason: null, nextRunAt: now, updatedAt: now });
     expect(mut.insert).not.toHaveBeenCalled();
   });
 

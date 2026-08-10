@@ -64,6 +64,11 @@ export const CampaignSchema = z.object({
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),
   status: z.string(),
+  // WHY the campaign stopped: audience_exhausted | max_leads_reached | manual | org_teardown.
+  // Null on an ongoing campaign, and on every campaign stopped before the reason was recorded.
+  // A campaign that stopped because it ran out of people to contact (audience_exhausted) comes
+  // back by itself once the brand has somebody to contact again; no other reason does.
+  stopReason: z.string().nullable(),
   nextRunAt: z.string().nullable(),
   notifyFrequency: z.string().nullable(),
   notifyChannel: z.string().nullable(),

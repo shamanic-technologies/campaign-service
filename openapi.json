@@ -135,6 +135,10 @@
           "status": {
             "type": "string"
           },
+          "stopReason": {
+            "type": "string",
+            "nullable": true
+          },
           "nextRunAt": {
             "type": "string",
             "nullable": true
@@ -185,6 +189,7 @@
           "startDate",
           "endDate",
           "status",
+          "stopReason",
           "nextRunAt",
           "notifyFrequency",
           "notifyChannel",

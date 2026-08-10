@@ -132,6 +132,21 @@ export const campaigns = pgTable(
 
     // Status: 'ongoing' or 'stopped'
     status: text("status").notNull().default("ongoing"),
+
+    // WHY this campaign stopped — see STOP_REASONS in src/lib/stop-reason.ts for the vocabulary.
+    //
+    // Load-bearing for exactly one decision: a campaign that stopped because it ran out of people
+    // to contact comes back on its own once the brand has somebody to contact again, and a
+    // campaign stopped for ANY other reason never does. Without a recorded reason those two are
+    // the same row, so "resume the exhausted ones" would also resurrect the ones a person
+    // switched off on purpose.
+    //
+    // NULL = not recorded (every row stopped before migration 0046, and every ongoing row). Never
+    // resumed: a stop nobody wrote a reason for is not evidence of exhaustion. Cleared back to
+    // NULL whenever a campaign becomes ongoing again, so the column always describes the CURRENT
+    // stop, never a previous one.
+    stopReason: text("stop_reason"),
+
     nextRunAt: timestamp("next_run_at", { withTimezone: true }),
 
     // Notifications (legacy - to be replaced by reportingFrequency)
@@ -146,6 +161,11 @@ export const campaigns = pgTable(
     index("idx_campaigns_org").on(table.orgId),
     uniqueIndex("uniq_campaigns_org_name").on(table.orgId, table.name),
     index("idx_campaigns_org_feature_funnel").on(table.orgId, table.featureSlug, table.funnelKey),
+    // Serves the resume sweep's only read — the stopped campaigns that ran out of people to
+    // contact. Partial so it covers that narrow population and not the whole stopped history.
+    index("idx_campaigns_resumable")
+      .on(table.stopReason, table.updatedAt)
+      .where(sql`${table.status} = 'stopped' and ${table.stopReason} is not null`),
     // A campaign is unique on (org, brand, sales funnel, acquisition channel) — see migration 0044.
     // Scoped to `ongoing`: a stopped row is history, not a competitor for the brand's turn.
     // `coalesce(funnel_key, '')` is load-bearing — Postgres treats NULLs as distinct, so without it
