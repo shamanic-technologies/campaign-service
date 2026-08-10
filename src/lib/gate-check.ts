@@ -6,6 +6,7 @@ import { anyBrandPaused } from "./brand-pause.js";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
 import { fetchFunnelBudgets } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
+import { STOP_REASONS } from "./stop-reason.js";
 
 const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
 
@@ -357,9 +358,12 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
 
 async function autoStopCampaign(campaignId: string): Promise<void> {
   await db.update(campaigns)
-    .set({ status: "stopped", updatedAt: new Date() })
+    // States WHY, so the resume sweep can tell this apart from a campaign that ran out of people
+    // to contact. A lead cap is a limit the campaign reached, not one it can grow out of: it
+    // never comes back on its own.
+    .set({ status: "stopped", stopReason: STOP_REASONS.MAX_LEADS_REACHED, updatedAt: new Date() })
     .where(eq(campaigns.id, campaignId));
-  console.log(`[campaign-service] Auto-stopped campaign ${campaignId}`);
+  console.log(`[campaign-service] Auto-stopped campaign ${campaignId} (max leads reached)`);
 }
 
 async function fetchLeadStats(

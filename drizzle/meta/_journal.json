@@ -323,6 +323,13 @@
       "when": 1777000000000,
       "tag": "0045_owner_funnel_decision_f4d73dab",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1777100000000,
+      "tag": "0046_campaign_stop_reason",
+      "breakpoints": true
     }
   ]
 }

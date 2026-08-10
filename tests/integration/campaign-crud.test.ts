@@ -242,6 +242,24 @@ describe("Campaign CRUD", () => {
         .expect(200);
 
       expect(activateRes.body.campaign.status).toBe("ongoing");
+      // The stop it described is over, so the reason goes with it.
+      expect(activateRes.body.campaign.stopReason).toBeNull();
+    });
+
+    it("records a hand stop as `manual`, so nothing ever brings it back on its own", async () => {
+      const createRes = await createCampaign().expect(201);
+      const campaignId = createRes.body.campaign.id;
+
+      const stopRes = await request(app)
+        .patch(`/campaigns/${campaignId}`)
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({ status: "stop" })
+        .expect(200);
+
+      expect(stopRes.body.campaign.status).toBe("stopped");
+      // `manual` is not resumable: stopping a campaign on purpose has to stay stopped.
+      expect(stopRes.body.campaign.stopReason).toBe("manual");
     });
 
     it("should update featureInputs", async () => {

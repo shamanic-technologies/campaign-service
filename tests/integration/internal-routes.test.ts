@@ -1243,6 +1243,10 @@ describe("Pipeline routes", () => {
       });
       expect(updated!.status).toBe("stopped");
       expect(updated!.nextRunAt).toBeNull();
+      // And it says WHY. This is the one reason a campaign comes back on its own — the customer
+      // is emailed asking them to extend an audience, so their doing it has to restart it. A stop
+      // that does not record this reason is a campaign that stays stopped forever.
+      expect(updated!.stopReason).toBe("audience_exhausted");
     });
 
     it("should set nextRunAt and NOT fire-and-forget when stopCampaign is false", async () => {
