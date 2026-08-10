@@ -10,6 +10,7 @@ import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflow
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { campaignIdentityColumns } from "../lib/campaign-identity.js";
+import { STOP_REASONS } from "../lib/stop-reason.js";
 
 const router = Router();
 
@@ -381,6 +382,10 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     const updates = { ...req.body, updatedAt: new Date() };
     if (updates.status) {
       updates.status = statusMap[updates.status] ?? updates.status;
+      // A person stopping a campaign is a decision, and it says so on the row: `manual` is not
+      // resumable, so nothing brings this campaign back on its own. Activating clears the reason
+      // — the stop it described is over.
+      updates.stopReason = req.body.status === "stop" ? STOP_REASONS.MANUAL : null;
     }
 
     const [updated] = await db

@@ -100,7 +100,9 @@ export async function ensureRunnableSalesOutreachCampaign(
 
     const [campaign] = await store
       .update(campaigns)
-      .set({ status: "ongoing", nextRunAt: now, updatedAt: now })
+      // Clearing stopReason keeps the column describing the CURRENT state: the stop it described
+      // is over, and an ongoing campaign must never look like a resume candidate.
+      .set({ status: "ongoing", stopReason: null, nextRunAt: now, updatedAt: now })
       .where(and(
         eq(campaigns.id, stopped.id),
         eq(campaigns.orgId, orgId),

@@ -6,6 +6,11 @@ import { resolveWorkflowSlugForTrigger } from "./features-workflow-projection-cl
 import { listRuns } from "@distribute/runs-client";
 import { notPausedBrandClause } from "./brand-pause.js";
 import { planFunnelTurns } from "./funnel-campaigns.js";
+import {
+  countResumableCampaigns,
+  resumeServeableCampaigns,
+  RESUME_SWEEP_INTERVAL_MS,
+} from "./campaign-resume.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -336,6 +341,11 @@ async function tick(): Promise<void> {
   isRunning = true;
   try {
     try {
+      // Bring back the campaigns that ran out of people to contact and now have people again,
+      // BEFORE the claim — a campaign resumed here is due immediately, so it takes its turn on
+      // this very tick instead of waiting for the next one. Throttled to its own cadence
+      // (RESUME_SWEEP_INTERVAL_MS), so a 60s tick does not turn into a 60s fan-out.
+      await resumeServeableCampaigns();
       await claimStuckCampaigns();
       await reRunDueCampaigns();
     } catch (err) {
@@ -345,6 +355,13 @@ async function tick(): Promise<void> {
     let delayMs = ACTIVE_INTERVAL_MS;
     try {
       delayMs = computeNextDelayMs(await loadOngoingSnapshot());
+      // A brand whose only campaign is stopped-for-exhaustion has an EMPTY ongoing snapshot, so
+      // the cadence above sleeps the full idle hour and the resume sweep would only run once an
+      // hour however often it is willing to run. While there is anything to bring back, sleep no
+      // longer than the sweep's own cadence.
+      if (delayMs > RESUME_SWEEP_INTERVAL_MS && (await countResumableCampaigns()) > 0) {
+        delayMs = RESUME_SWEEP_INTERVAL_MS;
+      }
     } catch (err) {
       console.error("[campaign-service] Scheduler delay computation error:", err);
     }

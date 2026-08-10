@@ -86,6 +86,14 @@ vi.mock("../../src/lib/funnel-campaigns.js", () => ({
   planFunnelTurns: vi.fn(async () => new Map()),
 }));
 
+// The resume sweep has its own suite (tests/integration/campaign-resume.test.ts) and needs a real
+// DB. Inert here so the narrowly-mocked db/schema/drizzle-orm above stay sufficient.
+vi.mock("../../src/lib/campaign-resume.js", () => ({
+  resumeServeableCampaigns: vi.fn(async () => 0),
+  countResumableCampaigns: vi.fn(async () => 0),
+  RESUME_SWEEP_INTERVAL_MS: 600_000,
+}));
+
 import {
   reRunDueCampaigns,
   claimStuckCampaigns,
