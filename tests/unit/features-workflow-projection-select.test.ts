@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
+  fetchWorkflowProjectionRows,
   selectAudienceFromProjection,
   hasServeableAudienceInProjection,
   type ProjectionRow,
@@ -157,5 +158,75 @@ describe("hasServeableAudienceInProjection", () => {
   it("counts an audience under ANY workflow (workflow-agnostic)", () => {
     const rows = [row("aud-a", "wf-a"), row("aud-b", "wf-b")];
     expect(hasServeableAudienceInProjection(rows, {})).toBe(true);
+  });
+});
+
+// ── What the projection is PRICED on: the funnel a campaign states, else the brand's goal ──
+describe("fetchWorkflowProjectionRows pricing key", () => {
+  const identity = {
+    orgId: "org-1",
+    userId: "user-1",
+    runId: "11111111-1111-4111-8111-111111111111",
+    campaignId: "camp-1",
+    brandId: "brand-1",
+    workflowSlug: "wf-1",
+    featureSlug: "sales-cold-email-outreach",
+  };
+
+  function stubOk() {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ rows: [] }),
+      text: async () => "{}",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  beforeEach(() => {
+    process.env.FEATURES_SERVICE_URL = "http://features-service";
+    process.env.FEATURES_SERVICE_API_KEY = "test-key";
+  });
+
+  it("sends the FUNNEL when the campaign states one — it wins over a goal at features-service", async () => {
+    const fetchMock = stubOk();
+    await fetchWorkflowProjectionRows({
+      featureSlug: "sales-cold-email-outreach",
+      brandId: "brand-1",
+      funnelKey: "sales_meetings_from_website",
+      goal: null,
+      identity,
+    });
+    const href = fetchMock.mock.calls[0][0].toString();
+    expect(href).toContain("funnel=sales_meetings_from_website");
+    expect(href).not.toContain("goal=");
+  });
+
+  it("sends the brand's GOAL for a campaign that states no funnel — a feature with no sales funnel", async () => {
+    const fetchMock = stubOk();
+    await fetchWorkflowProjectionRows({
+      featureSlug: "pr-cold-email-outreach",
+      brandId: "brand-1",
+      funnelKey: null,
+      goal: "positiveReply",
+      identity,
+    });
+    const href = fetchMock.mock.calls[0][0].toString();
+    expect(href).toContain("goal=positiveReply");
+    expect(href).not.toContain("funnel=");
+  });
+
+  it("THROWS when given neither — features-service reads an absent goal as a silent meeting-booked default", async () => {
+    stubOk();
+    await expect(
+      fetchWorkflowProjectionRows({
+        featureSlug: "sales-cold-email-outreach",
+        brandId: "brand-1",
+        funnelKey: null,
+        goal: null,
+        identity,
+      }),
+    ).rejects.toThrow(/needs the funnel/);
   });
 });
