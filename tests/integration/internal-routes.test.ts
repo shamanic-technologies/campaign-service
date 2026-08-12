@@ -482,10 +482,14 @@ describe("Pipeline routes", () => {
 
     // === Campaign v2: per-campaign own config ===
 
-    it("should pace on the campaign's OWN goal (override brand currentGoal) when set", async () => {
-      // Brand runtime goal is 'signup' (mock default). The campaign owns 'purchase' → the
-      // workflow-projection fetch (which now drives both legs) must pace on 'purchase'.
-      const campaign = await insertTestCampaign(orgId, { brandIds, goal: "purchase" });
+    it("should price on the FUNNEL the campaign states, not on any goal", async () => {
+      // The brand's goal is 'signup' (mock default) and it is irrelevant here: the campaign states
+      // the funnel it sells, which is the only word that separates a meeting bought with a positive
+      // reply from one bought with a click onto the site.
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        funnelKey: "sales_meetings_from_website",
+      });
 
       await request(app)
         .post("/start-run")
@@ -493,7 +497,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(mockFetchCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ goal: "purchase" }),
+        expect.objectContaining({ funnelKey: "sales_meetings_from_website", goal: null }),
       );
     });
 
@@ -533,7 +537,9 @@ describe("Pipeline routes", () => {
       );
     });
 
-    it("should pace on a campaign goal outside the legacy three values", async () => {
+    it("should ignore a legacy goal still stored on the row — the funnel is what it sells", async () => {
+      // A row written before the goal stopped being written still carries one. It changes nothing:
+      // pricing follows the funnel when there is one, and the brand's goal when there is not.
       const campaign = await insertTestCampaign(orgId, { brandIds, goal: "positiveReply" });
 
       await request(app)
@@ -542,7 +548,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(mockFetchCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ goal: "positiveReply" }),
+        expect.objectContaining({ funnelKey: null, goal: "signup" }),
       );
     });
 
@@ -588,8 +594,8 @@ describe("Pipeline routes", () => {
       expect(res.body.audienceId).toBe(DEFAULT_AUDIENCE_ID);
     });
 
-    it("should NOT arbitrate a campaign that states its own goal", async () => {
-      const campaign = await insertTestCampaign(orgId, { brandIds, goal: "websiteVisit" });
+    it("should NOT arbitrate a campaign that STATES ITS FUNNEL — the customer's funding decided it", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds, funnelKey: "form_magnet" });
 
       await request(app)
         .post("/start-run")
@@ -598,7 +604,7 @@ describe("Pipeline routes", () => {
 
       expect(mockFetchArbitration).not.toHaveBeenCalled();
       expect(mockFetchCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ goal: "websiteVisit" }),
+        expect.objectContaining({ funnelKey: "form_magnet", goal: null }),
       );
     });
 

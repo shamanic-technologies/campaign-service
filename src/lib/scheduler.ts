@@ -107,7 +107,6 @@ export async function reRunDueCampaigns(): Promise<number> {
       activeGoalId: campaigns.activeGoalId,
       brandProfileId: campaigns.brandProfileId,
       audienceId: campaigns.audienceId,
-      goal: campaigns.goal,
       funnelKey: campaigns.funnelKey,
     });
 
@@ -186,8 +185,9 @@ export async function reRunDueCampaigns(): Promise<number> {
             featureSlug,
           },
           fallbackSlug: campaign.workflowSlug,
-          // Campaign v2: pace the workflow pick on the campaign's own goal when set.
-          goalOverride: campaign.goal,
+          // Price the pick on the funnel the campaign STATES — the only word that separates the
+          // two meeting funnels. A campaign that states one is never goal-arbitrated.
+          funnelKey: campaign.funnelKey,
         });
         await executeCampaignWorkflow(workflowSlug, {
           campaignId: campaign.id,

@@ -330,6 +330,13 @@
       "when": 1777100000000,
       "tag": "0046_campaign_stop_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1777200000000,
+      "tag": "0047_live_campaign_funnel_from_declaration",
+      "breakpoints": true
     }
   ]
 }

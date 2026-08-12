@@ -262,8 +262,9 @@
             "nullable": true,
             "minLength": 1
           },
-          "goal": {
-            "$ref": "#/components/schemas/RuntimeGoal"
+          "funnelKey": {
+            "type": "string",
+            "minLength": 1
           },
           "audienceIds": {
             "type": "array",
@@ -367,9 +368,6 @@
             "type": "string",
             "nullable": true,
             "minLength": 1
-          },
-          "goal": {
-            "$ref": "#/components/schemas/RuntimeGoal"
           },
           "audienceIds": {
             "type": "array",

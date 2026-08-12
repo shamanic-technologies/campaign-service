@@ -1,12 +1,11 @@
-import { and, arrayContains, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, arrayContains, desc, eq } from "drizzle-orm";
 import { getStatsBudget, listRuns, type IdentityHeaders } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { fetchFunnelBudgets, fundedFunnels, type FunnelBudget } from "./funnel-budget-client.js";
 import { fetchDeclaredSalesFunnels, type DeclaredSalesFunnel } from "./brand-sales-funnels-client.js";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
-import { readBrandGoal, resolveCampaignFunnelKey } from "./funnel-adoption.js";
-import { acceptedFunnelKeys, goalForFunnel, toFunnelKey } from "./sales-funnel-vocabulary.js";
+import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { campaignIdentityColumns } from "./campaign-identity.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
@@ -27,7 +26,6 @@ export interface ClaimedFunnelCampaign {
   brandIds: string[] | null;
   featureSlug: string | null;
   funnelKey: string | null;
-  goal?: string | null;
 }
 
 /** One funnel campaign in the running to take the brand's next turn. */
@@ -207,20 +205,14 @@ async function planOneBrand(
 }
 
 /**
- * Make sure every funded funnel of the brand HAS a campaign — the one that is already doing that
- * funnel's work whenever there is one, and a new one only when there is not.
+ * Make sure every funded funnel of the brand HAS a campaign.
  *
- * A brand that has been running outreach for months keeps THAT campaign when it funds the funnel
- * that campaign was already working: it becomes the funnel's campaign, keeping its id, its
- * months of runs and every cost attributed to it. Standing up a second, empty campaign beside it
- * left the working one looking dead and the live one looking like it had produced nothing.
- *
- * The campaign STATES its funnel, and that is the whole statement of what it sells. It also
- * carries the goal that funnel corresponds to — a legacy alias for consumers still reading a goal
- * off our rows, and what stops the campaign being goal-arbitrated: a campaign that states its own
- * goal is never arbitrated, so features-service keeps answering the best workflow and the
- * per-audience evidence and stops being the thing that chooses which funnel runs. The customer's
- * funding decides that.
+ * The campaign STATES its funnel, and that statement is the whole vocabulary for what it sells.
+ * Nothing here reads a goal to work out which funnel an existing campaign is on: every campaign
+ * states its funnel from birth (creation refuses a sales campaign that does not), so there is
+ * nothing left to attribute and nothing that can be unattributable. A brand that funds a funnel
+ * gets a campaign for that funnel, full stop — no campaign of the brand can hold provisioning
+ * back any more.
  *
  * A funnel billing funds but brand-service does not declare (or declares inactive) is skipped: a
  * switched-off funnel must never be worked, whatever ceiling billing still holds for it.
@@ -247,52 +239,8 @@ async function ensureFundedFunnelCampaigns({
 
   const declaredKeys = new Set(declared.map((f) => f.funnelKey));
 
-  // Every alive campaign of this (org, brand, feature) that has not yet stated a funnel, oldest
-  // first — the oldest is the one carrying the history, the spend and the results.
-  const funnelless = await db.query.campaigns.findMany({
-    where: and(
-      eq(campaigns.orgId, seed.orgId),
-      eq(campaigns.featureSlug, featureSlug),
-      eq(campaigns.status, "ongoing"),
-      isNull(campaigns.funnelKey),
-      arrayContains(campaigns.brandIds, [brandId]),
-    ),
-    orderBy: [asc(campaigns.createdAt)],
-  });
-
-  // The brand's goal is what tells us which funnel a campaign that states none is already
-  // working. Read at most once per brand per tick, and only when there is something to adopt.
-  const brandGoal = funnelless.length > 0
-    ? await readBrandGoal(brandId, {
-        orgId: seed.orgId,
-        userId: seed.createdByUserId,
-        campaignId: seed.id,
-        workflowSlug: seed.workflowSlug,
-        featureSlug,
-      })
-    : null;
-
-  const incumbentByFunnel = new Map<string, { id: string }>();
-  // A funnel-less campaign whose goal names no single funnel — the brand sells through several
-  // (`combinedSales`), or the goal stops short of a paid client. We do NOT guess which funnel it
-  // works: the funnel is a stored fact, not an inference. But "unknown" must not mean the working
-  // campaign loses its turn to an empty one, so while such a campaign is alive this brand grows NO
-  // new funnel campaigns — see the provisioning branch below.
-  let hasUnattributableIncumbent = false;
-  for (const c of funnelless) {
-    const key = resolveCampaignFunnelKey(c.goal, brandGoal);
-    if (!key) {
-      hasUnattributableIncumbent = true;
-      continue;
-    }
-    if (!incumbentByFunnel.has(key)) incumbentByFunnel.set(key, c);
-  }
-
   for (const f of funded) {
     if (!declaredKeys.has(f.funnelKey)) continue;
-    // The goal the funnel corresponds to — a legacy alias for consumers still reading one, and
-    // what keeps this campaign out of goal arbitration. Never read back to find the funnel.
-    const goal = goalForFunnel(f.funnelKey);
 
     const existing = await db.query.campaigns.findFirst({
       where: and(
@@ -303,51 +251,6 @@ async function ensureFundedFunnelCampaigns({
       ),
       orderBy: [desc(campaigns.createdAt)],
     });
-
-    // Whichever alive campaign is already doing this funnel's work owns the funnel — the oldest
-    // one, i.e. the one carrying the history. Checked even when a funnel campaign exists, so a
-    // brand that already grew an empty duplicate is repaired rather than left with two.
-    const incumbent = incumbentByFunnel.get(f.funnelKey) ?? null;
-
-    if (incumbent) {
-      await db
-        .update(campaigns)
-        .set({ funnelKey: f.funnelKey, goal, updatedAt: now })
-        .where(and(eq(campaigns.id, incumbent.id), eq(campaigns.orgId, seed.orgId)));
-      // An empty campaign this service stood up for a funnel its incumbent was already working
-      // is this bug's own leftover: it never ran and never spent, and leaving it would keep two
-      // campaigns on one funnel. Nothing that ever ran is ever removed — see isRemovableStandIn.
-      if (existing && (await isRemovableStandIn(existing, seed.orgId, brandId, featureSlug))) {
-        await db
-          .delete(campaigns)
-          .where(and(eq(campaigns.id, existing.id), eq(campaigns.orgId, seed.orgId)));
-        console.log(
-          `[campaign-service] funnel ${f.funnelKey} of brand ${brandId}: kept campaign ${incumbent.id} ` +
-          `(its own history) and dropped the empty stand-in ${existing.id} (never ran, never spent)`,
-        );
-      }
-      continue;
-    }
-
-    // The brand sells through several funnels and the campaign already doing the work does not say
-    // which. Standing a funnel campaign up beside it would duplicate its work AND let the pair
-    // spend both ceilings on top of each other — the incumbent paces on the brand-level pot, which
-    // billing answers as the SUM of exactly these funnels. So nothing new is provisioned while the
-    // ambiguity lasts; the working campaign keeps running on that pot, exactly as it did before
-    // per-funnel funding existed. An empty stand-in this bug already produced is dropped here.
-    if (hasUnattributableIncumbent) {
-      if (existing && (await isRemovableStandIn(existing, seed.orgId, brandId, featureSlug))) {
-        await db
-          .delete(campaigns)
-          .where(and(eq(campaigns.id, existing.id), eq(campaigns.orgId, seed.orgId)));
-        console.log(
-          `[campaign-service] funnel ${f.funnelKey} of brand ${brandId}: dropped the empty stand-in ` +
-          `${existing.id} (never ran, never spent) — the brand's alive campaign states no funnel and ` +
-          `its goal names no single one, so nothing is provisioned beside it`,
-        );
-      }
-      continue;
-    }
 
     if (existing) {
       // A funnel the customer re-funded after switching it off resumes rather than duplicating.
@@ -374,10 +277,10 @@ async function ensureFundedFunnelCampaigns({
         brandIds: [brandId],
         ...campaignIdentityColumns({ brandIds: [brandId], featureSlug }),
         featureSlug,
+        // The funnel says what this campaign sells, and it is the only word for it. `goal` is
+        // NOT written any more: it could not tell the two meeting funnels apart, and a consumer
+        // reading it reads a poorer statement of the same thing.
         funnelKey: f.funnelKey,
-        // The funnel says what this campaign sells. `goal` is the legacy alias of that same
-        // statement, kept for consumers still reading one.
-        goal,
         featureInputs: null,
         status: "ongoing",
         nextRunAt: now,
@@ -395,50 +298,6 @@ async function ensureFundedFunnelCampaigns({
 
 export function funnelCampaignName(featureSlug: string, brandId: string, funnelKey: string): string {
   return `${featureSlug} - ${brandId} - ${funnelKey}`;
-}
-
-/**
- * True only for a campaign THIS service stood up for a funnel and that has never done anything:
- * the name it was provisioned under, no run of its own in runs-service, and no cost attributed
- * to it. Such a row is this bug's own leftover, created within hours of the incumbent being
- * parked, and removing it is undoing our write — never a customer's campaign.
- *
- * Every condition is required and every read fails CLOSED: an unreadable run list or spend
- * figure answers "not removable", so nothing is ever removed on a blind guess.
- */
-async function isRemovableStandIn(
-  existing: { id: string; name: string },
-  orgId: string,
-  brandId: string,
-  featureSlug: string,
-): Promise<boolean> {
-  // Both vocabularies: a stand-in provisioned before the funnel rename carries the pre-rename
-  // spelling in its NAME, and migration 0043 rewrites those names — but a replica running the old
-  // code between the two would recreate one. Accepting both costs nothing and never widens what
-  // is removable: every other condition still has to hold.
-  const provisionedNames = new Set(
-    acceptedFunnelKeys().map((k) => funnelCampaignName(featureSlug, brandId, k)),
-  );
-  if (!provisionedNames.has(existing.name)) return false;
-
-  try {
-    const { runs } = await listRuns({ orgId, campaignId: existing.id, limit: 1 });
-    if (runs.length > 0) return false;
-
-    const budget = await getStatsBudget({
-      orgId,
-      campaignId: existing.id,
-      featureSlug,
-      windows: [{ label: "lifetime", since: new Date(0).toISOString() }],
-    });
-    const lifetime = budget.windows.find((w) => w.label === "lifetime");
-    const spent = lifetime
-      ? parseFloat(lifetime.netTotalCostInUsdCents ?? lifetime.totalCostInUsdCents) || 0
-      : 0;
-    return spent === 0;
-  } catch {
-    return false;
-  }
 }
 
 /**
