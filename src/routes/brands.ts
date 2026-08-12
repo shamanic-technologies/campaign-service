@@ -68,8 +68,6 @@ router.patch("/brands/:brandId/pause", requireApiKey, serviceAuth, validateBody(
         await ensureRunnableSalesOutreachCampaign(tx, {
           orgId,
           brandId,
-          userId: req.userId,
-          runId: req.runId,
           // Feature-agnostic un-pause: seed the feature the caller is resuming (forwarded as
           // x-feature-slug), NOT a hardcoded cold. Absent (brand-level dashboard un-pause carries
           // no feature) → defaults to sales-cold-email-outreach inside ensureRunnable.

@@ -10,7 +10,7 @@ import {
 /** The campaign fields the serveable-audience read needs. */
 export type ServeableAudienceCampaign = Pick<
   Campaign,
-  "id" | "orgId" | "goal" | "audienceIds"
+  "id" | "orgId" | "funnelKey" | "audienceIds"
 >;
 
 /**
@@ -26,10 +26,10 @@ export type ServeableAudienceCampaign = Pick<
  * The audience set comes from features-service, which owns it — this service never reaches into
  * the service that owns audiences to decide whether a brand has somebody to contact.
  *
- * Deliberately does NOT arbitrate the goal, unlike /start-run. Audience MEMBERSHIP is
- * goal-independent (features-service enumerates every active audience of the brand per dynasty
- * whatever the goal; the goal only changes the cost metric attached to each row), so asking on
- * the brand goal returns the same set. If that ever stopped holding this would see a SUPERSET,
+ * Deliberately does NOT arbitrate, unlike /start-run. Audience MEMBERSHIP does not depend on what
+ * the campaign sells (features-service enumerates every active audience of the brand per dynasty
+ * either way; the funnel/goal only changes the cost metric attached to each row), so asking on the
+ * campaign's own funnel returns the same set. If that ever stopped holding this would see a SUPERSET,
  * which is the safe direction for both callers: it can only keep a campaign alive or bring one
  * back, never stop one wrongly.
  *
@@ -41,13 +41,17 @@ export async function serveableAudienceIdsForCampaign(
   featureSlug: string,
   identity: DownstreamIdentity,
 ): Promise<string[]> {
-  const brandRuntimeContext = await fetchBrandRuntimeContext(identity.brandId, identity);
-  const runtimeGoal: RuntimeGoal = campaign.goal ?? brandRuntimeContext.currentGoal;
+  // A campaign that states its funnel is priced on it; only one that states none needs a goal,
+  // and only the brand can answer that.
+  const goal: RuntimeGoal | null = campaign.funnelKey
+    ? null
+    : (await fetchBrandRuntimeContext(identity.brandId, identity)).currentGoal;
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
   const rows = await fetchWorkflowProjectionRows({
     featureSlug,
     brandId: identity.brandId,
-    goal: runtimeGoal,
+    funnelKey: campaign.funnelKey,
+    goal,
     identity,
   });
   return serveableAudienceIdsInProjection(rows, {

@@ -220,16 +220,20 @@ describe("resolveWorkflowSlugForTrigger — goal arbitration", () => {
     expect(warnSpy).toHaveBeenCalled();
   });
 
-  it("never arbitrates a campaign that states its OWN goal — that is a manual override", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routeFetch({ projection: jsonResponse({ rows: [rawRow(null, "wf-own-goal", 3)] }) }),
-    );
+  it("never arbitrates a campaign that STATES ITS FUNNEL — the customer's funding decided it", async () => {
+    const fetchMock = routeFetch({ projection: jsonResponse({ rows: [rawRow(null, "wf-funnel", 3)] }) });
+    vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      resolveWorkflowSlugForTrigger({ ...baseArgs, goalOverride: "websiteVisit" }),
-    ).resolves.toBe("wf-own-goal");
+      resolveWorkflowSlugForTrigger({ ...baseArgs, funnelKey: "sales_meetings_from_website" }),
+    ).resolves.toBe("wf-funnel");
     // routeFetch throws on an unexpected goal-arbitration call, so reaching here proves none was made.
+    // The projection is priced on the FUNNEL — the only word that separates the two meeting funnels —
+    // and no goal is sent, nor is the brand's goal even read.
+    const href = fetchMock.mock.calls[0][0].toString();
+    expect(href).toContain("funnel=sales_meetings_from_website");
+    expect(href).not.toContain("goal=");
+    expect(mockFetchBrandRuntimeContext).not.toHaveBeenCalled();
   });
 
   it("does not call features-service at all for a non-rotating feature", async () => {

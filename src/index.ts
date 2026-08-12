@@ -17,7 +17,6 @@ import statsRoutes from "./routes/stats.js";
 import internalRoutes from "./routes/internal.js";
 import { startScheduler } from "./lib/scheduler.js";
 import { registerExtendAudienceTemplate } from "./lib/transactional-email.js";
-import { runFunnelBackfill } from "./lib/funnel-backfill.js";
 const app = express();
 const PORT = process.env.PORT || 3003;
 
@@ -75,10 +74,6 @@ if (process.env.NODE_ENV !== "test") {
         // Register lifecycle email templates AFTER port-bind, fire-and-forget: a slow or
         // down transactional-email-service must never delay boot or fail the deploy.
         void registerExtendAudienceTemplate();
-        // Write the funnel every existing campaign runs onto its own row, once. Idempotent and
-        // fire-and-forget for the same reason: it reads brand-service per (org, brand) pair and
-        // must never delay the port bind or fail a deploy.
-        void runFunnelBackfill();
       });
     })
     .catch((err) => {

@@ -52,11 +52,12 @@ describe('No Legacy Patterns - CRITICAL', () => {
     ).toHaveLength(0);
   });
 
-  it('should NOT read a goal off brand-service, except the brand-level currentGoal', () => {
+  it('should NOT read a goal off brand-service beyond the brand-level currentGoal', () => {
     // brand-service retired the goal set: the funnel is the only word it emits for what a brand
     // sells. Reading a goal off a DECLARED FUNNEL is what silently stopped every funnel campaign
-    // being provisioned. The one goal-shaped read that survives is the brand's own currentGoal on
-    // /runtime-context, which brand-service deliberately still serves for brands with one pot.
+    // being provisioned. The one goal-shaped read that survives anywhere is the brand's own
+    // currentGoal on /runtime-context, and it is consulted ONLY for a campaign that states no
+    // sales funnel — a feature that sells through none (PR, hiring, VC, AI-visibility).
     const client = fs.readFileSync(
       path.join(srcDir, 'lib/brand-sales-funnels-client.ts'),
       'utf-8',
@@ -70,14 +71,92 @@ describe('No Legacy Patterns - CRITICAL', () => {
     expect(code).not.toMatch(/\bcurrentGoal\b/);
   });
 
+  it('should NOT translate between a goal and a funnel anywhere in src', () => {
+    // The goal was the poorer word (both meeting funnels collapse onto one `meetingBooked`) and it
+    // was wrong at the source (brand-service's column carried a NOT NULL default). Both directions
+    // of the translation are DELETED, not moved: a campaign STATES its funnel and every consumer
+    // reads it there. A re-introduced map is how a brand whose goal names no funnel gets a live
+    // campaign nobody can attribute — and, with the rule that used to gate on it, how a customer
+    // funds a funnel and never gets a campaign for it.
+    const files = getAllTsFiles(srcDir);
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const file of files) {
+      const content = fs.readFileSync(file, 'utf-8');
+      content.split('\n').forEach((line, index) => {
+        const code = line.trimStart();
+        if (code.startsWith('*') || code.startsWith('/*') || code.startsWith('//')) return;
+        if (/funnelForGoal|goalForFunnel|goalsWithAFunnel|resolveCampaignFunnelKey|readBrandGoal|FUNNEL_BY_GOAL|GOAL_BY_FUNNEL/.test(line)) {
+          violations.push({
+            file: path.relative(srcDir, file),
+            line: index + 1,
+            code: line.trim().substring(0, 80),
+          });
+        }
+      });
+    }
+
+    expect(
+      violations,
+      `A goal is never translated to a funnel, or a funnel to a goal:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`
+    ).toHaveLength(0);
+  });
+
+  it('should NOT write the goal column anywhere in src', () => {
+    // The column is still SERVED (dashboard consumers migrate next) and scheduled for removal, but
+    // nothing SETS it: a campaign says what it sells with its funnel. A write here would put a
+    // second, poorer statement back on the row for a consumer to disagree with.
+    const files = getAllTsFiles(srcDir);
+    const violations: { file: string; payload: string }[] = [];
+
+    for (const file of files) {
+      const content = fs.readFileSync(file, 'utf-8');
+      // Every drizzle write payload in the file: `.values({ … })` / `.set({ … })`.
+      for (const match of content.matchAll(/\.(values|set)\(\{/g)) {
+        const start = match.index! + match[0].length - 1;
+        let depth = 0;
+        let end = start;
+        for (; end < content.length; end++) {
+          if (content[end] === '{') depth++;
+          else if (content[end] === '}' && --depth === 0) break;
+        }
+        const payload = content.slice(start, end + 1);
+        const code = payload
+          .split('\n')
+          .filter((l) => !l.trimStart().startsWith('*') && !l.trimStart().startsWith('//'))
+          .join('\n');
+        if (/(^|[\s{,])goal\s*:/.test(code)) {
+          violations.push({ file: path.relative(srcDir, file), payload: payload.slice(0, 120) });
+        }
+      }
+    }
+
+    expect(
+      violations,
+      `Nothing writes the goal column any more:\n${violations.map(v => `  ${v.file}\n    ${v.payload}`).join('\n')}`
+    ).toHaveLength(0);
+  });
+
+  it('should still SERVE the stored goal — the column is scheduled for removal, not dropped here', () => {
+    // The dashboard reads it on three surfaces and migrates next; dropping it from the wire now
+    // takes those pages down.
+    const schemas = fs.readFileSync(path.join(srcDir, 'schemas.ts'), 'utf-8');
+    expect(schemas).toMatch(/goal: RuntimeGoalSchema\.nullable\(\)/);
+    const dbSchema = fs.readFileSync(path.join(srcDir, 'db/schema.ts'), 'utf-8');
+    expect(dbSchema).toMatch(/goal:\s*text\("goal"\)/);
+  });
+
   it('should emit only the canonical funnel vocabulary from the funnel map', () => {
     // The pre-rename spellings are ACCEPTED forever on the way in (billing still sends them) and
     // never emitted. A canonical key is what gets stored and what a consumer reads.
     const vocab = fs.readFileSync(path.join(srcDir, 'lib/sales-funnel-vocabulary.ts'), 'utf-8');
-    const maps = vocab.slice(vocab.indexOf('const FUNNEL_BY_GOAL'));
+    const canonical = vocab.slice(
+      vocab.indexOf('export const SALES_FUNNEL_KEYS'),
+      vocab.indexOf('const LEGACY_FUNNEL_KEYS'),
+    );
 
     for (const preRename of ['visit_form', 'reply_meeting', 'visit_meeting', 'visit_signup']) {
-      expect(maps).not.toContain(`"${preRename}"`);
+      expect(canonical).not.toContain(preRename);
     }
   });
 

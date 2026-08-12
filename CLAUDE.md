@@ -17,8 +17,14 @@ A gate block caused by a **normal, expected** business state — out of credits,
 ## Two distinct "goal" concepts — `activeGoalId` (attribution) vs `campaigns.goal` (pacing). Do NOT conflate.
 
 - **`activeGoalId`** (text, nullable) is an OPAQUE attribution id, threaded downstream as the `x-active-goal-id` header and returned on reads. It **never drives pacing** — no gate-check, workflow pick, or audience selection reads it.
-- **`campaigns.goal`** (nullable — added Campaign v2, migration 0039) is the campaign's OWN optimization goal and IS the pacing lever. At `/start-run` and in the scheduler's workflow greedy pick, the runtime goal is `campaign.goal ?? brandRuntimeContext.currentGoal` — the campaign's own goal overrides the brand's `currentGoal` when set, else inherits it (NULL). Exposed on reads + `/start-run`, so display and runtime agree.
-- The brief for Campaign v2 asserted "per-campaign goal runtime is already implemented" — it was NOT. Before 0039, ALL pacing used the brand `currentGoal`; there was no per-campaign goal override. If a future task claims per-campaign goal already paces, verify against `runtimeGoal` resolution in `src/routes/internal.ts` /start-run, not the presence of `activeGoalId`. (Set 2026-07-17, Campaign v2 PR #276.)
+- **`campaigns.goal`** (nullable) is LEGACY and READ-ONLY since 2026-08-12. It is still SERVED wherever
+  it is stored (the dashboard reads it on three surfaces and migrates next) and the column is
+  **scheduled for removal** — but nothing writes it: it is absent from the create/update bodies and
+  from every insert/update payload, pinned by `tests/unit/no-legacy.test.ts`. It is NOT a pacing
+  lever any more: a campaign says what it sells with its **sales funnel** (`funnelKey`), which is
+  what pricing, arbitration and provisioning all read. A goal is still consulted for exactly ONE
+  case — a campaign that states NO funnel, i.e. a feature that sells through no sales funnel (PR,
+  hiring, VC, AI-visibility) — and then it is the BRAND's `currentGoal`, never the column.
 
 ## The goal is an OPAQUE STRING — this service does NOT own the goal vocabulary, and must never re-introduce an enum for it
 
@@ -26,7 +32,13 @@ A gate block caused by a **normal, expected** business state — out of credits,
 
 Two services own this concept and neither is this one: **brand-service** owns which goals a brand authorizes (its `brands.current_goal` check constraint already permits `websiteVisit`, `positiveReply`, `whatsappConversation`, `combinedSales` on top of the three we had names for), and **features-service** owns the spelling — it normalises every fleet spelling and returns **400 on a goal it cannot resolve**, which is the fail-loud boundary. campaign-service only carries the value from one to the other.
 
-The enum never constrained the brand-goal path (`fetchBrandRuntimeContext` is a bare cast, no Zod), only what a CALLER could ask for on `campaign.goal` — which made the brand's own goal unrepresentable per-campaign. **A funnel campaign's `goal` is now DERIVED from its funnel** (`goalForFunnel`) rather than forwarded from brand-service, which no longer emits one per funnel; the brand-level `currentGoal` it still serves is unchanged and still the fallback everywhere.
+**The goal→funnel map and the funnel→goal alias are DELETED (2026-08-12), not moved.** A campaign
+states its funnel; nothing derives one word from the other in either direction, and
+`tests/unit/no-legacy.test.ts` fails if `funnelForGoal` / `goalForFunnel` / `readBrandGoal` /
+`resolveCampaignFunnelKey` reappear. The only goal read left anywhere is the brand's `currentGoal`
+on `/runtime-context`, consulted for a campaign that states no funnel — brand-service still serves
+it, and features-service still needs one word or the other (an ABSENT goal is a silent
+"meeting-booked" default there, so `fetchWorkflowProjectionRows` THROWS when given neither).
 
 **Non-empty is the one rule that stays, and it is fail-loud, not taste**: features-service reads an ABSENT goal as "default to meeting-booked", so `""` would forward as a silent default instead of an error. Never relax `.min(1)`.
 
@@ -67,6 +79,12 @@ TRIGGER   (scheduler)  : elected goal → its elected workflow           ← gre
 START-RUN (internal.ts): elected goal → Thompson over the pairing rows ← explore, ours
 ```
 
+**Since 2026-08-12 arbitration answers ONLY for a campaign that states NO funnel.** A campaign that
+states one is priced on that funnel (`?funnel=` on `/workflow-projection`, which WINS over `goal`
+there and is the only word separating the two meeting funnels), and which funnel runs is the
+customer's funding decision, not a cost ranking. The gate on that is `campaign.funnelKey`, not the
+legacy `campaign.goal`, which nothing writes any more.
+
 **Why the ranking is not ours to do.** A cost-per-outcome is denominated in each goal's OWN outcome — a click, a reply, a booked meeting — so comparing two goals' cost-per-outcome compares two different things. Only features-service can normalise each goal through its own funnel to the same terminal unit (a paying client's lifetime revenue). Ranking goals here would mean re-deriving their economics. Do NOT add a consumer-side argmin over per-goal calls.
 
 **Both legs elect the SAME goal without threading anything through the DAG.** features-service's election is deterministic (argmax return-per-dollar, canonical tie-break) and both calls hit the same shared evidence snapshot, so the trigger and `/start-run` converge on their own. The elected goal is NOT persisted on the campaign row — it is a per-run decision, not config.
@@ -96,26 +114,22 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
   billing's `GET /internal/brands/:id/funnel-budgets` ∩ brand-service's
   `GET /internal/brands/:id/sales-funnels`. A funnel billing funds but brand-service does not
   declare ACTIVE is never provisioned.
-- **The campaign ALREADY doing a funnel's work becomes that funnel's campaign — a second one is
-  never stood up beside it.** `findIncumbentForFunnel` looks for the OLDEST `ongoing` campaign of
-  the same (org, brand, feature) that states no funnel and whose goal (its own, else the brand's)
-  names this funnel, and adopts it: same id, same months of runs, same attributed costs, now
-  stating the funnel + its goal. Standing up an empty twin left the working campaign reading as
-  dead and the live one as having produced nothing (prod, brand `6e21bb6c`, 2026-08-02). An empty
-  campaign THIS service provisioned for a funnel its incumbent was already working is dropped in
-  the same step — and only then: `isRemovableStandIn` requires the provisioned name, zero runs in
-  runs-service AND zero lifetime cost, and fails CLOSED on any unreadable read. Nothing that ever
-  ran is ever removed.
+- **A campaign cannot be CREATED without stating its funnel, so nothing is ever adopted or
+  inferred.** `POST /campaigns` 400s a sales-outreach create with no `funnelKey` (and on a token no
+  catalogue names); the creator provisions per funded funnel, so it already knows the answer. Every
+  other feature sells through no sales funnel and states none. Un-pause (`ensureRunnableSalesOutreachCampaign`)
+  therefore no longer SEEDS a campaign when a brand has none: it returns `{action:"deferred"}` and
+  the per-funnel step provisions one campaign per funded, declared funnel on the next tick. The
+  goal-based adoption of a funnel-less incumbent (`findIncumbentForFunnel`, `isRemovableStandIn`)
+  is DELETED with the goal vocabulary — provisioning adds, it never re-labels an existing campaign.
 - **THE FUNNEL IS THE ONLY WORD. A campaign STATES it, persisted, and a consumer names what the
   campaign buys without a translation table.** The four canonical keys are
   `sales_meetings_from_conversation`, `sales_meetings_from_website`, `website_purchases`,
   `form_magnet`. brand-service retired the goal set and renamed the keys (#434, 2026-08-02): its
   funnel reads carry NO goal, so reading one is what silently stops every funnel campaign being
-  provisioned — pinned by `tests/unit/no-legacy.test.ts`. `campaigns.goal` survives as a DERIVED
-  LEGACY ALIAS of the same statement (`goalForFunnel`, byte-equal with what brand-service's
-  catalogue used to emit per funnel), so a consumer still reading a goal keeps working and none has
-  to change in lockstep — but it cannot tell the two meeting funnels apart, which is why nothing
-  here reads it back. It is also what keeps a funnel campaign out of goal arbitration.
+  provisioned — pinned by `tests/unit/no-legacy.test.ts`. `campaigns.goal` is served as stored and
+  never written (see above): it cannot tell the two meeting funnels apart, which is why nothing here
+  reads it back and why the column is scheduled for removal.
 - **Every spelling in, one canonical token out** — `toFunnelKey` in
   `src/lib/sales-funnel-vocabulary.ts`, the ONE place the vocabulary lives. Load-bearing on THREE
   boundaries, not just history: **billing-service still emits the pre-rename keys today**
@@ -123,17 +137,13 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
   canonical four, and a campaign row can carry either. Compare raw tokens on any of the three and a
   fully-funded funnel reads as UNFUNDED — the gate blocks it and it silently stops sending. Never
   delete a legacy entry.
-- **Two migrations, then the goal is never read for a funnel again.** 0042 wrote the funnel of
-  every campaign stating a goal; 0043 renames those stored keys (and the provisioned campaign NAME,
-  which carries the same token) to the canonical four. `src/lib/funnel-backfill.ts` (boot, after
-  `listen`, fire-and-forget, idempotent) covers the rest by reading each (org, brand) pair's
-  `currentGoal` once — the one goal-shaped read brand-service deliberately kept. `funnelForGoal`
-  exists for exactly those two: booked meeting → `sales_meetings_from_conversation` (these
-  campaigns are cold email, so the chain that ran is reply→meeting, never the website one —
-  owner-decided 2026-08-02), form submissions → `form_magnet`, website purchase / signup →
-  `website_purchases`. A goal naming no single funnel (`combinedSales`, `websiteVisit`,
-  `positiveReply`, `whatsappConversation`) keeps a NULL funnel: a funnel is a stored fact, never a
-  guess.
+- **History was written by three migrations, and no code reads a goal for a funnel any more.** 0042
+  wrote the funnel of every campaign stating a goal; 0043 renamed those keys (and the provisioned
+  campaign NAME, which carries the same token) to the canonical four; **0047** wrote the last three
+  LIVE rows from their (org, brand) pair's DECLARED funnel set, and only where that set names
+  exactly one funnel. The boot backfill (`src/lib/funnel-backfill.ts`) that read each pair's
+  `currentGoal` is DELETED with the map it used. A pair declaring several funnels is left alone
+  rather than guessed at, and stopped rows stay as they are — 682 of them, history.
 - **The gate paces on that funnel's own ceiling** (`gate-check.ts`, block a2), fail-CLOSED like
   the brand ceiling. Precedence: campaign's own `dailyBudgetCents` → `funnelKey` ceiling → brand
   daily budget. A funnel funded at ZERO, or absent from billing while the brand funds OTHER
@@ -196,33 +206,31 @@ read as one campaign.
   — their history lives in runs-service, keyed on `campaign_id`, and repointing it is runs-service's
   own ledger to move. Deleting them would orphan the history, which is the one thing never allowed.
 
-## The funnel of a brand that sells through several is UNKNOWN, and unknown never costs the working campaign its turn
+## Nothing can be unattributable — so nothing holds a brand's provisioning back
 
-A funnel-less campaign is attributed to a funnel by reading the goal it runs on (its own, else the
-brand's) through `funnelForGoal`. A goal that spans several funnels — `combinedSales` — names none,
-by design: a stated funnel is a fact, never a guess.
+The rule that used to live here held a brand's per-funnel provisioning back while ANY alive campaign
+of it could not be attributed to a funnel (a goal like `combinedSales` names several, so it named
+none). It was correct while a funnel could be unknown, and it cost exactly what it was protecting:
+a customer funded a funnel and never got a campaign for it — 2 of 18 live campaigns were in that
+state on 2026-08-12, and the empty column in the dashboard was only where it showed.
 
-**While such a campaign is alive, the brand grows NO funnel campaigns** (`ensureFundedFunnelCampaigns`),
-and an empty stand-in already provisioned for one is dropped (`isRemovableStandIn` — provisioned
-name, zero runs, zero lifetime cost, fails CLOSED on any unreadable read). Standing one up beside an
-unattributable incumbent duplicates its work AND lets the pair spend both ceilings on top of the
-incumbent's, which paces on the brand-level pot billing answers as the SUM of exactly those funnels.
-Prod, brand `f4d73dab` 2026-08-02: goal `combinedSales`, two funded funnels, two empty campaigns
-provisioned at 09:53 beside a campaign carrying six weeks and 69,442 runs.
+A funnel cannot be unknown any more: **creation refuses a sales campaign that states none**, so the
+condition the rule tested can no longer arise. It is DELETED, along with the stand-in cleanup that
+existed to undo the duplicates it prevented. **A brand that funds a funnel gets a campaign for that
+funnel, full stop** — `tests/unit/funnel-campaigns.test.ts` pins that even a campaign carrying no
+funnel (a row older than the rule) does not hold provisioning back, and nothing is re-labelled or
+deleted when it happens: provisioning only adds.
 
-**Only the OWNER lifts that unknown, per (org, brand), and every such answer is written through
-`campaign_funnel_owner_decisions`** — one row per campaign it wrote, holding the value it replaced
-and the migration tag that wrote it, so the write is auditable, re-runnable and undoable by that
-tag. Nothing in the runtime reads the table: the funnel lives on the campaign row like every other
-one. First answer, migration 0045 (org `f0420eb5` / brand `f4d73dab`, Kevin 2026-08-02): the live
-campaign `d5a759bf` states `sales_meetings_from_conversation`, its 51 stopped sales campaigns state
-`website_purchases`. The brand switched funnel on 19 July WITHOUT creating a campaign, so no row
-marks the transition; a run-date split was declined — a campaign's history is not cut in two — and
-the accepted cost is that 33,229 of `d5a759bf`'s 54,809 runs predate the switch and sit under the
-meeting funnel (one-directional: a meeting reads MORE expensive than it was, never less). Do NOT
-"fix" it. Do NOT extend the answer to any other brand in the same state, and note that a brand row
-is claimed by several orgs — three stopped campaigns other orgs hold on `f4d73dab` are other
-customers' and keep a NULL funnel.
+**An owner answer about a campaign's funnel is still written through `campaign_funnel_owner_decisions`**
+— one row per campaign written, holding the value it replaced and the migration tag that wrote it,
+so every such write is auditable, re-runnable and undoable by that tag. Nothing in the runtime reads
+the table. Two answers exist: migration **0045** (org `f0420eb5` / brand `f4d73dab`, Kevin
+2026-08-02 — the live campaign `d5a759bf` states `sales_meetings_from_conversation`, its 51 stopped
+sales campaigns state `website_purchases`; a run-date split was declined, so 33,229 of `d5a759bf`'s
+54,809 runs predate the July 19 switch and sit under the meeting funnel, one-directional and NOT to
+be "fixed"), and migration **0047** (the three live rows above, taken from each pair's declared
+funnel set). Note that a brand row is claimed by several orgs — the stopped campaigns other orgs
+hold on `f4d73dab` are other customers' and keep a NULL funnel.
 
 ## Brand serialization counts SALES runs only — a brand's PR run is not its sales outreach's business
 
