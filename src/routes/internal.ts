@@ -221,15 +221,16 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       workflowSlug,
       featureSlug: featureSlug!,
     };
+    // brand-service also answers the brand PROFILE, which the sending runtime needs downstream —
+    // so this read stays whatever the campaign sells.
     const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, preRunIdentity);
-    // Campaign v2: the campaign's OWN goal drives THIS campaign's pacing when set —
-    // overriding the brand's currentGoal for both the workflow projection and the audience
-    // bandit. NULL → pace on the brand goal (inherit), unchanged behavior. This is the
-    // single place the runtime goal is resolved, so display (campaign reads expose the same
-    // raw campaign.goal) and runtime agree. Whatever the value is, it is forwarded verbatim —
-    // this service does not own the goal vocabulary and never rewrites it.
-    // Arbitration may replace this below when the campaign states no own goal.
-    let runtimeGoal: RuntimeGoal = campaign.goal ?? brandRuntimeContext.currentGoal;
+    // What this run is PRICED on. A campaign that states its SALES FUNNEL is priced on that
+    // funnel — the only word that separates a meeting bought with a positive reply from one
+    // bought with a click onto the site. A campaign that states none sells through no sales
+    // funnel (PR, hiring, VC, AI-visibility): those are still priced on the brand's goal, which
+    // is the one place a goal survives, and are still arbitrated below.
+    const funnelKey: string | null = campaign.funnelKey;
+    let runtimeGoal: RuntimeGoal | null = funnelKey ? null : brandRuntimeContext.currentGoal;
     // Cost-aware Thompson sampling over the chosen workflow's audiences, straight from
     // features-service /workflow-projection — which enumerates EVERY active audience of the
     // brand per dynasty (floored to brand/crossOrg when an audience never ran the workflow),
@@ -246,10 +247,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     try {
       // The GOAL is arbitrated by features-service, on the same evidence the trigger used and
       // by the same deterministic rule, so both legs land on the same goal without threading
-      // anything through the DAG. Only when the campaign states no own goal — an explicit
-      // per-campaign goal is a manual override and is never arbitrated away.
+      // anything through the DAG. Only for a campaign that states NO funnel — a stated funnel is
+      // the customer's funding decision and is never arbitrated away.
       let projectionRows: ProjectionRow[] | null = null;
-      if (!campaign.goal) {
+      if (!funnelKey) {
         const arbitration = await fetchGoalArbitration({
           featureSlug: featureSlug!,
           brandId: primaryBrandId,
@@ -267,6 +268,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       projectionRows ??= await fetchWorkflowProjectionRows({
         featureSlug: featureSlug!,
         brandId: primaryBrandId,
+        funnelKey,
         goal: runtimeGoal,
         identity: preRunIdentity,
       });

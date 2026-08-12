@@ -1,8 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { funnelForGoal, SALES_FUNNEL_KEYS } from "../../src/lib/sales-funnel-vocabulary.js";
-import { resolveCampaignFunnelKey } from "../../src/lib/funnel-adoption.js";
+import { SALES_FUNNEL_KEYS } from "../../src/lib/sales-funnel-vocabulary.js";
 import { SALES_OUTREACH_FEATURE_SLUGS } from "../../src/lib/sales-outreach-campaign.js";
 
 const TAG = "0045_owner_funnel_decision_f4d73dab";
@@ -23,15 +22,6 @@ function uuidsIn(text: string): Set<string> {
 }
 
 describe("the funnel of a brand that sells through several is UNKNOWN until its owner answers it", () => {
-  it("a goal that names no single funnel still resolves to NULL — the migration answers ONE pair, it does not weaken the rule", () => {
-    for (const goal of ["combinedSales", "websiteVisit", "positiveReply", "whatsappConversation"]) {
-      expect(funnelForGoal(goal)).toBeNull();
-      // Neither as the campaign's own goal nor inherited from its brand.
-      expect(resolveCampaignFunnelKey(goal, null)).toBeNull();
-      expect(resolveCampaignFunnelKey(null, goal)).toBeNull();
-    }
-  });
-
   it("names exactly one (org, brand) pair — every other brand in the same unattributable state is untouched", () => {
     const uuids = uuidsIn(STATEMENTS);
     expect(uuids).toEqual(new Set([ORG_ID, BRAND_ID, LIVE_CAMPAIGN_ID]));

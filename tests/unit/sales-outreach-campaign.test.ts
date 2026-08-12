@@ -139,89 +139,6 @@ describe("ensureRunnableSalesOutreachCampaign", () => {
     expect(mut.insert).not.toHaveBeenCalled();
   });
 
-  it("creates a default sales campaign when none exists", async () => {
-    const now = new Date("2026-06-18T12:00:00.000Z");
-    const created = campaign({ id: "campaign-created", nextRunAt: now, updatedAt: now });
-    const mut = mutation([created]);
-    const store = {
-      query: { campaigns: { findFirst: vi.fn().mockResolvedValue(undefined) } },
-      update: mut.update,
-      insert: mut.insert,
-    };
-
-    await expect(ensureRunnableSalesOutreachCampaign(store as never, {
-      orgId: "org-1",
-      brandId: "brand-1",
-      userId: "user-1",
-      runId: "run-1",
-      now,
-    })).resolves.toEqual({ action: "created", campaign: created });
-
-    expect(mut.update).not.toHaveBeenCalled();
-    expect(mut.fns.values).toHaveBeenCalledWith(expect.objectContaining({
-      orgId: "org-1",
-      createdByUserId: "user-1",
-      parentRunId: "run-1",
-      workflowSlug: SALES_OUTREACH_WORKFLOW_SLUG,
-      brandIds: ["brand-1"],
-      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
-      status: "ongoing",
-      nextRunAt: now,
-    }));
-  });
-
-  it("creates a CRM campaign (feature-agnostic) when featureSlug is sales-crm-email-outreach", async () => {
-    const now = new Date("2026-06-18T12:00:00.000Z");
-    const created = campaign({ id: "campaign-crm", featureSlug: SALES_CRM_FEATURE_SLUG, nextRunAt: now, updatedAt: now });
-    const mut = mutation([created]);
-    const store = {
-      query: { campaigns: { findFirst: vi.fn().mockResolvedValue(undefined) } },
-      update: mut.update,
-      insert: mut.insert,
-    };
-
-    await expect(ensureRunnableSalesOutreachCampaign(store as never, {
-      orgId: "org-1",
-      brandId: "brand-1",
-      userId: "user-1",
-      featureSlug: SALES_CRM_FEATURE_SLUG,
-      now,
-    })).resolves.toEqual({ action: "created", campaign: created });
-
-    // The seeded row carries the CRM feature + its own slug as the (scheduler-overridden) nominal
-    // workflow — NOT the hardcoded cold feature/workflow.
-    expect(mut.fns.values).toHaveBeenCalledWith(expect.objectContaining({
-      featureSlug: SALES_CRM_FEATURE_SLUG,
-      workflowSlug: SALES_CRM_FEATURE_SLUG,
-      brandIds: ["brand-1"],
-      status: "ongoing",
-    }));
-  });
-
-  it("defaults to cold when a non-sales feature slug is passed", async () => {
-    const now = new Date("2026-06-18T12:00:00.000Z");
-    const created = campaign({ id: "campaign-created", nextRunAt: now, updatedAt: now });
-    const mut = mutation([created]);
-    const store = {
-      query: { campaigns: { findFirst: vi.fn().mockResolvedValue(undefined) } },
-      update: mut.update,
-      insert: mut.insert,
-    };
-
-    await ensureRunnableSalesOutreachCampaign(store as never, {
-      orgId: "org-1",
-      brandId: "brand-1",
-      userId: "user-1",
-      featureSlug: "pr-expert-quote-outreach",
-      now,
-    });
-
-    expect(mut.fns.values).toHaveBeenCalledWith(expect.objectContaining({
-      featureSlug: SALES_OUTREACH_FEATURE_SLUG,
-      workflowSlug: SALES_OUTREACH_WORKFLOW_SLUG,
-    }));
-  });
-
   it("fails loud when the stopped campaign is missing its user id", async () => {
     const stopped = campaign({ id: "campaign-stopped", status: "stopped", createdByUserId: null });
     const mut = mutation([]);
@@ -240,7 +157,12 @@ describe("ensureRunnableSalesOutreachCampaign", () => {
     expect(mut.insert).not.toHaveBeenCalled();
   });
 
-  it("fails loud when creating a new campaign without a user id", async () => {
+
+  it("never creates a campaign that would state no funnel — provisioning waits for the funnel step", async () => {
+    // A campaign is never born without stating the sales funnel it sells, and un-pause cannot
+    // know it: the brand's declared set is not this transaction's business, and inferring one is
+    // exactly what this ship deletes. The scheduler's per-funnel step stands up one campaign per
+    // funnel the customer FUNDS and brand-service DECLARES, each stating its own funnel.
     const mut = mutation([]);
     const store = {
       query: { campaigns: { findFirst: vi.fn().mockResolvedValue(undefined) } },
@@ -251,9 +173,10 @@ describe("ensureRunnableSalesOutreachCampaign", () => {
     await expect(ensureRunnableSalesOutreachCampaign(store as never, {
       orgId: "org-1",
       brandId: "brand-1",
-    })).rejects.toThrow("x-user-id header required");
+      now: new Date("2026-08-12T12:00:00.000Z"),
+    })).resolves.toEqual({ action: "deferred" });
 
-    expect(mut.update).not.toHaveBeenCalled();
     expect(mut.insert).not.toHaveBeenCalled();
+    expect(mut.update).not.toHaveBeenCalled();
   });
 });

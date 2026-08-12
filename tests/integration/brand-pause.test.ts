@@ -158,7 +158,10 @@ describe("Brand pause routes", () => {
     expect(salesCampaigns.find((c) => c.id === stopped.id)!.status).toBe("stopped");
   });
 
-  it("PATCH paused=false creates a default sales outreach campaign when none exists", async () => {
+  it("PATCH paused=false creates NO campaign when the brand has none — one would state no funnel", async () => {
+    // Un-pausing cannot know which sales funnel a new campaign would sell, and a campaign is never
+    // born without stating one. The scheduler's per-funnel step provisions one campaign per funnel
+    // the customer FUNDS and brand-service DECLARES, each stating its own funnel.
     const brandId = crypto.randomUUID();
     await setBrandPause(orgId, brandId, true);
 
@@ -171,11 +174,7 @@ describe("Brand pause routes", () => {
         arrayContains(campaigns.brandIds, [brandId]),
       ),
     });
-    expect(created).toBeDefined();
-    expect(created!.status).toBe("ongoing");
-    expect(created!.workflowSlug).toBe("sales-email-cold-outreach");
-    expect(created!.createdByUserId).toBe("user-brand-pause");
-    expect(created!.nextRunAt).not.toBeNull();
+    expect(created).toBeUndefined();
   });
 
   it("PATCH paused=true only sets the pause flag and does not stop campaigns", async () => {

@@ -72,17 +72,30 @@ interface WorkflowProjectionResponse {
 interface FetchWorkflowProjectionInput {
   featureSlug: string;
   brandId: string;
-  goal: RuntimeGoal;
+  /**
+   * The SALES FUNNEL to price on — what a sales campaign STATES on its own row. Wins over `goal`
+   * at features-service and is the only word that separates a meeting bought with a positive reply
+   * from one bought with a click onto the site.
+   */
+  funnelKey?: string | null;
+  /**
+   * The brand's optimization goal, for a campaign that states no funnel — i.e. a feature that
+   * sells through no sales funnel (PR, hiring, VC, AI-visibility). features-service reads an
+   * ABSENT goal as "default to meeting-booked", so one of the two MUST be given: pricing on a
+   * silent default is exactly the wrong answer quietly.
+   */
+  goal?: RuntimeGoal | null;
   identity: DownstreamIdentity;
 }
 
 // Pull the (audience × workflow) evidence rows from features-service's reshaped
-// /workflow-projection endpoint. Sends brandId + goal (the endpoint also accepts the
-// `objective` spelling; `goal` camelCase is accepted). brandProfileId is no longer a
-// parameter — the new endpoint derives economics from brandId alone.
+// /workflow-projection endpoint. Sends brandId + either the funnel (a sales campaign) or the goal
+// (a feature with no sales funnel). brandProfileId is not a parameter — the endpoint derives
+// economics from brandId alone.
 export async function fetchWorkflowProjectionRows({
   featureSlug,
   brandId,
+  funnelKey,
   goal,
   identity,
 }: FetchWorkflowProjectionInput): Promise<ProjectionRow[]> {
@@ -94,7 +107,17 @@ export async function fetchWorkflowProjectionRows({
 
   const url = new URL(`${baseUrl.replace(/\/$/, "")}/features/${encodeURIComponent(featureSlug)}/workflow-projection`);
   url.searchParams.set("brandId", brandId);
-  url.searchParams.set("goal", goal);
+  // The funnel is the finer word and features-service prices on it in preference to a goal, so a
+  // campaign that states one is never priced through a goal that cannot tell its funnel apart.
+  if (funnelKey) url.searchParams.set("funnel", funnelKey);
+  else if (goal) url.searchParams.set("goal", goal);
+  else {
+    throw new Error(
+      "[campaign-service] workflow-projection needs the funnel the campaign states or, for a " +
+      "feature with no sales funnel, the brand's goal — features-service silently defaults to " +
+      "meeting-booked when neither is sent",
+    );
+  }
 
   const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
   if (!res.ok) {
@@ -234,10 +257,7 @@ export async function fetchGoalArbitration({
 // costPerOutcomeUsd carry no rankable economics and are skipped. If NO row has a
 // costPerOutcomeUsd, return null → resolveWorkflowSlugForTrigger falls back to the
 // campaign's configured slug (only fallback path).
-export function selectWorkflowGreedy(
-  rows: ProjectionRow[],
-  _goal: RuntimeGoal,
-): string | null {
+export function selectWorkflowGreedy(rows: ProjectionRow[]): string | null {
   let bestSlug: string | null = null;
   let bestCost = Infinity;
   for (const r of rows) {
@@ -388,7 +408,7 @@ export function isWorkflowRotationEnabled(featureSlug: string): boolean {
 }
 
 /**
- * Resolve which workflow to launch for THIS run: resolve the brand's current goal,
+ * Resolve which workflow to launch for THIS run: price on what the campaign sells,
  * pull the workflow-projection rows from features-service, and greedily pick the best one
  * (cheapest expected cost-per-success) — so a campaign always runs its strongest
  * workflow instead of being frozen on its configured slug. The workflow MUST be
@@ -407,33 +427,38 @@ export async function resolveWorkflowSlugForTrigger(args: {
   primaryBrandId: string;
   identity: DownstreamIdentity;
   fallbackSlug: string;
-  // Campaign v2: the campaign's OWN goal. When set, the greedy workflow pick paces on it
-  // instead of the brand's currentGoal — so the campaign's own goal drives BOTH the trigger
-  // (workflow) and /start-run (audience) legs. NULL/undefined → pace on the brand goal.
-  goalOverride?: RuntimeGoal | null;
+  // The SALES FUNNEL the campaign states. Set → the greedy pick is priced on that funnel and the
+  // campaign is NEVER goal-arbitrated: the customer funds the funnel, so the customer's funding
+  // decides which funnel runs. Null → a feature that sells through no sales funnel, which is
+  // arbitrated exactly as before and otherwise paces on the brand goal.
+  funnelKey?: string | null;
 }): Promise<string> {
-  const { featureSlug, primaryBrandId, identity, fallbackSlug, goalOverride } = args;
+  const { featureSlug, primaryBrandId, identity, fallbackSlug, funnelKey } = args;
   // Rotation is feature-scoped: non-rotating features keep their configured workflow.
   if (!isWorkflowRotationEnabled(featureSlug)) return fallbackSlug;
   try {
-    // A campaign that states its OWN goal is a manual override and is NOT arbitrated — the
-    // customer picked that goal on purpose. Arbitration only fills the inherit case.
-    if (!goalOverride) {
+    // A campaign that STATES A FUNNEL is never arbitrated: the customer funds each funnel
+    // separately, and that funding — not a cost ranking — decides which funnel is worked.
+    // Arbitration only answers for a campaign that sells through no sales funnel.
+    if (!funnelKey) {
       const arbitration = await fetchGoalArbitration({ featureSlug, brandId: primaryBrandId, identity });
       // The elected goal already determined this workflow (features-service ranks the goal's
       // workflows on the same cost-per-outcome our greedy uses), so there is nothing left to
       // pick here. Null → no arbitration for this brand yet, fall through to the brand goal.
       if (arbitration) return arbitration.workflowSlug;
     }
-    const ctx = await fetchBrandRuntimeContext(primaryBrandId, identity);
-    const goal: RuntimeGoal = goalOverride ?? ctx.currentGoal;
+    // Only a campaign with no funnel needs a goal at all, and only the brand can answer it.
+    const goal: RuntimeGoal | null = funnelKey
+      ? null
+      : (await fetchBrandRuntimeContext(primaryBrandId, identity)).currentGoal;
     const rows = await fetchWorkflowProjectionRows({
       featureSlug,
       brandId: primaryBrandId,
+      funnelKey,
       goal,
       identity,
     });
-    return selectWorkflowGreedy(rows, goal) ?? fallbackSlug;
+    return selectWorkflowGreedy(rows) ?? fallbackSlug;
   } catch (err) {
     console.warn(
       `[campaign-service] workflow bandit failed for brand ${primaryBrandId}, using configured workflow ${fallbackSlug}:`,

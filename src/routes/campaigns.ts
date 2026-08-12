@@ -11,6 +11,8 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { campaignIdentityColumns } from "../lib/campaign-identity.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
+import { isSalesOutreachFeature } from "../lib/sales-outreach-campaign.js";
+import { acceptedFunnelKeys, toFunnelKey } from "../lib/sales-funnel-vocabulary.js";
 
 const router = Router();
 
@@ -109,7 +111,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       activeGoalId,
       brandProfileId,
       audienceId,
-      goal,
+      funnelKey: bodyFunnelKey,
       audienceIds,
       servicesOffered,
       clickDestinationUrl,
@@ -128,6 +130,23 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
 
     // featureSlug comes exclusively from x-feature-slug header
     const resolvedFeatureSlug = req.featureSlug || "";
+
+    // A sales campaign STATES the funnel it sells, at birth. The creator provisions per funded
+    // funnel, so it already knows which one — nothing is inferred here, not from a goal, not from
+    // the brand's declared set, not ever. A sales campaign with no funnel is what left a customer
+    // funding a funnel and never getting a campaign for it, so this is a hard 400 rather than a
+    // row nobody can attribute. Every other feature sells through no sales funnel and states none.
+    const funnelKey = isSalesOutreachFeature(resolvedFeatureSlug)
+      ? toFunnelKey(bodyFunnelKey)
+      : null;
+    if (isSalesOutreachFeature(resolvedFeatureSlug) && !funnelKey) {
+      return res.status(400).json({
+        error: bodyFunnelKey
+          ? `Unknown sales funnel "${bodyFunnelKey}" — expected one of: ${acceptedFunnelKeys().join(", ")}`
+          : `Cannot create a ${resolvedFeatureSlug} campaign without stating its sales funnel — ` +
+            `funnelKey is required (one of: ${acceptedFunnelKeys().join(", ")})`,
+      });
+    }
 
     // Validate all required workflow fields BEFORE creating the campaign
     const brandIdCsv = (brandIds as string[]).join(",");
@@ -176,8 +195,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
             eq(campaigns.status, "ongoing"),
             eq(campaigns.brandId, identity.brandId),
             eq(campaigns.acquisitionChannel, identity.acquisitionChannel),
-            // This route never states a funnel, so the identity it names is the funnel-less one.
-            isNull(campaigns.funnelKey),
+            // The identity includes the funnel: an incumbent is the campaign alive on THIS funnel
+            // (or the funnel-less one, for a feature that sells through no sales funnel).
+            funnelKey ? eq(campaigns.funnelKey, funnelKey) : isNull(campaigns.funnelKey),
           ),
           orderBy: [campaigns.createdAt],
         })
@@ -194,7 +214,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           ...(activeGoalId !== undefined ? { activeGoalId } : {}),
           ...(brandProfileId !== undefined ? { brandProfileId } : {}),
           ...(audienceId !== undefined ? { audienceId } : {}),
-          ...(goal !== undefined ? { goal } : {}),
           ...(audienceIds !== undefined ? { audienceIds } : {}),
           ...(servicesOffered !== undefined ? { servicesOffered } : {}),
           ...(clickDestinationUrl !== undefined ? { clickDestinationUrl } : {}),
@@ -256,7 +275,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         activeGoalId: activeGoalId ?? null,
         brandProfileId: brandProfileId ?? null,
         audienceId: audienceId ?? null,
-        goal: goal ?? null,
+        funnelKey,
         audienceIds: audienceIds ?? null,
         servicesOffered: servicesOffered ?? null,
         clickDestinationUrl: clickDestinationUrl ?? null,
@@ -312,12 +331,15 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     // Two creates raced the same identity. The loser does not get a second campaign for it — the
     // one that won IS this identity's campaign, so hand that one back rather than an error.
     if (error?.code === "23505" && constraint === "uniq_campaigns_org_brand_funnel_channel") {
+      const racedFunnelKey = isSalesOutreachFeature(req.featureSlug)
+        ? toFunnelKey(req.body.funnelKey)
+        : null;
       const winner = await db.query.campaigns.findFirst({
         where: and(
           eq(campaigns.orgId, req.orgId!),
           eq(campaigns.status, "ongoing"),
           eq(campaigns.brandId, (req.body.brandIds as string[])[0]),
-          isNull(campaigns.funnelKey),
+          racedFunnelKey ? eq(campaigns.funnelKey, racedFunnelKey) : isNull(campaigns.funnelKey),
         ),
         orderBy: [campaigns.createdAt],
       });

@@ -9,21 +9,17 @@ export const ErrorResponse = z.object({
   error: z.string(),
 }).openapi("ErrorResponse");
 
-// The runtime optimization goal a campaign paces against — an OPAQUE string, deliberately
-// not an enum. campaign-service does NOT own this vocabulary: brand-service owns which goals
-// a brand authorizes (its own column already permits values this service never had a name
-// for), and features-service owns the spelling and fails loud on a goal it cannot resolve.
-// A campaign's own goal, when set, overrides the brand goal for that campaign's
-// pacing/candidate-selection; NULL inherits the brand.
+// The runtime optimization goal — an OPAQUE string, deliberately not an enum. This service does
+// NOT own the vocabulary and no longer WRITES it: a campaign says what it sells with its SALES
+// FUNNEL (`funnelKey`), which is the only word that separates a meeting bought with a positive
+// reply from one bought with a click onto the site. The goal collapsed both onto `meetingBooked`.
 //
-// This used to be z.enum(["signup", "meetingBooked", "purchase"]), which capped a campaign to
-// three of the goals the fleet supports and made the brand's own goal unrepresentable per
-// campaign. The brand-goal path never went through this schema (it is read straight off
-// brand-service), so the enum constrained nothing except what a caller could ASK for.
+// The value is still SERVED wherever it is stored, because consumers are still reading it and
+// migrate next; nothing sets it any more (it is absent from the create/update bodies). The COLUMN
+// is scheduled for removal once those consumers are off it.
 //
-// Non-empty is the one constraint we keep, and it is a fail-loud rule rather than a taste:
-// features-service reads an ABSENT goal as "default to meeting-booked", so an empty string
-// would forward as a silent default instead of an error.
+// Non-empty stays a fail-loud rule rather than a taste: features-service reads an ABSENT goal as
+// "default to meeting-booked", so an empty string would forward as a silent default.
 export const RuntimeGoalSchema = z.string().min(1).openapi("RuntimeGoal");
 
 export const CampaignSchema = z.object({
@@ -39,8 +35,10 @@ export const CampaignSchema = z.object({
   activeGoalId: z.string().nullable(),
   brandProfileId: z.string().nullable(),
   audienceId: z.string().nullable(),
-  // Per-campaign OWN config (Campaign v2). Null = inherit the brand. `goal` is renderable
-  // and drives this campaign's runtime pacing; audienceIds is the targeted subset.
+  // Per-campaign OWN config (Campaign v2). Null = inherit the brand. audienceIds is the
+  // targeted subset. `goal` is a LEGACY read-only field: still served wherever it is stored so
+  // consumers reading it keep working, never written any more, and scheduled for removal — a
+  // campaign states what it sells with `funnelKey`.
   goal: RuntimeGoalSchema.nullable(),
   audienceIds: z.array(z.string()).nullable(),
   servicesOffered: z.array(z.string()).nullable(),
@@ -53,12 +51,12 @@ export const CampaignSchema = z.object({
   dailyBudgetCents: z.number().int().nullable(),
   // The sales funnel this campaign works — the ONE word for what it sells, in brand-service's
   // vocabulary (sales_meetings_from_conversation | sales_meetings_from_website |
-  // website_purchases | form_magnet). A consumer reads what a campaign buys HERE; it never has to
-  // consult `goal`, which survives only as a legacy alias of the same statement and cannot tell
-  // the two meeting funnels apart. Null = not funnel-scoped: the campaign paces on
-  // the brand-level daily budget as it always has. Set = the campaign is paced on THAT funnel's
-  // own daily ceiling in billing, which is what makes a funnel's spend attributable to it.
-  // Provisioned by this service from the funnels the customer funds — never set by a caller.
+  // website_purchases | form_magnet). A consumer reads what a campaign buys HERE and nowhere else.
+  // STATED at creation for every sales campaign; null only for a feature that sells through no
+  // sales funnel (PR, hiring, VC, AI-visibility) and for sales rows created before it was
+  // required. A stated funnel paces the campaign on THAT funnel's own daily ceiling in billing —
+  // unless billing holds no per-funnel ceilings for the brand at all, in which case the brand has
+  // one pot and the campaign paces on the brand daily budget exactly as it always has.
   funnelKey: z.string().nullable(),
   maxLeads: z.number().int().nullable(),
   startDate: z.string().nullable(),
@@ -89,10 +87,16 @@ export const CreateCampaignBody = z.object({
   activeGoalId: z.string().min(1).nullable().optional(),
   brandProfileId: z.string().min(1).nullable().optional(),
   audienceId: z.string().min(1).nullable().optional(),
+  // The SALES FUNNEL this campaign sells, stated at birth. REQUIRED for every sales-outreach
+  // feature (the route 400s without it) and ignored for every other feature, which sells through
+  // no sales funnel. Accepts the canonical four (sales_meetings_from_conversation |
+  // sales_meetings_from_website | website_purchases | form_magnet) and the pre-rename spellings
+  // (reply_meeting | visit_meeting | visit_signup | visit_form), stored canonical. Nothing is ever
+  // inferred: a creator provisions per funded funnel, so it already knows the answer.
+  funnelKey: z.string().min(1).optional(),
   // Per-campaign OWN config (Campaign v2). Omit / null = inherit the brand. audienceIds is the
   // targeted SUBSET (one or more) of the brand's audiences; an empty array is rejected — use
   // null to clear back to inherit.
-  goal: RuntimeGoalSchema.nullable().optional(),
   audienceIds: z.array(z.string().min(1)).min(1, "audienceIds must contain at least one audience (use null to inherit the brand)").nullable().optional(),
   servicesOffered: z.array(z.string().min(1)).nullable().optional(),
   clickDestinationUrl: z.string().min(1).nullable().optional(),
@@ -126,8 +130,8 @@ export const UpdateCampaignBody = z.object({
   audienceId: z.string().min(1).nullable().optional(),
   // Set / clear this campaign's OWN config (Campaign v2). null clears a field → inherit the
   // brand. Updating these never touches the brand or any sibling campaign. audienceIds must be
-  // non-empty when present; use null to clear back to inherit.
-  goal: RuntimeGoalSchema.nullable().optional(),
+  // non-empty when present; use null to clear back to inherit. `goal` is deliberately absent: it
+  // is a legacy read-only field nothing writes any more.
   audienceIds: z.array(z.string().min(1)).min(1, "audienceIds must contain at least one audience (use null to inherit the brand)").nullable().optional(),
   servicesOffered: z.array(z.string().min(1)).nullable().optional(),
   clickDestinationUrl: z.string().min(1).nullable().optional(),
@@ -255,8 +259,9 @@ export const StartRunResponse = z.object({
   // workflow-service propagates this as x-audience-id to every downstream DAG node
   // so all run costs are attributed to the audience. Null when none is selected.
   audienceId: z.string().nullable(),
-  // The campaign's OWN config for this run (Campaign v2). `goal` is the campaign's own
-  // optimization goal (null = paced on the brand goal); the sending runtime reads
+  // The campaign's OWN config for this run (Campaign v2). `goal` is LEGACY and read-only —
+  // served as stored (almost always null), never written, scheduled for removal; the sending
+  // runtime reads
   // servicesOffered / clickDestinationUrl as authoritative per-campaign config (null =
   // inherit the brand). audienceIds is the campaign's targeted subset.
   goal: RuntimeGoalSchema.nullable(),
