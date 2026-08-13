@@ -137,13 +137,28 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
   canonical four, and a campaign row can carry either. Compare raw tokens on any of the three and a
   fully-funded funnel reads as UNFUNDED — the gate blocks it and it silently stops sending. Never
   delete a legacy entry.
-- **History was written by three migrations, and no code reads a goal for a funnel any more.** 0042
+- **History was written by four migrations, and no code reads a goal for a funnel any more.** 0042
   wrote the funnel of every campaign stating a goal; 0043 renamed those keys (and the provisioned
   campaign NAME, which carries the same token) to the canonical four; **0047** wrote the last three
   LIVE rows from their (org, brand) pair's DECLARED funnel set, and only where that set names
-  exactly one funnel. The boot backfill (`src/lib/funnel-backfill.ts`) that read each pair's
-  `currentGoal` is DELETED with the map it used. A pair declaring several funnels is left alone
-  rather than guessed at, and stopped rows stay as they are — 682 of them, history.
+  exactly one funnel; **0048** wrote the STOPPED ancestors of a live campaign (see below). The boot
+  backfill (`src/lib/funnel-backfill.ts`) that read each pair's `currentGoal` is DELETED with the
+  map it used. A pair declaring several funnels is left alone rather than guessed at.
+- **A STOPPED campaign's funnel is NOT inert history — it decides whose totals its history lands
+  in.** 0047 left stopped rows alone on the premise that "a funnel nobody stated for a campaign
+  nobody is running changes nothing about what it did". That premise is wrong: features-service
+  totals a brand's campaigns into families keyed on (org, brand, funnel, channel), so a stopped
+  ancestor carrying NO funnel keys onto a family with no live member — it renders no line at all
+  while its runs, spend, leads and replies keep counting at BRAND level. That is the whole gap a
+  customer reads between the campaign view and the brand view (prod 2026-08-13, brand 75d7e3e8: 12
+  positive replies against 15, $1,246.63 of spend against $2,057.06, the missing $810.43 on 45
+  stopped ancestors). **0048** closes it by RULE, not by a list: a stopped row carrying no funnel
+  states the funnel of the live campaign of its (org, brand, acquisition channel), and only where
+  that triple has EXACTLY ONE live campaign stating one — none, or several, is left alone, and a
+  stopped row that already states a funnel is never restated. The partial unique index is on
+  `ongoing` rows only, so writing a stopped row can never collide with it. Pinned by
+  `tests/integration/stopped-ancestor-funnel-backfill.test.ts`, which applies the file itself to a
+  prod-shaped database twice.
 - **The gate paces on that funnel's own ceiling** (`gate-check.ts`, block a2), fail-CLOSED like
   the brand ceiling. Precedence: campaign's own `dailyBudgetCents` → `funnelKey` ceiling → brand
   daily budget. A funnel funded at ZERO, or absent from billing while the brand funds OTHER
@@ -228,9 +243,11 @@ the table. Two answers exist: migration **0045** (org `f0420eb5` / brand `f4d73d
 2026-08-02 — the live campaign `d5a759bf` states `sales_meetings_from_conversation`, its 51 stopped
 sales campaigns state `website_purchases`; a run-date split was declined, so 33,229 of `d5a759bf`'s
 54,809 runs predate the July 19 switch and sit under the meeting funnel, one-directional and NOT to
-be "fixed"), and migration **0047** (the three live rows above, taken from each pair's declared
-funnel set). Note that a brand row is claimed by several orgs — the stopped campaigns other orgs
-hold on `f4d73dab` are other customers' and keep a NULL funnel.
+be "fixed"), migration **0047** (the three live rows above, taken from each pair's declared
+funnel set), and migration **0048** (the 45 stopped ancestors of the one live campaign of org
+`b645207b` / brand `75d7e3e8` / `cold_email`, taken from that campaign's own stated funnel). Note
+that a brand row is claimed by several orgs — the stopped campaigns other orgs hold on `f4d73dab`
+are other customers' and keep a NULL funnel, and 0048's rule joins on the org for the same reason.
 
 ## Brand serialization counts SALES runs only — a brand's PR run is not its sales outreach's business
 

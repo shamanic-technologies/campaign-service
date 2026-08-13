@@ -337,6 +337,13 @@
       "when": 1777200000000,
       "tag": "0047_live_campaign_funnel_from_declaration",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1777300000000,
+      "tag": "0048_stopped_ancestors_state_their_campaign_funnel",
+      "breakpoints": true
     }
   ]
 }
