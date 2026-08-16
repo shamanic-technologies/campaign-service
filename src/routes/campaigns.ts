@@ -40,31 +40,42 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
 /**
  * GET /campaigns - List all campaigns for org
  *
- * Supports filtering by brandId, workflowSlug, featureSlug.
+ * Supports filtering by brandId, status, workflowSlug, featureSlug, and an optional limit.
+ *
+ * `status` takes the vocabulary the column actually stores — `ongoing` or `stopped`. Anything
+ * else is a 400 from CampaignsFilterQuery: a caller who asks for "running" gets told so, rather
+ * than the whole list back with their filter quietly dropped.
+ *
+ * `limit` is absent for every existing consumer, and absent means every match, unchanged. When
+ * a caller states one, the response carries `hasMore` so a truncated list reads as truncated.
  */
 router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilterQuery), async (req: AuthenticatedRequest, res) => {
   try {
     const {
-      brandId, workflowSlug, featureSlug,
-    } = req.query as {
-      brandId?: string;
-      workflowSlug?: string;
-      featureSlug?: string;
-    };
+      brandId, status, workflowSlug, featureSlug, limit,
+    } = CampaignsFilterQuery.parse(req.query);
 
     const conditions = [eq(campaigns.orgId, req.orgId!)];
 
     if (brandId) conditions.push(arrayContains(campaigns.brandIds, [brandId]));
+    if (status) conditions.push(eq(campaigns.status, status));
     if (workflowSlug) conditions.push(eq(campaigns.workflowSlug, workflowSlug));
     if (featureSlug) conditions.push(eq(campaigns.featureSlug, featureSlug));
 
-    const results = await db
+    const query = db
       .select()
       .from(campaigns)
       .where(and(...conditions))
       .orderBy(desc(campaigns.createdAt));
 
-    res.json({ campaigns: results });
+    // One row past the cap tells us whether there is a next page without a second count query.
+    const rows = limit === undefined ? await query : await query.limit(limit + 1);
+
+    if (limit === undefined) {
+      return res.json({ campaigns: rows });
+    }
+
+    res.json({ campaigns: rows.slice(0, limit), hasMore: rows.length > limit });
   } catch (error) {
     console.error("[campaign-service] List campaigns error:", error);
     res.status(500).json({ error: "Internal server error" });

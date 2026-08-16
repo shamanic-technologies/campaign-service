@@ -74,10 +74,13 @@ registry.registerPath({
   path: "/campaigns",
   tags: ["Campaigns"],
   summary: "List campaigns for org",
+  description:
+    "Filterable by brandId, status, workflowSlug and featureSlug. `status` takes the stored vocabulary — `ongoing` (running) or `stopped`; any other value is a 400 rather than an unfiltered list. `limit` is optional: omit it and every match comes back, as it always has; state one and the response carries `hasMore`.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { query: CampaignsFilterQuery },
   responses: {
-    200: { description: "List of campaigns", content: { "application/json": { schema: z.object({ campaigns: z.array(CampaignSchema) }) } } },
+    200: { description: "List of campaigns", content: { "application/json": { schema: z.object({ campaigns: z.array(CampaignSchema), hasMore: z.boolean().optional() }) } } },
+    400: { description: "Unrecognised filter value (e.g. a status outside ongoing/stopped)", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
