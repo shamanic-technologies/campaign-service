@@ -7,7 +7,6 @@
 // EVERYTHING here is fire-and-forget: it must NEVER block, delay, or fail the outreach
 // loop / run finalization. Every path swallows its error (logged, not thrown).
 import type { Campaign } from "../db/schema.js";
-import { anyBrandPaused } from "./brand-pause.js";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
 
 // eventType == template name. transactional-email-service maps a send's eventType to the
@@ -181,8 +180,8 @@ async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId
  * Sends ONLY when EVERY condition holds:
  *   - a sales-outreach feature (cold or CRM — the audience/extend concept applies)
  *   - the campaign has an owning user (createdByUserId) to resolve as recipient
- *   - the brand is ACTIVE (not paused)
- *   - a daily budget is configured (> 0)
+ *   - a daily budget is configured (> 0) — which IS "the brand is funded", and is therefore also
+ *     what says the brand is running at all now that `brand_pause` is gone
  *   - the org has auto-topup ON
  *
  * The 1x/month-per-brand cap is enforced by transactional-email-service dedup, not here.
@@ -198,7 +197,6 @@ export async function maybeSendExtendAudienceEmail(campaign: Campaign, opts: { r
     const brandIds = campaign.brandIds ?? [];
     if (brandIds.length === 0) return;
 
-    if (await anyBrandPaused(campaign.orgId, brandIds)) return;
     if (!(await hasPositiveDailyBudget(campaign))) return;
     if (!(await readAutoTopupEnabled(campaign.orgId))) return;
 

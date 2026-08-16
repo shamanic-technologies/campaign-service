@@ -1,0 +1,21 @@
+-- Retire the brand pause flag. Funding a sales funnel is what makes its campaigns eligible.
+--
+-- `brand_pause.paused` was a second source of truth for a fact the money already states. The
+-- customer surface that wrote it (the brand-wide pause control) was deleted when the product
+-- decided a customer stops a chain by dropping its per-funnel ceiling to zero, and no writer
+-- replaced it anywhere in the fleet — audited across the customer dashboard and the staff
+-- console. The flag stayed READ, though: the scheduler joined against it and excluded a paused
+-- brand's sales campaigns. So 27 brands sat stored-paused with no API path back, 10 of them
+-- funded, holding 11 ongoing campaigns that could never be claimed.
+--
+-- Nothing is lost by dropping it. Every one of those 27 brands funds nothing — no funnel with a
+-- positive ceiling, no brand-level pot — so the funding rule that replaces the flag holds exactly
+-- the same brands, and holds them for a reason a customer can change.
+--
+-- `brand_pause_transitions` is deliberately KEPT: it is a closed record of the flips that did
+-- happen, features-service's Customer Success health board reads it, and dropping it would lose
+-- real history to answer nothing. No new row can be written to it — the PATCH route that did is
+-- gone with the flag.
+--
+-- Idempotent + boot-safe: only drops when the table still exists.
+DROP TABLE IF EXISTS "brand_pause";

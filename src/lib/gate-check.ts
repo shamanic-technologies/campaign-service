@@ -2,7 +2,6 @@ import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type 
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
-import { anyBrandPaused } from "./brand-pause.js";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
 import { fetchFunnelBudgets } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
@@ -67,18 +66,6 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // Campaign must be ongoing
   if (campaign.status !== "ongoing") {
     return { allowed: false, reason: "Campaign is not ongoing" };
-  }
-
-  // Brand pause — HOLD if ANY target brand is paused (same org). Defense-in-depth: the
-  // scheduler already excludes paused-brand campaigns from its claim, but a run already in
-  // flight when the brand was paused still reaches this gate. NOT a terminal stop — the
-  // campaign stays 'ongoing'; internal.ts backs it off and the next un-pause resumes it.
-  //
-  // FEATURE-SCOPED: a brand pause is a sales-outreach switch, so it only holds that feature
-  // family's runs (cold + CRM). Non-sales features (pr-expert-quote-outreach, …) run through even
-  // when the brand is paused — mirrors notPausedBrandClause() on the scheduler side.
-  if (isSalesOutreachFeature(campaign.featureSlug) && (await anyBrandPaused(campaign.orgId, campaign.brandIds))) {
-    return { allowed: false, reason: "Brand paused" };
   }
 
   const identity: IdentityHeaders = {
@@ -553,7 +540,20 @@ async function brandDailyBudgetBlock(
   }
 
   const dailyBudgetCents = dailyBudget.dailyBudgetCents;
-  if (dailyBudgetCents === null) return null; // explicitly unset → no cap this tick
+  // A budget nobody ever stated is NOT "no cap this tick" — it is nothing funded, and a campaign
+  // the customer funds nothing for does not run. Reading it as unbounded is exactly how two
+  // brands that fund nothing at all kept sending against no ceiling while 27 brands that DID
+  // state a zero were held by a flag nobody could write. Funding is what makes a campaign
+  // eligible; its absence cannot be the thing that removes the limit.
+  //
+  // Only ever reached for a sales-outreach campaign (this whole block is `if (isSalesFeature)`),
+  // so no other feature family is held by it.
+  if (dailyBudgetCents === null) {
+    return { allowed: false, reason: "Brand not funded" };
+  }
+  if (dailyBudgetCents <= 0) {
+    return { allowed: false, reason: "Brand not funded" };
+  }
 
   const brandSpend = await getStatsBudget({
     orgId: campaign.orgId,

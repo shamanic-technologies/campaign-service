@@ -20,7 +20,6 @@ import {
   TransferBrandBody,
   TransferBrandResponse,
   DeleteCampaignsByOrgResponse,
-  UpdateBrandPauseBody,
   BrandPauseResponse,
   SetBrandCampaignsDailyBudgetBody,
   SetBrandCampaignsDailyBudgetResponse,
@@ -138,37 +137,19 @@ registry.registerPath({
   },
 });
 
-// === BRAND PAUSE ===
+// === BRAND HELD STATE (derived from funding) ===
 
 registry.registerPath({
   method: "get",
   path: "/brands/{brandId}/pause",
   tags: ["Brands"],
-  summary: "Get a brand's pause state",
-  description: "Returns whether the brand is paused. When paused, the scheduler holds every ongoing campaign targeting this brand. No row → paused=false, updatedAt=null. Org-scoped via x-org-id.",
+  summary: "Is this brand held (funds nothing)?",
+  description: "Returns whether the brand's sales campaigns are HELD, derived from what the customer FUNDS in billing-service — there is no stored pause flag any more (it had no writer left in the fleet and was retired in v0.51.0). paused=true ⟺ no sales funnel of this (org, brand) carries a positive daily ceiling AND the brand-level daily budget is not positive either; funding any one funnel releases it with no other step. updatedAt is always null (the state is not stored here). 502 when billing cannot be read — a brand whose funding is unknown is not reported as running. Org-scoped via x-org-id.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { params: z.object({ brandId: z.string() }) },
   responses: {
     200: { description: "Brand pause state", content: { "application/json": { schema: BrandPauseResponse } } },
     400: { description: "Missing x-org-id", content: { "application/json": { schema: ErrorResponse } } },
-    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-registry.registerPath({
-  method: "patch",
-  path: "/brands/{brandId}/pause",
-  tags: ["Brands"],
-  summary: "Set a brand's pause state (upsert)",
-  description: "Pauses or un-pauses all of the brand's ongoing campaigns at the scheduler. Upserts one mutable row per brand. Un-pausing resumes held campaigns on the next scheduler tick with zero re-launch. Org-scoped via x-org-id.",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: {
-    params: z.object({ brandId: z.string() }),
-    body: { content: { "application/json": { schema: UpdateBrandPauseBody } } },
-  },
-  responses: {
-    200: { description: "Updated brand pause state", content: { "application/json": { schema: BrandPauseResponse } } },
-    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
@@ -195,8 +176,8 @@ registry.registerPath({
   method: "get",
   path: "/brands/{brandId}/pause-history",
   tags: ["Brands"],
-  summary: "Get a brand's pause on/off transition timeline",
-  description: "Forward-only, per-(org, brand) history of pause/resume flips (oldest first) for the Customer Success health board. Each transition's `paused` is the new state after the flip. No-op PATCHes (same value) record nothing; flips before this shipped are not backfilled. No transitions → empty array. Org-scoped via x-org-id. Does not affect GET /brands/{brandId}/pause.",
+  summary: "Get a brand's pause on/off transition timeline (closed history)",
+  description: "Per-(org, brand) history of the flips of the retired brand pause flag (oldest first) for the Customer Success health board. CLOSED: the flag and the PATCH route that wrote it were removed in v0.51.0, so no new transition can be recorded — the timeline is kept because it is a true record of what happened. Each transition's `paused` is the new state after that flip. No transitions → empty array. Org-scoped via x-org-id. Unrelated to GET /brands/{brandId}/pause, which now answers from funding.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { params: z.object({ brandId: z.string() }) },
   responses: {

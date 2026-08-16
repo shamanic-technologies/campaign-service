@@ -275,4 +275,52 @@ describe('No Legacy Patterns - CRITICAL', () => {
       `Campaign-service must not create/update/pause/cancel Stripe subscriptions:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`
     ).toHaveLength(0);
   });
+
+  it('should NOT bring back the brand pause flag — funding is the one statement of held', () => {
+    // `brand_pause.paused` was a second source of truth for a fact billing already states, and it
+    // outlived its writer: the customer dashboard's pause control was deleted (a customer stops a
+    // chain by defunding it), nothing in the fleet wrote the flag any more, and 27 brands sat
+    // stored-paused with no API path back. A campaign is held when the customer funds nothing for
+    // it, decided in ONE place (src/lib/campaign-funding.ts). The flag, its table and its helpers
+    // must not come back — a second representation is what produced the contradiction.
+    const roots = [srcDir, path.join(__dirname, '../../packages')].filter((d) => fs.existsSync(d));
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const root of roots) {
+      for (const file of getAllTsFiles(root)) {
+        const content = fs.readFileSync(file, 'utf-8');
+        content.split('\n').forEach((line, index) => {
+          if (/anyBrandPaused|notPausedBrandClause|\bbrandPause\b|["']brand_pause["']/.test(line)) {
+            violations.push({
+              file: path.relative(path.join(__dirname, '../..'), file),
+              line: index + 1,
+              code: line.trim().substring(0, 80),
+            });
+          }
+        });
+      }
+    }
+
+    expect(
+      violations,
+      `The brand pause flag is retired — a campaign is held by what the customer funds:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`
+    ).toHaveLength(0);
+  });
+
+  it('should NOT expose a writer for the brand held state on any surface', () => {
+    // A brand-wide pause button beside per-funnel ceilings is the same contradiction wearing a
+    // different hat. The held state is READ (GET /brands/:brandId/pause, derived from billing) and
+    // written nowhere.
+    const routesDir = path.join(srcDir, 'routes');
+    const violations: string[] = [];
+    for (const file of getAllTsFiles(routesDir)) {
+      const content = fs.readFileSync(file, 'utf-8');
+      content.split('\n').forEach((line, index) => {
+        if (/router\.(patch|post|put)\(\s*["'][^"']*\/pause/.test(line)) {
+          violations.push(`${path.relative(path.join(__dirname, '../..'), file)}:${index + 1}`);
+        }
+      });
+    }
+    expect(violations, `No route may write a brand pause state:\n${violations.join('\n')}`).toHaveLength(0);
+  });
 });

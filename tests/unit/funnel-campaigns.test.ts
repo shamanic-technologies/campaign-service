@@ -58,7 +58,9 @@ vi.mock("drizzle-orm", () => ({
   asc: vi.fn(),
   desc: vi.fn(),
   isNull: vi.fn(),
+  inArray: vi.fn(),
   arrayContains: vi.fn(),
+  sql: Object.assign(vi.fn(), { join: vi.fn() }),
 }));
 
 const mockFetch = vi.fn();
@@ -69,6 +71,7 @@ import {
   selectLowestFillRatio,
   funnelCampaignName,
   FUNNEL_TURN_DEFER_MS,
+  FUNDING_RECHECK_MS,
   type ClaimedFunnelCampaign,
 } from "../../src/lib/funnel-campaigns.js";
 
@@ -85,6 +88,7 @@ function claimed(overrides: Partial<ClaimedFunnelCampaign> = {}): ClaimedFunnelC
     brandIds: ["brand-1"],
     featureSlug: SALES,
     funnelKey: null,
+    dailyBudgetCents: null,
     ...overrides,
   };
 }
@@ -92,12 +96,20 @@ function claimed(overrides: Partial<ClaimedFunnelCampaign> = {}): ClaimedFunnelC
 // billing-service still names these funnels the PRE-RENAME way, so every test below feeds this
 // mock the legacy spellings on purpose: the two producers disagree in production today, and the
 // canonicalisation is what keeps a fully-funded funnel from reading as unfunded.
-function mockFunnelBudgets(funnels: Array<{ funnelKey: string; dailyBudgetCents: string }>) {
+function mockFunnelBudgets(
+  funnels: Array<{ funnelKey: string; dailyBudgetCents: string }>,
+  // What billing answers as the brand-level pot. Defaults to the sum, which is what it derives
+  // when the brand funds per funnel; pass it explicitly for a brand with ONE pot (funnels: []).
+  brandDailyBudgetCents?: string | null,
+) {
   mockFetch.mockResolvedValueOnce({
     ok: true,
     json: async () => ({
       brandId: "brand-1",
-      dailyBudgetCents: String(funnels.reduce((s, f) => s + Number(f.dailyBudgetCents), 0)),
+      dailyBudgetCents:
+        brandDailyBudgetCents === undefined
+          ? String(funnels.reduce((s, f) => s + Number(f.dailyBudgetCents), 0))
+          : brandDailyBudgetCents,
       funnels: funnels.map(f => ({ ...f, updatedAt: null })),
     }),
   });
@@ -209,16 +221,45 @@ describe("planFunnelTurns", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("a brand that never set per-funnel ceilings behaves exactly as today", async () => {
-    mockFunnelBudgets([]);
+  it("a brand with ONE funded pot and no per-funnel ceilings runs exactly as it always did", async () => {
+    mockFunnelBudgets([], "5000");
     const deferred = await planFunnelTurns([claimed()]);
     expect(deferred.size).toBe(0);
   });
 
-  it("falls through to today's behaviour when the ceilings cannot be read (fail-soft)", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
-    const deferred = await planFunnelTurns([claimed()]);
+  it("HOLDS a brand that funds nothing — no funnel ceiling and no pot", async () => {
+    mockFunnelBudgets([], null);
+    const now = new Date("2026-08-16T10:00:00Z");
+    const deferred = await planFunnelTurns([claimed()], now);
+    expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
+  });
+
+  it("HOLDS a brand whose every funnel is funded at zero", async () => {
+    mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
+    const now = new Date("2026-08-16T10:00:00Z");
+    const deferred = await planFunnelTurns(
+      [claimed({ funnelKey: "sales_meetings_from_conversation" })],
+      now,
+    );
+    expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
+  });
+
+  it("funding ONE funnel releases that funnel's campaign with no other step", async () => {
+    mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }]);
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue({ id: "campaign-1", name: "x", status: "ongoing", stopReason: null });
+    mockSpend("0");
+
+    const deferred = await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
     expect(deferred.size).toBe(0);
+  });
+
+  it("HOLDS the brand when the ceilings cannot be read (fail-CLOSED)", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+    const now = new Date("2026-08-16T10:00:00Z");
+    const deferred = await planFunnelTurns([claimed()], now);
+    // The gate refuses to spend on the same unreadable ceiling, so firing would only burn a run.
+    expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
   });
 
   it("gives every funded funnel its own campaign", async () => {
@@ -478,9 +519,9 @@ describe("planFunnelTurns", () => {
       now,
     );
 
-    // The funded-but-full one waits for the day rollover; the unfunded one re-checks in a minute
-    // because its funding can change at any moment (and the gate is what refuses to spend).
+    // The funded-but-full one waits for the day rollover; the unfunded one is not waiting its
+    // TURN at all, it is waiting for money, so it re-checks on the funding cadence.
     expect(deferred.get("c-visit")!.getTime()).toBeGreaterThan(now.getTime() + FUNNEL_TURN_DEFER_MS);
-    expect(deferred.get("c-unfunded")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
+    expect(deferred.get("c-unfunded")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
   });
 });

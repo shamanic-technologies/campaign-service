@@ -25,9 +25,9 @@ vi.mock("../../src/lib/gate-check.js", () => ({
 
 import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
-import { brandPause, brandPauseTransitions, campaigns } from "../../src/db/schema.js";
+import { brandPauseTransitions, campaigns } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
-import { cleanTestData, closeDb, insertTestCampaign, setBrandPause } from "../helpers/test-db.js";
+import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
@@ -45,7 +45,7 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
     await closeDb();
   });
 
-  it("stops org campaigns, clears scheduler candidates, and removes org brand pause rows", async () => {
+  it("stops org campaigns, clears scheduler candidates, and removes the org's pause-history rows", async () => {
     const orgBrandId = crypto.randomUUID();
     const otherBrandId = crypto.randomUUID();
     const queuedCampaign = await insertTestCampaign(orgId, {
@@ -68,8 +68,6 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
       nextRunAt: new Date(Date.now() + 60_000),
       brandIds: [otherBrandId],
     });
-    await setBrandPause(orgId, orgBrandId, true);
-    await setBrandPause(otherOrgId, otherBrandId, true);
     // A recorded pause transition for this org (cascade target) + one for the other org (survives).
     await db.insert(brandPauseTransitions).values({ brandId: orgBrandId, orgId, paused: true });
     await db.insert(brandPauseTransitions).values({ brandId: otherBrandId, orgId: otherOrgId, paused: true });
@@ -81,7 +79,6 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
 
     expect(res.body.updatedTables).toEqual([
       { tableName: "campaigns", count: 2 },
-      { tableName: "brand_pause", count: 1 },
       { tableName: "brand_pause_transitions", count: 1 },
     ]);
 
@@ -101,11 +98,6 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
     expect(otherOrgAfter!.status).toBe("ongoing");
     expect(otherOrgAfter!.nextRunAt).not.toBeNull();
 
-    const orgPauseRows = await db.query.brandPause.findMany({ where: eq(brandPause.orgId, orgId) });
-    expect(orgPauseRows).toHaveLength(0);
-    const otherPauseRows = await db.query.brandPause.findMany({ where: eq(brandPause.orgId, otherOrgId) });
-    expect(otherPauseRows).toHaveLength(1);
-
     const orgTransitions = await db.query.brandPauseTransitions.findMany({ where: eq(brandPauseTransitions.orgId, orgId) });
     expect(orgTransitions).toHaveLength(0);
     const otherTransitions = await db.query.brandPauseTransitions.findMany({ where: eq(brandPauseTransitions.orgId, otherOrgId) });
@@ -120,7 +112,6 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
 
     expect(res.body.updatedTables).toEqual([
       { tableName: "campaigns", count: 0 },
-      { tableName: "brand_pause", count: 0 },
       { tableName: "brand_pause_transitions", count: 0 },
     ]);
   });
@@ -144,7 +135,6 @@ describe("DELETE /internal/campaigns/by-org/:orgId", () => {
 
     expect(retry.body.updatedTables).toEqual([
       { tableName: "campaigns", count: 0 },
-      { tableName: "brand_pause", count: 0 },
       { tableName: "brand_pause_transitions", count: 0 },
     ]);
   });
