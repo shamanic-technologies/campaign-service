@@ -8,6 +8,8 @@
 // loop / run finalization. Every path swallows its error (logged, not thrown).
 import type { Campaign } from "../db/schema.js";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
+import { hasExhaustedAudience } from "./audience-exhaustion.js";
+import { fetchBrandRuntimeContext } from "./brand-runtime-client.js";
 
 // eventType == template name. transactional-email-service maps a send's eventType to the
 // template of the same name and applies its monthly-per-brand dedup to this eventType.
@@ -17,6 +19,13 @@ const DASHBOARD_URL = "https://dashboard.distribute.you";
 
 // The template registered at boot via PUT /platform-templates (API-key only; no user
 // session needed at cold start). Copy is user-facing: plain, no em-dash.
+//
+// `{{audiencesUrl}}` lands on the brand's OWN audiences page, not the dashboard root: a
+// customer with several brands should not have to work out which one paused and then
+// navigate to it. `{{brandFooter}}` carries that same identity as a quiet grey line at the
+// foot, so the message itself stays about the outreach rather than about ids. Both are
+// built by the sender; transactional-email leaves an absent variable empty, so an email we
+// could not attribute renders exactly as it did before, with no footer and no invented name.
 const EXTEND_AUDIENCE_TEMPLATE = {
   name: EXTEND_AUDIENCE_EVENT_TYPE,
   subject: "Your outreach is waiting on new leads",
@@ -24,7 +33,8 @@ const EXTEND_AUDIENCE_TEMPLATE = {
     "<p>Hi there,</p>",
     "<p>Your outreach has now contacted everyone in your current audiences, so sending has paused.</p>",
     "<p>Add or widen an audience and we'll pick sending back up automatically.</p>",
-    '<p><a href="{{dashboardUrl}}">Extend an audience</a></p>',
+    '<p><a href="{{audiencesUrl}}">Extend an audience</a></p>',
+    '<p style="color:#8a8a8a;font-size:12px;">{{brandFooterHtml}}</p>',
   ].join("\n"),
   textBody: [
     "Hi there,",
@@ -33,9 +43,59 @@ const EXTEND_AUDIENCE_TEMPLATE = {
     "",
     "Add or widen an audience and we'll pick sending back up automatically.",
     "",
-    "Extend an audience: {{dashboardUrl}}",
+    "Extend an audience: {{audiencesUrl}}",
+    "",
+    "{{brandFooter}}",
   ].join("\n"),
 };
+
+/** The brand's own audiences page, the one place this email asks the customer to go. */
+function audiencesUrl(orgId: string, brandId: string): string {
+  return `${DASHBOARD_URL}/orgs/${encodeURIComponent(orgId)}/brands/${encodeURIComponent(brandId)}/audiences`;
+}
+
+// transactional-email interpolates a variable's value raw into the HTML body, so a brand
+// name is escaped here rather than trusted.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * The brand's display name, from brand-service. Returns null when it cannot be resolved,
+ * and says so LOUDLY: the email then keeps its current wording rather than carrying a
+ * placeholder or a fabricated name.
+ */
+async function readBrandName(campaign: Campaign, brandId: string, userId: string, runId: string): Promise<string | null> {
+  try {
+    const ctx = await fetchBrandRuntimeContext(brandId, {
+      orgId: campaign.orgId,
+      userId,
+      runId,
+      campaignId: campaign.id,
+      brandId,
+      workflowSlug: campaign.workflowSlug,
+      featureSlug: campaign.featureSlug ?? "",
+    });
+    const name = typeof ctx.brand?.name === "string" ? ctx.brand.name.trim() : "";
+    if (!name) {
+      console.error(
+        `[campaign-service] extend-audience email: brand ${brandId} has no name in its runtime context — sending without the brand footer`,
+      );
+      return null;
+    }
+    return name;
+  } catch (err) {
+    console.error(
+      `[campaign-service] extend-audience email: could not resolve brand ${brandId} identity — sending without the brand footer:`,
+      err,
+    );
+    return null;
+  }
+}
 
 function transactionalEmailConfig(): { url: string; apiKey: string } | null {
   const url = process.env.TRANSACTIONAL_EMAIL_SERVICE_URL;
@@ -145,6 +205,12 @@ async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId
   const cfg = transactionalEmailConfig();
   if (!cfg) return;
   const brandIds = campaign.brandIds ?? [];
+  const brandId = brandIds[0];
+  const brandName = await readBrandName(campaign, brandId, userId, runId);
+  // Empty when the identity could not be read: the template then renders the footer line
+  // blank and the message says exactly what it said before, with nothing invented.
+  const brandFooterHtml = brandName ? `About your outreach for ${escapeHtml(brandName)}.` : "";
+  const brandFooterText = brandName ? `About your outreach for ${brandName}.` : "";
   try {
     const res = await fetch(`${cfg.url}/send`, {
       method: "POST",
@@ -162,7 +228,11 @@ async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId
         eventType: EXTEND_AUDIENCE_EVENT_TYPE,
         brandIds,
         campaignId: campaign.id,
-        metadata: { dashboardUrl: DASHBOARD_URL },
+        metadata: {
+          audiencesUrl: audiencesUrl(campaign.orgId, brandId),
+          brandFooterHtml,
+          brandFooter: brandFooterText,
+        },
       }),
     });
     if (!res.ok) {
@@ -179,6 +249,10 @@ async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId
  *
  * Sends ONLY when EVERY condition holds:
  *   - a sales-outreach feature (cold or CRM — the audience/extend concept applies)
+ *   - the campaign actually RAN OUT of people: at least one real audience of its own was
+ *     exhausted. A brand that never had an audience contacted nobody, so "you have now
+ *     contacted everyone" is false for it — zero out of zero is not everyone. The dashboard
+ *     already tells that brand it has no active audience, and this path says nothing.
  *   - the campaign has an owning user (createdByUserId) to resolve as recipient
  *   - a daily budget is configured (> 0) — which IS "the brand is funded", and is therefore also
  *     what says the brand is running at all now that `brand_pause` is gone
@@ -196,6 +270,12 @@ export async function maybeSendExtendAudienceEmail(campaign: Campaign, opts: { r
 
     const brandIds = campaign.brandIds ?? [];
     if (brandIds.length === 0) return;
+
+    // Nobody was ever contacted → nothing was ever "fully contacted". A campaign whose brand
+    // has no audience at all reaches this same auto-stop branch (its exhaustion carries no
+    // audience id, so no mark is ever written), and telling it that its outreach finished is
+    // the one thing it must not hear. The campaign still stops; only the claim is withheld.
+    if (!(await hasExhaustedAudience(campaign.id))) return;
 
     if (!(await hasPositiveDailyBudget(campaign))) return;
     if (!(await readAutoTopupEnabled(campaign.orgId))) return;
