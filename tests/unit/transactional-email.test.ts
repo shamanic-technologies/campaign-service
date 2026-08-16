@@ -7,6 +7,22 @@ vi.mock("../../src/lib/sales-outreach-campaign.js", () => ({
     s === "sales-cold-email-outreach" || s === "sales-crm-email-outreach",
 }));
 
+// The guard that separates "ran out of people" from "never had anybody".
+const hasExhaustedAudience = vi.fn(async () => true);
+vi.mock("../../src/lib/audience-exhaustion.js", () => ({
+  hasExhaustedAudience: (campaignId: string) => hasExhaustedAudience(campaignId),
+}));
+
+const fetchBrandRuntimeContext = vi.fn(async () => ({
+  brand: { id: "brand-1", name: "Lux Projects Bali" },
+  currentGoal: "meetingBooked",
+  brandProfile: null,
+}));
+vi.mock("../../src/lib/brand-runtime-client.js", () => ({
+  fetchBrandRuntimeContext: (brandId: string, identity: unknown) =>
+    fetchBrandRuntimeContext(brandId as never, identity as never),
+}));
+
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
@@ -79,6 +95,14 @@ function sendCall() {
 describe("maybeSendExtendAudienceEmail", () => {
   beforeEach(() => {
     mockFetch.mockReset();
+    hasExhaustedAudience.mockClear();
+    hasExhaustedAudience.mockResolvedValue(true);
+    fetchBrandRuntimeContext.mockClear();
+    fetchBrandRuntimeContext.mockResolvedValue({
+      brand: { id: "brand-1", name: "Lux Projects Bali" },
+      currentGoal: "meetingBooked",
+      brandProfile: null,
+    });
     routeFetch();
   });
 
@@ -92,6 +116,55 @@ describe("maybeSendExtendAudienceEmail", () => {
     expect(call![1].headers["x-user-id"]).toBe("user-1");
     expect(call![1].headers["x-org-id"]).toBe("org-1");
     expect(call![1].headers["x-run-id"]).toBe("run-1");
+  });
+
+  it("does NOT send when no audience was ever exhausted — nobody was ever contacted", async () => {
+    // The zero-audience brand: it reaches the same auto-stop branch, having contacted nobody.
+    hasExhaustedAudience.mockResolvedValue(false);
+    await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+    expect(sendCall()).toBeUndefined();
+  });
+
+  it("stays silent for a zero-audience brand however many times its campaign stops", async () => {
+    hasExhaustedAudience.mockResolvedValue(false);
+    for (let i = 0; i < 5; i++) {
+      await maybeSendExtendAudienceEmail(makeCampaign(), { runId: `r-${i}` });
+    }
+    expect(sendCall()).toBeUndefined();
+  });
+
+  it("names the brand in a footer and links to that brand's audiences page", async () => {
+    await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "run-1" });
+    const body = JSON.parse(String(sendCall()![1].body));
+    expect(body.metadata.audiencesUrl).toBe(
+      "https://dashboard.distribute.you/orgs/org-1/brands/brand-1/audiences",
+    );
+    expect(body.metadata.brandFooter).toBe("About your outreach for Lux Projects Bali.");
+    expect(body.metadata.brandFooterHtml).toBe("About your outreach for Lux Projects Bali.");
+  });
+
+  it("escapes the brand name it interpolates into the HTML body", async () => {
+    fetchBrandRuntimeContext.mockResolvedValue({
+      brand: { id: "brand-1", name: '<script>x</script> & Co' },
+      currentGoal: "meetingBooked",
+      brandProfile: null,
+    } as never);
+    await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+    const body = JSON.parse(String(sendCall()![1].body));
+    expect(body.metadata.brandFooterHtml).toBe("About your outreach for &lt;script&gt;x&lt;/script&gt; &amp; Co.");
+    expect(body.metadata.brandFooter).toBe("About your outreach for <script>x</script> & Co.");
+  });
+
+  it("still sends, with no footer and no invented name, when the brand identity cannot be read", async () => {
+    fetchBrandRuntimeContext.mockRejectedValue(new Error("brand-service down"));
+    await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+    const body = JSON.parse(String(sendCall()![1].body));
+    expect(body.metadata.brandFooter).toBe("");
+    expect(body.metadata.brandFooterHtml).toBe("");
+    // The one click still lands on the brand's own audiences page.
+    expect(body.metadata.audiencesUrl).toBe(
+      "https://dashboard.distribute.you/orgs/org-1/brands/brand-1/audiences",
+    );
   });
 
   it("does NOT send for a non-sales feature", async () => {
