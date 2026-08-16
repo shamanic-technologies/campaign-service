@@ -406,6 +406,32 @@ So `/end-run` REINTERPRETS `stopCampaign=true` as audience-scoped: it marks `req
 
 At that all-audiences-exhausted auto-stop point (and ONLY there) `/end-run` also fires a **fire-and-forget extend-audience lifecycle email** (`maybeSendExtendAudienceEmail`, `src/lib/transactional-email.ts`) nudging the user to extend an audience so outreach can resume. It sends via **transactional-email-service** (`POST /send`, eventType `audience_fully_contacted`; template registered at boot via `PUT /platform-templates`) ONLY when ALL hold: sales-cold-email-outreach feature, `campaign.createdByUserId` present (recipient), a daily budget `> 0` (which IS "the brand is funded", and since 2026-08-16 is also the only statement that it is running at all) (campaign `dailyBudgetCents` else the brand's billing daily budget), and org `has_auto_topup` (billing `GET /internal/accounts/by-org/{orgId}/balance`, user-less). The **1×/month-per-brand cap is owned by transactional-email dedup** (its `audience_fully_contacted` monthly-per-brand cadence), NOT a local table. Every guard read is **fail-SAFE** (any error/absent field → treat as OFF → no email) and the whole call is fire-and-forget after the response, so it NEVER blocks or fails run finalization. When refactoring `/end-run`, keep this call at the exhausted-stop branch — do not drop it. (Set 2026-07-22, PR #292.)
 
+**"Everyone has been contacted" is a claim about people we actually contacted, so it needs a real
+audience to have run out** — `hasExhaustedAudience(campaign.id)`, ANY row in
+`campaign_audience_exhaustion` for the campaign, TTL ignored (this asks whether outreach ever ran
+out of people, not whether an audience is dry right now). Every other guard asked whether the brand
+is set up to keep spending; none asked whether anybody was ever contacted, so a brand with NO
+audience and NO contacts reached the same auto-stop branch and was told its outreach had finished:
+zero out of zero read as everyone. That brand writes no exhaustion row precisely because its stop
+carries no audience id — the case `/end-run` already logs as "cannot mark a specific audience
+exhausted" — so the mark IS the evidence, and no new state was needed to tell the two apart. The
+campaign still stops; only the claim is withheld, and the dashboard's persistent "no active
+audience" banner is what that brand reads instead. Verified in prod 2026-08-16: the three campaigns
+that ever received this email hold 11, 3 and **0** exhaustion rows — the zero is Lux Projects Bali
+(`cb965e9d`, brand `ccc29ba2`, emailed twice, 0 contacts and 0 audiences ever); the other two are
+unaffected.
+
+**The email NAMES the brand and links to that brand's own audiences page.** It used to carry no
+identity at all and point at the dashboard root, so a customer with several brands could not tell
+which one paused. `{{audiencesUrl}}` is
+`https://dashboard.distribute.you/orgs/<orgId>/brands/<brandId>/audiences` (the campaign's primary
+brand) and `{{brandFooterHtml}}` / `{{brandFooter}}` carry the name as a quiet grey line at the
+foot, HTML and text respectively — transactional-email interpolates a variable RAW into the HTML
+body, so the name is escaped here. The name comes from brand-service `/runtime-context`, the read
+this service already makes; if it cannot be resolved the footer is EMPTY and the email reads exactly
+as it did before. Never substitute a placeholder or an id for a name a customer will read.
+(Set 2026-08-16.)
+
 ## A campaign that ran out of people to contact comes BACK on its own — the customer's action is the trigger, and they were told so
 
 The auto-stop above emails the customer asking them to extend or add an audience. Nothing closed

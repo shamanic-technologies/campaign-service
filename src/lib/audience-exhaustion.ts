@@ -26,6 +26,25 @@ export async function markAudienceExhausted(campaignId: string, audienceId: stri
 }
 
 /**
+ * Has this campaign EVER exhausted a real audience?
+ *
+ * Deliberately ignores the TTL: this answers "did outreach ever run out of people in an
+ * audience it actually had", not "is an audience dry right now". A brand that never had an
+ * audience — and therefore never contacted anybody — never writes a row here, because the
+ * DAG's stopCampaign carries no audience id for it (the same case /end-run already logs as
+ * "cannot mark a specific audience exhausted"). That distinction is what separates a
+ * campaign that finished its people from one that never had any.
+ */
+export async function hasExhaustedAudience(campaignId: string): Promise<boolean> {
+  const rows = await db
+    .select({ audienceId: campaignAudienceExhaustion.audienceId })
+    .from(campaignAudienceExhaustion)
+    .where(eq(campaignAudienceExhaustion.campaignId, campaignId))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
  * Audience ids currently exhausted for a campaign — i.e. marked within the TTL window.
  * Marks older than the TTL are ignored (the audience is due for a re-probe), so they never
  * appear here and the bandit will consider that audience again on the next run.
