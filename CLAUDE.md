@@ -380,6 +380,24 @@ Unit tests (`pnpm test:unit`) need neither — they fully mock db/runs-client.
 
 `campaigns.status` uses **`ongoing`** for a live/running campaign and **`stopped`** for a halted one. There is NO `active` value. When diagnosing "which campaigns are running / did I stop them all", filter `status='ongoing'` — a query on `status='active'` returns EMPTY and falsely reads as "nothing is running". The scheduler's `reRunDueCampaigns` claims rows where `status='ongoing' AND nextRunAt <= now()`. (Set 2026-07-07: first diagnostic pass filtered `active`, wrongly reported all campaigns stopped while 9 were `ongoing`.)
 
+**`GET /campaigns?status=` serves that same vocabulary, and an unrecognised value is a 400 — never
+an unfiltered list.** The filter did not exist until 2026-08-16: the query schema declared brand,
+workflow and feature only, the handler destructured exactly those, and a `status` a caller sent
+was accepted by api-service's query whitelist, forwarded, and dropped here without a word. A 200
+with all 134 of an org's campaigns reads as "this org really does have 134 running", not "your
+filter was ignored" — which is why it survived unnoticed, and why `CampaignStatusEnum`
+(`ongoing` | `stopped`) is a Zod enum rather than a free string: `status=running` must be told it
+is wrong. No aliasing — a translation table is the thing this service keeps deleting, and one
+400 teaches the caller in a single round. The three older filters were verified to work.
+
+**`limit` is OPTIONAL and absent means every match** — that is what every existing consumer gets
+and it does not change. It exists because the filter alone does not make the big slice askable: an
+org's 682 stopped campaigns are a bigger response than the 134 that already broke the MCP client
+at 54KB. It is a limit and not a cursor because no caller pages today, and it reads one row past
+the cap so the response can carry `hasMore` — a truncated list that cannot say it is truncated is
+the same silent lie as the dropped filter. A caller that needs to WALK the stopped set will need a
+cursor; nothing has asked. (Set 2026-08-16.)
+
 ## `/end-run` `stopCampaign=true` is AUDIENCE-scoped, NOT campaign-scoped — never blindly set `status='stopped'` on it
 
 The workflow DAG sends `stopCampaign=true` whenever a run's SINGLE bandit-picked audience returns no leads (`fetch-lead.found == false`) — it's a **hardcoded literal on the `end-run-no-lead` DAG node** (`stopCampaign == !found`), evaluated on the ONE audience `/start-run` chose for that run. It does NOT mean "the whole campaign is done": the bandit narrows each run to one audience, so one audience running dry says nothing about the campaign's OTHER audiences. Obeying it literally (the old `status='stopped'` on any `stopCampaign=true`) wrongly halted multi-audience campaigns the instant their one exhausted audience got picked, while other audiences still had tens of thousands of reachable leads (prod incident brand `75d7e3e8`, 2026-07-21: stopped at 14:01 on audience `729e06f0` while 7 others were `exhausted=false`).

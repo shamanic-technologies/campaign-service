@@ -214,6 +214,13 @@
           "error"
         ]
       },
+      "CampaignStatusEnum": {
+        "type": "string",
+        "enum": [
+          "ongoing",
+          "stopped"
+        ]
+      },
       "CreateCampaignBody": {
         "type": "object",
         "properties": {
@@ -902,6 +909,7 @@
           "Campaigns"
         ],
         "summary": "List campaigns for org",
+        "description": "Filterable by brandId, status, workflowSlug and featureSlug. `status` takes the stored vocabulary — `ongoing` (running) or `stopped`; any other value is a 400 rather than an unfiltered list. `limit` is optional: omit it and every match comes back, as it always has; state one and the response carries `hasMore`.",
         "security": [
           {
             "apiKeyAuth": []
@@ -914,6 +922,14 @@
             },
             "required": false,
             "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/CampaignStatusEnum"
+            },
+            "required": false,
+            "name": "status",
             "in": "query"
           },
           {
@@ -931,6 +947,16 @@
             "required": false,
             "name": "featureSlug",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
           }
         ],
         "responses": {
@@ -946,11 +972,24 @@
                       "items": {
                         "$ref": "#/components/schemas/Campaign"
                       }
+                    },
+                    "hasMore": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
                     "campaigns"
                   ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unrecognised filter value (e.g. a status outside ongoing/stopped)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

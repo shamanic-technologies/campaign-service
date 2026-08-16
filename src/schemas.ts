@@ -114,10 +114,22 @@ export const CreateCampaignBody = z.object({
   notifyDestination: z.string().optional(),
 }).openapi("CreateCampaignBody");
 
+// The two values `campaigns.status` is ever written with. There is no `active` and no
+// `running` — a live campaign is `ongoing` (see CLAUDE.md, "Campaign status enum"). The enum
+// is what makes an unrecognised status a loud 400 instead of a silently unfiltered list.
+export const CampaignStatusEnum = z.enum(["ongoing", "stopped"], {
+  error: 'status must be "ongoing" (running) or "stopped"',
+}).openapi("CampaignStatusEnum");
+
 export const CampaignsFilterQuery = z.object({
   brandId: z.string().optional(),
+  status: CampaignStatusEnum.optional(),
   workflowSlug: z.string().optional(),
   featureSlug: z.string().optional(),
+  // Optional cap on how many rows come back. Absent = every match, which is what every
+  // existing consumer gets today. When present the response also carries `hasMore`, so a
+  // truncated list is never mistaken for a complete one.
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
 }).openapi("CampaignsFilterQuery");
 
 export const UpdateCampaignBody = z.object({
