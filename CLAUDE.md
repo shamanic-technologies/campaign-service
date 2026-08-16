@@ -117,10 +117,10 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
 - **A campaign cannot be CREATED without stating its funnel, so nothing is ever adopted or
   inferred.** `POST /campaigns` 400s a sales-outreach create with no `funnelKey` (and on a token no
   catalogue names); the creator provisions per funded funnel, so it already knows the answer. Every
-  other feature sells through no sales funnel and states none. Un-pause (`ensureRunnableSalesOutreachCampaign`)
-  therefore no longer SEEDS a campaign when a brand has none: it returns `{action:"deferred"}` and
-  the per-funnel step provisions one campaign per funded, declared funnel on the next tick. The
-  goal-based adoption of a funnel-less incumbent (`findIncumbentForFunnel`, `isRemovableStandIn`)
+  other feature sells through no sales funnel and states none. Nothing SEEDS a campaign for a brand
+  that has none except the per-funnel step, which provisions one campaign per funded, declared
+  funnel (`ensureRunnableSalesOutreachCampaign`, the old un-pause seeder, is DELETED with the
+  pause route that called it). The goal-based adoption of a funnel-less incumbent (`findIncumbentForFunnel`, `isRemovableStandIn`)
   is DELETED with the goal vocabulary — provisioning adds, it never re-labels an existing campaign.
 - **THE FUNNEL IS THE ONLY WORD. A campaign STATES it, persisted, and a consumer names what the
   campaign buys without a translation table.** The four canonical keys are
@@ -186,8 +186,72 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
   spend past a cap it cannot read.
 - A brand that never set per-funnel ceilings grows no funnel campaigns and behaves exactly as
   before: its campaigns state their funnel (a label) and keep pacing on the brand-level pot.
-- The brand-level PAUSE is untouched: the dashboard still reads and renders it.
-(Set 2026-08-02; adoption + fleet-wide funnel statement, same day.)
+- The brand-level PAUSE FLAG is GONE — funding is the only thing that holds a campaign. See the
+  next section.
+(Set 2026-08-02; adoption + fleet-wide funnel statement, same day; pause retired 2026-08-16.)
+
+## Funding a sales funnel is what makes its campaigns eligible — there is no pause flag any more
+
+"Is this brand paused" used to live here, in `brand_pause`, while "is this brand funded" lives in
+billing as a per-funnel daily ceiling. Two representations of one fact, and they disagreed. The
+product decided months ago that a customer stops a chain by dropping its ceiling to zero, and the
+brand-wide pause control was deleted from the customer dashboard along with its writer — but the
+flag was still READ, so 27 brands sat stored-paused with no API path back, 10 of them funded,
+holding 11 `ongoing` campaigns the scheduler would never claim. The flag is retired (migration
+0049 drops the table) and the money says it instead.
+
+- **ONE definition, `src/lib/campaign-funding.ts`.** A campaign is funded when a POSITIVE ceiling
+  exists for it, on gate-check's exact precedence: its own `dailyBudgetCents` (the mirror of its
+  funnel ceiling) → its `funnelKey`'s ceiling → the brand-level pot. Shared by the leg that HOLDS
+  an ongoing campaign (`planFunnelTurns`) and the leg that RESUMES a stopped one
+  (`campaign-resume`), for the same reason `serveableAudienceIdsForCampaign` is shared: two legs
+  on two definitions is how a campaign gets held by one and never picked up by the other.
+- **A ceiling nobody ever stated is UNFUNDED, not unbounded.** `brandDailyBudgetBlock` used to
+  read a null brand budget as "no cap this tick" and let the campaign run. That is how two brands
+  funding nothing at all (`8ea87a06…` org `d46ba002…`, `d7d25db9…` org `21bbec7f…`) kept sending
+  against no ceiling while 27 brands that DID state a zero were held by a flag nobody could
+  write. The gate now answers `Brand not funded`. It is only ever reached for a sales-outreach
+  campaign — every other feature family is untouched by funding, exactly as the pause was
+  sales-scoped.
+- **The hold is at the TURN, not the claim.** There is no SQL clause any more: the claim
+  `UPDATE … RETURNING` cannot call billing, and mirroring the ceiling into a column would rebuild
+  the same second-representation problem one layer down. A held campaign is claimed, held by
+  `planFunnelTurns`, and given `nextRunAt = now + FUNDING_RECHECK_MS` (10 min) — not the 1-minute
+  turn cadence, because it is not waiting its turn, it is waiting for money. That interval IS the
+  feature's latency: fund a funnel and its campaign runs within ten minutes, with no manual step.
+- **Fail-CLOSED here, unlike the rest of the turn planner.** An unreadable budget holds the brand.
+  Turn-taking is fail-soft because it only reorders work already allowed; this decides whether to
+  spend, and the gate refuses the same run on the same unreadable read anyway — firing it could
+  only burn a run.
+- **A brand with NOTHING running is claimed by nobody, so it is swept.**
+  `provisionFundedFunnelsForIdleBrands` (own 10-min cadence) reads the (org, brand) pairs that
+  have sales campaigns and no `ongoing` one — 27 of 44 today — and stands up one campaign per
+  funded, DECLARED funnel. Without it, funding a funnel on a brand whose campaigns are all stopped
+  would mean nothing forever, which is precisely the brand this exists for. The scheduler's idle
+  sleep is capped at that interval for the same reason the resume sweep needed it: a brand with
+  nothing ongoing yields an empty snapshot and would otherwise be looked at hourly.
+- **Funding brings back the campaign that was HELD, never the campaign that stopped for a reason
+  of its own.** A row carrying `audience_exhausted`, `max_leads_reached`, `manual` or
+  `org_teardown` said why it stopped and money answers none of them (the exhaustion sweep owns the
+  first — it asks the audience owner, the only honest test). A NULL reason is the pre-column
+  population, i.e. the workflow-version churn, so it is the campaign rather than a decision about
+  it, and funding resumes it.
+- **`GET /brands/:brandId/pause` STAYS and answers from the money**: held ⟺ no funnel carries a
+  positive ceiling AND the brand pot is not positive. `updatedAt` is always null (nothing stores
+  it) and an unreadable billing is a **502**, never a cheerful `paused:false`. **`PATCH
+  /brands/:brandId/pause` is DELETED** — re-adding a writer is the contradiction wearing a
+  different hat, and `tests/unit/no-legacy.test.ts` fails on any route that writes a pause.
+  api-service still proxies the PATCH; that proxy is now dead (it had no caller).
+- **`brand_pause_transitions` is KEPT as a CLOSED history.** No new row can be written (its writer
+  was the PATCH), but the flips that happened are real and features-service's Customer Success
+  board reads them via `/pause-history`. Dropping it would lose history to answer nothing.
+- **Consumer note (features-service):** its account triage reads this route as one of
+  paused → active → inactive. `paused` now means "funds nothing", which SUBSUMES the old
+  `inactive` (budget 0 or unset), so those two collapse into one for a sales brand. Money sums are
+  unaffected — both were already excluded from spend/MRR/ARR.
+- **Verified at ship**: all 27 stored-paused brands answer zero on every funnel and null on the
+  brand pot, so every one of them is still held after this ships, by the new rule. (Set
+  2026-08-16.)
 
 ## A campaign is unique on (org, brand, sales funnel, acquisition channel) — the WORKFLOW is not part of it
 
@@ -291,7 +355,7 @@ Unit tests (`pnpm test:unit`) need neither — they fully mock db/runs-client.
 
 ## Raw-`sql` list params need `sql.join`, NOT a bare JS array — and workflow dynasties live in the DB, not src
 
-**Interpolating a JS array into a drizzle raw `sql` template does NOT expand it into a param list.** `sql\`... IN (${arr})\`` binds the whole array as ONE composite → `operator does not exist: text = record`; `= ANY(${arr})` → `op ANY/ALL (array) requires array on right side`. Neither works. To expand a small in-code list (e.g. the sales-outreach feature family in `brand-pause.ts notPausedBrandClause`), use `sql.join([...set].map((v) => sql\`${v}\`), sql\`, \`)` inside `IN (...)`. Caught only by the integration tests (unit tests mock the DB), so run `pnpm test:integration` after any raw-`sql` list change. (Set 2026-07-24, sales-crm feature-family pause clause.)
+**Interpolating a JS array into a drizzle raw `sql` template does NOT expand it into a param list.** `sql\`... IN (${arr})\`` binds the whole array as ONE composite → `operator does not exist: text = record`; `= ANY(${arr})` → `op ANY/ALL (array) requires array on right side`. Neither works. To expand a small in-code list (e.g. the sales-outreach feature family in `funnel-campaigns.ts`'s idle-brand sweep), use `sql.join([...set].map((v) => sql\`${v}\`), sql\`, \`)` inside `IN (...)`. Caught only by the integration tests (unit tests mock the DB), so run `pnpm test:integration` after any raw-`sql` list change. (Set 2026-07-24, sales-crm feature-family pause clause; the clause itself is gone, the trap is not.)
 
 **Workflow dynasties/slugs are DB-resident (workflow-service `workflows` table), NOT seeded in workflow-service `src`.** To answer "does feature X have a workflow dynasty / which slugs exist / has it ever run," query the workflow-service Neon DB (`workflows` grouped by `feature_slug, workflow_dynasty_slug`; runs via `workflow_runs`), do NOT `git grep` workflow-service src — a src grep returns only test fixtures and misses every real dynasty. Cost 2026-07-24: grepped workflow-service src, wrongly concluded `sales-crm-email-outreach` had no dynasty (blocking a plan); the DB showed 5 active CRM dynasties seeded the day before. features-service also cannot resolve "which feature is a brand on" — all 31 of its endpoints take `featureSlug` as INPUT; the feature identity comes from the caller (`x-feature-slug`), never from features-service.
 
@@ -322,7 +386,7 @@ The workflow DAG sends `stopCampaign=true` whenever a run's SINGLE bandit-picked
 
 So `/end-run` REINTERPRETS `stopCampaign=true` as audience-scoped: it marks `req.audienceId` exhausted in **`campaign_audience_exhaustion`** (migration 0040) and auto-stops the campaign ONLY when `hasServeableAudience()` finds no serveable, non-exhausted audience left (all targeted audiences exhausted = the sole legitimate campaign-wide stop). Otherwise it falls through to the normal reschedule so the next tick re-draws from the remaining audiences. The bandit (`selectAudienceForRun`) takes `excludedAudienceIds` and `/start-run` passes the fresh exhausted set so it never re-picks a known-dry audience. **Fail-SAFE**: any error in the exhaustion check does NOT stop the campaign (a false stop is the exact bug this fixes). The exhaustion mark expires after a **24h TTL** (`getFreshExhaustedAudienceIds`) — audiences are re-probed daily because Apollo can add new matching leads over time, so exhaustion is never permanent. The `done`/exhaustion signals from apollo/human/lead-service are all HONEST and per-audience; the campaign-wide escalation was purely the DAG's literal + campaign-service obeying it. Do NOT move the stop decision back into a blanket `stopCampaign=true → stopped`. (Set 2026-07-21, PR #281.)
 
-At that all-audiences-exhausted auto-stop point (and ONLY there) `/end-run` also fires a **fire-and-forget extend-audience lifecycle email** (`maybeSendExtendAudienceEmail`, `src/lib/transactional-email.ts`) nudging the user to extend an audience so outreach can resume. It sends via **transactional-email-service** (`POST /send`, eventType `audience_fully_contacted`; template registered at boot via `PUT /platform-templates`) ONLY when ALL hold: sales-cold-email-outreach feature, `campaign.createdByUserId` present (recipient), brand not paused, a daily budget `> 0` (campaign `dailyBudgetCents` else the brand's billing daily budget), and org `has_auto_topup` (billing `GET /internal/accounts/by-org/{orgId}/balance`, user-less). The **1×/month-per-brand cap is owned by transactional-email dedup** (its `audience_fully_contacted` monthly-per-brand cadence), NOT a local table. Every guard read is **fail-SAFE** (any error/absent field → treat as OFF → no email) and the whole call is fire-and-forget after the response, so it NEVER blocks or fails run finalization. When refactoring `/end-run`, keep this call at the exhausted-stop branch — do not drop it. (Set 2026-07-22, PR #292.)
+At that all-audiences-exhausted auto-stop point (and ONLY there) `/end-run` also fires a **fire-and-forget extend-audience lifecycle email** (`maybeSendExtendAudienceEmail`, `src/lib/transactional-email.ts`) nudging the user to extend an audience so outreach can resume. It sends via **transactional-email-service** (`POST /send`, eventType `audience_fully_contacted`; template registered at boot via `PUT /platform-templates`) ONLY when ALL hold: sales-cold-email-outreach feature, `campaign.createdByUserId` present (recipient), a daily budget `> 0` (which IS "the brand is funded", and since 2026-08-16 is also the only statement that it is running at all) (campaign `dailyBudgetCents` else the brand's billing daily budget), and org `has_auto_topup` (billing `GET /internal/accounts/by-org/{orgId}/balance`, user-less). The **1×/month-per-brand cap is owned by transactional-email dedup** (its `audience_fully_contacted` monthly-per-brand cadence), NOT a local table. Every guard read is **fail-SAFE** (any error/absent field → treat as OFF → no email) and the whole call is fire-and-forget after the response, so it NEVER blocks or fails run finalization. When refactoring `/end-run`, keep this call at the exhausted-stop branch — do not drop it. (Set 2026-07-22, PR #292.)
 
 ## A campaign that ran out of people to contact comes BACK on its own — the customer's action is the trigger, and they were told so
 
@@ -331,7 +395,7 @@ that loop: they did exactly what the email asked and the campaign stayed stopped
 no path anywhere turned a stopped campaign back on. The dashboard made it worse — it lists only
 live campaigns, so the brand saw an empty table and no reason. Prod, brand
 `a179bbd9-8eed-4dba-9338-78125922b0c6`: auto-stopped 2026-08-05 for exhaustion, owner activated
-three fresh audiences 2026-08-10, five days of a funded and unpaused brand produced nothing.
+three fresh audiences 2026-08-10, five days of a funded brand produced nothing.
 
 - **WHY a campaign stopped is a stored fact** — `campaigns.stop_reason` (migration 0046), written
   at every one of the four places this service stops a campaign: `audience_exhausted` (/end-run,
@@ -343,7 +407,7 @@ three fresh audiences 2026-08-10, five days of a funded and unpaused brand produ
   backfill: a stop nobody wrote a reason for is not evidence of exhaustion, and a
   timestamp-correlation guess would resurrect campaigns a person stopped on purpose. The loop
   closes forward. The reason is CLEARED whenever a campaign becomes ongoing again (resume,
-  activate, brand un-pause), so the column always describes the CURRENT stop.
+  activate, funding provisioning), so the column always describes the CURRENT stop.
 - **The candidate population is the narrow one, never "every stopped campaign".** 682 stopped
   rows against 17 ongoing — a stopped campaign is a large and mostly permanent population, so
   `resumeServeableCampaigns` (`src/lib/campaign-resume.ts`) reads only `status='stopped' AND
@@ -357,13 +421,14 @@ three fresh audiences 2026-08-10, five days of a funded and unpaused brand produ
 - **Own cadence, not the tick's.** `RESUME_SWEEP_INTERVAL_MS` = 10 min. A tick fires as often as
   every 60s; asking features-service about every exhausted campaign at that rate would be a
   per-minute fan-out for a state that changes when a customer edits their audiences. The
-  scheduler caps its idle sleep at that interval while anything is waiting
-  (`countResumableCampaigns`) — otherwise a brand whose ONLY campaign is stopped has an empty
-  ongoing snapshot, sleeps the full idle hour, and the sweep runs hourly however willing it is.
+  scheduler never sleeps past that interval — otherwise a brand whose ONLY campaign is stopped
+  has an empty ongoing snapshot, sleeps the full idle hour, and the sweep runs hourly however
+  willing it is. (Unconditional since 2026-08-16: the funding sweep needs the same floor, and one
+  snapshot query per ten minutes on an idle service is cheaper than the precondition read it
+  replaced.)
 - **Fail-CLOSED, unlike the scheduler's other reads.** Funding is checked on gate-check's exact
   precedence (own `dailyBudgetCents` → funnel ceiling → brand daily budget) and an unreadable
-  budget, an unreadable audience set, a paused brand or a zero ceiling all leave the campaign
-  stopped. Turn-taking is fail-SOFT because it only reorders work already allowed; this decides
+  budget, an unreadable audience set or a zero/absent ceiling all leave the campaign stopped. Turn-taking is fail-SOFT because it only reorders work already allowed; this decides
   whether to START spending again, which is the gate's stance. **Every refusal is logged with its
   reason** — a resume that cannot be decided safely is not a resume, and it says so.
 - **AT MOST one ongoing campaign per identity still holds.** The sweep checks for an incumbent on

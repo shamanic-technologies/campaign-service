@@ -2,11 +2,9 @@ import { and, asc, eq } from "drizzle-orm";
 import type { IdentityHeaders } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
-import { notPausedBrandClause } from "./brand-pause.js";
 import { STOP_REASONS } from "./stop-reason.js";
 import { serveableAudienceIdsForCampaign } from "./serveable-audience.js";
-import { fetchFunnelBudgets } from "./funnel-budget-client.js";
-import { toFunnelKey } from "./sales-funnel-vocabulary.js";
+import { campaignFunding } from "./campaign-funding.js";
 import type { DownstreamIdentity } from "./downstream-headers.js";
 
 /**
@@ -30,26 +28,6 @@ export const RESUME_SWEEP_MAX_CAMPAIGNS = 100;
 /** Why a candidate was NOT resumed, for the log line. */
 type SkipReason = string;
 
-/**
- * How many campaigns are waiting on a resume decision. Read by the scheduler's cadence: while
- * anything is waiting, the idle sleep is capped at the sweep interval, so a brand whose only
- * campaign is stopped does not sit through the full idle hour before anyone looks at it.
- */
-export async function countResumableCampaigns(): Promise<number> {
-  const rows = await db
-    .select({ id: campaigns.id })
-    .from(campaigns)
-    .where(
-      and(
-        eq(campaigns.status, "stopped"),
-        eq(campaigns.stopReason, STOP_REASONS.AUDIENCE_EXHAUSTED),
-        notPausedBrandClause(),
-      ),
-    )
-    .limit(1);
-  return rows.length;
-}
-
 let lastSweepAt = 0;
 
 /** Test seam: forget the throttle so a test can run consecutive sweeps. */
@@ -68,8 +46,7 @@ export function resetResumeSweepThrottle(): void {
  * durable population, and every other stopped campaign is invisible to this code.
  *
  * A candidate comes back only when ALL of these hold, and each failure says which one:
- *   - its brand is not paused,
- *   - its funding still has a ceiling to spend against,
+ *   - the customer funds a ceiling for it to spend against,
  *   - features-service reports at least one serveable, non-exhausted audience,
  *   - no ongoing campaign already holds its (org, brand, funnel, channel) identity.
  * Anything unreadable leaves the campaign stopped and logs why. A resume that cannot be decided
@@ -85,9 +62,6 @@ export async function resumeServeableCampaigns(now: Date = new Date()): Promise<
     where: and(
       eq(campaigns.status, "stopped"),
       eq(campaigns.stopReason, STOP_REASONS.AUDIENCE_EXHAUSTED),
-      // A paused brand is not resumed while it stays paused — same clause the scheduler holds
-      // ongoing campaigns with, so pause means the same thing on both sides of the line.
-      notPausedBrandClause(),
     ),
     // Oldest-touched first, so a population larger than one sweep rotates instead of starving.
     orderBy: [asc(campaigns.updatedAt)],
@@ -227,43 +201,20 @@ async function resumeOneCampaign(
 /**
  * Is there still a ceiling to spend against? Returns null when funded, or the reason it is not.
  *
- * Mirrors gate-check's precedence exactly — the campaign's OWN daily budget, else its funnel's
- * ceiling, else the brand's daily budget — because resuming a campaign the gate would refuse to
- * let spend is a campaign that comes back only to be blocked on its first tick.
+ * One definition, shared with the leg that HOLDS an ongoing campaign (`campaignFunding`), because
+ * a rule that decides whether to START spending and a rule that decides whether to KEEP spending
+ * must be the same rule — two legs on two definitions is how a campaign gets held by one and
+ * never picked up by the other.
  *
- * Fail-CLOSED: an unreadable budget leaves the campaign stopped. The scheduler's turn-taking
- * treats the same read as fail-SOFT because it only reorders work that is already allowed; here
- * the read decides whether to START spending again, which is the gate's stance, not the
- * scheduler's.
+ * Fail-CLOSED: an unreadable budget leaves the campaign stopped.
  */
 async function fundingCeiling(
   campaign: typeof campaigns.$inferSelect,
   brandId: string,
   identity: IdentityHeaders,
 ): Promise<SkipReason | null> {
-  if (campaign.dailyBudgetCents !== null) {
-    return campaign.dailyBudgetCents > 0 ? null : "its own daily budget is zero";
-  }
-
-  const budgets = await fetchFunnelBudgets(brandId, identity);
-  if (!budgets.ok) return "billing did not answer the brand's budget";
-
-  if (campaign.funnelKey && budgets.funnels.length > 0) {
-    // Both sides canonicalised — billing still emits the pre-rename spellings, so comparing raw
-    // tokens would read a fully funded funnel as unfunded and never bring its campaign back.
-    const funnelKey = toFunnelKey(campaign.funnelKey);
-    const ceilingCents = funnelKey
-      ? budgets.funnels.find((f) => f.funnelKey === funnelKey)?.dailyBudgetCents ?? null
-      : null;
-    if (ceilingCents === null) return `funnel ${campaign.funnelKey} is not funded`;
-    return ceilingCents > 0 ? null : `funnel ${campaign.funnelKey} is funded at zero`;
-  }
-
-  // A brand with ONE pot — and a funnel campaign of a brand billing reports no per-funnel
-  // ceilings for, which paces on that same pot.
-  const brandCents = budgets.brandDailyBudgetCents;
-  if (brandCents === null) return "the brand has no daily budget set";
-  return brandCents > 0 ? null : "the brand's daily budget is zero";
+  const verdict = await campaignFunding(campaign, brandId, identity);
+  return verdict.funded ? null : verdict.reason;
 }
 
 /** Leave a campaign stopped and say why. Never silent: a refused resume is a decision. */

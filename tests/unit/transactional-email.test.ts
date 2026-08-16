@@ -1,13 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { mockAnyBrandPaused } = vi.hoisted(() => ({
-  mockAnyBrandPaused: vi.fn(),
-}));
-
-vi.mock("../../src/lib/brand-pause.js", () => ({
-  anyBrandPaused: mockAnyBrandPaused,
-}));
-
 vi.mock("../../src/lib/sales-outreach-campaign.js", () => ({
   SALES_OUTREACH_FEATURE_SLUG: "sales-cold-email-outreach",
   SALES_CRM_FEATURE_SLUG: "sales-crm-email-outreach",
@@ -87,8 +79,6 @@ function sendCall() {
 describe("maybeSendExtendAudienceEmail", () => {
   beforeEach(() => {
     mockFetch.mockReset();
-    mockAnyBrandPaused.mockReset();
-    mockAnyBrandPaused.mockResolvedValue(false);
     routeFetch();
   });
 
@@ -114,9 +104,11 @@ describe("maybeSendExtendAudienceEmail", () => {
     expect(sendCall()).toBeUndefined();
   });
 
-  it("does NOT send when the brand is paused", async () => {
-    mockAnyBrandPaused.mockResolvedValue(true);
-    await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+  it("does NOT send when the brand's budget is zero — a defunded brand is a held brand", async () => {
+    // This replaces the old brand-pause guard: the flag is gone, and "funds nothing" is now the
+    // one statement that a brand is not running.
+    routeFetch({ brandBudgetCents: 0 });
+    await maybeSendExtendAudienceEmail(makeCampaign({ dailyBudgetCents: null }), { runId: "r" });
     expect(sendCall()).toBeUndefined();
   });
 

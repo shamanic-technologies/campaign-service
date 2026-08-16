@@ -152,10 +152,6 @@ export const UpdateCampaignBody = z.object({
 
 // --- Brand pause ---
 
-export const UpdateBrandPauseBody = z.object({
-  paused: z.boolean(),
-}).openapi("UpdateBrandPauseBody");
-
 export const BrandPauseResponse = z.object({
   brandId: z.string(),
   orgId: z.string(),

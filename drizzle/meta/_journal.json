@@ -344,6 +344,13 @@
       "when": 1777300000000,
       "tag": "0048_stopped_ancestors_state_their_campaign_funnel",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1777400000000,
+      "tag": "0049_drop_brand_pause",
+      "breakpoints": true
     }
   ]
 }

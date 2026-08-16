@@ -20,10 +20,9 @@ vi.mock("../../src/lib/funnel-budget-client.js", async (importOriginal) => {
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
 import { campaigns } from "../../src/db/schema.js";
-import { cleanTestData, closeDb, insertTestCampaign, setBrandPause } from "../helpers/test-db.js";
+import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import {
   resumeServeableCampaigns,
-  countResumableCampaigns,
   resetResumeSweepThrottle,
   RESUME_SWEEP_INTERVAL_MS,
 } from "../../src/lib/campaign-resume.js";
@@ -219,16 +218,26 @@ describe("one live campaign per identity (AC4)", () => {
   });
 });
 
-describe("a brand that is paused or has nothing funded (AC5)", () => {
-  it("does not resume a paused brand's campaign, and does once it un-pauses", async () => {
+describe("a brand that funds nothing (AC5)", () => {
+  it("does not resume a defunded brand's campaign, and does once a funnel is funded again", async () => {
+    // There is no pause flag to hold it any more: what holds it is that nobody funds it, and what
+    // releases it is the customer funding a funnel. Same statement on both legs.
     const brandId = crypto.randomUUID();
     const campaign = await insertExhaustedCampaign({ brandIds: [brandId], brandId });
-    await setBrandPause(orgId, brandId, true);
+    mockFetchFunnelBudgets.mockResolvedValue({
+      ok: true,
+      brandDailyBudgetCents: 0,
+      funnels: [{ funnelKey: "sales_meetings_from_conversation", dailyBudgetCents: 0 }],
+    });
 
     expect(await resumeServeableCampaigns()).toBe(0);
     expect((await read(campaign.id))?.status).toBe("stopped");
 
-    await setBrandPause(orgId, brandId, false);
+    mockFetchFunnelBudgets.mockResolvedValue({
+      ok: true,
+      brandDailyBudgetCents: 2_500,
+      funnels: [{ funnelKey: "sales_meetings_from_conversation", dailyBudgetCents: 2_500 }],
+    });
     resetResumeSweepThrottle();
 
     expect(await resumeServeableCampaigns()).toBe(1);
@@ -339,9 +348,4 @@ describe("the sweep's own cadence", () => {
     expect(mockServeableAudienceIds).toHaveBeenCalledTimes(2);
   });
 
-  it("counts what is waiting so the scheduler does not sleep an hour on it", async () => {
-    expect(await countResumableCampaigns()).toBe(0);
-    await insertExhaustedCampaign();
-    expect(await countResumableCampaigns()).toBe(1);
-  });
 });

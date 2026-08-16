@@ -1,18 +1,34 @@
-import { and, arrayContains, desc, eq } from "drizzle-orm";
+import { and, arrayContains, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getStatsBudget, listRuns, type IdentityHeaders } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { fetchFunnelBudgets, fundedFunnels, type FunnelBudget } from "./funnel-budget-client.js";
 import { fetchDeclaredSalesFunnels, type DeclaredSalesFunnel } from "./brand-sales-funnels-client.js";
-import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
+import { isSalesOutreachFeature, SALES_OUTREACH_FEATURE_SLUGS } from "./sales-outreach-campaign.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { campaignIdentityColumns } from "./campaign-identity.js";
+import { fundingFromBudgets } from "./campaign-funding.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
 // re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
 // campaign of the brand is in the running every tick: none is ever held out because another one
 // covers its funnel.
 export const FUNNEL_TURN_DEFER_MS = 60_000; // 1 min
+
+/**
+ * How long a campaign the customer funds NOTHING for waits before it is looked at again.
+ *
+ * A held campaign is not waiting its turn, it is waiting for money, and money changes when a
+ * person edits their funnels — hours or days apart, not minutes. Re-checking it at the turn
+ * cadence would be one billing read per held brand per minute, forever, for a state that almost
+ * never moves; the 27 brands held today would be ~39k reads a day answering "still nothing".
+ *
+ * It is also the WHOLE latency of the feature: funding a funnel makes its campaign eligible
+ * within this window, with no manual step. Ten minutes is the same cadence the resume sweep runs
+ * at, and for the same reason — the customer is owed that it works without them, not that it
+ * works within the minute.
+ */
+export const FUNDING_RECHECK_MS = 10 * 60_000; // 10 min
 
 /**
  * The campaign columns the turn planner reads. Structurally a subset of what the scheduler's
@@ -26,6 +42,8 @@ export interface ClaimedFunnelCampaign {
   brandIds: string[] | null;
   featureSlug: string | null;
   funnelKey: string | null;
+  /** The mirror of this campaign's funnel ceiling. Stated → it IS the ceiling this campaign runs on. */
+  dailyBudgetCents: number | null;
 }
 
 /** One funnel campaign in the running to take the brand's next turn. */
@@ -77,7 +95,11 @@ export function selectLowestFillRatio(candidates: FunnelTurnCandidate[]): string
  * campaign absent from the map fires — so every non-sales campaign, and every brand with no
  * per-funnel funding, is untouched and behaves exactly as it does today.
  *
- * Three things happen per brand, in this order:
+ * Four things happen per brand, in this order:
+ *   0. Hold — a campaign the customer funds nothing for does not run. This is the ONLY thing that
+ *      holds a brand's sales campaigns now: `brand_pause` is gone, and funding says it instead.
+ *      Fail-CLOSED (an unreadable answer holds), because the gate refuses to spend on a ceiling
+ *      it cannot read anyway, so firing would only burn a run.
  *   1. Provision — every funded funnel of the brand gets its own campaign (created on the spot,
  *      due immediately, so the next tick can claim it).
  *   2. Serialize — at most ONE run in flight per brand ACROSS ITS SALES CAMPAIGNS. This is the
@@ -89,9 +111,8 @@ export function selectLowestFillRatio(candidates: FunnelTurnCandidate[]): string
  *      stopped a brand's sales outreach outright (see hasLiveSalesRunForBrand).
  *   3. Rank — the funded funnel with the lowest spent/ceiling ratio takes the turn.
  *
- * Fail-SOFT throughout: any unreadable budget, funnel set or spend leaves the brand on today's
- * behaviour rather than blocking it. The per-funnel CEILING is enforced fail-CLOSED in
- * gate-check, which is where spend control belongs — this is turn-taking, an optimization.
+ * Turn-taking is fail-SOFT (it only reorders work already allowed); the HOLD is fail-CLOSED, and
+ * so is the per-funnel CEILING in gate-check, which is where spend control belongs.
  */
 export async function planFunnelTurns(
   claimed: ClaimedFunnelCampaign[],
@@ -116,9 +137,11 @@ export async function planFunnelTurns(
     try {
       await planOneBrand(group, now, deferred);
     } catch (err) {
-      // A planning failure must never strand a brand: leave the group to fire on today's
-      // behaviour (per-campaign serialization + the gate's own ceiling enforcement).
-      console.warn(`[campaign-service] funnel turn planning failed for campaign ${group[0]?.id}:`, err);
+      // A planning failure is not a licence to spend: hold the group and say so. The gate would
+      // refuse these runs anyway (it fail-closes on the same unreadable ceilings), so firing them
+      // buys nothing and costs a run each.
+      console.warn(`[campaign-service] funnel turn planning failed for campaign ${group[0]?.id} — holding the brand:`, err);
+      for (const c of group) deferred.set(c.id, new Date(now.getTime() + FUNDING_RECHECK_MS));
     }
   }
 
@@ -143,53 +166,57 @@ async function planOneBrand(
     workflowSlug: seed.workflowSlug,
   };
 
+  const heldAt = new Date(now.getTime() + FUNDING_RECHECK_MS);
+
   const budgets = await fetchFunnelBudgets(brandId, identity);
-  // Unreadable ceilings → today's behaviour. gate-check fail-closes on the same read, so an
-  // outage cannot turn into overspend; it just cannot improve turn-taking either.
-  if (!budgets.ok) return;
+  // Fail-CLOSED. An unreadable ceiling is not "spend freely for a tick": the gate refuses the run
+  // on the very same read, so firing it only burns a run and re-asks in a minute.
+  if (!budgets.ok) {
+    for (const c of group) deferred.set(c.id, heldAt);
+    return;
+  }
 
   const funded = fundedFunnels(budgets);
-  // A brand that has never set per-funnel ceilings behaves EXACTLY as it does today: billing
-  // still answers its brand-level budget and the pre-funnel campaign paces on it.
-  if (funded.length === 0) return;
+  if (funded.length > 0) {
+    const declared = await fetchDeclaredSalesFunnels(brandId, identity);
+    await ensureFundedFunnelCampaigns({ seed, brandId, featureSlug, funded, declared, now });
+  }
 
-  const declared = await fetchDeclaredSalesFunnels(brandId, identity);
-  await ensureFundedFunnelCampaigns({ seed, brandId, featureSlug, funded, declared, now });
+  // (0) The hold. A campaign the customer funds nothing for waits for money, not for a turn — so
+  // it is out of the running entirely and re-checked on the funding cadence. This is the only
+  // thing that holds a brand's sales campaigns now.
+  //
+  // EVERY funded campaign of the brand is in the running, every tick. There is no campaign held
+  // out because another one covers its funnel: each is ranked on what IT has already spent today
+  // against the ceiling that actually binds IT, so nothing starves and nothing overspends.
+  const candidates: FunnelTurnCandidate[] = [];
+  for (const c of group) {
+    const verdict = fundingFromBudgets(c, budgets);
+    if (!verdict.funded) {
+      deferred.set(c.id, heldAt);
+      continue;
+    }
+    // A row written before the rename still carries the pre-rename spelling until migration 0043
+    // reaches it — and a mixed fleet must rank on one vocabulary or a funnel silently loses its
+    // ceiling and never takes a turn.
+    candidates.push({
+      campaignId: c.id,
+      funnelKey: toFunnelKey(c.funnelKey) ?? "",
+      spentCents: await spentTodayCents(orgId, c.id, featureSlug),
+      ceilingCents: verdict.ceilingCents,
+    });
+  }
+
+  if (candidates.length === 0) return;
 
   // Serial, for now: at most one SALES run in flight per brand. Running funnels concurrently needs
   // an audit of lead de-duplication and of sending-account load that nobody has done, so it is
   // deliberately out of scope — delete this block and the funnels run in parallel.
   if (await hasLiveSalesRunForBrand(orgId, brandId, now)) {
-    for (const c of group) deferred.set(c.id, new Date(now.getTime() + FUNNEL_TURN_DEFER_MS));
+    for (const c of candidates) {
+      deferred.set(c.campaignId, new Date(now.getTime() + FUNNEL_TURN_DEFER_MS));
+    }
     return;
-  }
-
-  const ceilingByFunnel = new Map(funded.map((f) => [f.funnelKey, f.dailyBudgetCents]));
-
-  // The ceiling a campaign that states no funnel is paced on: the brand-level daily budget,
-  // which is exactly what gate-check enforces for it. Billing answers that total as the SUM of
-  // the per-funnel ceilings, so the sum is the honest stand-in when the total cannot be read.
-  const brandCeilingCents =
-    budgets.brandDailyBudgetCents ?? funded.reduce((sum, f) => sum + f.dailyBudgetCents, 0);
-
-  // EVERY alive campaign of the brand is in the running, every tick. There is no campaign held
-  // out because another one covers its funnel: each is ranked on what IT has already spent today
-  // against the ceiling that actually binds IT, so nothing starves and nothing overspends.
-  const candidates: FunnelTurnCandidate[] = [];
-  for (const c of group) {
-    // A row written before the rename still carries the pre-rename spelling until migration 0043
-    // reaches it — and a mixed fleet must rank on one vocabulary or a funnel silently loses its
-    // ceiling and never takes a turn.
-    const canonical = toFunnelKey(c.funnelKey);
-    candidates.push({
-      campaignId: c.id,
-      funnelKey: canonical ?? "",
-      spentCents: await spentTodayCents(orgId, c.id, featureSlug),
-      // A campaign on a funnel the customer does not fund gets a zero ceiling and yields its
-      // turn — that is the customer's funding decision, enforced fail-closed in the gate, and
-      // it re-checks every tick because funding can change at any minute.
-      ceilingCents: canonical ? (ceilingByFunnel.get(canonical) ?? 0) : brandCeilingCents,
-    });
   }
 
   const winner = selectLowestFillRatio(candidates);
@@ -198,9 +225,7 @@ async function planOneBrand(
 
   for (const c of candidates) {
     if (c.campaignId === winner) continue;
-    const at =
-      reset && c.ceilingCents > 0 ? reset : new Date(now.getTime() + FUNNEL_TURN_DEFER_MS);
-    deferred.set(c.campaignId, at);
+    deferred.set(c.campaignId, reset ?? new Date(now.getTime() + FUNNEL_TURN_DEFER_MS));
   }
 }
 
@@ -216,6 +241,14 @@ async function planOneBrand(
  *
  * A funnel billing funds but brand-service does not declare (or declares inactive) is skipped: a
  * switched-off funnel must never be worked, whatever ceiling billing still holds for it.
+ *
+ * Funding brings back the campaign that was HELD, never the campaign that stopped for a reason of
+ * its own. A row carrying `audience_exhausted`, `max_leads_reached`, `manual` or `org_teardown`
+ * stated why it stopped, and money is not an answer to any of those — the exhaustion sweep owns
+ * the first (it asks the audience owner, which is the only honest test), and the other three were
+ * decisions. A NULL reason is the population that predates the column: those rows are the
+ * workflow-version churn this service used to grow one stopped campaign per workflow version for,
+ * so they are the campaign, not a decision about it, and funding resumes them.
  */
 async function ensureFundedFunnelCampaigns({
   seed,
@@ -253,12 +286,24 @@ async function ensureFundedFunnelCampaigns({
     });
 
     if (existing) {
-      // A funnel the customer re-funded after switching it off resumes rather than duplicating.
+      // A funnel the customer re-funded after switching it off resumes rather than duplicating —
+      // unless the campaign stopped for a reason of its own, which money does not answer.
       if (existing.status !== "ongoing") {
+        if (existing.stopReason !== null) {
+          console.log(
+            `[campaign-service] Not resuming campaign ${existing.id} for funded funnel ${f.funnelKey} — it stopped for ${existing.stopReason}`,
+          );
+          continue;
+        }
         await db
           .update(campaigns)
           .set({ status: "ongoing", nextRunAt: now, updatedAt: now })
-          .where(and(eq(campaigns.id, existing.id), eq(campaigns.orgId, seed.orgId)));
+          .where(and(
+            eq(campaigns.id, existing.id),
+            eq(campaigns.orgId, seed.orgId),
+            eq(campaigns.status, "stopped"),
+            isNull(campaigns.stopReason),
+          ));
       }
       continue;
     }
@@ -298,6 +343,161 @@ async function ensureFundedFunnelCampaigns({
 
 export function funnelCampaignName(featureSlug: string, brandId: string, funnelKey: string): string {
   return `${featureSlug} - ${brandId} - ${funnelKey}`;
+}
+
+/**
+ * How often the platform asks "did anybody fund a funnel of a brand that has nothing running?"
+ *
+ * Its own cadence, like the resume sweep and for the same reason: the answer changes when a person
+ * edits their funnels. This IS the latency between funding a funnel and its campaign existing.
+ */
+export const FUNDING_SWEEP_INTERVAL_MS = 10 * 60_000; // 10 min
+
+/**
+ * Most (org, brand) pairs examined in one sweep. Not a silent cap: going over it is logged with
+ * the number left behind, and the sweep reads least-recently-touched first, so the remainder is
+ * picked up next time rather than starved.
+ */
+export const FUNDING_SWEEP_MAX_BRANDS = 100;
+
+let lastFundingSweepAt = 0;
+
+/** Test seam: forget the throttle so a test can run consecutive sweeps. */
+export function resetFundingSweepThrottle(): void {
+  lastFundingSweepAt = 0;
+}
+
+/**
+ * Provision the funded funnels of a brand that has NOTHING running.
+ *
+ * `planFunnelTurns` provisions off the campaigns claimed this tick, so it can only ever help a
+ * brand that already has one ongoing campaign. A brand whose campaigns are all stopped is claimed
+ * by nobody, so nothing would ever look at it again — and that is precisely the brand this
+ * feature is for: 27 of the 44 brands with sales campaigns have no ongoing one, and under the old
+ * flag their way back was a pause button that no longer exists anywhere in the fleet.
+ *
+ * So funding is asked about them directly. One campaign is stood up per funnel the customer FUNDS
+ * and brand-service DECLARES; a brand that funds nothing is read and left exactly as it is, which
+ * is what keeps every brand held today held after this ships.
+ *
+ * Fail-soft per brand: an unreadable brand is skipped, never provisioned on a guess.
+ */
+export async function provisionFundedFunnelsForIdleBrands(now: Date = new Date()): Promise<number> {
+  if (now.getTime() - lastFundingSweepAt < FUNDING_SWEEP_INTERVAL_MS) return 0;
+  lastFundingSweepAt = now.getTime();
+
+  const slugs = [...SALES_OUTREACH_FEATURE_SLUGS];
+
+  // One row per (org, brand) that has sales campaigns and NO ongoing one — the most recently
+  // touched of them, which is what a new campaign inherits its owner and workflow from. Done in
+  // SQL rather than by reading every sales campaign into memory: the stopped population is large
+  // (682 rows today) and grows, while the answer is at most one row per brand.
+  const seeds = await db.execute<{
+    id: string;
+    org_id: string;
+    brand_id: string;
+    feature_slug: string;
+    workflow_slug: string;
+    created_by_user_id: string;
+  }>(sql`
+    SELECT DISTINCT ON (c.org_id, coalesce(c.brand_id, c.brand_ids[1]))
+           c.id, c.org_id, coalesce(c.brand_id, c.brand_ids[1]) AS brand_id,
+           c.feature_slug, c.workflow_slug, c.created_by_user_id
+    FROM campaigns c
+    WHERE c.feature_slug IN (${sql.join(slugs.map((s) => sql`${s}`), sql`, `)})
+      AND coalesce(c.brand_id, c.brand_ids[1]) IS NOT NULL
+      AND c.created_by_user_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM campaigns o
+        WHERE o.org_id = c.org_id
+          AND o.status = 'ongoing'
+          AND o.feature_slug IN (${sql.join(slugs.map((s) => sql`${s}`), sql`, `)})
+          AND coalesce(o.brand_id, o.brand_ids[1]) = coalesce(c.brand_id, c.brand_ids[1])
+      )
+    ORDER BY c.org_id, coalesce(c.brand_id, c.brand_ids[1]), c.updated_at DESC
+    LIMIT ${FUNDING_SWEEP_MAX_BRANDS + 1}
+  `);
+
+  const rows = Array.from(seeds as unknown as Iterable<{
+    id: string;
+    org_id: string;
+    brand_id: string;
+    feature_slug: string;
+    workflow_slug: string;
+    created_by_user_id: string;
+  }>);
+  const examined = rows.slice(0, FUNDING_SWEEP_MAX_BRANDS);
+  if (rows.length > FUNDING_SWEEP_MAX_BRANDS) {
+    console.log(
+      `[campaign-service] Funding sweep examining ${examined.length} of ${rows.length}+ idle brands — the rest are examined on the next sweep (least recently touched first)`,
+    );
+  }
+
+  let provisioned = 0;
+  for (const row of examined) {
+    try {
+      const identity: IdentityHeaders = {
+        orgId: row.org_id,
+        userId: row.created_by_user_id,
+        campaignId: row.id,
+        brandId: row.brand_id,
+        workflowSlug: row.workflow_slug,
+      };
+
+      const budgets = await fetchFunnelBudgets(row.brand_id, identity);
+      if (!budgets.ok) continue;
+      const funded = fundedFunnels(budgets);
+      // The expected state for most brands on most sweeps: still funding nothing. Not logged — it
+      // fires for every idle brand of every client on every sweep, and it is already observable in
+      // the brand having no ongoing campaign.
+      if (funded.length === 0) continue;
+
+      const declared = await fetchDeclaredSalesFunnels(row.brand_id, identity);
+      const before = await countOngoingSalesCampaigns(row.org_id, row.brand_id);
+      await ensureFundedFunnelCampaigns({
+        seed: {
+          id: row.id,
+          orgId: row.org_id,
+          createdByUserId: row.created_by_user_id,
+          workflowSlug: row.workflow_slug,
+          brandIds: [row.brand_id],
+          featureSlug: row.feature_slug,
+          funnelKey: null,
+          dailyBudgetCents: null,
+        },
+        brandId: row.brand_id,
+        featureSlug: row.feature_slug,
+        funded,
+        declared,
+        now,
+      });
+      const after = await countOngoingSalesCampaigns(row.org_id, row.brand_id);
+      if (after > before) {
+        provisioned += after - before;
+        console.log(
+          `[campaign-service] Funding brought back brand ${row.brand_id} (org ${row.org_id}): ${after - before} campaign(s) now ongoing for its funded funnels`,
+        );
+      }
+    } catch (err) {
+      console.warn(`[campaign-service] Funding sweep failed for brand ${row.brand_id}:`, err);
+    }
+  }
+
+  return provisioned;
+}
+
+/** How many ongoing sales campaigns this (org, brand) holds — the sweep's before/after. */
+async function countOngoingSalesCampaigns(orgId: string, brandId: string): Promise<number> {
+  const rows = await db.query.campaigns.findMany({
+    where: and(
+      eq(campaigns.orgId, orgId),
+      eq(campaigns.status, "ongoing"),
+      inArray(campaigns.featureSlug, [...SALES_OUTREACH_FEATURE_SLUGS]),
+      arrayContains(campaigns.brandIds, [brandId]),
+    ),
+    columns: { id: true },
+  });
+  return rows.length;
 }
 
 /**
