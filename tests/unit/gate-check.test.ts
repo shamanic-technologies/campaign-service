@@ -5,7 +5,6 @@ const {
   mockUpdateRun,
   mockGetStatsBudget,
   mockDbUpdate,
-  mockAnyBrandPaused,
 } = vi.hoisted(() => {
   const mockSet = vi.fn().mockReturnValue({
     where: vi.fn().mockResolvedValue(undefined),
@@ -15,13 +14,8 @@ const {
     mockUpdateRun: vi.fn(),
     mockGetStatsBudget: vi.fn(),
     mockDbUpdate: vi.fn().mockReturnValue({ set: mockSet }),
-    mockAnyBrandPaused: vi.fn(),
   };
 });
-
-vi.mock("../../src/lib/brand-pause.js", () => ({
-  anyBrandPaused: mockAnyBrandPaused,
-}));
 
 vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
@@ -154,42 +148,6 @@ describe("Gate Check", () => {
     mockRuns();
     mockGetStatsBudget.mockResolvedValue({ windows: [] });
     mockUpdateRun.mockResolvedValue({});
-    mockAnyBrandPaused.mockResolvedValue(false);
-  });
-
-  describe("Brand pause", () => {
-    it("should HOLD (block, non-terminal) when a target brand is paused", async () => {
-      mockAnyBrandPaused.mockResolvedValue(true);
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand paused");
-      // HOLD, not terminal: never auto-stops the campaign.
-      expect(result.autoStopped).toBeUndefined();
-      // Short-circuits before the runs fetch — a paused brand never hits runs-service.
-      expect(mockListRuns).not.toHaveBeenCalled();
-    });
-
-    it("should HOLD a multi-brand campaign if ANY one brand is paused", async () => {
-      mockAnyBrandPaused.mockResolvedValue(true);
-      const result = await runGateChecks(makeCampaign({ brandIds: ["b1", "b2", "b3"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand paused");
-    });
-
-    it("should NOT block when no target brand is paused", async () => {
-      mockAnyBrandPaused.mockResolvedValue(false);
-      const result = await runGateChecks(makeCampaign({ brandIds: ["b1", "b2"], featureSlug: NON_SALES_FEATURE }));
-      expect(result.allowed).toBe(true);
-    });
-
-    it("should NOT hold a NON-sales campaign even when its brand is paused (pause is sales-only)", async () => {
-      mockAnyBrandPaused.mockResolvedValue(true); // brand IS paused…
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], featureSlug: NON_SALES_FEATURE }));
-      // …but the pause holds only sales-cold-email-outreach, so a pr-expert run passes the gate.
-      expect(result.reason).not.toBe("Brand paused");
-      // The pause branch must short-circuit for non-sales — never even query the pause table.
-      expect(mockAnyBrandPaused).not.toHaveBeenCalled();
-    });
   });
 
   it("should block if campaign is not ongoing", async () => {
@@ -958,16 +916,25 @@ describe("Gate Check", () => {
       expect(result.reason).toBe("Brand daily budget reached");
     });
 
-    it("treats an unset budget (null) as unbounded — no cap", async () => {
+    it("holds a sales campaign whose brand states NO budget — unfunded is not unbounded", async () => {
+      // This is the hole the retired brand-pause flag was papering over: a null brand budget used
+      // to read as "no cap this tick", so a brand funding nothing at all sent against no ceiling
+      // while brands that DID state a zero were held by a flag nobody could write.
       mockDailyBudget(null);
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          { label: "today", totalCostInUsdCents: "999999" }, // huge spend, null ceiling → never blocks
-        ])
-      );
+      mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([]));
 
       const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(true);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand not funded");
+    });
+
+    it("holds a sales campaign whose brand states a ZERO budget", async () => {
+      mockDailyBudget("0");
+      mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([]));
+
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Brand not funded");
     });
 
     it("re-enables on the next loop once the ceiling is raised", async () => {

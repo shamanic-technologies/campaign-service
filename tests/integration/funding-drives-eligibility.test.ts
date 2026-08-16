@@ -1,0 +1,350 @@
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+
+/**
+ * Funding a sales funnel is what makes its campaigns eligible to run.
+ *
+ * This file replaces the brand-pause suite. `brand_pause` was a second source of truth for a fact
+ * the money already states: the customer surface that wrote it was deleted when the product
+ * decided a customer stops a chain by defunding it, no writer replaced it anywhere in the fleet,
+ * and the flag kept holding campaigns nobody could release — 27 brands stored paused, 10 of them
+ * funded, 11 ongoing campaigns that could never be claimed.
+ *
+ * What is pinned here is the RULE, not any row count: nothing funded → held; fund one funnel →
+ * eligible, with no manual step.
+ */
+
+// Keep workflow + runs-client inert so the scheduler under test never fires a real flow and
+// always sees "no live run" (→ campaigns are eligible to claim unless the funding hold stops them).
+const { mockExecute } = vi.hoisted(() => ({ mockExecute: vi.fn() }));
+
+vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
+  resolveWorkflowSlugForTrigger: vi.fn(async (a) => a.fallbackSlug),
+}));
+
+vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
+  return { ...original, executeCampaignWorkflow: mockExecute };
+});
+
+vi.mock("@distribute/runs-client", () => ({
+  listRuns: vi.fn().mockResolvedValue({ runs: [] }),
+  createRun: vi.fn().mockResolvedValue({ id: "run-1" }),
+  updateRun: vi.fn(),
+  getStatsBudget: vi.fn().mockResolvedValue({ windows: [] }),
+}));
+
+import request from "supertest";
+import { eq } from "drizzle-orm";
+import app from "../../src/index.js";
+import { db } from "../../src/db/index.js";
+import { campaigns, brandPauseTransitions } from "../../src/db/schema.js";
+import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
+import { reRunDueCampaigns, claimStuckCampaigns } from "../../src/lib/scheduler.js";
+import { SALES_OUTREACH_FEATURE_SLUG } from "../../src/lib/sales-outreach-campaign.js";
+import { FUNDING_RECHECK_MS, resetFundingSweepThrottle } from "../../src/lib/funnel-campaigns.js";
+
+const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
+const orgId = "funding-eligibility-org";
+const past = () => new Date(Date.now() - 60_000);
+
+// billing-service is the ONE source of "is this funded". It still names these funnels the
+// pre-rename way on the wire, which is exactly what production sends today.
+const mockFetch = vi.fn();
+vi.stubGlobal("fetch", mockFetch);
+
+/** billing answers these per-funnel ceilings for every brand asked about. */
+function billingAnswers(
+  funnels: Array<{ funnelKey: string; dailyBudgetCents: string }>,
+  brandDailyBudgetCents: string | null,
+) {
+  mockFetch.mockImplementation(async (url: string) => {
+    if (String(url).includes("/funnel-budgets")) {
+      return {
+        ok: true,
+        json: async () => ({
+          brandId: "b",
+          dailyBudgetCents: brandDailyBudgetCents,
+          funnels: funnels.map((f) => ({ ...f, updatedAt: null })),
+        }),
+      };
+    }
+    // brand-service's declared sales funnels — every funnel billing funds is declared active.
+    if (String(url).includes("/sales-funnels")) {
+      return {
+        ok: true,
+        json: async () => ({
+          funnels: [
+            { funnelKey: "sales_meetings_from_conversation", active: true, name: "x", steps: [], rates: {} },
+            { funnelKey: "website_purchases", active: true, name: "y", steps: [], rates: {} },
+          ],
+        }),
+      };
+    }
+    return { ok: false, status: 500, json: async () => ({}) };
+  });
+}
+
+/** billing cannot be read at all. */
+function billingUnavailable() {
+  mockFetch.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
+}
+
+function getPause(brandId: string, org = orgId) {
+  return request(app).get(`/brands/${brandId}/pause`).set("x-api-key", API_KEY).set("x-org-id", org);
+}
+function getPauseHistory(brandId: string, org = orgId) {
+  return request(app).get(`/brands/${brandId}/pause-history`).set("x-api-key", API_KEY).set("x-org-id", org);
+}
+
+async function insertSalesCampaign(brandId: string, over: Record<string, unknown> = {}) {
+  return insertTestCampaign(orgId, {
+    status: "ongoing",
+    nextRunAt: past(),
+    brandIds: [brandId],
+    brandId,
+    acquisitionChannel: "cold_email",
+    featureSlug: SALES_OUTREACH_FEATURE_SLUG,
+    createdByUserId: "user-x",
+    funnelKey: "sales_meetings_from_conversation",
+    ...over,
+  });
+}
+
+afterAll(async () => {
+  await cleanTestData();
+  await closeDb();
+});
+
+beforeEach(async () => {
+  await cleanTestData();
+  vi.clearAllMocks();
+  mockExecute.mockResolvedValue(undefined);
+  resetFundingSweepThrottle();
+  process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+  process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
+});
+
+describe("the scheduler holds what the customer funds nothing for", () => {
+  it("holds a sales campaign whose every funnel is funded at zero, and leaves it ongoing", async () => {
+    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
+    const brandId = crypto.randomUUID();
+    const campaign = await insertSalesCampaign(brandId);
+
+    await reRunDueCampaigns();
+
+    expect(mockExecute).not.toHaveBeenCalled();
+    const after = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaign.id) });
+    // HELD, not stopped — and re-checked on the funding cadence rather than every minute.
+    expect(after!.status).toBe("ongoing");
+    expect(after!.nextRunAt!.getTime()).toBeGreaterThan(Date.now() + FUNDING_RECHECK_MS - 30_000);
+  });
+
+  it("holds a brand that states no budget at all — unfunded is not unbounded", async () => {
+    billingAnswers([], null);
+    const brandId = crypto.randomUUID();
+    await insertSalesCampaign(brandId);
+
+    await reRunDueCampaigns();
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("holds fail-CLOSED when billing cannot be read", async () => {
+    billingUnavailable();
+    const brandId = crypto.randomUUID();
+    await insertSalesCampaign(brandId);
+
+    await reRunDueCampaigns();
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("runs the campaign of a funnel the customer funds — no manual step", async () => {
+    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
+    const brandId = crypto.randomUUID();
+    await insertSalesCampaign(brandId);
+
+    await reRunDueCampaigns();
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("funding a funnel releases the campaign that was held, on the next tick", async () => {
+    const brandId = crypto.randomUUID();
+    const campaign = await insertSalesCampaign(brandId);
+
+    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
+    await reRunDueCampaigns();
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    // The customer funds the funnel. Nothing else happens — no button, no API call to us.
+    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
+    await db.update(campaigns).set({ nextRunAt: past() }).where(eq(campaigns.id, campaign.id));
+
+    await reRunDueCampaigns();
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("still runs a brand with ONE pot and no per-funnel ceilings, exactly as before", async () => {
+    billingAnswers([], "5000");
+    const brandId = crypto.randomUUID();
+    await insertSalesCampaign(brandId, { funnelKey: null });
+
+    await reRunDueCampaigns();
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT hold a non-sales campaign of an unfunded brand — this is a sales-outreach rule", async () => {
+    billingAnswers([], null);
+    const brandId = crypto.randomUUID();
+    await insertTestCampaign(orgId, {
+      status: "ongoing",
+      nextRunAt: past(),
+      brandIds: [brandId],
+      featureSlug: "pr-expert-quote-outreach",
+      createdByUserId: "user-x",
+    });
+
+    expect(await reRunDueCampaigns()).toBe(1);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("claimStuckCampaigns still recovers a stuck campaign — the hold is applied at the turn, not the claim", async () => {
+    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
+    const brandId = crypto.randomUUID();
+    const campaign = await insertSalesCampaign(brandId, { nextRunAt: null });
+
+    expect(await claimStuckCampaigns()).toBe(1);
+    const after = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaign.id) });
+    expect(after!.nextRunAt).not.toBeNull();
+
+    // …and the very next claim holds it again rather than running it.
+    await reRunDueCampaigns();
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+});
+
+describe("funding brings back a brand that has nothing running", () => {
+  it("provisions a campaign per funded, declared funnel for a brand whose campaigns are all stopped", async () => {
+    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
+    const brandId = crypto.randomUUID();
+    await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null, funnelKey: null });
+
+    const { provisionFundedFunnelsForIdleBrands } = await import("../../src/lib/funnel-campaigns.js");
+    expect(await provisionFundedFunnelsForIdleBrands()).toBe(1);
+
+    const ongoing = await db.query.campaigns.findMany({
+      where: eq(campaigns.status, "ongoing"),
+    });
+    expect(ongoing).toHaveLength(1);
+    expect(ongoing[0].funnelKey).toBe("sales_meetings_from_conversation");
+  });
+
+  it("does NOT resume a campaign that stopped for a reason of its own — money answers none of them", async () => {
+    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
+    const brandId = crypto.randomUUID();
+    const stopped = await insertSalesCampaign(brandId, {
+      status: "stopped",
+      nextRunAt: null,
+      stopReason: "manual",
+    });
+
+    const { provisionFundedFunnelsForIdleBrands } = await import("../../src/lib/funnel-campaigns.js");
+    await provisionFundedFunnelsForIdleBrands();
+
+    const after = await db.query.campaigns.findFirst({ where: eq(campaigns.id, stopped.id) });
+    expect(after!.status).toBe("stopped");
+  });
+
+  it("leaves a brand that funds nothing exactly as it is", async () => {
+    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
+    const brandId = crypto.randomUUID();
+    const stopped = await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null });
+
+    const { provisionFundedFunnelsForIdleBrands } = await import("../../src/lib/funnel-campaigns.js");
+    expect(await provisionFundedFunnelsForIdleBrands()).toBe(0);
+
+    const after = await db.query.campaigns.findFirst({ where: eq(campaigns.id, stopped.id) });
+    expect(after!.status).toBe("stopped");
+  });
+});
+
+describe("GET /brands/:brandId/pause answers from the money", () => {
+  it("held when every funnel is funded at zero", async () => {
+    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
+    const brandId = crypto.randomUUID();
+    const res = await getPause(brandId).expect(200);
+    expect(res.body).toEqual({ brandId, orgId, paused: true, updatedAt: null });
+  });
+
+  it("held when the brand states no budget at all", async () => {
+    billingAnswers([], null);
+    const brandId = crypto.randomUUID();
+    const res = await getPause(brandId).expect(200);
+    expect(res.body.paused).toBe(true);
+  });
+
+  it("NOT held when one funnel carries a positive ceiling", async () => {
+    billingAnswers(
+      [
+        { funnelKey: "reply_meeting", dailyBudgetCents: "0" },
+        { funnelKey: "visit_signup", dailyBudgetCents: "1000" },
+      ],
+      "1000",
+    );
+    const brandId = crypto.randomUUID();
+    const res = await getPause(brandId).expect(200);
+    expect(res.body.paused).toBe(false);
+  });
+
+  it("NOT held when the brand has one pot and it is positive", async () => {
+    billingAnswers([], "2500");
+    const brandId = crypto.randomUUID();
+    const res = await getPause(brandId).expect(200);
+    expect(res.body.paused).toBe(false);
+  });
+
+  it("502s rather than reporting a brand as running when billing cannot be read", async () => {
+    billingUnavailable();
+    await getPause(crypto.randomUUID()).expect(502);
+  });
+
+  it("requires x-org-id (400) — funding belongs to the (org, brand) pair", async () => {
+    billingAnswers([], "1000");
+    await request(app).get(`/brands/${crypto.randomUUID()}/pause`).set("x-api-key", API_KEY).expect(400);
+  });
+
+  it("requires a valid api key (401)", async () => {
+    await getPause(crypto.randomUUID()).set("x-api-key", "wrong").expect(401);
+  });
+
+  it("has no writer: PATCH /brands/:brandId/pause is gone", async () => {
+    await request(app)
+      .patch(`/brands/${crypto.randomUUID()}/pause`)
+      .set("x-api-key", API_KEY)
+      .set("x-org-id", orgId)
+      .send({ paused: true })
+      .expect(404);
+  });
+});
+
+describe("GET /brands/:brandId/pause-history still serves the flag-era timeline", () => {
+  it("returns an empty timeline when no transition was ever recorded", async () => {
+    const brandId = crypto.randomUUID();
+    const res = await getPauseHistory(brandId).expect(200);
+    expect(res.body).toEqual({ brandId, orgId, transitions: [] });
+  });
+
+  it("returns the recorded flips oldest first, org-scoped", async () => {
+    const brandId = crypto.randomUUID();
+    await db.insert(brandPauseTransitions).values({
+      brandId, orgId, paused: true, transitionedAt: new Date("2026-07-01T00:00:00Z"),
+    });
+    await db.insert(brandPauseTransitions).values({
+      brandId, orgId, paused: false, transitionedAt: new Date("2026-07-05T00:00:00Z"),
+    });
+    await db.insert(brandPauseTransitions).values({
+      brandId, orgId: "another-org", paused: true, transitionedAt: new Date("2026-07-02T00:00:00Z"),
+    });
+
+    const res = await getPauseHistory(brandId).expect(200);
+    expect(res.body.transitions.map((t: { paused: boolean }) => t.paused)).toEqual([true, false]);
+  });
+});

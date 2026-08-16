@@ -181,39 +181,14 @@ export const campaigns = pgTable(
 export type Campaign = typeof campaigns.$inferSelect;
 export type NewCampaign = typeof campaigns.$inferInsert;
 
-// Brand pause flag — ONE mutable row per brand (upsert in place).
+// Brand pause transition log — a CLOSED record of the flag era.
 //
-// When paused=true, the campaign-service scheduler holds EVERY ongoing campaign whose
-// brandIds includes this brand (same org): the campaign stays 'ongoing' but is not claimed
-// or re-fired. Un-pausing (paused=false) lets the next scheduler tick pick those campaigns
-// up again with zero re-launch. Read/written via GET/PATCH /brands/:brandId/pause and
-// joined locally by the scheduler + gate-check (no per-tick HTTP). Mirrors the single-scalar
-// per-brand store pattern (billing-service brand_daily_budgets).
-export const brandPause = pgTable(
-  "brand_pause",
-  {
-    brandId: text("brand_id").primaryKey(),
-    orgId: text("org_id").notNull(),
-    paused: boolean("paused").notNull().default(false),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    index("idx_brand_pause_org").on(table.orgId),
-  ]
-);
-
-export type BrandPause = typeof brandPause.$inferSelect;
-export type NewBrandPause = typeof brandPause.$inferInsert;
-
-// Brand pause transition log — APPEND-ONLY history of pause on/off flips per (org, brand).
-//
-// The brand_pause table above holds only the CURRENT scalar state (upsert-in-place). It cannot
-// answer "when was this brand paused / resumed?" for the Customer Success health board. This
-// table records one immutable row per state CHANGE: when PATCH /brands/:brandId/pause flips the
-// paused boolean, brands.ts inserts a transition here in the same transaction. A no-op PATCH
-// (same value) writes nothing. Forward-only — pre-existing flips before this table shipped were
-// never recorded and are not backfilled. Read via GET /brands/:brandId/pause-history
-// (features-service customer-health board). paused = the NEW state after the flip.
+// One immutable row per flip of the old `brand_pause.paused` boolean. Both that table and the
+// PATCH route that wrote it are GONE (migration 0049): a brand is held by what the customer funds,
+// so there is no flag left to flip and no new row can ever be written here. The table is kept
+// because it is a true record of what happened to these brands and the Customer Success health
+// board reads it via GET /brands/:brandId/pause-history — the alternative is losing the history to
+// answer nothing. paused = the NEW state after that flip.
 export const brandPauseTransitions = pgTable(
   "brand_pause_transitions",
   {

@@ -4,13 +4,12 @@ import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveWorkflowSlugForTrigger } from "./features-workflow-projection-client.js";
 import { listRuns } from "@distribute/runs-client";
-import { notPausedBrandClause } from "./brand-pause.js";
-import { planFunnelTurns } from "./funnel-campaigns.js";
 import {
-  countResumableCampaigns,
-  resumeServeableCampaigns,
-  RESUME_SWEEP_INTERVAL_MS,
-} from "./campaign-resume.js";
+  planFunnelTurns,
+  provisionFundedFunnelsForIdleBrands,
+  FUNDING_SWEEP_INTERVAL_MS,
+} from "./funnel-campaigns.js";
+import { resumeServeableCampaigns } from "./campaign-resume.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -92,8 +91,6 @@ export async function reRunDueCampaigns(): Promise<number> {
         eq(campaigns.status, "ongoing"),
         isNotNull(campaigns.nextRunAt),
         lte(campaigns.nextRunAt, now),
-        // Hold campaigns of paused brands — never claimed while any target brand is paused.
-        notPausedBrandClause(),
       ),
     )
     .returning({
@@ -108,14 +105,16 @@ export async function reRunDueCampaigns(): Promise<number> {
       brandProfileId: campaigns.brandProfileId,
       audienceId: campaigns.audienceId,
       funnelKey: campaigns.funnelKey,
+      dailyBudgetCents: campaigns.dailyBudgetCents,
     });
 
   if (dueCampaigns.length === 0) return 0;
 
-  // Per-funnel turn-taking. Provisions a campaign for every funded funnel of each brand,
-  // holds the brand to ONE run in flight, and hands the turn to the funded funnel with the
-  // lowest spent-today/ceiling ratio. Campaigns absent from the map fire as they always have —
-  // every non-sales campaign, and every brand with no per-funnel funding, is untouched.
+  // Per-funnel funding + turn-taking. HOLDS every sales campaign the customer funds nothing for
+  // (the only hold there is now that `brand_pause` is gone), provisions a campaign for every
+  // funded funnel of each brand, holds the brand to ONE run in flight, and hands the turn to the
+  // funded funnel with the lowest spent-today/ceiling ratio. Campaigns absent from the map fire
+  // as they always have — every non-sales campaign is untouched.
   const funnelDefers = await planFunnelTurns(dueCampaigns, now);
 
   for (const campaign of dueCampaigns) {
@@ -230,8 +229,6 @@ export async function claimStuckCampaigns(): Promise<number> {
     where: and(
       eq(campaigns.status, "ongoing"),
       isNull(campaigns.nextRunAt),
-      // Hold campaigns of paused brands — a paused brand's stuck campaign is not re-claimed.
-      notPausedBrandClause(),
     ),
     columns: { id: true, orgId: true },
   });
@@ -305,13 +302,10 @@ export function computeNextDelayMs(
 /** Load the ongoing-campaign snapshot used to pick the next tick delay. */
 async function loadOngoingSnapshot(): Promise<Array<{ nextRunAt: Date | null }>> {
   return db.query.campaigns.findMany({
-    // Exclude paused-brand campaigns from the cadence snapshot too: an all-paused brand then
-    // yields an empty snapshot → IDLE_MAX_MS, so the Neon compute can suspend instead of being
-    // pinned at the 60s active cadence by a paused (nextRunAt=null) campaign.
-    where: and(
-      eq(campaigns.status, "ongoing"),
-      notPausedBrandClause(),
-    ),
+    // A held campaign carries a nextRunAt on the funding cadence rather than being absent from
+    // this snapshot, so a brand that funds nothing sleeps for ten minutes at a time instead of
+    // pinning the 60s active cadence — and is still looked at without anyone asking.
+    where: eq(campaigns.status, "ongoing"),
     columns: { nextRunAt: true },
   });
 }
@@ -346,6 +340,10 @@ async function tick(): Promise<void> {
       // this very tick instead of waiting for the next one. Throttled to its own cadence
       // (RESUME_SWEEP_INTERVAL_MS), so a 60s tick does not turn into a 60s fan-out.
       await resumeServeableCampaigns();
+      // A brand whose campaigns are ALL stopped is claimed by nobody, so the claim path below
+      // could never notice that its owner funded a funnel. Asked on its own cadence, before the
+      // claim, so a campaign stood up here takes its turn on this very tick.
+      await provisionFundedFunnelsForIdleBrands();
       await claimStuckCampaigns();
       await reRunDueCampaigns();
     } catch (err) {
@@ -355,13 +353,14 @@ async function tick(): Promise<void> {
     let delayMs = ACTIVE_INTERVAL_MS;
     try {
       delayMs = computeNextDelayMs(await loadOngoingSnapshot());
-      // A brand whose only campaign is stopped-for-exhaustion has an EMPTY ongoing snapshot, so
-      // the cadence above sleeps the full idle hour and the resume sweep would only run once an
-      // hour however often it is willing to run. While there is anything to bring back, sleep no
-      // longer than the sweep's own cadence.
-      if (delayMs > RESUME_SWEEP_INTERVAL_MS && (await countResumableCampaigns()) > 0) {
-        delayMs = RESUME_SWEEP_INTERVAL_MS;
-      }
+      // Both sweeps that bring a campaign BACK — the exhaustion resume and the funding
+      // provisioner — act on campaigns that are NOT ongoing, so they are invisible to the
+      // snapshot above: a brand with nothing running yields an empty snapshot, sleeps the full
+      // idle hour, and neither sweep gets to run more than hourly however willing it is. Never
+      // sleep past their shared cadence. The cost of being wrong is one snapshot query per ten
+      // minutes on a fully idle service; the cost of not doing it is that funding a funnel takes
+      // an hour to mean anything.
+      delayMs = Math.min(delayMs, FUNDING_SWEEP_INTERVAL_MS);
     } catch (err) {
       console.error("[campaign-service] Scheduler delay computation error:", err);
     }
