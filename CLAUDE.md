@@ -515,6 +515,44 @@ The other three call sites were already bounded (`scheduler.ts hasLiveRunForCamp
 status and a limit is a regression, and `tests/unit/gate-check.test.ts` fails on one.
 (Set 2026-08-07.)
 
+## A run id this service hands another service MUST EXIST — never mint one
+
+`x-run-id` is not a correlation string. workflow-service turns the one we send into the
+`parentRunId` of the run it creates, and `runs.parent_run_id` carries a foreign key to `runs.id`,
+so a freshly minted uuid is refused by runs-service and the whole execution 502s **before the DAG
+runs a single node**. Nothing about that is visible from the campaign: it stays `ongoing`, its
+`nextRunAt` is set as normal, and it produces nothing forever. Prod 2026-08-18: 3,593 refusals in
+six hours, a different minted id on every line, one live customer campaign silent for two days
+(`9570e3ce`, created by the per-funnel provisioner) and 313 stopped rows one resume away from the
+same branch.
+
+- **A campaign's `parentRunId` is its ANCESTOR run**, written once at creation from the creator's
+  `x-run-id`, and every execution's run tree chains under it. A creator carrying no run of its own
+  — the per-funnel provisioner, the idle-brand sweep — leaves it NULL, which is where the minting
+  came from.
+- **`ensureCampaignRunId` (`src/lib/trigger-run.ts`) is the ONE place a missing ancestor is
+  filled**, shared by the leg that TRIGGERS (scheduler) and the leg that RESUMES
+  (campaign-resume) for the same reason `campaignFunding` is: two legs minting differently is how
+  one of them ships an id nothing can resolve. It creates a real root run and **persists it on the
+  campaign**, so it is established once rather than per tick and every later trigger takes the
+  same branch as a campaign born with one.
+- **The anchor carries NO `campaignId`, and is `completed` immediately.** It is the tree's root,
+  not an execution. Every campaign-scoped read here (gate-check's stale cleanup and lifetime
+  `completed` count, `hasLiveRunForCampaign`, `hasLiveSalesRunForBrand`) filters on `campaignId` —
+  tagging it would recreate exactly the orphan run that stopped this service creating runs at
+  trigger time in the first place. The persist happens BEFORE the finalize, so a failed finalize
+  reuses the run instead of throwing it away.
+- **Fail-CLOSED: an anchor that cannot be established means no dispatch.** The scheduler's
+  per-campaign catch logs it and the campaign is re-claimed by `claimStuckCampaigns`; the resume
+  sweep leaves the campaign stopped. And `executeCampaignWorkflow` now **throws** on a non-2xx
+  from workflow-service instead of logging and returning — a refused execution is a campaign that
+  did not run, and returning quietly is what let this hide.
+- `tests/unit/no-legacy.test.ts` fails on `randomUUID` in `scheduler.ts`, `campaign-resume.ts` or
+  `transactional-email.ts`. The extend-audience email's `?? crypto.randomUUID()` fallback is gone
+  too: `/end-run` requires `x-run-id` (`requirePipelineHeaders`), so it was a stand-in that could
+  only ever name a run that does not exist.
+(Set 2026-08-18, issue #352.)
+
 ## Scheduler in-flight guard — check ANY live run for the campaign, never the campaign-service marker
 
 The `campaign-service / <campaignId>` parent run (created by the workflow DAG's start-run) is an **ephemeral ~2s marker** — `start-run → end-run` within seconds — NOT an enclosing span. The genuinely-long work (lead-service `buffer/next`, observed up to **755s**) runs in a separate `lead-service / lead-serve` run that is **not linked** under the marker via `parent_run_id`. So `src/lib/scheduler.ts`'s "is a flow still alive?" check MUST query `listRuns` scoped to **`campaignId` + `status=running` + `startedAfter=freshnessCutoff`** (any service) via `hasLiveRunForCampaign()` — **never** `(serviceName="campaign-service", taskName=campaignId)`, which only sees the 2s corpse and re-fires mid-fill → `lead-service` `409 Concurrent buffer/next` storm. `STUCK_RUN_FRESHNESS_THRESHOLD_MS` must stay **strictly greater than** lead-service's max fill (`PULL_NEXT_TIMEOUT` 600s; observed 755s) — currently 15min. `reRunDueCampaigns` and `claimStuckCampaigns` MUST share the same helper. (Set 2026-06-13, v0.25.1 / DIS-277.)

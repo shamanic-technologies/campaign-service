@@ -5,6 +5,7 @@ import { campaigns } from "../db/schema.js";
 import { STOP_REASONS } from "./stop-reason.js";
 import { serveableAudienceIdsForCampaign } from "./serveable-audience.js";
 import { campaignFunding } from "./campaign-funding.js";
+import { ensureCampaignRunId } from "./trigger-run.js";
 import type { DownstreamIdentity } from "./downstream-headers.js";
 
 /**
@@ -108,9 +109,12 @@ async function resumeOneCampaign(
   if (!featureSlug) return skip(campaign, "no feature slug on the campaign");
   if (!userId) return skip(campaign, "no createdByUserId — nothing could run it");
 
-  // A fresh run id per check: the downstream reads are real, attributable calls, and a reused or
-  // absent one is rejected by the services that validate it as a UUID.
-  const runId = crypto.randomUUID();
+  // The campaign's own ancestor run. The downstream reads below are real, attributable calls, so
+  // the id they carry has to resolve in runs-service — a minted one does not, and it is the same
+  // id the scheduler then hands workflow-service when this campaign takes its first turn back
+  // (where an unresolvable ancestor means the execution is refused outright). Established once and
+  // persisted; a campaign that cannot be given one is left stopped by the caller's catch.
+  const runId = await ensureCampaignRunId(campaign);
   const identity: DownstreamIdentity = {
     orgId: campaign.orgId,
     userId,

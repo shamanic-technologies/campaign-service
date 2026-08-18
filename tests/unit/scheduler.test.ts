@@ -6,6 +6,8 @@ const {
   mockDbReturning,
   mockDbFindMany,
   mockListRuns,
+  mockCreateRun,
+  mockUpdateRun,
 } = vi.hoisted(() => {
   return {
     mockExecuteCampaignWorkflow: vi.fn(),
@@ -13,6 +15,8 @@ const {
     mockDbReturning: vi.fn(),
     mockDbFindMany: vi.fn(),
     mockListRuns: vi.fn(),
+    mockCreateRun: vi.fn(),
+    mockUpdateRun: vi.fn(),
   };
 });
 
@@ -28,6 +32,8 @@ vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
 
 vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
+  createRun: mockCreateRun,
+  updateRun: mockUpdateRun,
 }));
 
 vi.mock("../../src/db/index.js", () => ({
@@ -111,6 +117,8 @@ describe("Scheduler - reRunDueCampaigns", () => {
     mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => a.fallbackSlug);
     mockDbReturning.mockResolvedValue([]);
     mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
+    mockCreateRun.mockResolvedValue({ id: "anchor-run-1" });
+    mockUpdateRun.mockResolvedValue({ id: "anchor-run-1", status: "completed" });
   });
 
   it("should return 0 when no campaigns are due", async () => {
@@ -155,7 +163,7 @@ describe("Scheduler - reRunDueCampaigns", () => {
     );
   });
 
-  it("should NOT create a run — let the workflow's start-run do it", async () => {
+  it("should NOT create the EXECUTION run — start-run in the DAG still owns that", async () => {
     mockDbReturning.mockResolvedValue([
       {
         id: "campaign-1",
@@ -170,8 +178,12 @@ describe("Scheduler - reRunDueCampaigns", () => {
 
     await reRunDueCampaigns();
 
-    // No createRun import or call — scheduler delegates run creation to the DAG
+    // The only run created here is the campaign's ANCESTOR — never a campaign-tagged execution
+    // run, which is what produced orphan rows invisible to gate-check.
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
+    expect(mockCreateRun.mock.calls[0][0]).not.toHaveProperty("campaignId");
+    expect(mockCreateRun.mock.calls[0][0]).toMatchObject({ taskName: "campaign-trigger" });
   });
 
   it("should use parentRunId as runId when available", async () => {
@@ -223,7 +235,11 @@ describe("Scheduler - reRunDueCampaigns", () => {
     );
   });
 
-  it("should generate a UUID runId when no parentRunId", async () => {
+  // A minted uuid names a run that does not exist. workflow-service turns the x-run-id we send
+  // into the parentRunId of the run it creates, and that column carries an FK — so runs-service
+  // refused the insert and EVERY execution of such a campaign 502'd before the DAG began, while
+  // the campaign went on looking ongoing and freshly rescheduled.
+  it("should hand downstream a run that exists when the campaign has no ancestor", async () => {
     mockDbReturning.mockResolvedValue([
       {
         id: "campaign-1",
@@ -238,10 +254,32 @@ describe("Scheduler - reRunDueCampaigns", () => {
 
     await reRunDueCampaigns();
 
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
     const call = mockExecuteCampaignWorkflow.mock.calls[0];
-    expect(call[1].runId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    );
+    expect(call[1].runId).toBe("anchor-run-1");
+  });
+
+  it("should NOT dispatch an execution when the ancestor run cannot be established", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "sales-email-cold-outreach",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+      },
+    ]);
+    mockCreateRun.mockRejectedValue(new Error("runs-service unavailable"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await reRunDueCampaigns();
+
+    // Fails where somebody can see it, rather than dispatching an id that cannot resolve.
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
   it("should skip campaigns without brandIds", async () => {
