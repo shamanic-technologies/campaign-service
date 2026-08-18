@@ -10,7 +10,7 @@ export const SALES_CRM_FEATURE_SLUG = "sales-crm-email-outreach";
  * Which sales funnels this feature may be SOLD THROUGH is features-service's statement, read per
  * feature — never a matrix held here.
  */
-export const SALES_FEEDBACK_REQUEST_FEATURE_SLUG = "sales-feedback-request-cold-email-outreach";
+export const SALES_FEEDBACK_REQUEST_FEATURE_SLUG = "feedback-request-cold-email-outreach";
 
 // The sales-outreach feature family. Every feature here shares the SAME runtime behaviour in this
 // service — the funding hold, per-pair pacing, greedy workflow rotation + Thompson audience

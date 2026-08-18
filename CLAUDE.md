@@ -114,7 +114,7 @@ in-scope — never that a live set is fully covered by it. (Set 2026-08-18.)
 
 A sales funnel can be worked through more than one OFFER at once: the straight sales pitch
 (`sales-cold-email-outreach`) and the feedback request
-(`sales-feedback-request-cold-email-outreach`), which asks a buyer about the problem we solve
+(`feedback-request-cold-email-outreach`), which asks a buyer about the problem we solve
 instead of pitching. Same infrastructure, same measurement — only the offer differs, so a brand can
 work ONE funnel through BOTH, and each is a campaign of its own.
 

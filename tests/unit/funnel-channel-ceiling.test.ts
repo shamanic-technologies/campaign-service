@@ -23,7 +23,7 @@ function read(
 }
 
 const SALES = "sales-cold-email-outreach";
-const FEEDBACK = "sales-feedback-request-cold-email-outreach";
+const FEEDBACK = "feedback-request-cold-email-outreach";
 
 describe("the ceiling that binds one (funnel, acquisition channel) pair", () => {
   it("answers 'no finer grain' when billing states no pair for the funnel", () => {

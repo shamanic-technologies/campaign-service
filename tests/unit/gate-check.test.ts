@@ -722,7 +722,7 @@ describe("Gate Check", () => {
         "3000",
         [
           { funnelKey: "reply_meeting", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "2000" },
-          { funnelKey: "reply_meeting", featureSlug: "sales-feedback-request-cold-email-outreach", dailyBudgetCents: "1000" },
+          { funnelKey: "reply_meeting", featureSlug: "feedback-request-cold-email-outreach", dailyBudgetCents: "1000" },
         ],
       );
       mockGetStatsBudget.mockResolvedValue(
@@ -742,7 +742,7 @@ describe("Gate Check", () => {
         "3000",
         [
           { funnelKey: "reply_meeting", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "2000" },
-          { funnelKey: "reply_meeting", featureSlug: "sales-feedback-request-cold-email-outreach", dailyBudgetCents: "1000" },
+          { funnelKey: "reply_meeting", featureSlug: "feedback-request-cold-email-outreach", dailyBudgetCents: "1000" },
         ],
       );
       mockGetStatsBudget.mockResolvedValue(
@@ -754,7 +754,7 @@ describe("Gate Check", () => {
         makeCampaign({
           brandIds: ["brand-1"],
           funnelKey: "sales_meetings_from_conversation",
-          featureSlug: "sales-feedback-request-cold-email-outreach",
+          featureSlug: "feedback-request-cold-email-outreach",
         }),
       );
       expect(result.allowed).toBe(true);
@@ -774,7 +774,7 @@ describe("Gate Check", () => {
         makeCampaign({
           brandIds: ["brand-1"],
           funnelKey: "sales_meetings_from_conversation",
-          featureSlug: "sales-feedback-request-cold-email-outreach",
+          featureSlug: "feedback-request-cold-email-outreach",
         }),
       );
       expect(result.allowed).toBe(false);
