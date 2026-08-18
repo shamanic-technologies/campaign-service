@@ -28,10 +28,11 @@ describe("the funnel of a brand that sells through several is UNKNOWN until its 
   });
 
   it("scopes to the sales-outreach feature family — a brand's PR / AI-visibility / VC campaigns run no sales funnel", () => {
-    for (const slug of SALES_OUTREACH_FEATURE_SLUGS) {
-      expect(STATEMENTS).toContain(`'${slug}'`);
-    }
+    // Every feature slug the migration names is a sales-outreach one. The converse is NOT asserted:
+    // this file is frozen history, so a sales channel shipped after it (the feedback request) can
+    // never appear in it, and demanding that it does would fail the day the family grows.
     const quotedFeatureSlugs = STATEMENTS.match(/'[a-z]+(?:-[a-z]+)+'/g) ?? [];
+    expect(quotedFeatureSlugs.length).toBeGreaterThan(0);
     for (const quoted of quotedFeatureSlugs) {
       expect(SALES_OUTREACH_FEATURE_SLUGS.has(quoted.slice(1, -1))).toBe(true);
     }

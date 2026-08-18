@@ -1,5 +1,5 @@
 import type { IdentityHeaders } from "@distribute/runs-client";
-import { fetchFunnelBudgets, type FunnelBudgetsRead } from "./funnel-budget-client.js";
+import { channelCeilingCents, fetchFunnelBudgets, type FunnelBudgetsRead } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 
 /**
@@ -13,9 +13,10 @@ import { toFunnelKey } from "./sales-funnel-vocabulary.js";
  * never be claimed and had no API path back. Two representations of one fact is what produced
  * that, so there is one now, and it is billing's.
  *
- * The precedence is gate-check's, exactly — the campaign's OWN daily budget, else its funnel's
- * ceiling, else the brand's daily budget — because a campaign the gate would refuse to let spend
- * must not be handed a turn, and a campaign the gate WOULD let spend must not be held.
+ * The precedence is gate-check's, exactly — the campaign's OWN daily budget, else its own (funnel,
+ * acquisition channel) pair's ceiling, else its funnel's ceiling, else the brand's daily budget —
+ * because a campaign the gate would refuse to let spend must not be handed a turn, and a campaign
+ * the gate WOULD let spend must not be held.
  *
  * A ceiling that was never stated is NOT "unbounded", it is "unfunded". That is the one place
  * this differs from what the gate used to do: `brandDailyBudgetBlock` read a null brand budget as
@@ -32,7 +33,12 @@ export type FundingVerdict =
  * campaign of that brand without asking billing again per campaign.
  */
 export function fundingFromBudgets(
-  campaign: { dailyBudgetCents?: number | null; funnelKey?: string | null },
+  campaign: {
+    dailyBudgetCents?: number | null;
+    funnelKey?: string | null;
+    /** The acquisition CHANNEL this campaign works its funnel through — a feature slug. */
+    featureSlug?: string | null;
+  },
   budgets: Extract<FunnelBudgetsRead, { ok: true }>,
 ): FundingVerdict {
   // The campaign's own figure is a MIRROR of its funnel's ceiling (gate-check is the first node
@@ -48,6 +54,30 @@ export function fundingFromBudgets(
     // tokens would read a fully funded funnel as unfunded and hold a campaign the customer pays
     // for.
     const funnelKey = toFunnelKey(campaign.funnelKey);
+
+    // The ceiling that binds THIS campaign is its own (funnel, channel) pair's, whenever billing
+    // states one: a funnel worked through two offers funds each separately, and holding both
+    // against the funnel TOTAL would let one spend the other's money. A funnel billing states no
+    // pair for falls through to the funnel figure below — that is every brand funding one channel
+    // per funnel, unchanged.
+    if (funnelKey) {
+      const pair = channelCeilingCents(budgets, funnelKey, campaign.featureSlug);
+      if (pair.grain === "pair") {
+        if (pair.cents === null) {
+          return {
+            funded: false,
+            reason: `funnel ${campaign.funnelKey} is not funded for channel ${campaign.featureSlug ?? "none"}`,
+          };
+        }
+        return pair.cents > 0
+          ? { funded: true, ceilingCents: pair.cents }
+          : {
+              funded: false,
+              reason: `funnel ${campaign.funnelKey} is funded at zero for channel ${campaign.featureSlug ?? "none"}`,
+            };
+      }
+    }
+
     const ceilingCents = funnelKey
       ? budgets.funnels.find((f) => f.funnelKey === funnelKey)?.dailyBudgetCents ?? null
       : null;
@@ -75,7 +105,11 @@ export function fundingFromBudgets(
  * outage could only burn a run that the gate is about to refuse anyway.
  */
 export async function campaignFunding(
-  campaign: { dailyBudgetCents?: number | null; funnelKey?: string | null },
+  campaign: {
+    dailyBudgetCents?: number | null;
+    funnelKey?: string | null;
+    featureSlug?: string | null;
+  },
   brandId: string,
   identity: IdentityHeaders,
 ): Promise<FundingVerdict> {

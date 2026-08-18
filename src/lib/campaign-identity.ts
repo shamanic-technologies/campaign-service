@@ -35,6 +35,10 @@ const CHANNEL_BY_FEATURE: Readonly<Record<string, string>> = Object.freeze({
   // through today; a brand may fund the same funnel on both, and those are two campaigns.
   "sales-cold-email-outreach": "cold_email",
   "sales-crm-email-outreach": "crm_email",
+  // The feedback-request offer. Same medium as `cold_email` and deliberately NOT the same channel
+  // token: a brand may work one funnel through both offers at once, and those are two campaigns,
+  // so they must hold two identities or the unique index would let only one of them exist.
+  "feedback-request-cold-email-outreach": "feedback_request_email",
 
   // Everything else. A sales funnel is not something these run — their funnel stays NULL — but
   // they still carry a channel so the identity key is enforceable for them too.

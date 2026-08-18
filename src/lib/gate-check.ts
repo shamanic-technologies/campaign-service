@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
-import { fetchFunnelBudgets } from "./funnel-budget-client.js";
+import { channelCeilingCents, fetchFunnelBudgets } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { STOP_REASONS } from "./stop-reason.js";
 
@@ -17,7 +17,7 @@ const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
 // cleaned on a later pass once the newer ones finish.
 const RUNNING_RUNS_LIMIT = 200;
 
-// The sales-outreach feature family (sales-cold-email-outreach + sales-crm-email-outreach) is
+// The sales-outreach feature family (every acquisition channel that sells a sales funnel) is
 // paced by the brand daily budget (billing-service brand_daily_budgets) and held on brand pause.
 // Every other feature is paced by the campaign's own budget windows and runs through a pause.
 // See isSalesOutreachFeature (sales-outreach-campaign.ts) for membership.
@@ -267,6 +267,29 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         // a campaign row written before migration 0043 does too, so comparing raw tokens would
         // find no ceiling for a funnel that is fully funded and block it as unfunded.
         const funnelKey = toFunnelKey(campaign.funnelKey);
+
+        // (a2') A funnel can be worked through two ACQUISITION CHANNELS at once — the straight
+        // sales pitch and the feedback-request pitch — and each is funded separately. So the
+        // ceiling that binds this campaign is its own (funnel, channel) pair's whenever billing
+        // states one, never the funnel total: pacing both campaigns on the total is exactly how
+        // one offer spends the money the other was funded for. A funnel billing states no pair for
+        // falls through to the funnel figure below, which is every brand funding one channel per
+        // funnel — unchanged.
+        if (funnelKey) {
+          const pair = channelCeilingCents(budgets, funnelKey, campaign.featureSlug);
+          if (pair.grain === "pair") {
+            // Funded through OTHER channels but not this one, or funded at zero: a deliberate
+            // customer decision, so never a fallback to the funnel or brand total.
+            if (pair.cents === null || pair.cents <= 0) {
+              return { allowed: false, reason: "Funnel not funded for this channel" };
+            }
+            if (spentCents >= pair.cents) {
+              return { allowed: false, reason: "Funnel daily budget reached" };
+            }
+            continue;
+          }
+        }
+
         const ceilingCents = funnelKey
           ? budgets.funnels.find(f => f.funnelKey === funnelKey)?.dailyBudgetCents ?? null
           : null;
