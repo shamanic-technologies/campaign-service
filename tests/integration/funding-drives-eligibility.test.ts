@@ -56,6 +56,12 @@ vi.stubGlobal("fetch", mockFetch);
 function billingAnswers(
   funnels: Array<{ funnelKey: string; dailyBudgetCents: string }>,
   brandDailyBudgetCents: string | null,
+  // The ADDITIVE (funnel, acquisition-channel feature) grain. Omitted = a billing deploy that does
+  // not serve it, which is what every case that does not pass it relies on.
+  channels?: Array<{ funnelKey: string; featureSlug: string; dailyBudgetCents: string }>,
+  // Which sales funnels each channel may be SOLD THROUGH, as features-service states it. Default:
+  // every channel sells every chain.
+  sellableByFeature?: Record<string, string[]>,
 ) {
   mockFetch.mockImplementation(async (url: string) => {
     if (String(url).includes("/funnel-budgets")) {
@@ -65,6 +71,34 @@ function billingAnswers(
           brandId: "b",
           dailyBudgetCents: brandDailyBudgetCents,
           funnels: funnels.map((f) => ({ ...f, updatedAt: null })),
+          ...(channels ? { channels: channels.map((c) => ({ ...c, updatedAt: null })) } : {}),
+        }),
+      };
+    }
+    // workflow-service: which workflow can RUN a channel. A workflow belongs to a feature, so a
+    // second channel never inherits the first one's.
+    if (String(url).includes("/workflows")) {
+      const featureSlug = new URL(String(url)).searchParams.get("featureSlug");
+      return {
+        ok: true,
+        json: async () => ({
+          workflows: [{ workflowSlug: `${featureSlug}-seed`, featureSlug, createdAt: "2026-08-18T00:00:00.000Z" }],
+        }),
+      };
+    }
+    // features-service's per-channel statement: which sales funnels this acquisition channel may
+    // be SOLD THROUGH. The cold-email pitch sells every chain.
+    if (String(url).includes("/features/")) {
+      const slug = decodeURIComponent(String(url).split("/features/")[1]!);
+      return {
+        ok: true,
+        json: async () => ({
+          salesFunnels: sellableByFeature?.[slug] ?? [
+            "sales_meetings_from_conversation",
+            "sales_meetings_from_website",
+            "website_purchases",
+            "form_magnet",
+          ],
         }),
       };
     }
@@ -122,6 +156,8 @@ beforeEach(async () => {
   resetFundingSweepThrottle();
   process.env.BILLING_SERVICE_URL = "https://billing.test.local";
   process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
+  process.env.FEATURES_SERVICE_URL = "https://features.test.local";
+  process.env.FEATURES_SERVICE_API_KEY = "test-features-key";
 });
 
 describe("the scheduler holds what the customer funds nothing for", () => {
@@ -235,6 +271,60 @@ describe("funding brings back a brand that has nothing running", () => {
     });
     expect(ongoing).toHaveLength(1);
     expect(ongoing[0].funnelKey).toBe("sales_meetings_from_conversation");
+  });
+
+  it("gives a funnel funded through TWO channels one campaign per channel", async () => {
+    billingAnswers(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }],
+      "5000",
+      [
+        { funnelKey: "reply_meeting", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" },
+        { funnelKey: "reply_meeting", featureSlug: "sales-feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
+      ],
+    );
+    const brandId = crypto.randomUUID();
+    await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null, funnelKey: null });
+
+    const { provisionFundedFunnelsForIdleBrands } = await import("../../src/lib/funnel-campaigns.js");
+    expect(await provisionFundedFunnelsForIdleBrands()).toBe(2);
+
+    const ongoing = await db.query.campaigns.findMany({ where: eq(campaigns.status, "ongoing") });
+    expect(ongoing).toHaveLength(2);
+    // Same funnel, one campaign per acquisition channel — and each holds its own identity, which
+    // is what the partial unique index on (org, brand, funnel, channel) polices.
+    for (const c of ongoing) expect(c.funnelKey).toBe("sales_meetings_from_conversation");
+    expect(ongoing.map((c) => c.featureSlug).sort()).toEqual([
+      "sales-cold-email-outreach",
+      "sales-feedback-request-cold-email-outreach",
+    ]);
+    expect(ongoing.map((c) => c.acquisitionChannel).sort()).toEqual(["cold_email", "feedback_request_email"]);
+    // The second channel runs its OWN feature's workflow.
+    const feedback = ongoing.find((c) => c.featureSlug === "sales-feedback-request-cold-email-outreach")!;
+    expect(feedback.workflowSlug).toBe("sales-feedback-request-cold-email-outreach-seed");
+  });
+
+  it("never provisions a funded pair the channel may not be sold through", async () => {
+    billingAnswers(
+      [{ funnelKey: "visit_signup", dailyBudgetCents: "5000" }],
+      "5000",
+      [
+        { funnelKey: "visit_signup", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" },
+        { funnelKey: "visit_signup", featureSlug: "sales-feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
+      ],
+      // The feedback request buys a CONVERSATION; the website-purchase chain starts with a click it
+      // has no way to sell.
+      { "sales-feedback-request-cold-email-outreach": ["sales_meetings_from_conversation"] },
+    );
+    const brandId = crypto.randomUUID();
+    await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null, funnelKey: null });
+
+    const { provisionFundedFunnelsForIdleBrands } = await import("../../src/lib/funnel-campaigns.js");
+    expect(await provisionFundedFunnelsForIdleBrands()).toBe(1);
+
+    const ongoing = await db.query.campaigns.findMany({ where: eq(campaigns.status, "ongoing") });
+    expect(ongoing).toHaveLength(1);
+    expect(ongoing[0].featureSlug).toBe("sales-cold-email-outreach");
+    expect(ongoing[0].funnelKey).toBe("website_purchases");
   });
 
   it("does NOT resume a campaign that stopped for a reason of its own — money answers none of them", async () => {

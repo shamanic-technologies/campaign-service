@@ -397,11 +397,12 @@ export function serveableAudienceIdsInProjection(
  * Whether the greedy workflow rotation applies to a given feature. When false, the
  * trigger keeps the campaign's configured workflowSlug (no features-service call).
  *
- * Scoped to the sales-outreach feature family (sales-cold-email-outreach +
- * sales-crm-email-outreach) — those vary their workflow across runs. Every other feature
+ * Scoped to the sales-outreach feature family (every acquisition CHANNEL that sells a sales
+ * funnel) — those vary their workflow across runs. Every other feature
  * always runs its campaign's configured workflowSlug, run after run, with no
  * features-service call and no rotation. (Product decision 2026-07-07: rotation is a
- * sales-outreach lever; extended to sales-crm-email-outreach 2026-07-24 for full parity.)
+ * sales-outreach lever; extended to sales-crm-email-outreach 2026-07-24 and to every sales
+ * channel since — a second channel is a second feature, and it rotates like the first.)
  */
 export function isWorkflowRotationEnabled(featureSlug: string): boolean {
   return isSalesOutreachFeature(featureSlug);

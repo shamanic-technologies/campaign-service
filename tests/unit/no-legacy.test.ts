@@ -347,4 +347,32 @@ describe('No Legacy Patterns - CRITICAL', () => {
     }
     expect(violations, `No route may write a brand pause state:\n${violations.join('\n')}`).toHaveLength(0);
   });
+
+  it('should NOT hold which acquisition channel sells which sales funnel', () => {
+    // A channel IS a feature slug, and which funnels a feature may be SOLD THROUGH is
+    // features-service's product statement — asked per feature, never copied here. A second copy
+    // drifts the day a channel gains or loses a chain, and the customer's money is on the outcome.
+    // The one file allowed to name a funnel beside a feature slug is the one that ASKS.
+    const files = getAllTsFiles(srcDir);
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const file of files) {
+      const relative = path.relative(srcDir, file);
+      if (relative === 'lib/feature-sales-funnels-client.ts') continue;
+      const content = fs.readFileSync(file, 'utf-8');
+      content.split('\n').forEach((line, index) => {
+        const code = line.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
+        // A feature slug and a funnel key on the same line of CODE is a matrix being written down.
+        if (/["'][a-z-]*sales-[a-z-]+["']/.test(code)
+          && /["'](sales_meetings_from_\w+|website_purchases|form_magnet|reply_meeting|visit_\w+)["']/.test(code)) {
+          violations.push({ file: relative, line: index + 1, code: line.trim().substring(0, 100) });
+        }
+      });
+    }
+
+    expect(
+      violations,
+      `Which feature sells through which funnel is features-service's statement — ask it:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`,
+    ).toHaveLength(0);
+  });
 });

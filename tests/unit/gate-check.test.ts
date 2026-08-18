@@ -627,6 +627,9 @@ describe("Gate Check", () => {
     function mockFunnelBudgets(
       funnels: Array<{ funnelKey: string; dailyBudgetCents: string }>,
       dailyBudgetCents: string | null = "3000",
+      // The ADDITIVE (funnel, acquisition-channel feature) grain. Omitted = a billing deploy that
+      // does not serve it, which is what every case above relies on to pace on the funnel figure.
+      channels?: Array<{ funnelKey: string; featureSlug: string; dailyBudgetCents: string }>,
     ) {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -634,6 +637,7 @@ describe("Gate Check", () => {
           brandId: "brand-1",
           dailyBudgetCents,
           funnels: funnels.map(f => ({ ...f, updatedAt: null })),
+          ...(channels ? { channels: channels.map(c => ({ ...c, updatedAt: null })) } : {}),
         }),
       });
     }
@@ -707,6 +711,98 @@ describe("Gate Check", () => {
       const result = await runGateChecks(funnelCampaign());
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("Funnel not funded");
+    });
+
+    it("paces on THIS (funnel, channel) pair's own ceiling, not the funnel total", async () => {
+      // One funnel worked through two offers. The sales pitch has spent its whole $20; under the
+      // funnel total ($30) it would still read as having room and keep spending the feedback
+      // request's money.
+      mockFunnelBudgets(
+        [{ funnelKey: "reply_meeting", dailyBudgetCents: "3000" }],
+        "3000",
+        [
+          { funnelKey: "reply_meeting", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "2000" },
+          { funnelKey: "reply_meeting", featureSlug: "sales-feedback-request-cold-email-outreach", dailyBudgetCents: "1000" },
+        ],
+      );
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "2000" }]),
+      );
+
+      const result = await runGateChecks(
+        makeCampaign({ brandIds: ["brand-1"], funnelKey: "sales_meetings_from_conversation" }),
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Funnel daily budget reached");
+    });
+
+    it("allows the other channel of the same funnel while it is under ITS ceiling", async () => {
+      mockFunnelBudgets(
+        [{ funnelKey: "reply_meeting", dailyBudgetCents: "3000" }],
+        "3000",
+        [
+          { funnelKey: "reply_meeting", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "2000" },
+          { funnelKey: "reply_meeting", featureSlug: "sales-feedback-request-cold-email-outreach", dailyBudgetCents: "1000" },
+        ],
+      );
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "500" }]),
+      );
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
+
+      const result = await runGateChecks(
+        makeCampaign({
+          brandIds: ["brand-1"],
+          funnelKey: "sales_meetings_from_conversation",
+          featureSlug: "sales-feedback-request-cold-email-outreach",
+        }),
+      );
+      expect(result.allowed).toBe(true);
+    });
+
+    it("never falls back to the funnel total for a channel the funnel does not fund", async () => {
+      mockFunnelBudgets(
+        [{ funnelKey: "reply_meeting", dailyBudgetCents: "3000" }],
+        "3000",
+        [
+          { funnelKey: "reply_meeting", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "2000" },
+          { funnelKey: "reply_meeting", featureSlug: "sales-crm-email-outreach", dailyBudgetCents: "1000" },
+        ],
+      );
+
+      const result = await runGateChecks(
+        makeCampaign({
+          brandIds: ["brand-1"],
+          funnelKey: "sales_meetings_from_conversation",
+          featureSlug: "sales-feedback-request-cold-email-outreach",
+        }),
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Funnel not funded for this channel");
+    });
+
+    it("a funnel funded through exactly ONE channel binds whatever feature the campaign states", async () => {
+      // billing attributed some brands' single ceiling to the default channel while their campaign
+      // runs another sales feature. Blocking those would break a brand that has funded one channel
+      // per funnel all along — which is every brand today.
+      mockFunnelBudgets(
+        [{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }],
+        "2000",
+        [{ funnelKey: "reply_meeting", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "2000" }],
+      );
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "10" }]),
+      );
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
+
+      const result = await runGateChecks(
+        makeCampaign({
+          brandIds: ["brand-1"],
+          funnelKey: "sales_meetings_from_conversation",
+          featureSlug: "sales-crm-email-outreach",
+        }),
+      );
+      expect(result.allowed).toBe(true);
     });
 
     it("a brand that funds no funnel separately paces on its brand budget, funnel or not", async () => {
