@@ -101,6 +101,15 @@ legacy `campaign.goal`, which nothing writes any more.
 
 **Arbitration now only decides for a brand with ONE pot.** A customer who funds each sales funnel separately has decided which funnels run — see the per-funnel section below. A funnel campaign carries the funnel's own goal, so it is a stated-goal campaign and is never arbitrated. (Set 2026-07-31, T4a; scoped 2026-08-02.)
 
+## A test that pins FROZEN history against a GROWING constant fails the day the constant grows
+
+`tests/unit/funnel-owner-decision.test.ts` asserted both directions between a shipped migration's
+SQL and `SALES_OUTREACH_FEATURE_SLUGS`: every slug in the SQL is a sales one (true forever) AND
+every sales slug appears in the SQL (true only until the family grows). Adding the second
+acquisition channel failed it, on a migration that is correct and can never mention a feature that
+did not exist when it ran. Assert the direction that stays true — what the frozen file names is
+in-scope — never that a live set is fully covered by it. (Set 2026-08-18.)
+
 ## Per (funnel, ACQUISITION CHANNEL) funding — a channel IS a feature slug, and every funded pair runs
 
 A sales funnel can be worked through more than one OFFER at once: the straight sales pitch
