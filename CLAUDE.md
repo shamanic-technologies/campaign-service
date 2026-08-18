@@ -101,6 +101,55 @@ legacy `campaign.goal`, which nothing writes any more.
 
 **Arbitration now only decides for a brand with ONE pot.** A customer who funds each sales funnel separately has decided which funnels run — see the per-funnel section below. A funnel campaign carries the funnel's own goal, so it is a stated-goal campaign and is never arbitrated. (Set 2026-07-31, T4a; scoped 2026-08-02.)
 
+## Per (funnel, ACQUISITION CHANNEL) funding — a channel IS a feature slug, and every funded pair runs
+
+A sales funnel can be worked through more than one OFFER at once: the straight sales pitch
+(`sales-cold-email-outreach`) and the feedback request
+(`sales-feedback-request-cold-email-outreach`), which asks a buyer about the problem we solve
+instead of pitching. Same infrastructure, same measurement — only the offer differs, so a brand can
+work ONE funnel through BOTH, and each is a campaign of its own.
+
+- **A CHANNEL IS A FEATURES-SERVICE FEATURE SLUG.** There is no channel table, enum or vocabulary
+  in this service and none is to be introduced. Adding a further channel is one line in
+  `SALES_OUTREACH_FEATURE_SLUGS` (`src/lib/sales-outreach-campaign.ts`) plus its
+  `CHANNEL_BY_FEATURE` token — a second offer on the same medium needs its OWN channel token
+  (`feedback_request_email`, not `cold_email`), or the two campaigns of one funnel would collide on
+  the identity index and only one could exist.
+- **One campaign per funded (funnel, channel) PAIR.** billing serves the pair ceiling ADDITIVELY on
+  the same read (`channels: [{funnelKey, featureSlug, dailyBudgetCents}]`, `funnels` being its
+  per-funnel SUM), so nothing here adds anything up. `fundedPairs` provisions off `channels` when
+  billing states any and off `funnels` × the seed's channel when it does not — that fallback is
+  what keeps a brand funding one channel per funnel, i.e. every brand today, byte-identical.
+- **The ceiling that binds a campaign is its OWN pair's** (`channelCeilingCents`), inserted at one
+  place in gate-check's precedence and one in `campaign-funding`: own `dailyBudgetCents` → PAIR
+  ceiling → funnel ceiling → brand pot. Ranking two channels of one funnel against the funnel TOTAL
+  is how one offer spends the money the other was funded for, and it shows up in no log at all.
+  A funnel SPLIT across channels that does not fund this campaign's channel is UNFUNDED — never a
+  fallback to the funnel or brand figure.
+- **A funnel funded through exactly ONE channel binds whatever feature the campaign states.** That
+  mirrors billing's own rule for a write naming no channel, and it is load-bearing: billing's
+  migration attributed some brands' single ceiling to the DEFAULT channel while their campaign runs
+  another sales feature, and holding those would break a brand that has funded one channel per
+  funnel all along.
+- **Which funnels a channel may be SOLD THROUGH is features-service's statement, asked per feature**
+  (`GET /features/{slug}` → `salesFunnels`, `src/lib/feature-sales-funnels-client.ts`). The feedback
+  request states `sales_meetings_from_conversation` alone: its offer buys a CONVERSATION, and the
+  other three chains buy their first step with a website click it has no way to sell. A funded pair
+  the feature may not sell gets NO campaign, the same way a funnel billing funds but brand-service
+  does not declare gets none. An unreadable statement provisions nothing for that channel — a pair
+  is never guessed at. `tests/unit/no-legacy.test.ts` fails if a feature slug and a funnel key ever
+  appear on one line of code outside the client that ASKS: a local matrix is a second copy of one
+  product fact, drifting the day a channel gains or loses a chain.
+- **A workflow belongs to a FEATURE, so a new channel's campaign is given its own** (workflow-service
+  `GET /workflows?featureSlug=&status=active`). The seed campaign's slug is only right for the
+  seed's own channel; handing it to another offer runs the wrong DAG, and a slug of no feature at
+  all is refused by workflow-service — a campaign that stays ongoing and produces nothing forever.
+  A channel with NO active workflow is not provisioned (fail-closed); the next sweep stands it up
+  the moment the dynasty ships.
+- Everything below — the turn-taking, the fail-closed hold, the per-brand serialization, which
+  stopped campaigns funding may resume — is UNCHANGED and applies per campaign, so it applies per
+  pair without a special case. (Set 2026-08-18.)
+
 ## Per-funnel funding: every funded funnel runs, each paced on its OWN ceiling
 
 billing-service lets a customer fund each of a brand's SALES FUNNELS separately. Its brand-level

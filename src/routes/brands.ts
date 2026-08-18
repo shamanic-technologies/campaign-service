@@ -12,7 +12,7 @@ import { SALES_OUTREACH_FEATURE_SLUGS } from "../lib/sales-outreach-campaign.js"
 
 // The daily budget is a sales-outreach pacing lever (the ONLY feature family the sales gate
 // enforces it for), so the brand-page propagation targets that family's campaigns
-// (sales-cold-email-outreach + sales-crm-email-outreach).
+// (every acquisition channel that sells a sales funnel).
 const SALES_FEATURE_SLUGS = [...SALES_OUTREACH_FEATURE_SLUGS];
 
 const router = Router();
@@ -68,7 +68,7 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
  * pacing enforces it immediately. Org-scoped (only this org's campaigns for the brand are
  * touched). dailyBudgetCents:null clears each campaign's own budget → they fall back to the
  * brand daily budget again. Scoped to the sales-outreach feature family
- * (sales-cold-email-outreach + sales-crm-email-outreach) — the only features the daily budget paces.
+ * (every acquisition channel that sells a sales funnel) — the only features the daily budget paces.
  */
 router.patch("/brands/:brandId/daily-budget", requireApiKey, serviceAuth, validateBody(SetBrandCampaignsDailyBudgetBody), async (req: AuthenticatedRequest, res) => {
   try {

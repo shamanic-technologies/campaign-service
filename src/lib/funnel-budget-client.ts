@@ -26,8 +26,42 @@ export interface FunnelBudget {
   dailyBudgetCents: number;
 }
 
+/**
+ * One (sales funnel, ACQUISITION-CHANNEL feature) ceiling — the finer grain billing serves
+ * ALONGSIDE the per-funnel figure above.
+ *
+ * A funnel can be worked through two offers at once (a straight sales pitch and a feedback-request
+ * pitch). Each is a campaign of its own, measured and funded on its own, so each must be paced on
+ * its own money: ranking both against the funnel TOTAL lets one consume what the other was funded
+ * for. `funnels` above is the per-funnel SUM of these, so nothing here is ever added up by a
+ * consumer.
+ *
+ * A CHANNEL IS A FEATURE SLUG. There is no channel table, enum or vocabulary in this service and
+ * none should be introduced — billing stores whatever feature slug the customer funds, and which
+ * feature may be sold through which funnel is features-service's statement, read per feature.
+ */
+export interface FunnelChannelBudget {
+  /** Canonical funnel key, same canonicalisation as `FunnelBudget.funnelKey`. */
+  funnelKey: SalesFunnelKey;
+  /** The acquisition channel this ceiling funds, as a features-service feature slug. */
+  featureSlug: string;
+  /** This PAIR's own daily ceiling, in CENTS. */
+  dailyBudgetCents: number;
+}
+
 export type FunnelBudgetsRead =
-  | { ok: true; brandDailyBudgetCents: number | null; funnels: FunnelBudget[] }
+  | {
+      ok: true;
+      brandDailyBudgetCents: number | null;
+      funnels: FunnelBudget[];
+      /**
+       * ADDITIVE grain. Empty for a brand that has never set per-funnel ceilings — and also for a
+       * billing deploy that predates the pair grain, which is why an ABSENT `channels` field is
+       * read as "no finer grain" rather than as "nothing is funded": every consumer then falls
+       * through to the funnel figure and behaves exactly as it did before.
+       */
+      channels: FunnelChannelBudget[];
+    }
   | { ok: false };
 
 /**
@@ -69,6 +103,7 @@ export async function fetchFunnelBudgets(
     const data = await res.json() as {
       dailyBudgetCents?: string | null;
       funnels?: Array<{ funnelKey?: string; dailyBudgetCents?: string }>;
+      channels?: Array<{ funnelKey?: string; featureSlug?: string; dailyBudgetCents?: string }>;
     };
 
     let brandDailyBudgetCents: number | null = null;
@@ -95,10 +130,60 @@ export async function fetchFunnelBudgets(
       funnels.push({ funnelKey, dailyBudgetCents: cents });
     }
 
-    return { ok: true, brandDailyBudgetCents, funnels };
+    // The pair grain is ADDITIVE and arrived after this consumer: an absent field is a billing
+    // deploy that does not serve it yet, which is "no finer grain", NOT "nothing is funded". A
+    // present-but-unparseable one is refused like the funnel figures — a ceiling we cannot read
+    // must never be read as no ceiling.
+    const channels: FunnelChannelBudget[] = [];
+    if (data.channels !== undefined) {
+      if (!Array.isArray(data.channels)) return { ok: false };
+      for (const raw of data.channels) {
+        if (!raw?.funnelKey || !raw?.featureSlug) return { ok: false };
+        const cents = parseFloat(raw.dailyBudgetCents ?? "");
+        if (!Number.isFinite(cents)) return { ok: false };
+        const funnelKey = toFunnelKey(raw.funnelKey);
+        if (!funnelKey) continue; // a funnel no catalogue names — same treatment as above
+        channels.push({ funnelKey, featureSlug: raw.featureSlug, dailyBudgetCents: cents });
+      }
+    }
+
+    return { ok: true, brandDailyBudgetCents, funnels, channels };
   } catch {
     return { ok: false };
   }
+}
+
+/**
+ * The ceiling that binds ONE (funnel, acquisition-channel feature) pair.
+ *
+ * Three answers, and the distinction between the last two is what keeps a single-channel brand
+ * behaving exactly as it did:
+ *
+ *   - `grain: "none"` — billing states no pair for this funnel at all (an older deploy, or a brand
+ *     that funds nothing per funnel). The caller falls through to the funnel figure, i.e. today's
+ *     behaviour, byte for byte.
+ *   - `cents` — this pair is funded at that amount.
+ *   - `cents: null` — the funnel IS split across channels and this campaign's channel is not one of
+ *     them, so it is unfunded. Never a fallback to the funnel total: that is precisely how one
+ *     offer would spend the money the other was funded for.
+ *
+ * A funnel funded through exactly ONE channel answers with that channel's ceiling WHATEVER feature
+ * the campaign states. That mirrors billing's own rule for a write that names no channel ("the
+ * funnel's single channel when it funds one"), and it is what guarantees that a brand funding one
+ * channel per funnel is unaffected — including the brands whose single ceiling billing's migration
+ * attributed to the default channel while their campaign runs another sales feature.
+ */
+export function channelCeilingCents(
+  read: Extract<FunnelBudgetsRead, { ok: true }>,
+  funnelKey: SalesFunnelKey,
+  featureSlug: string | null | undefined,
+): { grain: "none" } | { grain: "pair"; cents: number | null } {
+  // Same reading as on the wire: no pair stated is "no finer grain", never "nothing is funded".
+  const rows = (read.channels ?? []).filter((c) => c.funnelKey === funnelKey);
+  if (rows.length === 0) return { grain: "none" };
+  if (rows.length === 1) return { grain: "pair", cents: rows[0]!.dailyBudgetCents };
+  const match = featureSlug ? rows.find((c) => c.featureSlug === featureSlug) : undefined;
+  return { grain: "pair", cents: match ? match.dailyBudgetCents : null };
 }
 
 /**
@@ -108,4 +193,14 @@ export async function fetchFunnelBudgets(
  */
 export function fundedFunnels(read: Extract<FunnelBudgetsRead, { ok: true }>): FunnelBudget[] {
   return read.funnels.filter((f) => f.dailyBudgetCents > 0);
+}
+
+/**
+ * The (funnel, acquisition-channel feature) pairs this org actually FUNDS for the brand — the unit
+ * one campaign is provisioned per. A ceiling of zero is a deliberate "do not work this pair".
+ */
+export function fundedChannelPairs(
+  read: Extract<FunnelBudgetsRead, { ok: true }>,
+): FunnelChannelBudget[] {
+  return (read.channels ?? []).filter((c) => c.dailyBudgetCents > 0);
 }

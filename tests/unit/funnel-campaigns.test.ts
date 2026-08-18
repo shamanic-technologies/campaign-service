@@ -66,6 +66,7 @@ vi.mock("drizzle-orm", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
+import { SALES_FUNNEL_KEYS } from "../../src/lib/sales-funnel-vocabulary.js";
 import {
   planFunnelTurns,
   selectLowestFillRatio,
@@ -76,6 +77,7 @@ import {
 } from "../../src/lib/funnel-campaigns.js";
 
 const SALES = "sales-cold-email-outreach";
+const FEEDBACK = "sales-feedback-request-cold-email-outreach";
 
 // The brand's alive campaigns, as the sales-scoped liveness check reads them.
 let aliveBrandCampaigns: Array<{ id: string; featureSlug: string | null }> = [];
@@ -101,6 +103,10 @@ function mockFunnelBudgets(
   // What billing answers as the brand-level pot. Defaults to the sum, which is what it derives
   // when the brand funds per funnel; pass it explicitly for a brand with ONE pot (funnels: []).
   brandDailyBudgetCents?: string | null,
+  // The finer, ADDITIVE grain: one entry per (funnel, acquisition-channel feature). Omitted = a
+  // billing deploy that does not serve it, which every test below relies on to prove the
+  // per-funnel behaviour is untouched.
+  channels?: Array<{ funnelKey: string; featureSlug: string; dailyBudgetCents: string }>,
 ) {
   mockFetch.mockResolvedValueOnce({
     ok: true,
@@ -111,6 +117,7 @@ function mockFunnelBudgets(
           ? String(funnels.reduce((s, f) => s + Number(f.dailyBudgetCents), 0))
           : brandDailyBudgetCents,
       funnels: funnels.map(f => ({ ...f, updatedAt: null })),
+      ...(channels ? { channels: channels.map(c => ({ ...c, updatedAt: null })) } : {}),
     }),
   });
 }
@@ -203,6 +210,29 @@ describe("planFunnelTurns", () => {
     process.env.BILLING_SERVICE_API_KEY = "billing-key";
     process.env.BRAND_SERVICE_URL = "https://brand.test.local";
     process.env.BRAND_SERVICE_API_KEY = "brand-key";
+    process.env.FEATURES_SERVICE_URL = "https://features.test.local";
+    process.env.FEATURES_SERVICE_API_KEY = "features-key";
+    process.env.WORKFLOW_SERVICE_URL = "https://workflow.test.local";
+    process.env.WORKFLOW_SERVICE_API_KEY = "workflow-key";
+    // The reads that are ASKED PER CHANNEL rather than per brand: which funnels a channel may be
+    // sold through (features-service) and which workflow can run it (workflow-service). Answered by
+    // URL rather than by queue position, so every ordered `mockResolvedValueOnce` below — which
+    // takes precedence — keeps describing the billing/brand sequence it always did.
+    mockFetch.mockImplementation(async (input: URL | string) => {
+      const url = String(input);
+      if (url.includes("/features/")) {
+        return { ok: true, json: async () => ({ salesFunnels: [...SALES_FUNNEL_KEYS] }) };
+      }
+      if (url.includes("/workflows")) {
+        return {
+          ok: true,
+          json: async () => ({
+            workflows: [{ workflowSlug: `${new URL(url).searchParams.get("featureSlug")}-seed`, createdAt: "2026-08-18T00:00:00.000Z" }],
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    });
     mockListRuns.mockResolvedValue({ runs: [] });
     mockFindFirst.mockResolvedValue({ id: "existing", name: "custom name", status: "ongoing" });
     // The only findMany left is the sales-scoped liveness check ({ id, featureSlug }). Default the
@@ -283,6 +313,187 @@ describe("planFunnelTurns", () => {
     // is not written any more, because it cannot tell the two meeting funnels apart.
     for (const values of inserted) expect(values.goal).toBeUndefined();
     expect(inserted[0].name).toBe(funnelCampaignName(SALES, "brand-1", inserted[0].funnelKey));
+  });
+
+  it("gives a funnel funded through TWO channels one campaign per channel", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "3000" }],
+      "3000",
+      [
+        { funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "2000" },
+        { funnelKey: "reply_meeting", featureSlug: FEEDBACK, dailyBudgetCents: "1000" },
+      ],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    const inserted = mockInsertValues.mock.calls.map(c => c[0]);
+    expect(inserted).toHaveLength(2);
+    // One campaign per PAIR: each states the same funnel and its OWN channel, so neither can be
+    // mistaken for the other and each is paced on the ceiling that binds it.
+    expect(inserted.map(v => v.featureSlug).sort()).toEqual([SALES, FEEDBACK].sort());
+    for (const values of inserted) {
+      expect(values.funnelKey).toBe("sales_meetings_from_conversation");
+      expect(values.name).toBe(funnelCampaignName(values.featureSlug, "brand-1", values.funnelKey));
+    }
+    // The second channel runs its OWN feature's workflow — never the seed campaign's, which
+    // belongs to another offer and which workflow-service would refuse for this feature.
+    const feedback = inserted.find(v => v.featureSlug === FEEDBACK)!;
+    expect(feedback.workflowSlug).toBe(`${FEEDBACK}-seed`);
+  });
+
+  it("never provisions a pair the channel may not be sold through", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "visit_signup", featureSlug: FEEDBACK, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "website_purchases" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+    // features-service states the feedback request sells the CONVERSATION chain alone: it buys a
+    // conversation and has no website step to sell.
+    mockFetch.mockImplementationOnce(async () => ({
+      ok: true,
+      json: async () => ({ salesFunnels: ["sales_meetings_from_conversation"] }),
+    }));
+
+    await planFunnelTurns([claimed({ funnelKey: "website_purchases" })]);
+
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it("provisions nothing for a channel whose funnel statement cannot be read", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }],
+      "2000",
+      [{ funnelKey: "reply_meeting", featureSlug: FEEDBACK, dailyBudgetCents: "2000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+    mockFetch.mockImplementationOnce(async () => ({ ok: false, status: 500, json: async () => ({}) }));
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    // A pair is never guessed at — the same stance an unreadable brand declaration takes.
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it("provisions nothing for a channel with no active workflow to run it", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }],
+      "2000",
+      [{ funnelKey: "reply_meeting", featureSlug: FEEDBACK, dailyBudgetCents: "2000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+    mockFetch.mockImplementation(async (input: URL | string) => {
+      const url = String(input);
+      if (url.includes("/features/")) {
+        return { ok: true, json: async () => ({ salesFunnels: [...SALES_FUNNEL_KEYS] }) };
+      }
+      return { ok: true, json: async () => ({ workflows: [] }) };
+    });
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    // A campaign with no DAG to run would sit ongoing and produce nothing forever.
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it("paces each channel on its OWN ceiling, so one cannot consume the other's money", async () => {
+    // Both campaigns work the same funnel; the sales pitch has already spent its whole $20 while
+    // the feedback request has spent nothing of its $10. Ranked on the FUNNEL total ($30) the
+    // spent-out one would still look 66% empty and keep taking turns.
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "3000" }],
+      "3000",
+      [
+        { funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "2000" },
+        { funnelKey: "reply_meeting", featureSlug: FEEDBACK, dailyBudgetCents: "1000" },
+      ],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue({ id: "existing", name: "x", status: "ongoing", stopReason: null });
+    mockSpend("2000"); // the sales pitch, at its own ceiling
+    mockSpend("0");    // the feedback request, untouched
+
+    aliveBrandCampaigns = [
+      { id: "c-sales", featureSlug: SALES },
+      { id: "c-feedback", featureSlug: FEEDBACK },
+    ];
+    const now = new Date("2026-08-18T10:00:00Z");
+    const deferred = await planFunnelTurns(
+      [
+        claimed({ id: "c-sales", funnelKey: "sales_meetings_from_conversation", featureSlug: SALES }),
+        claimed({ id: "c-feedback", funnelKey: "sales_meetings_from_conversation", featureSlug: FEEDBACK }),
+      ],
+      now,
+    );
+
+    // The full channel yields; the empty one takes the turn.
+    expect(deferred.has("c-feedback")).toBe(false);
+    expect(deferred.get("c-sales")).toBeDefined();
+  });
+
+  it("HOLDS a campaign whose funnel is funded through OTHER channels only", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "3000" }],
+      "3000",
+      [
+        { funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "2000" },
+        { funnelKey: "reply_meeting", featureSlug: "sales-crm-email-outreach", dailyBudgetCents: "1000" },
+      ],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue({ id: "existing", name: "x", status: "ongoing", stopReason: null });
+    mockSpend("0");
+    mockSpend("0");
+
+    aliveBrandCampaigns = [{ id: "c-sales", featureSlug: SALES }];
+    const now = new Date("2026-08-18T10:00:00Z");
+    const deferred = await planFunnelTurns(
+      [
+        claimed({ id: "c-sales", funnelKey: "sales_meetings_from_conversation", featureSlug: SALES }),
+        claimed({ id: "c-crm", funnelKey: "sales_meetings_from_conversation", featureSlug: "sales-crm-email-outreach" }),
+        claimed({ id: "c-feedback", funnelKey: "sales_meetings_from_conversation", featureSlug: FEEDBACK }),
+      ],
+      now,
+    );
+
+    // The funnel is SPLIT across two channels and neither is the feedback request's: falling back
+    // to the funnel total would be spending the other two offers' money. It waits for money, not
+    // for a turn, so it is re-checked on the funding cadence.
+    expect(deferred.get("c-feedback")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
+    // The two funded channels are in the running as usual — one takes the turn, the other waits it.
+    expect(deferred.get("c-sales")?.getTime() ?? now.getTime() + FUNNEL_TURN_DEFER_MS)
+      .toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
+  });
+
+  it("a funnel funded through exactly ONE channel binds whatever feature the campaign states", async () => {
+    // billing's migration attributed some brands' single ceiling to the DEFAULT channel while their
+    // campaign runs another sales feature. Holding those would be a regression on a brand that has
+    // funded one channel per funnel all along, which is every brand today.
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }],
+      "2000",
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "2000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue({ id: "existing", name: "x", status: "ongoing", stopReason: null });
+    mockSpend("0");
+
+    aliveBrandCampaigns = [{ id: "c-crm", featureSlug: "sales-crm-email-outreach" }];
+    const deferred = await planFunnelTurns([
+      claimed({
+        id: "c-crm",
+        funnelKey: "sales_meetings_from_conversation",
+        featureSlug: "sales-crm-email-outreach",
+      }),
+    ]);
+
+    expect(deferred.size).toBe(0);
   });
 
   it("never provisions a funnel billing funds but brand-service does not declare active", async () => {
