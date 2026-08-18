@@ -3,9 +3,18 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 // The two things the resume asks other services: does this brand have somebody to contact, and
 // is there still a ceiling to spend against. Both are HTTP reads owned elsewhere; here they are
 // stubbed so the test exercises the DECISION, against a real database.
-const { mockServeableAudienceIds, mockFetchFunnelBudgets } = vi.hoisted(() => ({
+const { mockServeableAudienceIds, mockFetchFunnelBudgets, mockCreateRun, mockUpdateRun } = vi.hoisted(() => ({
   mockServeableAudienceIds: vi.fn(),
   mockFetchFunnelBudgets: vi.fn(),
+  mockCreateRun: vi.fn(),
+  mockUpdateRun: vi.fn(),
+}));
+
+// The resume's downstream reads carry a run id, and it has to be one runs-service can resolve —
+// the same id the scheduler then hands workflow-service when the campaign takes its turn back.
+vi.mock("@distribute/runs-client", () => ({
+  createRun: mockCreateRun,
+  updateRun: mockUpdateRun,
 }));
 
 vi.mock("../../src/lib/serveable-audience.js", () => ({
@@ -58,6 +67,8 @@ beforeEach(async () => {
   resetResumeSweepThrottle();
   mockServeableAudienceIds.mockResolvedValue(["audience-fresh"]);
   mockFetchFunnelBudgets.mockResolvedValue(FUNDED);
+  mockCreateRun.mockImplementation(async () => ({ id: crypto.randomUUID() }));
+  mockUpdateRun.mockResolvedValue({ status: "completed" });
 });
 
 afterAll(async () => {
@@ -328,6 +339,41 @@ describe("a resume that cannot be decided safely", () => {
     expect(await resumeServeableCampaigns()).toBe(1);
     expect((await read(broken.id))?.status).toBe("stopped");
     expect((await read(fine.id))?.status).toBe("ongoing");
+    warn.mockRestore();
+  });
+});
+
+describe("the run id a resumed campaign carries", () => {
+  it("gives a campaign with no ancestor a real one, and stores it so it is minted once", async () => {
+    const campaign = await insertExhaustedCampaign({ parentRunId: null });
+    const anchorId = crypto.randomUUID();
+    mockCreateRun.mockResolvedValue({ id: anchorId });
+
+    expect(await resumeServeableCampaigns()).toBe(1);
+
+    const anchor = (await read(campaign.id))?.parentRunId;
+    expect(anchor).toBe(anchorId);
+    // Not campaign-tagged: every campaign-scoped read in this service would otherwise see it.
+    expect(mockCreateRun.mock.calls[0][0]).not.toHaveProperty("campaignId");
+    expect(mockUpdateRun).toHaveBeenCalledWith(anchor, "completed", expect.anything());
+  });
+
+  it("reuses the ancestor a campaign already stored, asking runs-service for nothing", async () => {
+    const existing = crypto.randomUUID();
+    await insertExhaustedCampaign({ parentRunId: existing });
+
+    expect(await resumeServeableCampaigns()).toBe(1);
+    expect(mockCreateRun).not.toHaveBeenCalled();
+  });
+
+  it("leaves the campaign stopped when no ancestor can be established", async () => {
+    const campaign = await insertExhaustedCampaign({ parentRunId: null });
+    mockCreateRun.mockRejectedValue(new Error("runs-service unavailable"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(await resumeServeableCampaigns()).toBe(0);
+    expect((await read(campaign.id))?.status).toBe("stopped");
+    expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
 });

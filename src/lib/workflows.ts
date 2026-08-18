@@ -86,10 +86,15 @@ export async function executeCampaignWorkflow(
     }),
   });
 
+  // A refused execution is a campaign that did not run. Returning quietly told every caller the
+  // trigger had succeeded, so a campaign whose executions were ALL refused looked healthy from
+  // every angle: ongoing, rescheduled, silent. Throwing puts the refusal in front of whoever
+  // triggered it — the callers already catch and log against the campaign id.
   if (!res.ok) {
     const body = await res.text();
-    console.error(`[campaign-service] Execution failed (${res.status}): ${body}`);
-    return;
+    throw new Error(
+      `[campaign-service] Execution of "${workflowSlug}" for campaign ${inputs.campaignId} was refused (${res.status}): ${body}`,
+    );
   }
 
   await res.json();

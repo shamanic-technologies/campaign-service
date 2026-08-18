@@ -10,6 +10,7 @@ import {
   FUNDING_SWEEP_INTERVAL_MS,
 } from "./funnel-campaigns.js";
 import { resumeServeableCampaigns } from "./campaign-resume.js";
+import { ensureCampaignRunId } from "./trigger-run.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -162,10 +163,14 @@ export async function reRunDueCampaigns(): Promise<number> {
       const userId = campaign.createdByUserId!;
       const featureSlug = campaign.featureSlug!;
 
-      // Do NOT create a run here — /start-run in the workflow DAG creates it.
-      // Creating one here with a different taskName caused orphan runs that were
-      // invisible to gate-check and never cleaned up.
-      const runId = campaign.parentRunId || crypto.randomUUID();
+      // Still no per-execution run here — /start-run in the workflow DAG creates that one, and
+      // creating a second campaign-tagged run at trigger time is what produced orphan runs
+      // invisible to gate-check. What this DOES establish is the campaign's ANCESTOR run, which
+      // must exist: workflow-service turns the x-run-id we send into the parentRunId of the run it
+      // creates, and that column carries a foreign key. A campaign that never stored one used to
+      // be handed a minted uuid, so every one of its executions was refused before the DAG began.
+      // See ensureCampaignRunId — the anchor is created once and persisted, never per tick.
+      const runId = await ensureCampaignRunId(campaign);
 
       // Thompson-pick the workflow for THIS run (varies run-to-run) BEFORE execute.
       // Falls back to the configured slug on any failure (see
