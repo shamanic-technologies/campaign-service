@@ -77,7 +77,7 @@ import {
 } from "../../src/lib/funnel-campaigns.js";
 
 const SALES = "sales-cold-email-outreach";
-const FEEDBACK = "sales-feedback-request-cold-email-outreach";
+const FEEDBACK = "feedback-request-cold-email-outreach";
 
 // The brand's alive campaigns, as the sales-scoped liveness check reads them.
 let aliveBrandCampaigns: Array<{ id: string; featureSlug: string | null }> = [];

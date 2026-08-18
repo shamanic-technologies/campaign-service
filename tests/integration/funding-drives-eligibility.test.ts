@@ -279,7 +279,7 @@ describe("funding brings back a brand that has nothing running", () => {
       "5000",
       [
         { funnelKey: "reply_meeting", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" },
-        { funnelKey: "reply_meeting", featureSlug: "sales-feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
+        { funnelKey: "reply_meeting", featureSlug: "feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
       ],
     );
     const brandId = crypto.randomUUID();
@@ -294,13 +294,13 @@ describe("funding brings back a brand that has nothing running", () => {
     // is what the partial unique index on (org, brand, funnel, channel) polices.
     for (const c of ongoing) expect(c.funnelKey).toBe("sales_meetings_from_conversation");
     expect(ongoing.map((c) => c.featureSlug).sort()).toEqual([
+      "feedback-request-cold-email-outreach",
       "sales-cold-email-outreach",
-      "sales-feedback-request-cold-email-outreach",
     ]);
     expect(ongoing.map((c) => c.acquisitionChannel).sort()).toEqual(["cold_email", "feedback_request_email"]);
     // The second channel runs its OWN feature's workflow.
-    const feedback = ongoing.find((c) => c.featureSlug === "sales-feedback-request-cold-email-outreach")!;
-    expect(feedback.workflowSlug).toBe("sales-feedback-request-cold-email-outreach-seed");
+    const feedback = ongoing.find((c) => c.featureSlug === "feedback-request-cold-email-outreach")!;
+    expect(feedback.workflowSlug).toBe("feedback-request-cold-email-outreach-seed");
   });
 
   it("never provisions a funded pair the channel may not be sold through", async () => {
@@ -309,11 +309,11 @@ describe("funding brings back a brand that has nothing running", () => {
       "5000",
       [
         { funnelKey: "visit_signup", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" },
-        { funnelKey: "visit_signup", featureSlug: "sales-feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
+        { funnelKey: "visit_signup", featureSlug: "feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
       ],
       // The feedback request buys a CONVERSATION; the website-purchase chain starts with a click it
       // has no way to sell.
-      { "sales-feedback-request-cold-email-outreach": ["sales_meetings_from_conversation"] },
+      { "feedback-request-cold-email-outreach": ["sales_meetings_from_conversation"] },
     );
     const brandId = crypto.randomUUID();
     await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null, funnelKey: null });
