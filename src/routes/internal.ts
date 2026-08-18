@@ -504,7 +504,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
           // resume. Fire-and-forget — never blocks or fails run finalization, and the
           // 1x/month-per-brand cap is enforced by transactional-email-service dedup.
           if (campaign) {
-            void maybeSendExtendAudienceEmail(campaign, { runId: req.runId });
+            void maybeSendExtendAudienceEmail(campaign, { runId: req.runId! });
           }
           await db.update(campaigns)
             // States WHY it stopped, and it is the ONE reason a campaign comes back by itself:

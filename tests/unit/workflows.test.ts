@@ -118,7 +118,10 @@ describe("Workflow module", () => {
       ).rejects.toThrow("missing required fields: userId, featureSlug");
     });
 
-    it("should not throw when execution fails (non-ok response)", async () => {
+    // A refused execution is a campaign that did not run. Returning quietly told the caller the
+    // trigger had succeeded, so a campaign whose every execution was refused still read as
+    // healthy — ongoing, rescheduled, and silent about producing nothing.
+    it("should throw when the execution is refused (non-ok response)", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
@@ -128,7 +131,7 @@ describe("Workflow module", () => {
       const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
       await expect(
         executeCampaignWorkflow("sales-email-cold-outreach", VALID_INPUTS)
-      ).resolves.not.toThrow();
+      ).rejects.toThrow(/refused \(404\).*Workflow not found/s);
     });
 
     it("should not throw when workflow-service env vars are missing", async () => {

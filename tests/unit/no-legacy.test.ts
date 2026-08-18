@@ -307,6 +307,30 @@ describe('No Legacy Patterns - CRITICAL', () => {
     ).toHaveLength(0);
   });
 
+  it('should NOT mint a run id anywhere it crosses a service boundary', () => {
+    // A minted uuid names a run that does not exist. workflow-service turns the x-run-id it is
+    // given into the parentRunId of the run it creates, and runs.parent_run_id carries a foreign
+    // key — so every execution of a campaign handed a minted id was refused before the DAG began,
+    // while the campaign kept looking ongoing and freshly rescheduled (prod 2026-08-18: 3,593
+    // refusals in six hours, a different id on every line). A campaign's ancestor run is
+    // established ONCE, for real, in src/lib/trigger-run.ts.
+    const guarded = ['lib/scheduler.ts', 'lib/campaign-resume.ts', 'lib/transactional-email.ts'];
+    const violations: string[] = [];
+
+    for (const rel of guarded) {
+      const file = path.join(srcDir, rel);
+      if (!fs.existsSync(file)) continue;
+      fs.readFileSync(file, 'utf-8').split('\n').forEach((line, index) => {
+        if (/randomUUID/.test(line)) violations.push(`src/${rel}:${index + 1}\n    ${line.trim()}`);
+      });
+    }
+
+    expect(
+      violations,
+      `A run id handed to another service must be one runs-service can resolve — use ensureCampaignRunId:\n${violations.join('\n')}`,
+    ).toHaveLength(0);
+  });
+
   it('should NOT expose a writer for the brand held state on any surface', () => {
     // A brand-wide pause button beside per-funnel ceilings is the same contradiction wearing a
     // different hat. The held state is READ (GET /brands/:brandId/pause, derived from billing) and

@@ -261,7 +261,7 @@ async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId
  * The 1x/month-per-brand cap is enforced by transactional-email-service dedup, not here.
  * Any error is logged and swallowed — this must never affect run finalization.
  */
-export async function maybeSendExtendAudienceEmail(campaign: Campaign, opts: { runId?: string }): Promise<void> {
+export async function maybeSendExtendAudienceEmail(campaign: Campaign, opts: { runId: string }): Promise<void> {
   try {
     if (!isSalesOutreachFeature(campaign.featureSlug)) return;
 
@@ -280,8 +280,10 @@ export async function maybeSendExtendAudienceEmail(campaign: Campaign, opts: { r
     if (!(await hasPositiveDailyBudget(campaign))) return;
     if (!(await readAutoTopupEnabled(campaign.orgId))) return;
 
-    const runId = opts.runId ?? crypto.randomUUID();
-    await sendExtendAudienceEmail(campaign, userId, runId);
+    // The caller's own run, never a minted stand-in: `/end-run` requires x-run-id
+    // (requirePipelineHeaders), so one always exists — and a minted uuid names a run that does not,
+    // which is exactly what the services downstream refuse.
+    await sendExtendAudienceEmail(campaign, userId, opts.runId);
   } catch (err) {
     console.error(`[campaign-service] maybeSendExtendAudienceEmail failed for campaign ${campaign.id}:`, err);
   }
