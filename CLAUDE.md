@@ -155,6 +155,17 @@ work ONE funnel through BOTH, and each is a campaign of its own.
   all is refused by workflow-service — a campaign that stays ongoing and produces nothing forever.
   A channel with NO active workflow is not provisioned (fail-closed); the next sweep stands it up
   the moment the dynasty ships.
+- **A feature slug RENAMED upstream must be renamed here the same day, and it is renamed in ONE
+  spelling.** `CHANNEL_BY_FEATURE` is total by construction — an unrecognised slug falls through to
+  `featureSlug.replace(/-/g, "_")` — which is right for a feature nobody has named a token for and
+  WRONG for one that was renamed: the campaign is filed under a channel nothing else uses, silently,
+  with no error anywhere and no failing test, and it collides with nothing so the identity index
+  never complains. So the total-by-construction default is exactly what makes an upstream rename
+  invisible, and the map is not the only site: the family constant, the docs and every fixture
+  carry the literal. Never accept both spellings, alias them or normalise one onto the other — a
+  translation table is what this service keeps deleting, and two names for one channel is how a
+  brand grows two identities for one offer. (`sales-feedback-request-cold-email-outreach` →
+  `feedback-request-cold-email-outreach`, 2026-08-18.)
 - Everything below — the turn-taking, the fail-closed hold, the per-brand serialization, which
   stopped campaigns funding may resume — is UNCHANGED and applies per campaign, so it applies per
   pair without a special case. (Set 2026-08-18.)
