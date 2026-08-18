@@ -65,9 +65,18 @@ describe("ensureCampaignRunId", () => {
       taskName: "campaign-trigger",
       userId: "user-1",
       brandId: "brand-a,brand-b",
-      workflowSlug: "sales-email-cold-outreach",
       featureSlug: "sales-cold-email-outreach",
     });
+  });
+
+  it("states NO workflow — the workflow is re-picked every run, the ancestor is permanent", async () => {
+    await ensureCampaignRunId({ ...CAMPAIGN });
+
+    // runs-service refuses a child whose workflowSlug differs from its parent's (409
+    // Parent-child field conflict), so freezing this run's workflow on a permanent ancestor
+    // stops every execution the greedy bandit later picks a different one for.
+    expect(mockCreateRun.mock.calls[0][0]).not.toHaveProperty("workflowSlug");
+    expect(mockUpdateRun.mock.calls[0][2]).not.toHaveProperty("workflowSlug");
   });
 
   it("does NOT tag the anchor with the campaign — every campaign-scoped read would then see it", async () => {
