@@ -15,7 +15,6 @@ export interface AnchorableCampaign {
   createdByUserId?: string | null;
   brandIds?: string[] | null;
   brandId?: string | null;
-  workflowSlug?: string | null;
   featureSlug?: string | null;
 }
 
@@ -36,12 +35,21 @@ export interface AnchorableCampaign {
  * PERSISTED on the campaign, so it is minted a single time rather than per tick and every later
  * trigger takes the same branch as a campaign that was born with one.
  *
- * The anchor deliberately carries NO campaignId. It is not an execution — it is the tree's root —
- * and every campaign-scoped read in this service (the gate's stale-run cleanup and lifetime
- * `completed` count, the scheduler's in-flight guard, the brand serialization) filters on
- * `campaignId`. Tagging it would make it an orphan run those reads have to reason about, which is
- * the exact problem that stopped run creation happening here in the first place. It is marked
- * `completed` immediately for the same reason: nothing is executing under it yet.
+ * The anchor states only what is TRUE OF THE CAMPAIGN FOR ITS WHOLE LIFE — its org, its user, its
+ * brands, its feature. Nothing per-execution:
+ *
+ *   - No `campaignId`. It is not an execution, it is the tree's root, and every campaign-scoped
+ *     read in this service (the gate's stale-run cleanup and lifetime `completed` count, the
+ *     scheduler's in-flight guard, the brand serialization) filters on `campaignId`. Tagging it
+ *     would make it an orphan run those reads have to reason about, which is the exact problem
+ *     that stopped run creation happening here in the first place.
+ *   - No `workflowSlug`. The workflow is re-picked EVERY run by the greedy bandit, so freezing one
+ *     on a permanent ancestor states a fact that stops being true on the next run — and
+ *     runs-service refuses a child whose workflowSlug differs from its parent's
+ *     (`409 Parent-child field conflict`), which is the same silent full stop one layer along.
+ *     A child states its own and inherits nothing.
+ *
+ * It is marked `completed` immediately for the same reason: nothing is executing under it yet.
  *
  * Throws when the anchor cannot be established — the caller must NOT dispatch. Handing over an id
  * that cannot resolve is what this exists to stop.
@@ -59,7 +67,6 @@ export async function ensureCampaignRunId(campaign: AnchorableCampaign): Promise
     taskName: "campaign-trigger",
     userId: campaign.createdByUserId ?? undefined,
     brandId: brandIdCsv,
-    workflowSlug: campaign.workflowSlug ?? undefined,
     featureSlug: campaign.featureSlug ?? undefined,
   });
 
@@ -76,7 +83,6 @@ export async function ensureCampaignRunId(campaign: AnchorableCampaign): Promise
     orgId: campaign.orgId,
     userId: campaign.createdByUserId ?? undefined,
     brandId: brandIdCsv,
-    workflowSlug: campaign.workflowSlug ?? undefined,
     featureSlug: campaign.featureSlug ?? undefined,
   });
 

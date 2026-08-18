@@ -536,12 +536,20 @@ same branch.
   one of them ships an id nothing can resolve. It creates a real root run and **persists it on the
   campaign**, so it is established once rather than per tick and every later trigger takes the
   same branch as a campaign born with one.
-- **The anchor carries NO `campaignId`, and is `completed` immediately.** It is the tree's root,
-  not an execution. Every campaign-scoped read here (gate-check's stale cleanup and lifetime
-  `completed` count, `hasLiveRunForCampaign`, `hasLiveSalesRunForBrand`) filters on `campaignId` —
-  tagging it would recreate exactly the orphan run that stopped this service creating runs at
-  trigger time in the first place. The persist happens BEFORE the finalize, so a failed finalize
-  reuses the run instead of throwing it away.
+- **The anchor states only what is true of the campaign for its WHOLE LIFE** — org, user, brands,
+  feature — and is `completed` immediately. Nothing per-execution, for two different reasons that
+  both end in a silent full stop:
+  - No **`campaignId`**: every campaign-scoped read here (gate-check's stale cleanup and lifetime
+    `completed` count, `hasLiveRunForCampaign`, `hasLiveSalesRunForBrand`) filters on it, so
+    tagging the anchor recreates exactly the orphan run that stopped this service creating runs at
+    trigger time in the first place.
+  - No **`workflowSlug`**: the workflow is re-picked EVERY run by the greedy bandit, and
+    runs-service refuses a child whose `workflowSlug` differs from its parent's (`409 Parent-child
+    field conflict`). A permanent ancestor stating one workflow therefore blocks every run that
+    picks another — the same invisible halt one layer along, which is how it was found (v0.55.1
+    anchored `9570e3ce` correctly and the execution still 502'd, now loudly).
+  The persist happens BEFORE the finalize, so a failed finalize reuses the run instead of throwing
+  it away.
 - **Fail-CLOSED: an anchor that cannot be established means no dispatch.** The scheduler's
   per-campaign catch logs it and the campaign is re-claimed by `claimStuckCampaigns`; the resume
   sweep leaves the campaign stopped. And `executeCampaignWorkflow` now **throws** on a non-2xx
