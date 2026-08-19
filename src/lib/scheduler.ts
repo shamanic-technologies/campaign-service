@@ -107,6 +107,9 @@ export async function reRunDueCampaigns(): Promise<number> {
       audienceId: campaigns.audienceId,
       funnelKey: campaigns.funnelKey,
       dailyBudgetCents: campaigns.dailyBudgetCents,
+      // The offer this campaign sells. The turn planner asks brand-service for the funnels of THAT
+      // offer — the only grain with one answer on a brand selling several.
+      offerId: campaigns.offerId,
     });
 
   if (dueCampaigns.length === 0) return 0;

@@ -11,7 +11,11 @@ import {
 import { fetchFeatureSalesFunnels } from "./feature-sales-funnels-client.js";
 import { fetchActiveWorkflowSlugForFeature } from "./feature-workflow-client.js";
 import type { SalesFunnelKey } from "./sales-funnel-vocabulary.js";
-import { fetchDeclaredSalesFunnels, type DeclaredSalesFunnel } from "./brand-sales-funnels-client.js";
+import {
+  fetchBrandSalesFunnels,
+  fetchOfferSalesFunnels,
+  type SalesFunnelsRead,
+} from "./brand-sales-funnels-client.js";
 import { isSalesOutreachFeature, SALES_OUTREACH_FEATURE_SLUGS } from "./sales-outreach-campaign.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { campaignIdentityColumns } from "./campaign-identity.js";
@@ -52,6 +56,12 @@ export interface ClaimedFunnelCampaign {
   funnelKey: string | null;
   /** The mirror of this campaign's funnel ceiling. Stated → it IS the ceiling this campaign runs on. */
   dailyBudgetCents: number | null;
+  /**
+   * The offer this campaign sells — brand-service's id, carried and never derived. It is what
+   * makes "which funnels are sold here?" a question with ONE answer on a brand selling several
+   * offers. NULL is the pre-offer population and keeps the brand-keyed read it has always had.
+   */
+  offerId?: string | null;
 }
 
 /** One funnel campaign in the running to take the brand's next turn. */
@@ -186,7 +196,9 @@ async function planOneBrand(
 
   const funded = fundedPairs(budgets, featureSlug);
   if (funded.length > 0) {
-    const declared = await fetchDeclaredSalesFunnels(brandId, identity);
+    // Asked over the WHOLE group, not just the seed: a brand selling several offers has one
+    // campaign per offer in flight, and each is ranked on the funnels of the offer IT sells.
+    const declared = await resolveDeclaredFunnels(group, brandId, identity);
     await ensureFundedFunnelCampaigns({ seed, brandId, funded, declared, identity, now });
   }
 
@@ -272,6 +284,98 @@ function fundedPairs(
 }
 
 /**
+ * Which funnels are sold through this brand, and — for each of them — WHICH OFFER declares it.
+ *
+ * "The funnels of brand X" stopped having one answer the day a brand could sell several offers:
+ * each offer owns its own funnels and its own economics, and brand-service refuses a brand-keyed
+ * read on a brand holding more than one rather than picking one. A campaign already states the
+ * offer it sells, so the unambiguous question is asked per OFFER and the answers are unioned here.
+ */
+export interface ResolvedDeclaredFunnels {
+  /**
+   * funnelKey → the offer that declares it. NULL means it came from the BRAND-keyed read, i.e.
+   * from a campaign that states no offer — the pre-offer world, unchanged.
+   */
+  offerByFunnel: Map<SalesFunnelKey, string | null>;
+  /**
+   * Declared by SEVERAL offers of this brand. There is no single offer to file a new campaign
+   * under, and picking one would rank it on another product's economics — so nothing is
+   * provisioned for it and it is said out loud.
+   */
+  contested: Set<SalesFunnelKey>;
+}
+
+const NO_DECLARED_FUNNELS: ResolvedDeclaredFunnels = {
+  offerByFunnel: new Map(),
+  contested: new Set(),
+};
+
+/**
+ * Ask for the declared funnels at the grain that HAS one answer: once per distinct offer the
+ * brand's campaigns state, plus the brand-keyed read only when a campaign states no offer.
+ *
+ * A failure is never laundered into "the brand declares nothing" — that collapse is exactly what
+ * made the offer level silent. An ambiguity refusal says the grain was wrong (loudly, because it
+ * is this service's own question that was unanswerable), a transport failure says nothing is known
+ * this tick, and an EMPTY list is a truthful answer that is not logged at all: it is the routine
+ * state of a brand that has never declared a funnel, on every sweep of every client.
+ */
+async function resolveDeclaredFunnels(
+  group: Array<{ offerId?: string | null }>,
+  brandId: string,
+  identity: IdentityHeaders,
+): Promise<ResolvedDeclaredFunnels> {
+  const offerIds = [...new Set(group.map((c) => c.offerId).filter((id): id is string => !!id))];
+  const anyOfferless = group.some((c) => !c.offerId);
+
+  const offerByFunnel = new Map<SalesFunnelKey, string | null>();
+  const contested = new Set<SalesFunnelKey>();
+
+  const note = (read: SalesFunnelsRead, what: string): void => {
+    if (read.ok) return;
+    if (read.reason === "ambiguous") {
+      console.warn(
+        `[campaign-service] brand-service will not state the sales funnels of ${what} (brand ${brandId}) — ${read.detail}. Nothing is provisioned from it; this is a REFUSAL, not an empty declaration.`,
+      );
+      return;
+    }
+    console.warn(
+      `[campaign-service] Could not read the sales funnels of ${what} (brand ${brandId}) — ${read.detail} (${read.reason})`,
+    );
+  };
+
+  for (const offerId of offerIds) {
+    const read = await fetchOfferSalesFunnels(offerId, identity);
+    note(read, `offer ${offerId}`);
+    if (!read.ok) continue;
+    for (const f of read.funnels) {
+      const seen = offerByFunnel.get(f.funnelKey);
+      if (seen !== undefined && seen !== null && seen !== offerId) {
+        // Two offers of one brand sell through the same chain. Both are equals and neither
+        // outranks the other, so there is nobody to attribute a new campaign to.
+        contested.add(f.funnelKey);
+        continue;
+      }
+      offerByFunnel.set(f.funnelKey, offerId);
+    }
+  }
+
+  if (offerIds.length === 0 || anyOfferless) {
+    const read = await fetchBrandSalesFunnels(brandId, identity);
+    note(read, `brand ${brandId}`);
+    if (read.ok) {
+      for (const f of read.funnels) {
+        // An offer's own statement is the finer one and wins; the brand-keyed answer only fills
+        // what no offer named, which is the whole pre-offer population.
+        if (!offerByFunnel.has(f.funnelKey)) offerByFunnel.set(f.funnelKey, null);
+      }
+    }
+  }
+
+  return { offerByFunnel, contested };
+}
+
+/**
  * Make sure every funded (funnel, channel) pair of the brand HAS a campaign.
  *
  * The campaign STATES its funnel, and that statement is the whole vocabulary for what it sells.
@@ -309,22 +413,31 @@ async function ensureFundedFunnelCampaigns({
   seed: ClaimedFunnelCampaign;
   brandId: string;
   funded: FundedPair[];
-  declared: DeclaredSalesFunnel[] | null;
+  declared: ResolvedDeclaredFunnels;
   identity: IdentityHeaders;
   now: Date;
 }): Promise<void> {
   // No readable funnel declaration → nothing says the brand still sells through these funnels.
   // Provisioning waits; whatever campaigns already exist keep running.
-  if (!declared || declared.length === 0) return;
+  if (declared.offerByFunnel.size === 0) return;
   if (!seed.createdByUserId) return; // no recipient/owner to attribute a new campaign to
 
-  const declaredKeys = new Set(declared.map((f) => f.funnelKey));
   // One read per CHANNEL, not per pair: a brand funding both of a channel's funnels asks once.
   const sellableByFeature = new Map<string, Set<SalesFunnelKey> | null>();
   const workflowByFeature = new Map<string, string | null>();
 
   for (const f of funded) {
-    if (!declaredKeys.has(f.funnelKey)) continue;
+    if (declared.contested.has(f.funnelKey)) {
+      // Several offers of this brand sell through this chain. Provisioning one campaign would file
+      // it under one of them, i.e. rank it on another product's economics — so it waits for a
+      // caller that states which offer it means, and it is not silent about waiting.
+      console.warn(
+        `[campaign-service] Not provisioning funnel ${f.funnelKey} for brand ${brandId} — several offers of this brand declare it and none outranks another`,
+      );
+      continue;
+    }
+    const offerId = declared.offerByFunnel.get(f.funnelKey);
+    if (offerId === undefined) continue; // funded, but nobody declares selling through it
     const featureSlug = f.featureSlug;
 
     if (!sellableByFeature.has(featureSlug)) {
@@ -416,6 +529,9 @@ async function ensureFundedFunnelCampaigns({
         // NOT written any more: it could not tell the two meeting funnels apart, and a consumer
         // reading it reads a poorer statement of the same thing.
         funnelKey: f.funnelKey,
+        // The offer whose declaration is what put this funnel in scope. Carried, never derived:
+        // NULL when the funnel came from the brand-keyed read, which is the pre-offer world.
+        offerId: offerId ?? null,
         featureInputs: null,
         status: "ongoing",
         nextRunAt: now,
@@ -489,10 +605,11 @@ export async function provisionFundedFunnelsForIdleBrands(now: Date = new Date()
     feature_slug: string;
     workflow_slug: string;
     created_by_user_id: string;
+    offer_id: string | null;
   }>(sql`
     SELECT DISTINCT ON (c.org_id, coalesce(c.brand_id, c.brand_ids[1]))
            c.id, c.org_id, coalesce(c.brand_id, c.brand_ids[1]) AS brand_id,
-           c.feature_slug, c.workflow_slug, c.created_by_user_id
+           c.feature_slug, c.workflow_slug, c.created_by_user_id, c.offer_id
     FROM campaigns c
     WHERE c.feature_slug IN (${sql.join(slugs.map((s) => sql`${s}`), sql`, `)})
       AND coalesce(c.brand_id, c.brand_ids[1]) IS NOT NULL
@@ -515,6 +632,7 @@ export async function provisionFundedFunnelsForIdleBrands(now: Date = new Date()
     feature_slug: string;
     workflow_slug: string;
     created_by_user_id: string;
+    offer_id: string | null;
   }>);
   const examined = rows.slice(0, FUNDING_SWEEP_MAX_BRANDS);
   if (rows.length > FUNDING_SWEEP_MAX_BRANDS) {
@@ -542,7 +660,11 @@ export async function provisionFundedFunnelsForIdleBrands(now: Date = new Date()
       // the brand having no ongoing campaign.
       if (funded.length === 0) continue;
 
-      const declared = await fetchDeclaredSalesFunnels(row.brand_id, identity);
+      const declared = await resolveDeclaredFunnels(
+        [{ offerId: row.offer_id }],
+        row.brand_id,
+        identity,
+      );
       const before = await countOngoingSalesCampaigns(row.org_id, row.brand_id);
       await ensureFundedFunnelCampaigns({
         seed: {
@@ -554,6 +676,7 @@ export async function provisionFundedFunnelsForIdleBrands(now: Date = new Date()
           featureSlug: row.feature_slug,
           funnelKey: null,
           dailyBudgetCents: null,
+          offerId: row.offer_id,
         },
         brandId: row.brand_id,
         funded,
