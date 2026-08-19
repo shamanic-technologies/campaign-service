@@ -25,64 +25,172 @@ export interface DeclaredSalesFunnel {
 }
 
 /**
- * Read the funnels a brand has declared it sells through.
+ * The answer to "which funnels are sold through here?", with the three outcomes kept apart.
  *
- * Contract (brand-service): GET /internal/brands/{brandId}/sales-funnels (x-api-key [+ x-org-id])
- *   -> { funnels: [{ funnelKey, active, name, steps, rates, ... }] }
+ * They used to be one `null`, and that is what made the offer level dangerous: brand-service
+ * REFUSES a brand-keyed read on a brand holding several offers rather than guessing which one the
+ * caller meant, and a refusal collapsed onto `null` is indistinguishable from the service being
+ * unreachable and from the org having declared nothing at all. The consequence was silent — the
+ * day a customer creates their second offer, the brand simply looks like it declares no funnels
+ * and its campaigns stop being provisioned, with nothing logged about an offer anywhere.
  *
- * Returns null when the set could not be read (missing config, network error, non-2xx,
- * unparseable payload). Callers treat that as "no funnel information this tick" and leave the
- * brand exactly as it is — provisioning a campaign is not worth guessing a funnel for.
- *
- * An EMPTY list is a real answer, not a failure: the org has declared nothing yet. Per
- * brand-service's own contract we never substitute a plausible set for it.
- *
- * Only ACTIVE funnels are returned to the caller — a funnel the org switched off must never be
- * worked, whatever billing still holds a ceiling for.
+ *  - `ok` + funnels — a truthful answer. An EMPTY list is one of them: the org has declared
+ *    nothing yet, and per brand-service's own contract we never substitute a plausible set for it.
+ *  - `ambiguous` — brand-service will not answer at this grain because the key names more than one
+ *    configuration (several offers on the brand, or several orgs claiming it). This service asked
+ *    the wrong question; it is never treated as an empty set, and it is LOUD.
+ *  - `unavailable` — missing config, transport failure, non-2xx, unparseable payload. Nothing is
+ *    known this tick.
+ *  - `unknown_offer` — the offer id names nothing brand-service holds (404 on the offer read).
+ *    Distinct from `unavailable` because it does not fix itself by retrying.
  */
-export async function fetchDeclaredSalesFunnels(
-  brandId: string,
-  identity: IdentityHeaders,
-): Promise<DeclaredSalesFunnel[] | null> {
-  const url = process.env.BRAND_SERVICE_URL;
-  const apiKey = process.env.BRAND_SERVICE_API_KEY;
-  if (!url || !apiKey) return null;
+export type SalesFunnelsRead =
+  | { ok: true; funnels: DeclaredSalesFunnel[] }
+  | { ok: false; reason: "ambiguous" | "unavailable" | "unknown_offer"; detail: string };
 
+/**
+ * The refusal codes that mean "your key names more than one configuration, so there is no single
+ * answer" — whatever status brand-service dresses them in. Status 409 alone is enough; these are
+ * matched as well because a refusal must never be read as an empty set if it arrives as a 400.
+ */
+const AMBIGUITY_CODES = new Set([
+  "OFFER_REQUIRED",
+  "MULTIPLE_OFFERS",
+  "AMBIGUOUS_OFFER",
+  "ORG_REQUIRED",
+]);
+
+function headersFor(identity: IdentityHeaders, apiKey: string, brandId?: string): Record<string, string> {
   const headers: Record<string, string> = {
     "x-api-key": apiKey,
     // Per-brand configuration belongs to the (org, brand) pair — name the org rather than let
-    // brand-service pick one for a brand several orgs claim.
+    // brand-service pick one for a brand several orgs claim. An offer belongs to that same pair,
+    // so the org is named on the offer read too.
     "x-org-id": identity.orgId,
-    "x-brand-id": brandId,
   };
+  if (brandId) headers["x-brand-id"] = brandId;
   if (identity.userId) headers["x-user-id"] = identity.userId;
   if (identity.runId) headers["x-run-id"] = identity.runId;
   if (identity.campaignId) headers["x-campaign-id"] = identity.campaignId;
   if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
+  return headers;
+}
 
-  try {
-    const res = await fetch(
-      `${url.replace(/\/$/, "")}/internal/brands/${encodeURIComponent(brandId)}/sales-funnels`,
-      { headers },
-    );
-    if (!res.ok) return null;
+/** Only ACTIVE funnels reach a caller — a funnel the org switched off must never be worked. */
+function parseFunnels(data: unknown): DeclaredSalesFunnel[] | null {
+  const payload = data as { funnels?: Array<{ funnelKey?: string; active?: boolean }> };
+  if (!Array.isArray(payload?.funnels)) return null;
 
-    const data = await res.json() as {
-      funnels?: Array<{ funnelKey?: string; active?: boolean }>;
-    };
-    if (!Array.isArray(data.funnels)) return null;
-
-    const funnels: DeclaredSalesFunnel[] = [];
-    for (const raw of data.funnels) {
-      // Any spelling in, one canonical token out. A key neither catalogue names is skipped
-      // rather than worked: this service can only run a funnel it has a name for.
-      const funnelKey = toFunnelKey(raw?.funnelKey);
-      if (!funnelKey) continue;
-      if (raw.active === false) continue;
-      funnels.push({ funnelKey, active: true });
-    }
-    return funnels;
-  } catch {
-    return null;
+  const funnels: DeclaredSalesFunnel[] = [];
+  for (const raw of payload.funnels) {
+    // Any spelling in, one canonical token out. A key neither catalogue names is skipped rather
+    // than worked: this service can only run a funnel it has a name for.
+    const funnelKey = toFunnelKey(raw?.funnelKey);
+    if (!funnelKey) continue;
+    if (raw.active === false) continue;
+    funnels.push({ funnelKey, active: true });
   }
+  return funnels;
+}
+
+async function readSalesFunnels(
+  path: string,
+  headers: Record<string, string>,
+  baseUrl: string,
+  what: string,
+  // What a 404 means at this grain: an offer id that names nothing is a caller error that retrying
+  // never fixes; a brand-keyed 404 is just "nothing known this tick".
+  notFound: "unknown_offer" | "unavailable",
+): Promise<SalesFunnelsRead> {
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { headers });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      let code: string | undefined;
+      try {
+        const parsed = JSON.parse(body) as { code?: string; error?: { code?: string } };
+        code = parsed?.code ?? parsed?.error?.code;
+      } catch {
+        code = undefined;
+      }
+      if (res.status === 409 || (code && AMBIGUITY_CODES.has(code))) {
+        return {
+          ok: false,
+          reason: "ambiguous",
+          detail: `${what}: brand-service refuses this grain (${res.status}${code ? ` ${code}` : ""})`,
+        };
+      }
+      if (res.status === 404) {
+        return { ok: false, reason: notFound, detail: `${what}: 404` };
+      }
+      return { ok: false, reason: "unavailable", detail: `${what}: HTTP ${res.status}` };
+    }
+
+    const funnels = parseFunnels(await res.json());
+    if (!funnels) return { ok: false, reason: "unavailable", detail: `${what}: unparseable payload` };
+    return { ok: true, funnels };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: "unavailable", detail: `${what}: ${message}` };
+  }
+}
+
+/**
+ * Read the funnels ONE OFFER is sold through — the grain that has exactly one answer.
+ *
+ * Contract (brand-service): GET /internal/offers/{offerId}/sales-funnels (x-api-key)
+ *   -> { funnels: [{ funnelKey, active, name, steps, rates, ... }] }
+ *
+ * A campaign already states the offer it sells, so this is the question this service can always
+ * ask unambiguously: a brand selling ten offers has ten answers here and no ambiguity in any of
+ * them. A 404 is a caller error (an id that names nothing), NOT an unconfigured brand.
+ */
+export async function fetchOfferSalesFunnels(
+  offerId: string,
+  identity: IdentityHeaders,
+): Promise<SalesFunnelsRead> {
+  const url = process.env.BRAND_SERVICE_URL;
+  const apiKey = process.env.BRAND_SERVICE_API_KEY;
+  if (!url || !apiKey) {
+    return { ok: false, reason: "unavailable", detail: "brand-service not configured" };
+  }
+
+  return readSalesFunnels(
+    `/internal/offers/${encodeURIComponent(offerId)}/sales-funnels`,
+    headersFor(identity, apiKey),
+    url,
+    `offer ${offerId}`,
+    "unknown_offer",
+  );
+}
+
+/**
+ * Read the funnels a BRAND has declared it sells through — the pre-offer grain.
+ *
+ * Contract (brand-service): GET /internal/brands/{brandId}/sales-funnels (x-api-key [+ x-org-id])
+ *   -> { funnels: [...] }
+ *
+ * Kept for the one population it still answers for: a campaign that states NO offer, which
+ * behaves exactly as it did before offers existed. On a brand holding several offers this read is
+ * REFUSED (`ambiguous`) — that refusal is the whole reason the offer-grain read above exists, and
+ * it must never be laundered into an empty set here.
+ */
+export async function fetchBrandSalesFunnels(
+  brandId: string,
+  identity: IdentityHeaders,
+): Promise<SalesFunnelsRead> {
+  const url = process.env.BRAND_SERVICE_URL;
+  const apiKey = process.env.BRAND_SERVICE_API_KEY;
+  if (!url || !apiKey) {
+    return { ok: false, reason: "unavailable", detail: "brand-service not configured" };
+  }
+
+  return readSalesFunnels(
+    `/internal/brands/${encodeURIComponent(brandId)}/sales-funnels`,
+    headersFor(identity, apiKey, brandId),
+    url,
+    `brand ${brandId}`,
+    "unavailable",
+  );
 }
