@@ -379,8 +379,11 @@ attribution and on the customer's screen.
 - **It is NOT part of the identity key.** `uniq_campaigns_org_brand_funnel_channel` is untouched:
   widening it while the field is optional would let one brand grow unlimited offer-less campaigns on
   one (funnel, channel). Widening it is the same later wave that makes the field required.
-- **Nothing reads it** — no pacing, funding, selection, gate or provisioning decision. It is stored
-  and served, and `idx_campaigns_org_offer` serves the per-offer attribution read it exists for.
+- **It decides no MONEY question** — no pacing, funding, gate or ranking decision reads it, and
+  `idx_campaigns_org_offer` serves the per-offer attribution read it exists for. Since 2026-08-19 it
+  decides exactly ONE thing: WHICH QUESTION this service asks brand-service about the funnels sold
+  here (next section). That is a grain, not a lever — no campaign runs, stops, or spends differently
+  because of the value.
 - **AN OFFER BELONGS TO THE (ORG, BRAND) PAIR, NOT TO THE BRAND** — the same rule as every other
   per-brand configuration this service reads. brand-service's `brand_offers` is keyed on
   `(org_id, brand_id, name)`, so a brand claimed by ten orgs carries TEN offers, one per claiming
@@ -412,6 +415,43 @@ attribution and on the customer's screen.
   and a pair with no single offer. Only the SECOND exits non-zero: a campaign that names no single
   brand is the permanent honest answer and never changes, so failing the run on it would make this
   job red forever and teach everyone to ignore its exit code.
+
+## "Which funnels are sold here?" is asked of the OFFER — the only grain with ONE answer
+
+An offer owns its own value proposition AND its own declared sales funnels with their own
+economics, so "the funnels of brand X" stopped having one answer the day a brand could sell
+several. brand-service says so itself: it REFUSES a brand-keyed
+`GET /internal/brands/:id/sales-funnels` on a brand holding more than one offer rather than guessing
+which one the caller meant. A campaign already STATES the offer it sells, so the unambiguous
+question is `GET /internal/offers/:offerId/sales-funnels` — keyed on the offer alone, one answer per
+offer, ten answers on the brand ten orgs claim.
+
+- **Three outcomes, never one `null`.** `SalesFunnelsRead`
+  (`src/lib/brand-sales-funnels-client.ts`) is `{ok, funnels}` | `{ok:false, reason:
+  "ambiguous" | "unavailable" | "unknown_offer"}`. Collapsing them is what made the offer level
+  SILENT rather than merely broken: any non-2xx read as "declares nothing", so the day a customer
+  creates their second offer the brand's campaigns simply stop being provisioned, with nothing
+  crashing and nothing logged about an offer anywhere. An EMPTY list stays a truthful answer and is
+  NOT logged (it is the routine state of a brand that has declared nothing); a REFUSAL warns that it
+  is a refusal, in those words. `tests/unit/no-legacy.test.ts` fails on a nullable return here.
+- **`ambiguous` is matched on the STATUS and on the CODE.** 409 is enough on its own, and
+  `OFFER_REQUIRED` / `MULTIPLE_OFFERS` / `AMBIGUOUS_OFFER` / `ORG_REQUIRED` are matched whatever
+  status they arrive dressed in — a refusal read as an empty set is the whole failure mode, so it
+  must not depend on brand-service keeping one status forever.
+- **Asked over the WHOLE claimed group, once per distinct offer.** `resolveDeclaredFunnels`
+  (`funnel-campaigns.ts`) reads one offer at a time and unions the answers, keeping which offer
+  declared each funnel. The brand-keyed read is made ONLY when a campaign of the group states no
+  offer — so a campaign that states none behaves exactly as it did before offers existed, and a
+  brand whose campaigns all state one never makes the read that would be refused.
+- **A funnel SEVERAL offers of one brand declare is provisioned for NEITHER, loudly.** They are
+  equals and none outranks another, so there is no offer to file a new campaign under; picking one
+  would rank it on another product's economics. It waits for a caller that says which offer it
+  means. Same rule, same reason, as never resolving a brand to one of its offers.
+- **A campaign provisioned from an offer's declaration CARRIES that offer** (`offerId` on the
+  insert). Still carried, never derived: the value comes from the campaign whose declaration put the
+  funnel in scope, not from the funnel, the goal or the workflow.
+- The idle-brand funding sweep asks the same way, off its seed row's `offer_id`.
+(Set 2026-08-19.)
 
 ## Nothing can be unattributable — so nothing holds a brand's provisioning back
 

@@ -71,6 +71,57 @@ describe('No Legacy Patterns - CRITICAL', () => {
     expect(code).not.toMatch(/\bcurrentGoal\b/);
   });
 
+  it('should NOT collapse a sales-funnels refusal back onto a nullable answer', () => {
+    // The three outcomes — a truthful answer (possibly EMPTY), a refusal to answer at this grain,
+    // and a transport failure — were one `null`, and that is what made the offer level silent: the
+    // day a customer creates their second offer, brand-service refuses the brand-keyed read and the
+    // brand simply looks like it declares no funnels. Returning a nullable array again reinstates
+    // exactly that. The client returns a discriminated `SalesFunnelsRead` and nothing else.
+    const client = fs.readFileSync(
+      path.join(srcDir, 'lib/brand-sales-funnels-client.ts'),
+      'utf-8',
+    );
+    const code = client
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('*') && !l.trimStart().startsWith('/*') && !l.trimStart().startsWith('//'))
+      .join('\n');
+
+    expect(code).not.toMatch(/fetchDeclaredSalesFunnels/);
+    expect(code).not.toMatch(/Promise<DeclaredSalesFunnel\[\] \| null>/);
+    for (const fn of ['fetchOfferSalesFunnels', 'fetchBrandSalesFunnels']) {
+      expect(code).toMatch(new RegExp(`${fn}[\\s\\S]{0,400}?Promise<SalesFunnelsRead>`));
+    }
+  });
+
+  it('should NOT resolve a brand to ONE of its offers', () => {
+    // Several offers of one brand are equals and none outranks another. Picking one would rank a
+    // campaign on another product's economics and, across orgs, file one org's configuration onto
+    // another org's campaign — inside the very per-offer grouping the column exists to make
+    // correct. A campaign STATES its offer, or it has none.
+    const files = getAllTsFiles(srcDir);
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const file of files) {
+      const content = fs.readFileSync(file, 'utf-8');
+      content.split('\n').forEach((line, index) => {
+        const code = line.trimStart();
+        if (code.startsWith('*') || code.startsWith('/*') || code.startsWith('//')) return;
+        if (/offerForBrand|resolveOfferForBrand|primaryOffer|defaultOffer|firstOffer/.test(line)) {
+          violations.push({
+            file: path.relative(srcDir, file),
+            line: index + 1,
+            code: line.trim().substring(0, 80),
+          });
+        }
+      });
+    }
+
+    expect(
+      violations,
+      `A brand is never resolved to one of its offers:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`
+    ).toHaveLength(0);
+  });
+
   it('should NOT translate between a goal and a funnel anywhere in src', () => {
     // The goal was the poorer word (both meeting funnels collapse onto one `meetingBooked`) and it
     // was wrong at the source (brand-service's column carried a NOT NULL default). Both directions
