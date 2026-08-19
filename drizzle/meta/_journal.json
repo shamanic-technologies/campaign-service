@@ -351,6 +351,13 @@
       "when": 1777400000000,
       "tag": "0049_drop_brand_pause",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1777500000000,
+      "tag": "0050_campaign_offer_id",
+      "breakpoints": true
     }
   ]
 }

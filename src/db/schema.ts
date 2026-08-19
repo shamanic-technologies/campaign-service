@@ -123,6 +123,28 @@ export const campaigns = pgTable(
     // resolves the pre-rename spellings, because billing-service emits them to this day.
     funnelKey: text("funnel_key"),
 
+    // The OFFER this campaign sells — a brand-service offer UUID.
+    //
+    // An offer is one distinct thing a brand sells: its value proposition plus the sales funnels
+    // it sells through. A brand selling a $200 self-serve plan and a $20k enterprise contract has
+    // two offers, and without this column its two campaigns — same funnel, same channel — are the
+    // same row to every reader, in the data, in the money attribution and on the customer's
+    // screen. It is the dimension that separates them.
+    //
+    // brand-service OWNS the entity; this column carries its id and nothing else. No offer
+    // vocabulary, table or enum exists here and none is to be introduced — the same posture this
+    // service holds for the goal and the acquisition channel.
+    //
+    // NEVER derived. A funnel does not name an offer (several offers legitimately sell through
+    // one funnel, which is the entire reason this dimension exists), and neither does the goal or
+    // the workflow. It is stated by the creator or it is NULL.
+    //
+    // NULL = the campaign states no offer, and behaves exactly as it did before this column
+    // existed: nothing reads it for pacing, funding, selection or identity. Stating an offer is
+    // optional on create while callers migrate; it becomes required in a later wave, and only
+    // then, because requiring it now would break every live caller.
+    offerId: text("offer_id"),
+
     // Volume limit (optional, total leads across all runs)
     maxLeads: integer("max_leads"),
 
@@ -161,6 +183,11 @@ export const campaigns = pgTable(
     index("idx_campaigns_org").on(table.orgId),
     uniqueIndex("uniq_campaigns_org_name").on(table.orgId, table.name),
     index("idx_campaigns_org_feature_funnel").on(table.orgId, table.featureSlug, table.funnelKey),
+    // Serves "what did this offer buy" — the per-offer attribution read the column exists for.
+    // Partial: a campaign that states no offer is not part of any offer's answer.
+    index("idx_campaigns_org_offer")
+      .on(table.orgId, table.offerId)
+      .where(sql`${table.offerId} is not null`),
     // Serves the resume sweep's only read — the stopped campaigns that ran out of people to
     // contact. Partial so it covers that narrow population and not the whole stopped history.
     index("idx_campaigns_resumable")
