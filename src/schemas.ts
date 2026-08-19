@@ -58,6 +58,14 @@ export const CampaignSchema = z.object({
   // unless billing holds no per-funnel ceilings for the brand at all, in which case the brand has
   // one pot and the campaign paces on the brand daily budget exactly as it always has.
   funnelKey: z.string().nullable(),
+  // The OFFER this campaign sells — a brand-service offer UUID. An offer is one distinct thing a
+  // brand sells, so a campaign is (offer x sales funnel x acquisition channel) and this is the
+  // word that separates two campaigns a brand runs on one funnel through one channel for two
+  // different offers. Never derived from the funnel, the goal or the workflow — several offers
+  // sell through one funnel, which is why the dimension exists. Null = the campaign states no
+  // offer, which is every campaign created before it could be stated and every caller that has
+  // not migrated yet; nothing reads it for pacing, funding, selection or identity.
+  offerId: z.string().nullable(),
   maxLeads: z.number().int().nullable(),
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),
@@ -94,6 +102,16 @@ export const CreateCampaignBody = z.object({
   // (reply_meeting | visit_meeting | visit_signup | visit_form), stored canonical. Nothing is ever
   // inferred: a creator provisions per funded funnel, so it already knows the answer.
   funnelKey: z.string().min(1).optional(),
+  // The OFFER this campaign sells — a brand-service offer UUID.
+  //
+  // OPTIONAL, on purpose and for now: making it required is a breaking request-contract change,
+  // so callers state it as they migrate and a create without one behaves exactly as it did
+  // before the field existed. It becomes required in a later wave, once they have.
+  //
+  // Nothing is ever inferred when it is absent — not from the funnel (several offers sell through
+  // one funnel), not from the goal, not from the workflow. Absent means the campaign states no
+  // offer, and that is stored as NULL.
+  offerId: z.string().uuid("offerId must be a valid UUID").nullable().optional(),
   // Per-campaign OWN config (Campaign v2). Omit / null = inherit the brand. audienceIds is the
   // targeted SUBSET (one or more) of the brand's audiences; an empty array is rejected — use
   // null to clear back to inherit.
@@ -140,6 +158,10 @@ export const UpdateCampaignBody = z.object({
   activeGoalId: z.string().min(1).nullable().optional(),
   brandProfileId: z.string().min(1).nullable().optional(),
   audienceId: z.string().min(1).nullable().optional(),
+  // State (or clear) the OFFER this campaign sells — a brand-service offer UUID. Omit and it is
+  // untouched; null clears it back to "states no offer". This is how a caller that created a
+  // campaign before it could state an offer says which one it runs, without a second campaign.
+  offerId: z.string().uuid("offerId must be a valid UUID").nullable().optional(),
   // Set / clear this campaign's OWN config (Campaign v2). null clears a field → inherit the
   // brand. Updating these never touches the brand or any sibling campaign. audienceIds must be
   // non-empty when present; use null to clear back to inherit. `goal` is deliberately absent: it

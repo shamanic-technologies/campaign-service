@@ -123,6 +123,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       brandProfileId,
       audienceId,
       funnelKey: bodyFunnelKey,
+      offerId,
       audienceIds,
       servicesOffered,
       clickDestinationUrl,
@@ -225,6 +226,10 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           ...(activeGoalId !== undefined ? { activeGoalId } : {}),
           ...(brandProfileId !== undefined ? { brandProfileId } : {}),
           ...(audienceId !== undefined ? { audienceId } : {}),
+          // An incumbent campaign learns which offer it sells from a caller that now states one.
+          // Only when the caller actually sent it: a create that says nothing about the offer
+          // must not blank the one already on the row.
+          ...(offerId !== undefined ? { offerId } : {}),
           ...(audienceIds !== undefined ? { audienceIds } : {}),
           ...(servicesOffered !== undefined ? { servicesOffered } : {}),
           ...(clickDestinationUrl !== undefined ? { clickDestinationUrl } : {}),
@@ -287,6 +292,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         brandProfileId: brandProfileId ?? null,
         audienceId: audienceId ?? null,
         funnelKey,
+        // The offer this campaign sells, as STATED by its creator. Absent → NULL; nothing is
+        // inferred from the funnel, the goal or the workflow.
+        offerId: offerId ?? null,
         audienceIds: audienceIds ?? null,
         servicesOffered: servicesOffered ?? null,
         clickDestinationUrl: clickDestinationUrl ?? null,

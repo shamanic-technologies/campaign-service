@@ -120,6 +120,10 @@
             "type": "string",
             "nullable": true
           },
+          "offerId": {
+            "type": "string",
+            "nullable": true
+          },
           "maxLeads": {
             "type": "integer",
             "nullable": true
@@ -185,6 +189,7 @@
           "maxBudgetTotalUsd",
           "dailyBudgetCents",
           "funnelKey",
+          "offerId",
           "maxLeads",
           "startDate",
           "endDate",
@@ -272,6 +277,11 @@
           "funnelKey": {
             "type": "string",
             "minLength": 1
+          },
+          "offerId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
           },
           "audienceIds": {
             "type": "array",
@@ -375,6 +385,11 @@
             "type": "string",
             "nullable": true,
             "minLength": 1
+          },
+          "offerId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
           },
           "audienceIds": {
             "type": "array",
