@@ -381,13 +381,37 @@ attribution and on the customer's screen.
   one (funnel, channel). Widening it is the same later wave that makes the field required.
 - **Nothing reads it** — no pacing, funding, selection, gate or provisioning decision. It is stored
   and served, and `idx_campaigns_org_offer` serves the per-offer attribution read it exists for.
+- **AN OFFER BELONGS TO THE (ORG, BRAND) PAIR, NOT TO THE BRAND** — the same rule as every other
+  per-brand configuration this service reads. brand-service's `brand_offers` is keyed on
+  `(org_id, brand_id, name)`, so a brand claimed by ten orgs carries TEN offers, one per claiming
+  org, frequently all named the same thing. "This brand has an offer" is therefore not a question
+  this service can act on: resolving a campaign's offer by brand alone would write ANOTHER org's
+  offer id onto this org's campaign, a cross-org attribution inside the very per-offer grouping the
+  column exists to make correct. `makeOfferResolver` names `x-org-id` for exactly that reason, and
+  it is load-bearing, not tracking.
+- **The 145 campaigns that state no offer in prod are not a backfill that missed them.** Re-run
+  2026-08-19 after brand-service finished creating its offers (last one 09:22Z): NOT ONE is
+  attributable. 38 name no brand at all. The other 107 name a brand that does have offers — but
+  their OWN org claims that brand in brand-service for none of them, and 143 of the 145 belong to
+  two orgs (`8c734aed`, `dff98ee0`) brand-service does not know at all: no claim, no offer, nobody
+  to ask. Every one of them is stopped, and no ongoing campaign is unattributed. So the offer grain
+  under-counting against the brand headline for those brands is a brand-service claim gap, not a
+  coverage gap here, and the honest answer stays NULL until their pair gets an offer.
 - **The backfill is a SCRIPT, not the migration** (`scripts/backfill-campaign-offer.ts`): resolving a
   campaign's brand to its offer is a brand-service READ and SQL cannot make one, so migration 0050
   adds the column and backfills nothing. The script resolves once per (org, brand) pair, writes only
   rows still NULL (so a re-run is a no-op and it can never overwrite an offer a live create just
-  stated), **dry-runs by default** (`--apply` writes), and LEAVES ALONE + reports any brand that does
+  stated), **dry-runs by default** (`--apply` writes), and LEAVES ALONE + reports any pair that does
   not resolve to exactly one offer. Nothing is guessed for those. The previous value is NULL by
   construction, so the undo is exactly the ids the run prints, which it emits as a statement.
+  It is **RE-RUNNABLE, not one-shot** — brand-service keeps creating offers, so a campaign
+  unattributable today becomes attributable the day its pair gets one, and the fix for that is to
+  run this again, never to widen what it is willing to guess. Two things it refuses to guess:
+  a campaign naming SEVERAL brands (the array fallback fires only when it names exactly one — a
+  bare `brand_ids[1]` reads a multi-brand campaign as a campaign of whichever brand sorted first),
+  and a pair with no single offer. Only the SECOND exits non-zero: a campaign that names no single
+  brand is the permanent honest answer and never changes, so failing the run on it would make this
+  job red forever and teach everyone to ignore its exit code.
 
 ## Nothing can be unattributable — so nothing holds a brand's provisioning back
 
