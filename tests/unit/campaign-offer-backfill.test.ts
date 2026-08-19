@@ -100,7 +100,7 @@ describe("backfillCampaignOffers", () => {
     const resolve = vi.fn(async (brandId: string) =>
       brandId === "brand-1"
         ? resolved("offer-a")
-        : ({ offerId: null, reason: "brand declares 2 active offers" } as OfferResolution),
+        : ({ offerId: null, reason: "brand declares 2 offers" } as OfferResolution),
     );
 
     const result = await backfillCampaignOffers(sql, resolve, { dryRun: false });
@@ -108,7 +108,7 @@ describe("backfillCampaignOffers", () => {
     expect(result.written).toBe(1);
     expect(updates).toEqual([{ offerId: "offer-a", campaignId: "c1" }]);
     expect(result.unresolved).toEqual([
-      { campaignId: "c2", orgId: "org-2", brandId: "brand-2", reason: "brand declares 2 active offers" },
+      { campaignId: "c2", orgId: "org-2", brandId: "brand-2", reason: "brand declares 2 offers" },
     ]);
   });
 
@@ -182,8 +182,19 @@ describe("makeOfferResolver", () => {
     return Promise.resolve({ ok, status, json: async () => body } as Response);
   }
 
-  it("resolves a brand declaring exactly one active offer, naming the org on the wire", async () => {
-    const spy = withFetch(() => jsonResponse({ offers: [{ id: "offer-a", active: true }] }));
+  // The fixtures below carry brand-service's REAL wire shape, read off its deployed
+  // route: { offers: [{ offerId, brandId, name, createdAt, updatedAt }] }. They used
+  // to carry a guessed one ({ id, active }), written before that route existed.
+  const wireOffer = (offerId: string, name: string) => ({
+    offerId,
+    brandId: "brand-1",
+    name,
+    createdAt: "2026-08-19T00:00:00.000Z",
+    updatedAt: "2026-08-19T00:00:00.000Z",
+  });
+
+  it("resolves a brand declaring exactly one offer, naming the org on the wire", async () => {
+    const spy = withFetch(() => jsonResponse({ offers: [wireOffer("offer-a", "Starter")] }));
 
     const result = await makeOfferResolver("https://brand.test.local", "key")("brand-1", "org-1");
 
@@ -196,22 +207,27 @@ describe("makeOfferResolver", () => {
   });
 
   it("refuses to pick when a brand declares several — no offer is invented", async () => {
-    const spy = withFetch(() => jsonResponse({ offers: [{ id: "offer-a" }, { id: "offer-b" }] }));
+    const spy = withFetch(() =>
+      jsonResponse({ offers: [wireOffer("offer-a", "Starter"), wireOffer("offer-b", "Enterprise")] }),
+    );
 
     const result = await makeOfferResolver("https://brand.test.local", "key")("brand-1", "org-1");
 
     expect(result.offerId).toBeNull();
-    expect(result.reason).toContain("2 active offers");
+    expect(result.reason).toContain("2 offers");
     spy.mockRestore();
   });
 
-  it("ignores an inactive offer — a brand's live offer is the one it still sells", async () => {
+  // An offer has no liveness flag: it is the FUNNELS under it that switch on and off.
+  // A resolver that filtered on one would do nothing today and silently drop offers the
+  // day brand-service adds an unrelated field by that name.
+  it("does not filter on a liveness flag an offer does not have", async () => {
     const spy = withFetch(() =>
-      jsonResponse({ offers: [{ id: "offer-a", active: false }, { id: "offer-b", active: true }] }),
+      jsonResponse({ offers: [{ ...wireOffer("offer-a", "Starter"), active: false }] }),
     );
 
     expect(await makeOfferResolver("https://brand.test.local", "key")("brand-1", "org-1")).toEqual({
-      offerId: "offer-b",
+      offerId: "offer-a",
     });
     spy.mockRestore();
   });
