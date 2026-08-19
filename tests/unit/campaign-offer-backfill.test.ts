@@ -31,8 +31,8 @@ function createMockSql(rows: Record<string, unknown>[]) {
   return { sql: fn as unknown as Parameters<typeof backfillCampaignOffers>[0], updates };
 }
 
-function row(id: string, orgId = "org-1", brandId: string | null = "brand-1") {
-  return { id, org_id: orgId, brand_id: brandId };
+function row(id: string, orgId = "org-1", brandId: string | null = "brand-1", brandCount = brandId ? 1 : 0) {
+  return { id, org_id: orgId, brand_id: brandId, brand_count: brandCount };
 }
 
 function resolved(offerId: string): OfferResolution {
@@ -108,7 +108,7 @@ describe("backfillCampaignOffers", () => {
     expect(result.written).toBe(1);
     expect(updates).toEqual([{ offerId: "offer-a", campaignId: "c1" }]);
     expect(result.unresolved).toEqual([
-      { campaignId: "c2", orgId: "org-2", brandId: "brand-2", reason: "brand declares 2 offers" },
+      { campaignId: "c2", orgId: "org-2", brandId: "brand-2", kind: "gap", reason: "brand declares 2 offers" },
     ]);
   });
 
@@ -121,8 +121,51 @@ describe("backfillCampaignOffers", () => {
     expect(resolve).not.toHaveBeenCalled();
     expect(updates).toEqual([]);
     expect(result.unresolved).toEqual([
-      { campaignId: "c1", orgId: "org-1", brandId: null, reason: "campaign states no brand" },
+      {
+        campaignId: "c1",
+        orgId: "org-1",
+        brandId: null,
+        kind: "unattributable",
+        reason: "campaign states no brand",
+      },
     ]);
+  });
+
+  // A campaign of several brands arrives with a NULL brand and a count > 1 (the SELECT refuses to
+  // hand back a first element). It must read as "names several", not as "names none": the two are
+  // different facts, and only the count can tell them apart once the id is gone.
+  it("never picks one of several brands, and says so", async () => {
+    const { sql, updates } = createMockSql([row("c1", "org-1", null, 3)]);
+    const resolve = vi.fn();
+
+    const result = await backfillCampaignOffers(sql, resolve, { dryRun: false });
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(updates).toEqual([]);
+    expect(result.unresolved).toEqual([
+      {
+        campaignId: "c1",
+        orgId: "org-1",
+        brandId: null,
+        kind: "unattributable",
+        reason: "campaign states 3 brands",
+      },
+    ]);
+  });
+
+  // The SELECT is what protects the several-brand case, so it is asserted on the wire: a bare
+  // `brand_ids[1]` would silently attribute a multi-brand campaign to whichever brand sorted first.
+  it("only falls back to the brand array when it names exactly one brand", async () => {
+    const seen: string[] = [];
+    const sql = (async (strings: TemplateStringsArray) => {
+      seen.push(strings.join("?"));
+      return [];
+    }) as unknown as Parameters<typeof backfillCampaignOffers>[0];
+
+    await backfillCampaignOffers(sql, async () => resolved("offer-a"), { dryRun: false });
+
+    expect(seen[0]).toMatch(/array_length\("brand_ids", 1\), 0\) = 1 THEN "brand_ids"\[1\]/);
+    expect(seen[0]).toMatch(/ELSE NULL/);
   });
 
   it("re-running changes nothing: it selects and writes only rows whose offer is still NULL", async () => {

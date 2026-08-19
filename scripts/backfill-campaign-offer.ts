@@ -1,15 +1,32 @@
 /**
- * One-shot backfill: every existing campaign states the OFFER it sells.
+ * Backfill: every campaign that CAN be attributed states the OFFER it sells.
  *
  * A campaign is (offer x sales funnel x acquisition channel). Migration 0050 adds `offer_id` and
  * backfills NOTHING, because resolving a campaign's brand to its offer is a brand-service READ and
  * SQL cannot make one. This script makes it.
  *
- * Every brand has exactly one offer at the moment this runs — brand-service ships that migration
- * in the same wave — so this is a RESOLUTION, not a guess. Where a brand does not resolve to
- * exactly one offer, the campaign is LEFT ALONE and REPORTED. Nothing is ever inferred from the
- * funnel, the goal or the workflow: several offers legitimately sell through one funnel, which is
- * the whole reason the dimension exists, so picking one would invent an attribution.
+ * NOT one-shot, and that is the whole point. brand-service keeps creating offers, so a campaign
+ * that was unattributable when this last ran becomes attributable the moment its (org, brand) pair
+ * gets one. Coverage is therefore a thing to RE-RUN, not a thing to have done once: it resolves
+ * against whatever brand-service answers TODAY, writes only the rows still missing an offer, and
+ * can be run again tomorrow to pick up whatever became attributable in between.
+ *
+ * AN OFFER BELONGS TO THE (ORG, BRAND) PAIR, NOT TO THE BRAND, and that is what the remaining
+ * production gap turns out to be. Re-run 2026-08-19 after brand-service finished creating its
+ * offers: 145 campaigns state none, and NOT ONE of them is attributable. 38 name no brand. The
+ * other 107 name a brand that does have offers — but one per CLAIMING ORG (brand
+ * `f4d73dab` carries ten, one for each of its ten claiming orgs), and the campaign's own org
+ * claims that brand in brand-service for none of the 107. 143 of them belong to two orgs
+ * (`8c734aed`, `dff98ee0`) that brand-service does not know at all: no claim, no offer.
+ * So "the brand has exactly one offer" is not the question this can act on. Reading the brand's
+ * offer without naming the org would attribute one org's campaign to ANOTHER org's offer — a
+ * cross-org write into the very per-offer grouping this column exists to make correct. The 107
+ * stay unattributed until their own pair gets an offer, and a re-run picks them up when it does.
+ *
+ * Where a pair does not resolve to exactly one offer, the campaign is LEFT ALONE and REPORTED.
+ * Nothing is ever inferred from the funnel, the goal or the workflow: several offers legitimately
+ * sell through one funnel, which is the whole reason the dimension exists, so picking one would
+ * invent an attribution.
  *
  * Idempotent: it only ever selects and writes rows whose `offer_id` is still NULL, and the UPDATE
  * re-states that guard, so a second run writes nothing and a run racing a live create cannot
@@ -39,10 +56,23 @@ export type OfferResolution =
   | { offerId: string; reason?: undefined }
   | { offerId: null; reason: string };
 
+/**
+ * Why a campaign was left alone, and whether that is an ANSWER or a GAP.
+ *
+ * - `unattributable` — the campaign names no brand, or names several. There is nobody to ask, and
+ *   guessing is the one thing this must never do. Absence IS the honest answer, permanently: it
+ *   does not become attributable later, so a re-run reporting these is a re-run that worked.
+ * - `gap` — the campaign names exactly one brand and that brand did not resolve to exactly one
+ *   offer (none yet, several, or brand-service could not be read). Somebody must answer this, and
+ *   a later re-run may well pick it up on its own.
+ */
+export type UnresolvedKind = "unattributable" | "gap";
+
 export interface UnresolvedCampaign {
   campaignId: string;
   orgId: string;
   brandId: string | null;
+  kind: UnresolvedKind;
   reason: string;
 }
 
@@ -122,14 +152,30 @@ export async function backfillCampaignOffers(
 ): Promise<BackfillResult> {
   const dryRun = options.dryRun !== false;
 
-  // `brand_id` is the stored half of the campaign identity (migration 0044); the historical
-  // multi-brand rows only carry the array, so fall back to its first element exactly as 0044 did.
+  // `brand_id` is the stored half of the campaign identity (migration 0044); the historical rows
+  // only carry the array, so fall back to it — but ONLY when it names exactly ONE brand. Taking
+  // `brand_ids[1]` unconditionally reads a campaign of several brands as a campaign of its first,
+  // which is exactly the guess this script exists not to make: the offer written would be one
+  // brand's answer standing in for a question nobody asked. `brand_count` is what tells the two
+  // apart downstream, so "names no brand" and "names several" are reported as the different facts
+  // they are rather than both collapsing to a silent NULL.
   const rows = (await querySql`
-    SELECT "id", "org_id", coalesce("brand_id", "brand_ids"[1]) AS "brand_id"
+    SELECT
+      "id",
+      "org_id",
+      CASE
+        WHEN "brand_id" IS NOT NULL THEN "brand_id"
+        WHEN coalesce(array_length("brand_ids", 1), 0) = 1 THEN "brand_ids"[1]
+        ELSE NULL
+      END AS "brand_id",
+      CASE
+        WHEN "brand_id" IS NOT NULL THEN 1
+        ELSE coalesce(array_length("brand_ids", 1), 0)
+      END AS "brand_count"
     FROM "campaigns"
     WHERE "offer_id" IS NULL
     ORDER BY "created_at"
-  `) as unknown as Array<{ id: string; org_id: string; brand_id: string | null }>;
+  `) as unknown as Array<{ id: string; org_id: string; brand_id: string | null; brand_count: number }>;
 
   console.log(`Found ${rows.length} campaign(s) with no offer stated`);
 
@@ -143,7 +189,11 @@ export async function backfillCampaignOffers(
         campaignId: row.id,
         orgId: row.org_id,
         brandId: null,
-        reason: "campaign states no brand",
+        kind: "unattributable",
+        reason:
+          Number(row.brand_count) > 1
+            ? `campaign states ${row.brand_count} brands`
+            : "campaign states no brand",
       });
       continue;
     }
@@ -160,6 +210,7 @@ export async function backfillCampaignOffers(
         campaignId: row.id,
         orgId: row.org_id,
         brandId: row.brand_id,
+        kind: "gap",
         reason: resolution.reason,
       });
       continue;
@@ -201,10 +252,33 @@ async function main() {
 
   console.log(`\n${result.written} campaign(s) ${dryRun ? "would be" : ""} written, ${result.unresolved.length} left alone`);
 
-  if (result.unresolved.length > 0) {
-    console.error("\nLEFT ALONE — their brand does not resolve to exactly one offer. No offer is invented for these:");
-    for (const u of result.unresolved) {
-      console.error(`  campaign ${u.campaignId} (org ${u.orgId}, brand ${u.brandId ?? "none"}): ${u.reason}`);
+  const unattributable = result.unresolved.filter((u) => u.kind === "unattributable");
+  const gaps = result.unresolved.filter((u) => u.kind === "gap");
+
+  if (unattributable.length > 0) {
+    // Not a failure and not a to-do: there is no brand to ask, so no offer can honestly be stated.
+    // Reported as a count rather than a list — it is the same permanent set on every re-run.
+    console.log(
+      `\n${unattributable.length} campaign(s) name no single brand, so nothing can be asked for them — they stay unattributed, correctly.`,
+    );
+  }
+
+  if (gaps.length > 0) {
+    // Grouped by (org, brand): the reason is a property of the PAIR, not of each campaign, so one
+    // line per campaign prints the same sentence a hundred times and buries how many distinct
+    // things are actually unanswered. Six pairs is a report somebody reads; 107 lines is not.
+    const byPair = new Map<string, { orgId: string; brandId: string; reason: string; campaigns: number }>();
+    for (const u of gaps) {
+      const key = `${u.orgId}::${u.brandId}`;
+      const entry = byPair.get(key);
+      if (entry) entry.campaigns++;
+      else byPair.set(key, { orgId: u.orgId, brandId: u.brandId!, reason: u.reason, campaigns: 1 });
+    }
+    console.error(
+      `\nLEFT ALONE — ${gaps.length} campaign(s) across ${byPair.size} (org, brand) pair(s) whose brand does not resolve to exactly one offer. No offer is invented for these:`,
+    );
+    for (const p of byPair.values()) {
+      console.error(`  org ${p.orgId}, brand ${p.brandId} (${p.campaigns} campaign(s)): ${p.reason}`);
     }
   }
 
@@ -215,9 +289,11 @@ async function main() {
 
   await sql.end();
 
-  // A campaign left alone is a real gap somebody must answer, so the run reports it as a failure
-  // — the writes that did land stay, and re-running after the gap is closed picks up only those.
-  if (result.unresolved.length > 0) process.exit(1);
+  // A GAP is a real thing somebody must answer, so the run reports it as a failure — the writes
+  // that did land stay, and re-running after the gap is closed picks up only those. A campaign
+  // that names no single brand is NOT a gap: it is the honest answer and it never changes, so
+  // failing on it would make this job red forever and teach everyone to ignore its exit code.
+  if (gaps.length > 0) process.exit(1);
 }
 
 // Only run main() when executed directly (not imported in tests)
