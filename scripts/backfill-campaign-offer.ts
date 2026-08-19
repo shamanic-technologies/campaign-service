@@ -59,14 +59,20 @@ export interface BackfillResult {
 /**
  * Read the offer a brand sells, for ONE org's view of it.
  *
- * Contract (brand-service): GET /internal/brands/{brandId}/offers (x-api-key + x-org-id)
- *   -> { offers: [{ id, active }] }
+ * Contract (brand-service, verified against the deployed route rather than assumed):
+ *   GET /internal/brands/{brandId}/offers  (x-api-key + x-org-id)
+ *   -> { offers: [{ offerId, brandId, name, createdAt, updatedAt }] }
  *
  * `x-org-id` is load-bearing, not tracking: a `brands` row is a shared global identity that
  * several orgs legitimately claim, and everything configured on top of it belongs to the (org,
  * brand) pair. Naming the org is what stops brand-service answering for somebody else's offer.
  *
- * An inactive offer is not an answer — a brand's live offer is the one it still sells.
+ * THERE IS NO `active` ON AN OFFER, and this used to filter on one. An offer is a proposition
+ * a brand states; it is the FUNNELS underneath it that are switched on and off, which is why
+ * brand-service's own funnel read is the one that says "active only". Filtering here on a field
+ * that is never sent read as a deliberate liveness check while doing nothing — the dangerous
+ * kind of dead code, because the day brand-service adds an unrelated `active` it would start
+ * silently dropping offers. An offer's existence IS the answer.
  */
 export function makeOfferResolver(baseUrl: string, apiKey: string) {
   return async function resolveBrandOffer(brandId: string, orgId: string): Promise<OfferResolution> {
@@ -81,7 +87,7 @@ export function makeOfferResolver(baseUrl: string, apiKey: string) {
       return { offerId: null, reason: `brand-service returned ${res.status}` };
     }
 
-    let data: { offers?: Array<{ id?: string; offerId?: string; active?: boolean }> };
+    let data: { offers?: Array<{ offerId?: string }> };
     try {
       data = (await res.json()) as typeof data;
     } catch {
@@ -92,14 +98,13 @@ export function makeOfferResolver(baseUrl: string, apiKey: string) {
     }
 
     const ids = data.offers
-      .filter((o) => o?.active !== false)
-      .map((o) => o?.id ?? o?.offerId)
+      .map((o) => o?.offerId)
       .filter((id): id is string => typeof id === "string" && id.length > 0);
 
     if (ids.length === 1) return { offerId: ids[0] };
     return {
       offerId: null,
-      reason: ids.length === 0 ? "brand declares no active offer" : `brand declares ${ids.length} active offers`,
+      reason: ids.length === 0 ? "brand declares no offer" : `brand declares ${ids.length} offers`,
     };
   };
 }
