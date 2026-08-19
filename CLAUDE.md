@@ -354,6 +354,41 @@ read as one campaign.
   — their history lives in runs-service, keyed on `campaign_id`, and repointing it is runs-service's
   own ledger to move. Deleting them would orphan the history, which is the one thing never allowed.
 
+## The OFFER a campaign sells is brand-service's UUID, carried and never derived
+
+A new level sits between the brand and the campaign: **Org > Brand > Offer > Campaign**. An offer is
+one distinct thing a brand sells — its value proposition plus the sales funnels it sells through —
+so a brand selling a $200 self-serve plan and a $20k enterprise contract has two. A campaign sells
+exactly ONE, which makes a campaign **(offer × sales funnel × acquisition channel)**: it already
+stated the funnel (0041) and the channel (0044), and `campaigns.offer_id` (migration **0050**) is the
+missing third word. Without it, two campaigns of one brand on the same funnel through the same
+channel for two different offers are the same row to every reader — in the data, in the money
+attribution and on the customer's screen.
+
+- **brand-service OWNS the entity; this column carries its id.** No offer table, enum or vocabulary
+  exists here and none is to be introduced — the same posture this service holds for the goal and
+  the channel. It is not validated against brand-service on write, exactly as `funnelKey` and
+  `audienceIds` are not.
+- **NEVER derived.** Not from the funnel (several offers legitimately sell through one funnel, which
+  is the entire reason the dimension exists), not from the goal, not from the workflow. It is stated
+  by the creator or it is NULL.
+- **OPTIONAL on create, deliberately and temporarily.** Requiring it is a breaking request-contract
+  change, so a create that states no offer behaves EXACTLY as it did before the column existed and
+  callers state it as they migrate. It becomes required in a later wave, and only then. `PATCH` sets
+  or clears it, which is how a campaign created before it could state one says which offer it runs.
+- **It is NOT part of the identity key.** `uniq_campaigns_org_brand_funnel_channel` is untouched:
+  widening it while the field is optional would let one brand grow unlimited offer-less campaigns on
+  one (funnel, channel). Widening it is the same later wave that makes the field required.
+- **Nothing reads it** — no pacing, funding, selection, gate or provisioning decision. It is stored
+  and served, and `idx_campaigns_org_offer` serves the per-offer attribution read it exists for.
+- **The backfill is a SCRIPT, not the migration** (`scripts/backfill-campaign-offer.ts`): resolving a
+  campaign's brand to its offer is a brand-service READ and SQL cannot make one, so migration 0050
+  adds the column and backfills nothing. The script resolves once per (org, brand) pair, writes only
+  rows still NULL (so a re-run is a no-op and it can never overwrite an offer a live create just
+  stated), **dry-runs by default** (`--apply` writes), and LEAVES ALONE + reports any brand that does
+  not resolve to exactly one offer. Nothing is guessed for those. The previous value is NULL by
+  construction, so the undo is exactly the ids the run prints, which it emits as a statement.
+
 ## Nothing can be unattributable — so nothing holds a brand's provisioning back
 
 The rule that used to live here held a brand's per-funnel provisioning back while ANY alive campaign
