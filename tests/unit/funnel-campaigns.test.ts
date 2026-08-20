@@ -249,7 +249,7 @@ describe("planFunnelTurns", () => {
     mockFetch.mockImplementation(async (input: URL | string) => {
       const url = String(input);
       if (url.includes("/features/")) {
-        return { ok: true, json: async () => ({ salesFunnels: [...SALES_FUNNEL_KEYS] }) };
+        return { ok: true, json: async () => ({ feature: { slug: new URL(url).pathname.split("/features/")[1], salesFunnels: [...SALES_FUNNEL_KEYS] } }) };
       }
       if (url.includes("/workflows")) {
         return {
@@ -384,7 +384,7 @@ describe("planFunnelTurns", () => {
     // conversation and has no website step to sell.
     mockFetch.mockImplementationOnce(async () => ({
       ok: true,
-      json: async () => ({ salesFunnels: ["sales_meetings_from_conversation"] }),
+      json: async () => ({ feature: { slug: FEEDBACK, salesFunnels: ["sales_meetings_from_conversation"] } }),
     }));
 
     await planFunnelTurns([claimed({ funnelKey: "website_purchases" })]);
@@ -480,7 +480,7 @@ describe("planFunnelTurns", () => {
     mockFetch.mockImplementation(async (input: URL | string) => {
       const url = String(input);
       if (url.includes("/features/")) {
-        return { ok: true, json: async () => ({ salesFunnels: [...SALES_FUNNEL_KEYS] }) };
+        return { ok: true, json: async () => ({ feature: { slug: new URL(url).pathname.split("/features/")[1], salesFunnels: [...SALES_FUNNEL_KEYS] } }) };
       }
       // A REJECTION, not an empty catalogue. Collapsing the two is how a read that was refused on
       // every sweep looked exactly like a channel with no dynasty.
@@ -509,7 +509,7 @@ describe("planFunnelTurns", () => {
     mockFetch.mockImplementation(async (input: URL | string) => {
       const url = String(input);
       if (url.includes("/features/")) {
-        return { ok: true, json: async () => ({ salesFunnels: [...SALES_FUNNEL_KEYS] }) };
+        return { ok: true, json: async () => ({ feature: { slug: new URL(url).pathname.split("/features/")[1], salesFunnels: [...SALES_FUNNEL_KEYS] } }) };
       }
       return { ok: true, json: async () => ({ workflows: [] }) };
     });
