@@ -140,6 +140,28 @@ work ONE funnel through BOTH, and each is a campaign of its own.
   migration attributed some brands' single ceiling to the DEFAULT channel while their campaign runs
   another sales feature, and holding those would break a brand that has funded one channel per
   funnel all along.
+- **THE PROVISIONING PATH STATES A FULL IDENTITY, RUN ID INCLUDED — its two channel reads are
+  REFUSED without one.** features-service `GET /features/{slug}` answers `400 Missing required
+  headers: x-run-id` and workflow-service `GET /workflows` answers `400 x-org-id, x-user-id, and
+  x-run-id headers are required`, whatever the caller is doing. The provisioning identity is built
+  from a CAMPAIGN ROW, which carries no run, so both reads were rejected on every sweep and both
+  rejections were laundered into "unknown" and skipped: per-channel funding never worked once in
+  production (brand `75d7e3e8` funded the feedback-request channel on 19 Aug and had no campaign
+  for it nineteen hours later, with nothing in the logs about any of it). The brand-service read on
+  the same path answers 200 without a run id, which is why only this half was dead and why it
+  looked like nothing at all. `buildProvisioningIdentity` (`src/lib/provisioning-identity.ts`)
+  establishes the campaign's own ancestor via `ensureCampaignRunId` — a run runs-service can
+  resolve, never a minted uuid — and `ProvisioningIdentity` makes `userId` and `runId` REQUIRED so
+  the two clients cannot go back to attaching them when they happen to have them.
+  `tests/unit/no-legacy.test.ts` fails on a conditional identity header in either client.
+- **A pair passed over because a statement could not be READ says so, naming the pair.** "This
+  channel sells no such funnel" and "features-service would not answer" are different answers and
+  are returned as different ones (`FeatureSalesFunnelsRead` / `ActiveWorkflowRead`, both
+  `{ok:false, detail}` on a failure). A pair the customer is paying for that we FAILED to evaluate
+  is not a pair we evaluated and rejected, and collapsing the two is what let a read that was
+  rejected on every sweep look exactly like a channel with no dynasty. Skipping stays correct;
+  only the silence was wrong. Fail-SOFT still: an unreadable statement provisions nothing and does
+  NOT hold the brand — this decides which questions can be asked, not whether money may be spent.
 - **Which funnels a channel may be SOLD THROUGH is features-service's statement, asked per feature**
   (`GET /features/{slug}` → `salesFunnels`, `src/lib/feature-sales-funnels-client.ts`). The feedback
   request states `sales_meetings_from_conversation` alone: its offer buys a CONVERSATION, and the

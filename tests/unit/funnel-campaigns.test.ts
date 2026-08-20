@@ -9,9 +9,13 @@ const {
   mockUpdateSet,
   mockUpdateWhere,
   mockDeleteWhere,
+  mockCreateRun,
+  mockUpdateRun,
 } = vi.hoisted(() => ({
   mockListRuns: vi.fn(),
   mockGetStatsBudget: vi.fn(),
+  mockCreateRun: vi.fn(),
+  mockUpdateRun: vi.fn(),
   mockFindFirst: vi.fn(),
   mockFindMany: vi.fn(),
   mockInsertValues: vi.fn(),
@@ -23,6 +27,8 @@ const {
 vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
   getStatsBudget: mockGetStatsBudget,
+  createRun: mockCreateRun,
+  updateRun: mockUpdateRun,
 }));
 
 vi.mock("../../src/db/index.js", () => ({
@@ -82,6 +88,8 @@ import {
 
 const SALES = "sales-cold-email-outreach";
 const FEEDBACK = "feedback-request-cold-email-outreach";
+const ANCESTOR_RUN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // The brand's alive campaigns, as the sales-scoped liveness check reads them.
 let aliveBrandCampaigns: Array<{ id: string; featureSlug: string | null }> = [];
@@ -90,6 +98,8 @@ function claimed(overrides: Partial<ClaimedFunnelCampaign> = {}): ClaimedFunnelC
     id: "campaign-1",
     orgId: "org-1",
     createdByUserId: "user-1",
+    // The campaign's ancestor run — what every provisioning read states as its `x-run-id`.
+    parentRunId: ANCESTOR_RUN_ID,
     workflowSlug: "sales-email-cold-outreach",
     brandIds: ["brand-1"],
     featureSlug: SALES,
@@ -145,6 +155,20 @@ function mockDeclaredFunnels(funnels: Array<{ funnelKey: string; active?: boolea
       })),
     }),
   });
+}
+
+/** Run something and return everything it said on console.warn, joined. */
+async function captureWarnings(run: () => Promise<unknown>): Promise<string> {
+  const said: string[] = [];
+  const warn = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+    said.push(args.map((a) => (a instanceof Error ? a.message : String(a))).join(" "));
+  });
+  try {
+    await run();
+  } finally {
+    warn.mockRestore();
+  }
+  return said.join("\n");
 }
 
 function mockSpend(cents: string) {
@@ -368,6 +392,59 @@ describe("planFunnelTurns", () => {
     expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
+  it("states a FULL identity on both channel reads — the run id included, and it resolves", async () => {
+    // The whole feature was dead in production on exactly this: the provisioning identity was
+    // built from a campaign row, so it carried no run, and both services rejected it outright
+    // (`400 Missing required headers: x-run-id` / `400 x-org-id, x-user-id, and x-run-id headers
+    // are required`). Both rejections became "unknown" and the pair was skipped, silently.
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }],
+      "2000",
+      [{ funnelKey: "reply_meeting", featureSlug: FEEDBACK, dailyBudgetCents: "2000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    const reads = mockFetch.mock.calls.filter(
+      (c) => String(c[0]).includes("/features/") || String(c[0]).includes("/workflows"),
+    );
+    expect(reads.length).toBeGreaterThanOrEqual(2);
+    for (const [, init] of reads) {
+      const headers = (init as { headers: Record<string, string> }).headers;
+      expect(headers["x-org-id"]).toBe("org-1");
+      expect(headers["x-user-id"]).toBe("user-1");
+      // Well-formed enough for the downstream to accept, and a run runs-service can resolve —
+      // never a minted uuid (see trigger-run.ts / no-legacy).
+      expect(headers["x-run-id"]).toBe(ANCESTOR_RUN_ID);
+      expect(headers["x-run-id"]).toMatch(UUID_RE);
+    }
+  });
+
+  it("anchors a campaign that has no ancestor run BEFORE asking, and reuses that run", async () => {
+    const minted = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    mockCreateRun.mockResolvedValue({ id: minted });
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }],
+      "2000",
+      [{ funnelKey: "reply_meeting", featureSlug: FEEDBACK, dailyBudgetCents: "2000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([
+      claimed({ funnelKey: "sales_meetings_from_conversation", parentRunId: null }),
+    ]);
+
+    // Created once and PERSISTED on the campaign, so the next sweep takes the same branch as a
+    // campaign born with one.
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ parentRunId: minted }));
+    const featureRead = mockFetch.mock.calls.find((c) => String(c[0]).includes("/features/"))!;
+    expect((featureRead[1] as { headers: Record<string, string> }).headers["x-run-id"]).toBe(minted);
+  });
+
   it("provisions nothing for a channel whose funnel statement cannot be read", async () => {
     mockFunnelBudgets(
       [{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }],
@@ -378,10 +455,47 @@ describe("planFunnelTurns", () => {
     mockFindFirst.mockResolvedValue(undefined);
     mockFetch.mockImplementationOnce(async () => ({ ok: false, status: 500, json: async () => ({}) }));
 
-    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+    const said = await captureWarnings(() =>
+      planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]),
+    );
 
     // A pair is never guessed at — the same stance an unreadable brand declaration takes.
     expect(mockInsertValues).not.toHaveBeenCalled();
+    // ...and it is never passed over in SILENCE. The customer's money is on this pair and we
+    // failed to evaluate it, which is a different thing from evaluating it and saying no.
+    expect(said).toMatch(/could not READ features-service/);
+    expect(said).toContain(FEEDBACK);
+    expect(said).toContain("sales_meetings_from_conversation");
+    expect(said).toContain("brand-1");
+  });
+
+  it("says which funded pair it passed over when workflow-service will not answer", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }],
+      "2000",
+      [{ funnelKey: "reply_meeting", featureSlug: FEEDBACK, dailyBudgetCents: "2000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+    mockFetch.mockImplementation(async (input: URL | string) => {
+      const url = String(input);
+      if (url.includes("/features/")) {
+        return { ok: true, json: async () => ({ salesFunnels: [...SALES_FUNNEL_KEYS] }) };
+      }
+      // A REJECTION, not an empty catalogue. Collapsing the two is how a read that was refused on
+      // every sweep looked exactly like a channel with no dynasty.
+      return { ok: false, status: 400, text: async () => "x-run-id header required" };
+    });
+
+    const said = await captureWarnings(() =>
+      planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]),
+    );
+
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(said).toMatch(/could not READ workflow-service/);
+    expect(said).toContain(FEEDBACK);
+    expect(said).toContain("sales_meetings_from_conversation");
+    expect(said).toContain("400");
   });
 
   it("provisions nothing for a channel with no active workflow to run it", async () => {
