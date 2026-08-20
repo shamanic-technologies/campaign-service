@@ -162,8 +162,19 @@ work ONE funnel through BOTH, and each is a campaign of its own.
   rejected on every sweep look exactly like a channel with no dynasty. Skipping stays correct;
   only the silence was wrong. Fail-SOFT still: an unreadable statement provisions nothing and does
   NOT hold the brand — this decides which questions can be asked, not whether money may be spent.
+- **THE STATEMENT IS NESTED UNDER THE FEATURE THE REQUEST NAMED — `{ feature: { …, salesFunnels } }`
+  — and reading it a level up looks EXACTLY like a channel that declares nothing.** features-service
+  answers 200 with the envelope; the client read `salesFunnels` at the top level, found nothing, and
+  reported that the service had stated none, so every funded pair fleet-wide was passed over as
+  unevaluatable for the whole life of the feature. Nothing contradicted it because every test mocked
+  the shape the client expected — a client agreeing with itself and with nothing else — which is why
+  `tests/unit/feature-sales-funnels-client.test.ts` pins the read to the nested level AND asserts a
+  TOP-LEVEL payload is REFUSED. A payload assumption that no test states against the DEPLOYED
+  contract is not an assumption anything can catch. The sibling read (workflow-service `GET
+  /workflows` → `workflows`) really is top-level; check the contract per endpoint rather than
+  assuming one envelope for the fleet. (2026-08-20.)
 - **Which funnels a channel may be SOLD THROUGH is features-service's statement, asked per feature**
-  (`GET /features/{slug}` → `salesFunnels`, `src/lib/feature-sales-funnels-client.ts`). The feedback
+  (`GET /features/{slug}` → `feature.salesFunnels`, `src/lib/feature-sales-funnels-client.ts`). The feedback
   request states `sales_meetings_from_conversation` alone: its offer buys a CONVERSATION, and the
   other three chains buy their first step with a website click it has no way to sell. A funded pair
   the feature may not sell gets NO campaign, the same way a funnel billing funds but brand-service
