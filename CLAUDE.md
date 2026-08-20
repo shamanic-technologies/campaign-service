@@ -228,6 +228,33 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
   `ongoing` rows only, so writing a stopped row can never collide with it. Pinned by
   `tests/integration/stopped-ancestor-funnel-backfill.test.ts`, which applies the file itself to a
   prod-shaped database twice.
+- **That rule is an INVARIANT, so it lives on the TICK — a migration can only ever state it once.**
+  0048 ran against the fleet of 13 Aug and the bug recurred in nine days, on a brand that was not
+  yet eligible: org `d3367008` / brand `b97440f6` / `cold_email` read $53 on the offer and $1.81 on
+  the offer's one live campaign, $51.68 of it on an ancestor stating no funnel. The sequence is the
+  whole argument — on 13 Aug that ancestor was still LIVE and stated none, so 0048 correctly
+  declined it; on 16 Aug the funnel was funded and provisioning INSERTED a twin (a row at
+  `funnel_key NULL` can never match `eq(campaigns.funnelKey, …)`); on 19 Aug it stopped, becoming
+  eligible the same moment, with nothing left to apply the rule. `adoptFunnellessAncestors`
+  (`src/lib/funnel-ancestor-adoption.ts`) now applies it, scoped to one (org, brand, acquisition
+  channel), whenever a funnel campaign is provisioned OR confirmed for that triple. Migration
+  **0051** is the same rule re-stated for the one row eligible on 20 Aug, and is the last time it is
+  written as a migration. Same exclusions, same audit table, same idempotence in both halves;
+  `tests/integration/stopped-ancestor-funnel-rerun.test.ts` runs the file and the runtime rule over
+  ONE seed and asserts they reach the same verdict on every row, which is what stops the two copies
+  drifting. **The call site is collected into `adoptFor` and drained AFTER the loop on purpose**:
+  the existing-campaign check returns early with `continue`, so an adoption written inside it would
+  never run for a brand whose twin already exists — which is every brand this recurs on. The other
+  470 stopped funnel-less rows across 17 brands are NOT backfilled: the rule does not select them
+  (no live sibling stating a funnel on their triple), and the runtime half covers each the moment
+  its brand funds a funnel again.
+- **The live campaign of a (funnel, channel) wins the existing-campaign lookup over a stopped one,
+  whatever their creation dates.** Ordering on `created_at` alone answers "the newest row", a
+  different question: a stopped ancestor created after the incumbent — or one that only just became
+  findable because its funnel was folded onto this identity — is returned instead, and the resume
+  branch then brings it back alongside the incumbent. That is a `23505` on the partial unique index,
+  thrown INSIDE `planFunnelTurns`, which fail-closes and holds the whole brand every tick, forever,
+  for a brand whose campaign is running fine. It appears in no customer-visible state at all.
 - **The gate paces on that funnel's own ceiling** (`gate-check.ts`, block a2), fail-CLOSED like
   the brand ceiling. Precedence: campaign's own `dailyBudgetCents` → `funnelKey` ceiling → brand
   daily budget. A funnel funded at ZERO, or absent from billing while the brand funds OTHER

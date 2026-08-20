@@ -18,8 +18,9 @@ import {
 } from "./brand-sales-funnels-client.js";
 import { isSalesOutreachFeature, SALES_OUTREACH_FEATURE_SLUGS } from "./sales-outreach-campaign.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
-import { campaignIdentityColumns } from "./campaign-identity.js";
+import { acquisitionChannelForFeature, campaignIdentityColumns } from "./campaign-identity.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
+import { adoptFunnellessAncestorsSafely } from "./funnel-ancestor-adoption.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
 // re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
@@ -426,6 +427,13 @@ async function ensureFundedFunnelCampaigns({
   const sellableByFeature = new Map<string, Set<SalesFunnelKey> | null>();
   const workflowByFeature = new Map<string, string | null>();
 
+  // The (org, brand, acquisition channel) triples a funnel campaign is provisioned for on this
+  // tick. Collected rather than acted on inline BECAUSE the existing-campaign check below returns
+  // early with `continue`: a brand whose twin already exists — which is precisely the brand this
+  // recurrence was found on — would never reach an adoption written after that check. See
+  // funnel-ancestor-adoption.ts for the rule and why it cannot stay a one-shot migration.
+  const adoptFor = new Set<string>();
+
   for (const f of funded) {
     if (declared.contested.has(f.funnelKey)) {
       // Several offers of this brand sell through this chain. Provisioning one campaign would file
@@ -457,6 +465,20 @@ async function ensureFundedFunnelCampaigns({
       continue;
     }
 
+    // This pair gets a campaign on this channel — whether one already exists or one is inserted
+    // below. Either way a live funnel identity exists for the triple, which is the one moment the
+    // funnel-less stopped ancestors of that triple can be folded onto it.
+    const channel = acquisitionChannelForFeature(featureSlug);
+    if (channel) adoptFor.add(channel);
+
+    // The LIVE campaign of this pair wins over a stopped one, whatever their creation dates.
+    // Ordering on `created_at` alone answers "the newest row", which is not the same question: a
+    // stopped ancestor created after the incumbent — or one that only just became findable here
+    // because its funnel was folded onto this identity — would be returned instead, and the resume
+    // below would then try to bring it back alongside the incumbent. That is a 23505 on the partial
+    // unique index (ongoing rows only), and it is thrown INSIDE planFunnelTurns, which fail-closes
+    // and holds the whole brand: every tick, forever, for a brand whose campaign is running fine.
+    // At most one ongoing campaign per identity holds, so there is at most one such row to prefer.
     const existing = await db.query.campaigns.findFirst({
       where: and(
         eq(campaigns.orgId, seed.orgId),
@@ -464,7 +486,7 @@ async function ensureFundedFunnelCampaigns({
         eq(campaigns.funnelKey, f.funnelKey),
         arrayContains(campaigns.brandIds, [brandId]),
       ),
-      orderBy: [desc(campaigns.createdAt)],
+      orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
     });
 
     if (existing) {
@@ -544,6 +566,15 @@ async function ensureFundedFunnelCampaigns({
       const message = err instanceof Error ? err.message : String(err);
       if (!message.includes("uniq_campaigns_org_name")) throw err;
     }
+  }
+
+  // Reachable on every tick that provisions or confirms a funnel campaign, whatever branch each
+  // pair took above. Fail-soft and a no-op on every ordinary tick.
+  for (const channel of adoptFor) {
+    await adoptFunnellessAncestorsSafely(
+      { orgId: seed.orgId, brandId, acquisitionChannel: channel },
+      now,
+    );
   }
 }
 
