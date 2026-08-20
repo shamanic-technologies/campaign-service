@@ -358,6 +358,13 @@
       "when": 1777500000000,
       "tag": "0050_campaign_offer_id",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1777600000000,
+      "tag": "0051_stopped_ancestors_state_their_campaign_funnel_again",
+      "breakpoints": true
     }
   ]
 }
