@@ -1255,6 +1255,49 @@ describe("Pipeline routes", () => {
       expect(updated!.stopReason).toBe("audience_exhausted");
     });
 
+    it("stopCampaign=true does NOT stop a campaign that has served nothing — no audience ran, so nothing was exhausted", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        status: "ongoing",
+        featureSlug: "sales-cold-email-v1",
+        createdByUserId: "user_test",
+      });
+
+      mockListRuns.mockResolvedValue({
+        runs: [
+          { id: "run-791", status: "running", startedAt: new Date().toISOString() },
+        ],
+      });
+      // Nothing serveable AND nothing ever exhausted — the degenerate case: the campaign was
+      // created, its first serve came back empty carrying no audience id, and it has contacted
+      // nobody. An empty remainder is not evidence it finished its people.
+      mockFetchCandidates.mockResolvedValue([]);
+
+      await request(app)
+        .post("/end-run")
+        // Deliberately NO x-audience-id: no audience ran, so there is nothing to mark.
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: true })
+        .expect(200);
+
+      await new Promise((r) => setTimeout(r, 150));
+
+      const marks = await db
+        .select()
+        .from(campaignAudienceExhaustion)
+        .where(eq(campaignAudienceExhaustion.campaignId, campaign.id));
+      expect(marks).toHaveLength(0);
+
+      // Stays ongoing and is rescheduled so it is looked at again, rather than parked on
+      // `audience_exhausted` — a stop reason funding deliberately never resumes.
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      expect(updated!.status).toBe("ongoing");
+      expect(updated!.stopReason).toBeNull();
+      expect(updated!.nextRunAt).not.toBeNull();
+    });
+
     it("should set nextRunAt and NOT fire-and-forget when stopCampaign is false", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,

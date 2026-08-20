@@ -32,8 +32,14 @@ export async function markAudienceExhausted(campaignId: string, audienceId: stri
  * audience it actually had", not "is an audience dry right now". A brand that never had an
  * audience — and therefore never contacted anybody — never writes a row here, because the
  * DAG's stopCampaign carries no audience id for it (the same case /end-run already logs as
- * "cannot mark a specific audience exhausted"). That distinction is what separates a
- * campaign that finished its people from one that never had any.
+ * "no audience ran"). That distinction is what separates a campaign that finished its people
+ * from one that never had any.
+ *
+ * TWO legs read it, and they must read the same one: the auto-STOP itself (a campaign that has
+ * exhausted nothing has not exhausted everything, so it is never stopped as
+ * `audience_exhausted`) and the extend-audience email that stop sends (never claim everyone was
+ * contacted when nobody was). A campaign stopped on this reason is sticky against funding, so a
+ * wrong verdict here parks a funded channel indefinitely.
  */
 export async function hasExhaustedAudience(campaignId: string): Promise<boolean> {
   const rows = await db
@@ -42,6 +48,30 @@ export async function hasExhaustedAudience(campaignId: string): Promise<boolean>
     .where(eq(campaignAudienceExhaustion.campaignId, campaignId))
     .limit(1);
   return rows.length > 0;
+}
+
+/**
+ * May this campaign be auto-stopped as `audience_exhausted`?
+ *
+ * The rule, stated in one place because it is the whole of the verdict:
+ *
+ *   nothing left to serve  AND  it actually ran out of somebody.
+ *
+ * The first half alone is an EMPTY REMAINDER, and an empty remainder is equally true of a
+ * campaign that never had anything to do — 0 of 0 reads as 100%. So the terminal verdict is
+ * gated on the second half, POSITIVE evidence that work happened: an exhaustion mark, written
+ * only for a run that named a real audience. A campaign that has served nothing has exhausted
+ * nothing and is never stopped for it.
+ *
+ * Pure on purpose — the two facts are read by the caller, the rule is stated here.
+ */
+export function isExhaustionStopWarranted(evidence: {
+  /** Does features-service still offer a serveable, non-exhausted audience for this campaign? */
+  hasServeableAudience: boolean;
+  /** Has ANY audience of this campaign ever been marked exhausted? (`hasExhaustedAudience`) */
+  hasEverExhaustedAnAudience: boolean;
+}): boolean {
+  return !evidence.hasServeableAudience && evidence.hasEverExhaustedAnAudience;
 }
 
 /**
