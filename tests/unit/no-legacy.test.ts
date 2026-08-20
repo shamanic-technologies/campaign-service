@@ -365,7 +365,12 @@ describe('No Legacy Patterns - CRITICAL', () => {
     // while the campaign kept looking ongoing and freshly rescheduled (prod 2026-08-18: 3,593
     // refusals in six hours, a different id on every line). A campaign's ancestor run is
     // established ONCE, for real, in src/lib/trigger-run.ts.
-    const guarded = ['lib/scheduler.ts', 'lib/campaign-resume.ts', 'lib/transactional-email.ts'];
+    const guarded = [
+      'lib/scheduler.ts',
+      'lib/campaign-resume.ts',
+      'lib/transactional-email.ts',
+      'lib/provisioning-identity.ts',
+    ];
     const violations: string[] = [];
 
     for (const rel of guarded) {
@@ -379,6 +384,35 @@ describe('No Legacy Patterns - CRITICAL', () => {
     expect(
       violations,
       `A run id handed to another service must be one runs-service can resolve — use ensureCampaignRunId:\n${violations.join('\n')}`,
+    ).toHaveLength(0);
+  });
+
+  it('should NOT make the provisioning identity headers conditional', () => {
+    // features-service and workflow-service REFUSE a read that does not state a full identity —
+    // `400 Missing required headers: x-run-id` and `400 x-org-id, x-user-id, and x-run-id headers
+    // are required` — whatever the caller happens to be doing. Both clients used to attach those
+    // headers only when they happened to have them, and the provisioning path never did: every
+    // read was rejected outright, every rejection became "unknown", and the whole per-channel
+    // funding promise never worked once in production while saying nothing at all. Sending them
+    // unconditionally is what makes the refusal impossible to reintroduce quietly.
+    const guarded = ['lib/feature-sales-funnels-client.ts', 'lib/feature-workflow-client.ts'];
+    const violations: string[] = [];
+
+    for (const rel of guarded) {
+      const content = fs.readFileSync(path.join(srcDir, rel), 'utf-8');
+      content.split('\n').forEach((line, index) => {
+        if (/if\s*\(identity\.(runId|userId|orgId)\)/.test(line)) {
+          violations.push(`src/${rel}:${index + 1}\n    ${line.trim()}`);
+        }
+      });
+      for (const header of ['x-org-id', 'x-user-id', 'x-run-id']) {
+        if (!content.includes(`"${header}"`)) violations.push(`src/${rel} states no ${header}`);
+      }
+    }
+
+    expect(
+      violations,
+      `A provisioning read states its full identity or it is refused:\n${violations.join('\n')}`,
     ).toHaveLength(0);
   });
 

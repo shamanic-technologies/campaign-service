@@ -32,6 +32,12 @@ const {
 vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
   getStatsBudget: mockGetStatsBudget,
+  // Provisioning states an ancestor run on every read it makes — the seeds below already carry
+  // one, so these exist to fail loudly if a path ever mints a second.
+  createRun: vi.fn(async () => {
+    throw new Error("createRun must not be called: the seed already states an ancestor run");
+  }),
+  updateRun: vi.fn(),
 }));
 
 vi.mock("../../src/db/index.js", () => ({
@@ -97,6 +103,7 @@ function claimed(overrides: Partial<ClaimedFunnelCampaign> = {}): ClaimedFunnelC
     id: "campaign-1",
     orgId: "org-1",
     createdByUserId: "user-1",
+    parentRunId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     workflowSlug: "sales-email-cold-outreach",
     brandIds: ["brand-1"],
     featureSlug: SALES,
