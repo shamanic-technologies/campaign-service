@@ -10,7 +10,7 @@ import { EndRunBody, TransferBrandBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
-import { markAudienceExhausted, getFreshExhaustedAudienceIds, hasExhaustedAudience, isExhaustionStopWarranted } from "../lib/audience-exhaustion.js";
+import { markAudienceExhausted, getFreshExhaustedAudienceIds, hasExhaustedAudience, isExhaustionStopWarranted, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../lib/audience-exhaustion.js";
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
@@ -479,6 +479,11 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
     // exhausted (24h TTL; the bandit then skips it) and auto-stop the campaign ONLY when it has
     // no serveable, non-exhausted audience left. Otherwise fall through to the normal reschedule
     // so the next tick re-draws from the remaining audiences.
+    // Set when the campaign has nobody to contact and has served nothing: it is rescheduled
+    // rather than stopped, but on the RECHECK cadence below instead of the run cadence — the
+    // reason it cannot run does not move in eleven seconds.
+    let waitingForAudience = false;
+
     if (stopCampaign === true) {
       try {
         const exhaustedAudienceId = req.audienceId;
@@ -489,7 +494,9 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
           // this campaign ever contacted anybody. Says what it decided rather than proceeding:
           // the stop below is gated on that evidence, so this run cannot end in a verdict about
           // work that never happened.
-          console.warn(`[campaign-service] stopCampaign=true for campaign ${campaignId} with no x-audience-id — no audience ran, so nothing is marked exhausted and this run cannot conclude the campaign is exhausted`);
+          // Expected business state, not a fault: log at info. It is paired with the waiting
+          // line below and both now fire on the recheck cadence, not once per run.
+          console.log(`[campaign-service] stopCampaign=true for campaign ${campaignId} with no x-audience-id — no audience ran, so nothing is marked exhausted and this run cannot conclude the campaign is exhausted`);
         }
 
         const campaign = await db.query.campaigns.findFirst({
@@ -523,8 +530,14 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
           });
 
         if (!serveable && !stopWarranted) {
-          console.warn(`[campaign-service] Campaign ${campaignId} has no serveable audience and has never exhausted one — it has served nothing, so it is NOT auto-stopped as ${STOP_REASONS.AUDIENCE_EXHAUSTED}; rescheduling so it is looked at again`);
-          // Falls through to the reschedule below.
+          // Not stopped — and not re-fired in ten seconds either. "Nobody to contact" changes
+          // when the customer's audiences change or when a never-run channel finally has
+          // evidence, so the campaign WAITS on that timescale (the money cadence, not the turn
+          // cadence). Rescheduling on the run cadence is what fired a workflow every eleven
+          // seconds for campaigns 4769db14 and cb965e9d, each run unable to do anything.
+          waitingForAudience = true;
+          console.log(`[campaign-service] Campaign ${campaignId} has no serveable audience and has never exhausted one — it has served nothing, so it is NOT auto-stopped as ${STOP_REASONS.AUDIENCE_EXHAUSTED}; waiting ${NO_SERVEABLE_AUDIENCE_RECHECK_MS}ms for it to have somebody to contact`);
+          // Falls through to the reschedule below, which uses the recheck cadence.
         } else if (!serveable) {
           // Fully contacted: every targeted audience is exhausted and the campaign is
           // being auto-stopped. Nudge the user to extend an audience so outreach can
@@ -569,7 +582,13 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       // Failed runs get a 60s backoff; completed runs re-run after a short grace
       // (RERUN_GRACE_MS) so the wrapping workflow run finishes teardown before the
       // re-run tick — otherwise the in-flight guard sees it alive and forces +60s.
-      const delayMs = status === "failed" ? 60_000 : RERUN_GRACE_MS;
+      // A campaign waiting for somebody to contact waits on that reason's cadence — it is not
+      // waiting its turn, and firing it sooner cannot change the answer.
+      const delayMs = waitingForAudience
+        ? NO_SERVEABLE_AUDIENCE_RECHECK_MS
+        : status === "failed"
+          ? 60_000
+          : RERUN_GRACE_MS;
       const nextRunAt = new Date(Date.now() + delayMs);
 
       if (req.runId) {
@@ -589,7 +608,11 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       // instead of waiting out the current idle sleep.
       wakeScheduler();
 
-      if (status === "failed") {
+      if (waitingForAudience) {
+        // The waiting line above already said what was decided and until when; repeating the
+        // generic reschedule line under it is the third of the three lines that were filling
+        // the logs.
+      } else if (status === "failed") {
         console.warn(`[campaign-service] Run failed — rescheduled campaign ${campaignId} in ${delayMs}ms (nextRunAt=${nextRunAt.toISOString()})`);
       } else {
         console.log(`[campaign-service] Set nextRunAt=${nextRunAt.toISOString()} for campaign ${campaignId} (status=${status})`);

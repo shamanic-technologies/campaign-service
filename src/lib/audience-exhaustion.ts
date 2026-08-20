@@ -75,6 +75,23 @@ export function isExhaustionStopWarranted(evidence: {
 }
 
 /**
+ * How long a campaign with NOBODY to contact waits before it is looked at again.
+ *
+ * A campaign that has served nothing is deliberately not stopped (see
+ * `isExhaustionStopWarranted`) — it is rescheduled instead. Rescheduled on the RUN cadence
+ * (`RERUN_GRACE_MS`, 10s) that meant a workflow fired every eleven seconds for a campaign whose
+ * situation cannot change in eleven seconds: "nobody to contact" moves when a customer edits
+ * their audiences, or when a channel that has never run finally accumulates evidence — hours or
+ * days apart, never within the same minute.
+ *
+ * So it waits on the reason's own timescale, exactly as an unfunded campaign waits on
+ * `FUNDING_RECHECK_MS` rather than on its turn: the same 10 minutes, for the same reason, and it
+ * is the feature's latency — a campaign starts running within ten minutes of having somebody to
+ * contact, with no manual step and no stop to undo.
+ */
+export const NO_SERVEABLE_AUDIENCE_RECHECK_MS = 10 * 60_000; // 10 min
+
+/**
  * Audience ids currently exhausted for a campaign — i.e. marked within the TTL window.
  * Marks older than the TTL are ignored (the audience is due for a re-probe), so they never
  * appear here and the bandit will consider that audience again on the next run.
