@@ -93,12 +93,15 @@ function billingAnswers(
       return {
         ok: true,
         json: async () => ({
-          salesFunnels: sellableByFeature?.[slug] ?? [
-            "sales_meetings_from_conversation",
-            "sales_meetings_from_website",
-            "website_purchases",
-            "form_magnet",
-          ],
+          feature: {
+            slug,
+            salesFunnels: sellableByFeature?.[slug] ?? [
+              "sales_meetings_from_conversation",
+              "sales_meetings_from_website",
+              "website_purchases",
+              "form_magnet",
+            ],
+          },
         }),
       };
     }

@@ -179,7 +179,7 @@ beforeEach(() => {
   mockFetch.mockImplementation(async (input: URL | string) => {
     const url = String(input);
     if (url.includes("/features/")) {
-      return { ok: true, json: async () => ({ salesFunnels: [...SALES_FUNNEL_KEYS] }) };
+      return { ok: true, json: async () => ({ feature: { slug: url.split("/features/")[1], salesFunnels: [...SALES_FUNNEL_KEYS] } }) };
     }
     if (url.includes("/workflows")) {
       return {

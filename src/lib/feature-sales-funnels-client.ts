@@ -12,7 +12,15 @@ import type { ProvisioningIdentity } from "./provisioning-identity.js";
  * of one fact, drifting the day a channel gains or loses a chain.
  *
  * Contract (features-service): GET /features/{slug} (x-api-key + FULL identity)
- *   -> { slug, ..., salesFunnels: string[] }
+ *   -> { feature: { id, slug, ..., salesFunnels: string[] } }
+ *
+ * THE STATEMENT IS NESTED UNDER THE FEATURE THE REQUEST NAMED, and it is read there and nowhere
+ * else. Reading it at the top level found nothing on a 200 that carried it, so every funded pair
+ * was passed over as unevaluatable — a client agreeing with itself and with nothing else. The
+ * envelope is what the deployed service serves (verified on the api-registry contract for
+ * `GET /features/{slug}`), so `tests/unit/feature-sales-funnels-client.test.ts` pins the read to
+ * the nested level and REFUSES a top-level payload: a shape the service does not serve must not be
+ * the shape that works here.
  *
  * The identity is not tracking: features-service answers `400 Missing required headers: x-run-id`
  * to a request that does not state one, whatever the caller is doing. So the header is always sent
@@ -69,13 +77,14 @@ export async function fetchFeatureSalesFunnels(
       return { ok: false, detail: `HTTP ${res.status}${body ? ` ${body}` : ""}` };
     }
 
-    const data = await res.json() as { salesFunnels?: unknown };
-    if (!Array.isArray(data.salesFunnels)) {
-      return { ok: false, detail: "response states no salesFunnels array" };
+    const data = await res.json() as { feature?: { salesFunnels?: unknown } };
+    const stated = data.feature?.salesFunnels;
+    if (!Array.isArray(stated)) {
+      return { ok: false, detail: "response states no feature.salesFunnels array" };
     }
 
     const funnels = new Set<SalesFunnelKey>();
-    for (const raw of data.salesFunnels) {
+    for (const raw of stated) {
       // Any spelling in, one canonical token out — the same tolerance every other funnel read
       // here has. A key no catalogue names is skipped rather than worked.
       const key = typeof raw === "string" ? toFunnelKey(raw) : null;

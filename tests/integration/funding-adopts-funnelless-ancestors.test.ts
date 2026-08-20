@@ -83,7 +83,9 @@ function billingFunds(funnels: Array<{ funnelKey: string; dailyBudgetCents: stri
       return {
         ok: true,
         json: async () => ({
-          salesFunnels: [CONVERSATION, WEBSITE, "website_purchases", "form_magnet"],
+          feature: {
+            salesFunnels: [CONVERSATION, WEBSITE, "website_purchases", "form_magnet"],
+          },
         }),
       };
     }
