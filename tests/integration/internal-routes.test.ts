@@ -57,6 +57,7 @@ import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
 import { campaigns, campaignAudienceExhaustion } from "../../src/db/schema.js";
 import { eq, and } from "drizzle-orm";
+import { NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../../src/lib/audience-exhaustion.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
@@ -1296,6 +1297,56 @@ describe("Pipeline routes", () => {
       expect(updated!.status).toBe("ongoing");
       expect(updated!.stopReason).toBeNull();
       expect(updated!.nextRunAt).not.toBeNull();
+
+      // And it waits on the RECHECK cadence, not the run cadence: "nobody to contact" cannot
+      // change in ten seconds, so rescheduling on RERUN_GRACE_MS fired a workflow every eleven
+      // seconds forever for a campaign that could not do anything with it.
+      const waitMs = updated!.nextRunAt!.getTime() - Date.now();
+      expect(waitMs).toBeGreaterThan(NO_SERVEABLE_AUDIENCE_RECHECK_MS - 60_000);
+      expect(waitMs).toBeLessThanOrEqual(NO_SERVEABLE_AUDIENCE_RECHECK_MS);
+    });
+
+    it("a campaign waiting for an audience comes back by itself once it has one — the wait is a reschedule, never a stop", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        status: "ongoing",
+        featureSlug: "sales-cold-email-v1",
+        createdByUserId: "user_test",
+      });
+
+      mockListRuns.mockResolvedValue({
+        runs: [
+          { id: "run-792", status: "running", startedAt: new Date().toISOString() },
+        ],
+      });
+      // First pass: nothing serveable, nothing ever exhausted → waits.
+      mockFetchCandidates.mockResolvedValue([]);
+
+      await request(app)
+        .post("/end-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: true })
+        .expect(200);
+      await new Promise((r) => setTimeout(r, 150));
+
+      const waiting = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaign.id) });
+      expect(waiting!.status).toBe("ongoing");
+
+      // The customer activates an audience — the very next run finds somebody and the campaign
+      // is rescheduled promptly, with no manual step and no stop to undo.
+      mockFetchCandidates.mockResolvedValue([projectionRow("aud-fresh")]);
+
+      await request(app)
+        .post("/end-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: false })
+        .expect(200);
+      await new Promise((r) => setTimeout(r, 150));
+
+      const back = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaign.id) });
+      expect(back!.status).toBe("ongoing");
+      expect(back!.stopReason).toBeNull();
+      expect(back!.nextRunAt!.getTime() - Date.now()).toBeLessThan(60_000);
     });
 
     it("should set nextRunAt and NOT fire-and-forget when stopCampaign is false", async () => {

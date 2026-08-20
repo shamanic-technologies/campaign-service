@@ -680,6 +680,18 @@ real audience.
   ten seconds after birth on a channel funded at $10/day) and `cb965e9d` (Lux Projects Bali, the
   0-audience brand above). Pinned by `tests/integration/unpark-never-served-migration.test.ts`,
   which applies the file itself twice.
+- **It WAITS on the reason's cadence, it does not retry on the run's.** Rescheduling that campaign
+  on `RERUN_GRACE_MS` (10s) fired a workflow every eleven seconds, forever, for a campaign whose
+  situation cannot change in eleven seconds — 33 runs in the first minutes on `4769db14` and the
+  same on `cb965e9d`, each unable to reach anything, flooding every service in the chain. "Nobody
+  to contact" is the MONEY kind of wait, not the TURN kind: it moves when a customer edits their
+  audiences or when a never-run channel finally accumulates evidence, hours or days apart. So it
+  reschedules at `NO_SERVEABLE_AUDIENCE_RECHECK_MS` (10 min, the same figure and the same argument
+  as `FUNDING_RECHECK_MS`), which IS the latency — the campaign runs within ten minutes of having
+  somebody, with no manual step. The wait is a RESCHEDULE, never a stop: it stays `ongoing`, so
+  nothing has to be undone when the audience appears. One line says it is waiting and why, on that
+  cadence; the generic reschedule line is suppressed under it and the no-audience-ran line is
+  `info`, not `warn` — an expected business state.
 - WHY that campaign's first serve came back empty on a brand whose sibling served 109 leads the
   same day is a separate lead-service investigation. This service's job was to stop reading an
   empty answer as a finished one. (Set 2026-08-20.)
