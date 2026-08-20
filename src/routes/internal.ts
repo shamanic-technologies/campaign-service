@@ -10,7 +10,7 @@ import { EndRunBody, TransferBrandBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
-import { markAudienceExhausted, getFreshExhaustedAudienceIds } from "../lib/audience-exhaustion.js";
+import { markAudienceExhausted, getFreshExhaustedAudienceIds, hasExhaustedAudience, isExhaustionStopWarranted } from "../lib/audience-exhaustion.js";
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
@@ -485,7 +485,11 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         if (exhaustedAudienceId) {
           await markAudienceExhausted(campaignId, exhaustedAudienceId);
         } else {
-          console.warn(`[campaign-service] stopCampaign=true for campaign ${campaignId} with no x-audience-id — cannot mark a specific audience exhausted`);
+          // No audience id means no audience RAN, so there is nothing to mark and no evidence
+          // this campaign ever contacted anybody. Says what it decided rather than proceeding:
+          // the stop below is gated on that evidence, so this run cannot end in a verdict about
+          // work that never happened.
+          console.warn(`[campaign-service] stopCampaign=true for campaign ${campaignId} with no x-audience-id — no audience ran, so nothing is marked exhausted and this run cannot conclude the campaign is exhausted`);
         }
 
         const campaign = await db.query.campaigns.findFirst({
@@ -498,7 +502,30 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
             ? await hasServeableAudience(campaign, req)
             : false;
 
-        if (!serveable) {
+        // "Nothing left to serve" is ALSO true for a campaign that never had anything to serve,
+        // so an empty remainder is not evidence of exhaustion — 0 of 0 reads as 100%. The
+        // verdict rests on POSITIVE evidence that outreach actually ran out of people through
+        // THIS campaign: an exhaustion mark, which is only ever written for a run that named a
+        // real audience. Same definition the extend-audience email is gated on.
+        //
+        // Without that evidence the campaign is NOT stopped: it has a funded ceiling and nothing
+        // to show for it, so it stays `ongoing` and falls through to the normal reschedule below
+        // — the next tick looks at it again. Parking it on `audience_exhausted` would be sticky
+        // (funding deliberately never resumes that reason), so a campaign that never worked
+        // would sit on a funded channel forever, which is exactly what happened to the first
+        // campaign the per-channel provisioner ever created (4769db14, 2026-08-20: stopped ten
+        // seconds after birth having served nothing).
+        const stopWarranted =
+          !serveable &&
+          isExhaustionStopWarranted({
+            hasServeableAudience: serveable,
+            hasEverExhaustedAnAudience: await hasExhaustedAudience(campaignId),
+          });
+
+        if (!serveable && !stopWarranted) {
+          console.warn(`[campaign-service] Campaign ${campaignId} has no serveable audience and has never exhausted one — it has served nothing, so it is NOT auto-stopped as ${STOP_REASONS.AUDIENCE_EXHAUSTED}; rescheduling so it is looked at again`);
+          // Falls through to the reschedule below.
+        } else if (!serveable) {
           // Fully contacted: every targeted audience is exhausted and the campaign is
           // being auto-stopped. Nudge the user to extend an audience so outreach can
           // resume. Fire-and-forget — never blocks or fails run finalization, and the

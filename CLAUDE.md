@@ -641,10 +641,10 @@ out of people, not whether an audience is dry right now). Every other guard aske
 is set up to keep spending; none asked whether anybody was ever contacted, so a brand with NO
 audience and NO contacts reached the same auto-stop branch and was told its outreach had finished:
 zero out of zero read as everyone. That brand writes no exhaustion row precisely because its stop
-carries no audience id — the case `/end-run` already logs as "cannot mark a specific audience
-exhausted" — so the mark IS the evidence, and no new state was needed to tell the two apart. The
-campaign still stops; only the claim is withheld, and the dashboard's persistent "no active
-audience" banner is what that brand reads instead. Verified in prod 2026-08-16: the three campaigns
+carries no audience id — the case `/end-run` already logs as "no audience ran" — so the mark IS
+the evidence, and no new state was needed to tell the two apart. **Since 2026-08-20 that same
+evidence gates the STOP itself, not only the claim** (next section): withholding the email while
+still stopping was half the fix. Verified in prod 2026-08-16: the three campaigns
 that ever received this email hold 11, 3 and **0** exhaustion rows — the zero is Lux Projects Bali
 (`cb965e9d`, brand `ccc29ba2`, emailed twice, 0 contacts and 0 audiences ever); the other two are
 unaffected.
@@ -659,6 +659,41 @@ body, so the name is escaped here. The name comes from brand-service `/runtime-c
 this service already makes; if it cannot be resolved the footer is EMPTY and the email reads exactly
 as it did before. Never substitute a placeholder or an id for a name a customer will read.
 (Set 2026-08-16.)
+
+## A campaign that served NOTHING has exhausted nothing — the terminal verdict rests on POSITIVE evidence, never on an empty remainder
+
+The auto-stop asked ONE question: is there a serveable audience left? "None left" is equally true
+of a campaign that never had one, so a campaign that had contacted nobody took the same branch as
+one that had genuinely worked its audiences to the end — 0 of 0 read as 100%. The verdict is now
+gated on evidence that work HAPPENED through that campaign: `isExhaustionStopWarranted`
+(`src/lib/audience-exhaustion.ts`) is `!serveable && hasExhaustedAudience(campaignId)`, the SAME
+mark the extend-audience email is gated on, and it is only ever written for a run that named a
+real audience.
+
+- **Without that evidence the campaign is NOT stopped at all.** It stays `ongoing` and falls
+  through to the normal reschedule, so the next tick looks at it again. Nothing new decides
+  whether it may spend: the turn planner holds it if its pair is unfunded and the gate refuses a
+  run it cannot price. The alternative — stopping it — is STICKY: funding deliberately resumes a
+  campaign that was HELD but never one that stopped for a reason of its own, so
+  `audience_exhausted` parks a funded channel indefinitely with no manual path back, and the
+  funding sweep says exactly that on every pass.
+- **The degenerate branch states its decision.** `stopCampaign=true` with no `x-audience-id` used
+  to log that it could not mark an audience and then proceed to the stop anyway; it now says no
+  audience ran, and the gate says it is therefore not concluding exhaustion.
+- **The exhaustion stop itself is untouched.** A campaign that HAS served and then genuinely
+  exhausts still stops, still emails, still resumes through the sweep. Money is not an answer to
+  exhaustion; only the zero-evidence case was wrong.
+- **Migration 0052** applies the same rule to the rows already carrying the verdict — stopped for
+  `audience_exhausted` with zero exhaustion marks, and no live twin holding their identity — and
+  returns them to `ongoing` / no reason / due now, auditing each in
+  `campaign_stop_reason_decisions`. It selected the whole stopped-for-exhaustion population in
+  prod, two rows: `4769db14` (the first campaign the per-channel provisioner ever created, dead
+  ten seconds after birth on a channel funded at $10/day) and `cb965e9d` (Lux Projects Bali, the
+  0-audience brand above). Pinned by `tests/integration/unpark-never-served-migration.test.ts`,
+  which applies the file itself twice.
+- WHY that campaign's first serve came back empty on a brand whose sibling served 109 leads the
+  same day is a separate lead-service investigation. This service's job was to stop reading an
+  empty answer as a finished one. (Set 2026-08-20.)
 
 ## A campaign that ran out of people to contact comes BACK on its own — the customer's action is the trigger, and they were told so
 
