@@ -48,6 +48,11 @@
 -- IDEMPOTENT: a second run selects nothing (the rows it wrote are no longer stopped). REVERSIBLE
 -- by the ids the audit table records.
 
+-- campaign_id is `text` on purpose, and every comparison against it casts. The two id columns
+-- this file touches disagree on type in prod (campaigns.id is uuid, campaign_audience_exhaustion
+-- .campaign_id is text — a historical drift), and a from-scratch migrate chain lands them
+-- differently again, so `text` on both sides of an explicit cast is the only spelling that holds
+-- everywhere.
 CREATE TABLE IF NOT EXISTS campaign_stop_reason_decisions (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   campaign_id     text NOT NULL,
@@ -87,7 +92,7 @@ WITH candidates AS (
 audited AS (
   INSERT INTO campaign_stop_reason_decisions
     (campaign_id, previous_status, previous_reason, new_status, new_reason, decided_by)
-  SELECT c.id, c.status, c.stop_reason, 'ongoing', NULL,
+  SELECT c.id::text, c.status, c.stop_reason, 'ongoing', NULL,
          '0052_unpark_never_served_exhaustion_stops'
   FROM campaigns c
   JOIN candidates k ON k.id = c.id
@@ -101,4 +106,4 @@ SET status = 'ongoing',
     next_run_at = now(),
     updated_at = now()
 FROM audited a
-WHERE c.id = a.campaign_id;
+WHERE c.id::text = a.campaign_id;
