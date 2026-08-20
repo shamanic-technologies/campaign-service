@@ -45,6 +45,10 @@ vi.mock("../../src/db/index.js", () => ({
       },
     }),
     delete: vi.fn().mockReturnValue({ where: mockDeleteWhere }),
+    // Raw-SQL seam. The funnel-less-ancestor adoption runs through it and is inert here: these
+    // tests pin which QUESTIONS provisioning asks, not what the rule writes (that is measured
+    // against a real database in tests/integration/stopped-ancestor-funnel-rerun.test.ts).
+    execute: vi.fn().mockResolvedValue([]),
   },
 }));
 
