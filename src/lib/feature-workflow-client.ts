@@ -1,4 +1,4 @@
-import type { IdentityHeaders } from "@distribute/runs-client";
+import type { ProvisioningIdentity } from "./provisioning-identity.js";
 
 /**
  * A workflow that can actually RUN a given acquisition channel.
@@ -14,26 +14,39 @@ import type { IdentityHeaders } from "@distribute/runs-client";
  * campaign, and the next sweep provisions it the moment the dynasty ships. The slug chosen here is
  * only the seed — the greedy rotation re-picks one every run from that feature's own evidence.
  *
- * Contract (workflow-service): GET /workflows?featureSlug=&status=active
+ * Contract (workflow-service): GET /workflows?featureSlug=&status=active (x-api-key + FULL identity)
  *   -> { workflows: [{ workflowSlug, workflowDynastySlug, featureSlug, createdAt, ... }] }
  *
- * Returns null on missing config, network error, non-2xx, an unparseable payload, or a feature with
- * no active workflow.
+ * The identity is not tracking: workflow-service answers `400 x-org-id, x-user-id, and x-run-id
+ * headers are required` to anything less, so all three are always sent and the run id is one
+ * runs-service can resolve (see provisioning-identity.ts).
+ *
+ * "This channel has NO active workflow" and "I could not READ what workflows this channel has" are
+ * different answers and are returned as different ones. Both skip the pair — but only one of them
+ * means the customer is funding something we failed to evaluate, and collapsing them is how a read
+ * that was rejected outright on every sweep looked exactly like a channel with no dynasty.
  */
+export type ActiveWorkflowRead =
+  | { ok: true; workflowSlug: string }
+  | { ok: true; workflowSlug: null }
+  | { ok: false; detail: string };
+
 export async function fetchActiveWorkflowSlugForFeature(
   featureSlug: string,
-  identity: IdentityHeaders,
-): Promise<string | null> {
+  identity: ProvisioningIdentity,
+): Promise<ActiveWorkflowRead> {
   const baseUrl = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
-  if (!baseUrl || !apiKey) return null;
+  if (!baseUrl || !apiKey) {
+    return { ok: false, detail: "WORKFLOW_SERVICE_URL / WORKFLOW_SERVICE_API_KEY not configured" };
+  }
 
   const headers: Record<string, string> = {
     "x-api-key": apiKey,
     "x-org-id": identity.orgId,
+    "x-user-id": identity.userId,
+    "x-run-id": identity.runId,
   };
-  if (identity.userId) headers["x-user-id"] = identity.userId;
-  if (identity.runId) headers["x-run-id"] = identity.runId;
   if (identity.brandId) headers["x-brand-id"] = identity.brandId;
 
   try {
@@ -42,12 +55,24 @@ export async function fetchActiveWorkflowSlugForFeature(
     url.searchParams.set("status", "active");
 
     const res = await fetch(url, { headers });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // The BODY names the missing header (`x-org-id, x-user-id, and x-run-id headers are
+      // required`), which is the whole diagnostic — a bare status says nothing actionable.
+      let body = "";
+      try {
+        body = (await res.text()).slice(0, 200);
+      } catch {
+        body = "";
+      }
+      return { ok: false, detail: `HTTP ${res.status}${body ? ` ${body}` : ""}` };
+    }
 
     const data = await res.json() as {
       workflows?: Array<{ workflowSlug?: string; featureSlug?: string; createdAt?: string }>;
     };
-    if (!Array.isArray(data.workflows)) return null;
+    if (!Array.isArray(data.workflows)) {
+      return { ok: false, detail: "response states no workflows array" };
+    }
 
     // Filtered again on the feature: the seed must belong to the channel it is provisioned for,
     // whatever the query returned.
@@ -55,13 +80,13 @@ export async function fetchActiveWorkflowSlugForFeature(
       (w) => typeof w?.workflowSlug === "string" && w.workflowSlug.length > 0
         && (w.featureSlug === undefined || w.featureSlug === featureSlug),
     );
-    if (candidates.length === 0) return null;
+    if (candidates.length === 0) return { ok: true, workflowSlug: null };
 
     // Newest first, so a brand-new campaign starts on the channel's current workflow rather than
     // its oldest one. Ties (or an absent createdAt) fall back to the listed order, which is stable.
     candidates.sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
-    return candidates[0]!.workflowSlug!;
-  } catch {
-    return null;
+    return { ok: true, workflowSlug: candidates[0]!.workflowSlug! };
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
 }

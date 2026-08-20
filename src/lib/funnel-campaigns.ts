@@ -8,8 +8,9 @@ import {
   fundedFunnels,
   type FunnelBudgetsRead,
 } from "./funnel-budget-client.js";
-import { fetchFeatureSalesFunnels } from "./feature-sales-funnels-client.js";
-import { fetchActiveWorkflowSlugForFeature } from "./feature-workflow-client.js";
+import { fetchFeatureSalesFunnels, type FeatureSalesFunnelsRead } from "./feature-sales-funnels-client.js";
+import { fetchActiveWorkflowSlugForFeature, type ActiveWorkflowRead } from "./feature-workflow-client.js";
+import { buildProvisioningIdentity, type ProvisioningIdentity } from "./provisioning-identity.js";
 import type { SalesFunnelKey } from "./sales-funnel-vocabulary.js";
 import {
   fetchBrandSalesFunnels,
@@ -51,6 +52,12 @@ export interface ClaimedFunnelCampaign {
   id: string;
   orgId: string;
   createdByUserId: string | null;
+  /**
+   * This campaign's ancestor run — what the provisioning reads state as their `x-run-id`, and what
+   * a trigger hands workflow-service. NULL until `ensureCampaignRunId` establishes one; never a
+   * minted uuid, which runs-service refuses.
+   */
+  parentRunId: string | null;
   workflowSlug: string;
   brandIds: string[] | null;
   featureSlug: string | null;
@@ -197,10 +204,25 @@ async function planOneBrand(
 
   const funded = fundedPairs(budgets, featureSlug);
   if (funded.length > 0) {
-    // Asked over the WHOLE group, not just the seed: a brand selling several offers has one
-    // campaign per offer in flight, and each is ranked on the funnels of the offer IT sells.
-    const declared = await resolveDeclaredFunnels(group, brandId, identity);
-    await ensureFundedFunnelCampaigns({ seed, brandId, funded, declared, identity, now });
+    // The reads below are REFUSED without a full identity, and the campaign row this path is built
+    // from carries no run — so the campaign's own ancestor run is established first and stated on
+    // every one of them. Null here provisions nothing this sweep and is already logged; it does
+    // not hold the brand, because this decides which questions can be asked, not whether money
+    // may be spent.
+    const provisioning = await buildProvisioningIdentity(seed, brandId);
+    if (provisioning) {
+      // Asked over the WHOLE group, not just the seed: a brand selling several offers has one
+      // campaign per offer in flight, and each is ranked on the funnels of the offer IT sells.
+      const declared = await resolveDeclaredFunnels(group, brandId, provisioning);
+      await ensureFundedFunnelCampaigns({
+        seed,
+        brandId,
+        funded,
+        declared,
+        identity: provisioning,
+        now,
+      });
+    }
   }
 
   // (0) The hold. A campaign the customer funds nothing for waits for money, not for a turn — so
@@ -324,7 +346,7 @@ const NO_DECLARED_FUNNELS: ResolvedDeclaredFunnels = {
 async function resolveDeclaredFunnels(
   group: Array<{ offerId?: string | null }>,
   brandId: string,
-  identity: IdentityHeaders,
+  identity: ProvisioningIdentity,
 ): Promise<ResolvedDeclaredFunnels> {
   const offerIds = [...new Set(group.map((c) => c.offerId).filter((id): id is string => !!id))];
   const anyOfferless = group.some((c) => !c.offerId);
@@ -415,7 +437,7 @@ async function ensureFundedFunnelCampaigns({
   brandId: string;
   funded: FundedPair[];
   declared: ResolvedDeclaredFunnels;
-  identity: IdentityHeaders;
+  identity: ProvisioningIdentity;
   now: Date;
 }): Promise<void> {
   // No readable funnel declaration → nothing says the brand still sells through these funnels.
@@ -424,8 +446,8 @@ async function ensureFundedFunnelCampaigns({
   if (!seed.createdByUserId) return; // no recipient/owner to attribute a new campaign to
 
   // One read per CHANNEL, not per pair: a brand funding both of a channel's funnels asks once.
-  const sellableByFeature = new Map<string, Set<SalesFunnelKey> | null>();
-  const workflowByFeature = new Map<string, string | null>();
+  const sellableByFeature = new Map<string, FeatureSalesFunnelsRead>();
+  const workflowByFeature = new Map<string, ActiveWorkflowRead>();
 
   // The (org, brand, acquisition channel) triples a funnel campaign is provisioned for on this
   // tick. Collected rather than acted on inline BECAUSE the existing-campaign check below returns
@@ -453,9 +475,16 @@ async function ensureFundedFunnelCampaigns({
     }
     const sellable = sellableByFeature.get(featureSlug)!;
     // Unreadable → provision nothing for this channel, exactly as an unreadable brand declaration
-    // provisions nothing for the brand. A pair is not guessed at.
-    if (!sellable) continue;
-    if (!sellable.has(f.funnelKey)) {
+    // provisions nothing for the brand. A pair is not guessed at — but it is not passed over in
+    // silence either: the customer's money is on this pair and we failed to evaluate it, which is
+    // a different thing from evaluating it and saying no.
+    if (!sellable.ok) {
+      console.warn(
+        `[campaign-service] Not provisioning ${featureSlug} for funnel ${f.funnelKey} (brand ${brandId}, org ${seed.orgId}) — could not READ features-service's statement of which funnels this channel sells: ${sellable.detail}`,
+      );
+      continue;
+    }
+    if (!sellable.funnels.has(f.funnelKey)) {
       // A pair nobody can run: the customer funds it, but this channel has no way to sell that
       // chain. Logged once per sweep rather than silently dropped — the money is real and the
       // customer is owed an answer about it eventually.
@@ -523,7 +552,16 @@ async function ensureFundedFunnelCampaigns({
           await fetchActiveWorkflowSlugForFeature(featureSlug, identity),
         );
       }
-      workflowSlug = workflowByFeature.get(featureSlug)!;
+      const read = workflowByFeature.get(featureSlug)!;
+      // "This channel has no dynasty yet" is a routine answer; "workflow-service would not tell
+      // me" is a funded pair nobody evaluated. Same skip, different sentence, on purpose.
+      if (!read.ok) {
+        console.warn(
+          `[campaign-service] Not provisioning ${featureSlug} for funnel ${f.funnelKey} (brand ${brandId}, org ${seed.orgId}) — could not READ workflow-service's active workflows for this channel: ${read.detail}`,
+        );
+        continue;
+      }
+      workflowSlug = read.workflowSlug;
     }
     if (!workflowSlug) {
       console.log(
@@ -637,10 +675,11 @@ export async function provisionFundedFunnelsForIdleBrands(now: Date = new Date()
     workflow_slug: string;
     created_by_user_id: string;
     offer_id: string | null;
+    parent_run_id: string | null;
   }>(sql`
     SELECT DISTINCT ON (c.org_id, coalesce(c.brand_id, c.brand_ids[1]))
            c.id, c.org_id, coalesce(c.brand_id, c.brand_ids[1]) AS brand_id,
-           c.feature_slug, c.workflow_slug, c.created_by_user_id, c.offer_id
+           c.feature_slug, c.workflow_slug, c.created_by_user_id, c.offer_id, c.parent_run_id
     FROM campaigns c
     WHERE c.feature_slug IN (${sql.join(slugs.map((s) => sql`${s}`), sql`, `)})
       AND coalesce(c.brand_id, c.brand_ids[1]) IS NOT NULL
@@ -664,6 +703,7 @@ export async function provisionFundedFunnelsForIdleBrands(now: Date = new Date()
     workflow_slug: string;
     created_by_user_id: string;
     offer_id: string | null;
+    parent_run_id: string | null;
   }>);
   const examined = rows.slice(0, FUNDING_SWEEP_MAX_BRANDS);
   if (rows.length > FUNDING_SWEEP_MAX_BRANDS) {
@@ -675,6 +715,19 @@ export async function provisionFundedFunnelsForIdleBrands(now: Date = new Date()
   let provisioned = 0;
   for (const row of examined) {
     try {
+      const seed: ClaimedFunnelCampaign = {
+        id: row.id,
+        orgId: row.org_id,
+        createdByUserId: row.created_by_user_id,
+        parentRunId: row.parent_run_id,
+        workflowSlug: row.workflow_slug,
+        brandIds: [row.brand_id],
+        featureSlug: row.feature_slug,
+        funnelKey: null,
+        dailyBudgetCents: null,
+        offerId: row.offer_id,
+      };
+
       const identity: IdentityHeaders = {
         orgId: row.org_id,
         userId: row.created_by_user_id,
@@ -691,28 +744,23 @@ export async function provisionFundedFunnelsForIdleBrands(now: Date = new Date()
       // the brand having no ongoing campaign.
       if (funded.length === 0) continue;
 
+      // Same identity discipline as the tick: the two channel reads are refused without a run id,
+      // and this sweep's seed carries one no more than a claimed row does.
+      const provisioning = await buildProvisioningIdentity(seed, row.brand_id);
+      if (!provisioning) continue;
+
       const declared = await resolveDeclaredFunnels(
         [{ offerId: row.offer_id }],
         row.brand_id,
-        identity,
+        provisioning,
       );
       const before = await countOngoingSalesCampaigns(row.org_id, row.brand_id);
       await ensureFundedFunnelCampaigns({
-        seed: {
-          id: row.id,
-          orgId: row.org_id,
-          createdByUserId: row.created_by_user_id,
-          workflowSlug: row.workflow_slug,
-          brandIds: [row.brand_id],
-          featureSlug: row.feature_slug,
-          funnelKey: null,
-          dailyBudgetCents: null,
-          offerId: row.offer_id,
-        },
+        seed,
         brandId: row.brand_id,
         funded,
         declared,
-        identity,
+        identity: provisioning,
         now,
       });
       const after = await countOngoingSalesCampaigns(row.org_id, row.brand_id);
