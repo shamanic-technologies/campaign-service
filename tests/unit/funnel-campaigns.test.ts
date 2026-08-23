@@ -836,8 +836,10 @@ describe("planFunnelTurns", () => {
     mockFunnelBudgets([{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }]);
     mockDeclaredFunnels([{ funnelKey: "website_purchases" }]);
     mockFindFirst.mockResolvedValue({ id: "c-visit", name: "x", status: "ongoing" });
+    // Only the FUNDED campaign is ever asked what it spent — the unfunded one is out of the
+    // running before the question arises, so a second queued answer here would be a stale mock
+    // spilling into the next test.
     mockSpend("1200"); // the funded funnel is over its ceiling
-    mockSpend("0");    // the unfunded one has spent nothing, but has no ceiling to fill
 
     const now = new Date("2026-08-02T10:00:00Z");
     const deferred = await planFunnelTurns(
@@ -848,9 +850,84 @@ describe("planFunnelTurns", () => {
       now,
     );
 
-    // The funded-but-full one waits for the day rollover; the unfunded one is not waiting its
-    // TURN at all, it is waiting for money, so it re-checks on the funding cadence.
+    // The funded-but-full one waits on the funding cadence, not on its turn; the unfunded one is
+    // not waiting its TURN at all either, it is waiting for money — same cadence, same reason.
     expect(deferred.get("c-visit")!.getTime()).toBeGreaterThan(now.getTime() + FUNNEL_TURN_DEFER_MS);
     expect(deferred.get("c-unfunded")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
+  });
+
+  it("re-checks a brand whose every funded pair is at its ceiling on the funding cadence, not at the day rollover", async () => {
+    mockFunnelBudgets([
+      { funnelKey: "reply_meeting", dailyBudgetCents: "4000" },
+      { funnelKey: "visit_signup", dailyBudgetCents: "1000" },
+    ]);
+    mockDeclaredFunnels([
+      { funnelKey: "sales_meetings_from_conversation" },
+      { funnelKey: "website_purchases" },
+    ]);
+    mockFindFirst.mockResolvedValue({ id: "existing", name: "x", status: "ongoing" });
+    mockSpend("4000"); // c-reply: exactly at its ceiling
+    mockSpend("1200"); // c-visit: over its ceiling
+
+    const now = new Date("2026-08-23T16:24:00Z");
+    const deferred = await planFunnelTurns(
+      [
+        claimed({ id: "c-reply", funnelKey: "sales_meetings_from_conversation" }),
+        claimed({ id: "c-visit", funnelKey: "website_purchases" }),
+      ],
+      now,
+    );
+
+    // Nothing runs — but the money that re-opens them can arrive at any hour, so the wake-up is
+    // bounded by the funding cadence. Parking on the day rollover is what left a raised ceiling
+    // unspent until midnight UTC.
+    expect(deferred.get("c-reply")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
+    expect(deferred.get("c-visit")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
+  });
+
+  it("never defers past the day rollover when the rollover is nearer than the funding cadence", async () => {
+    mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "4000" }]);
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue({ id: "existing", name: "x", status: "ongoing" });
+    mockSpend("4000");
+
+    // Three minutes to midnight (local, which is what the day-rollover helper works in).
+    const now = new Date();
+    now.setHours(23, 57, 0, 0);
+    const deferred = await planFunnelTurns(
+      [claimed({ id: "c-reply", funnelKey: "sales_meetings_from_conversation" })],
+      now,
+    );
+
+    const rollover = new Date(now.getTime());
+    rollover.setDate(rollover.getDate() + 1);
+    rollover.setHours(0, 0, 0, 0);
+    expect(deferred.get("c-reply")?.getTime()).toBe(rollover.getTime());
+  });
+
+  it("leaves the non-exhausted paths alone: the winner fires and the loser waits its turn", async () => {
+    mockFunnelBudgets([
+      { funnelKey: "reply_meeting", dailyBudgetCents: "4000" },
+      { funnelKey: "visit_signup", dailyBudgetCents: "1000" },
+    ]);
+    mockDeclaredFunnels([
+      { funnelKey: "sales_meetings_from_conversation" },
+      { funnelKey: "website_purchases" },
+    ]);
+    mockFindFirst.mockResolvedValue({ id: "existing", name: "x", status: "ongoing" });
+    mockSpend("2000"); // c-reply: 50% full
+    mockSpend("900");  // c-visit: 90% full
+
+    const now = new Date("2026-08-23T16:24:00Z");
+    const deferred = await planFunnelTurns(
+      [
+        claimed({ id: "c-reply", funnelKey: "sales_meetings_from_conversation" }),
+        claimed({ id: "c-visit", funnelKey: "website_purchases" }),
+      ],
+      now,
+    );
+
+    expect(deferred.has("c-reply")).toBe(false);
+    expect(deferred.get("c-visit")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
   });
 });

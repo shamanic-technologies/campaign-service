@@ -263,8 +263,24 @@ async function planOneBrand(
   }
 
   const winner = selectLowestFillRatio(candidates);
-  // Every funded funnel is at its ceiling — nothing runs until they reset at the day rollover.
-  const reset = winner === null ? nextDayStart(now) : null;
+  // Every funded pair is at its ceiling. What re-opens it is NOT only the day rollover: a customer
+  // who raises a ceiling at 14:57 has bought headroom that exists the moment they buy it. The defer
+  // is written ONCE, from the ceiling current at this instant, and nothing else looks at an ongoing
+  // campaign deferred to tomorrow — not the claim (`next_run_at <= now()`), not `claimStuckCampaigns`
+  // (`next_run_at IS NULL`), not the resume sweep (stopped rows only). So parking on the rollover
+  // makes the raise land the NEXT DAY, with real funded headroom unused (prod 2026-08-23, brand
+  // 75d7e3e8: $39.13 of a $40 ceiling, raised to $50 at 14:57, zero runs after 13:24).
+  //
+  // Bounded by the funding cadence instead — the same figure and the same argument as
+  // FUNDING_RECHECK_MS, whose promise ("funding a funnel makes its campaign eligible within this
+  // window, with no manual step") held for a campaign funded from ZERO and not for one funded MORE.
+  // Same rule, missing branch. A brand STILL at its ceiling simply re-ranks and defers again: no run
+  // fires, no spend, and the gate is untouched. Ten minutes before midnight the rollover is the
+  // nearer of the two and wins, so the day reset is never overshot.
+  const reset =
+    winner === null
+      ? new Date(Math.min(nextDayStart(now).getTime(), now.getTime() + FUNDING_RECHECK_MS))
+      : null;
 
   for (const c of candidates) {
     if (c.campaignId === winner) continue;
@@ -651,11 +667,14 @@ export function resetFundingSweepThrottle(): void {
  *
  *   - a brand whose campaigns are ALL STOPPED is claimed by nobody, so nothing would look at it
  *     again ever (27 of the 44 brands with sales campaigns, the day this sweep was written);
- *   - a brand whose campaigns are all PARKED AT THEIR CEILING is deferred to the day rollover, so
- *     nothing looks at it again until midnight UTC. Its funding is perfectly readable the whole
- *     time. That is how brand 75d7e3e8 funded a second acquisition channel at 13:59 on 19 Aug and
- *     had no campaign for it nineteen hours later (issue #386) — too alive for a sweep that
- *     selected on "nothing ongoing", too quiet for the claim path.
+ *   - a brand whose campaigns are all PARKED AT THEIR CEILING used to be deferred to the day
+ *     rollover, so nothing looked at it again until midnight UTC while its funding stayed perfectly
+ *     readable the whole time. That is how brand 75d7e3e8 funded a second acquisition channel at
+ *     13:59 on 19 Aug and had no campaign for it nineteen hours later (issue #386) — too alive for
+ *     a sweep that selected on "nothing ongoing", too quiet for the claim path. That defer is now
+ *     bounded by FUNDING_RECHECK_MS, so such a brand is due within the sweep interval and the claim
+ *     path reaches it first; this selection covers it either way, which is the point of selecting on
+ *     WHEN it is next looked at rather than on which state parked it.
  *
  * So the selection is on WHEN the brand will next be looked at, not on whether it has something
  * running: a pair is examined here unless one of the brand's sales campaigns is in flight or due
