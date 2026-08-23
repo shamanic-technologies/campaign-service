@@ -6,7 +6,7 @@ import { resolveWorkflowSlugForTrigger } from "./features-workflow-projection-cl
 import { listRuns } from "@distribute/runs-client";
 import {
   planFunnelTurns,
-  provisionFundedFunnelsForIdleBrands,
+  provisionFundedPairsForQuietBrands,
   FUNDING_SWEEP_INTERVAL_MS,
 } from "./funnel-campaigns.js";
 import { resumeServeableCampaigns } from "./campaign-resume.js";
@@ -348,10 +348,11 @@ async function tick(): Promise<void> {
       // this very tick instead of waiting for the next one. Throttled to its own cadence
       // (RESUME_SWEEP_INTERVAL_MS), so a 60s tick does not turn into a 60s fan-out.
       await resumeServeableCampaigns();
-      // A brand whose campaigns are ALL stopped is claimed by nobody, so the claim path below
-      // could never notice that its owner funded a funnel. Asked on its own cadence, before the
-      // claim, so a campaign stood up here takes its turn on this very tick.
-      await provisionFundedFunnelsForIdleBrands();
+      // A brand nothing will claim soon — every campaign stopped, or every campaign parked at its
+      // ceiling until the day rollover — is invisible to the claim path below, so nothing would
+      // notice that its owner funded a channel. Asked on its own cadence, before the claim, so a
+      // campaign stood up here takes its turn on this very tick.
+      await provisionFundedPairsForQuietBrands();
       await claimStuckCampaigns();
       await reRunDueCampaigns();
     } catch (err) {
