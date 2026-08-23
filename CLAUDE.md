@@ -341,13 +341,24 @@ holding 11 `ongoing` campaigns the scheduler would never claim. The flag is reti
   Turn-taking is fail-soft because it only reorders work already allowed; this decides whether to
   spend, and the gate refuses the same run on the same unreadable read anyway — firing it could
   only burn a run.
-- **A brand with NOTHING running is claimed by nobody, so it is swept.**
-  `provisionFundedFunnelsForIdleBrands` (own 10-min cadence) reads the (org, brand) pairs that
-  have sales campaigns and no `ongoing` one — 27 of 44 today — and stands up one campaign per
-  funded, DECLARED funnel. Without it, funding a funnel on a brand whose campaigns are all stopped
-  would mean nothing forever, which is precisely the brand this exists for. The scheduler's idle
-  sleep is capped at that interval for the same reason the resume sweep needed it: a brand with
-  nothing ongoing yields an empty snapshot and would otherwise be looked at hourly.
+- **A brand nothing will CLAIM soon is swept, and "soon" is the selection — not "has nothing
+  running".** `provisionFundedPairsForQuietBrands` (own 10-min cadence) reads the (org, brand)
+  pairs that have sales campaigns and none of them in flight or due within the sweep interval,
+  and stands up one campaign per funded, DECLARED pair. Selecting on "no `ongoing` campaign" was
+  right for the brand whose campaigns are all STOPPED (27 of 44 the day it shipped) and blind to
+  the brand PARKED AT ITS CEILING: the turn planner defers it to the day rollover, so the claim
+  path — where provisioning otherwise lives — does not look at it again until midnight UTC, and a
+  channel funded in the meantime waits for the rollover. That brand is too alive for an
+  idle-selection sweep and too quiet for the claim path, and it fell between them for nineteen
+  hours in prod (brand `75d7e3e8`, second channel funded 2026-08-19 13:59, no campaign until the
+  next day — issue #386). Read volume is unchanged for a brand that is working: it is EXCLUDED
+  here precisely because the claim path reaches it sooner, so the cost is one billing read per
+  QUIET brand per ten minutes — the same cadence and the same argument as `FUNDING_RECHECK_MS`.
+  The scheduler's idle sleep is capped at that interval for the same reason the resume sweep
+  needed it: a brand with nothing ongoing yields an empty snapshot and would otherwise be looked
+  at hourly. The seed prefers an `ongoing` row (it carries the current owner, workflow and offer),
+  and the declared-funnel question is asked over every offer the pair's sales campaigns state, not
+  just the seed's. (Widened 2026-08-23.)
 - **Funding brings back the campaign that was HELD, never the campaign that stopped for a reason
   of its own.** A row carrying `audience_exhausted`, `max_leads_reached`, `manual` or
   `org_teardown` said why it stopped and money answers none of them (the exhaustion sweep owns the
@@ -499,7 +510,7 @@ offer, ten answers on the brand ten orgs claim.
 - **A campaign provisioned from an offer's declaration CARRIES that offer** (`offerId` on the
   insert). Still carried, never derived: the value comes from the campaign whose declaration put the
   funnel in scope, not from the funnel, the goal or the workflow.
-- The idle-brand funding sweep asks the same way, off its seed row's `offer_id`.
+- The quiet-brand funding sweep asks the same way, over the offers its pair's campaigns state.
 (Set 2026-08-19.)
 
 ## Nothing can be unattributable — so nothing holds a brand's provisioning back
@@ -572,7 +583,7 @@ Unit tests (`pnpm test:unit`) need neither — they fully mock db/runs-client.
 
 ## Raw-`sql` list params need `sql.join`, NOT a bare JS array — and workflow dynasties live in the DB, not src
 
-**Interpolating a JS array into a drizzle raw `sql` template does NOT expand it into a param list.** `sql\`... IN (${arr})\`` binds the whole array as ONE composite → `operator does not exist: text = record`; `= ANY(${arr})` → `op ANY/ALL (array) requires array on right side`. Neither works. To expand a small in-code list (e.g. the sales-outreach feature family in `funnel-campaigns.ts`'s idle-brand sweep), use `sql.join([...set].map((v) => sql\`${v}\`), sql\`, \`)` inside `IN (...)`. Caught only by the integration tests (unit tests mock the DB), so run `pnpm test:integration` after any raw-`sql` list change. (Set 2026-07-24, sales-crm feature-family pause clause; the clause itself is gone, the trap is not.)
+**Interpolating a JS array into a drizzle raw `sql` template does NOT expand it into a param list.** `sql\`... IN (${arr})\`` binds the whole array as ONE composite → `operator does not exist: text = record`; `= ANY(${arr})` → `op ANY/ALL (array) requires array on right side`. Neither works. To expand a small in-code list (e.g. the sales-outreach feature family in `funnel-campaigns.ts`'s idle-brand sweep), use `sql.join([...set].map((v) => sql\`${v}\`), sql\`, \`)` inside `IN (...)`. Caught only by the integration tests (unit tests mock the DB), so run `pnpm test:integration` after any raw-`sql` change. **Same template, second trap: a JS `Date` parameter is REFUSED outright** — postgres.js binds raw-`sql` params itself and throws `The "string" argument must be of type string ... Received an instance of Date`. Pass `d.toISOString()` and cast (`::timestamptz`). (2026-08-23, the quiet-brand sweep's due-soon bound.) (Set 2026-07-24, sales-crm feature-family pause clause; the clause itself is gone, the trap is not.)
 
 **Workflow dynasties/slugs are DB-resident (workflow-service `workflows` table), NOT seeded in workflow-service `src`.** To answer "does feature X have a workflow dynasty / which slugs exist / has it ever run," query the workflow-service Neon DB (`workflows` grouped by `feature_slug, workflow_dynasty_slug`; runs via `workflow_runs`), do NOT `git grep` workflow-service src — a src grep returns only test fixtures and misses every real dynasty. Cost 2026-07-24: grepped workflow-service src, wrongly concluded `sales-crm-email-outreach` had no dynasty (blocking a plan); the DB showed 5 active CRM dynasties seeded the day before. features-service also cannot resolve "which feature is a brand on" — all 31 of its endpoints take `featureSlug` as INPUT; the feature identity comes from the caller (`x-feature-slug`), never from features-service.
 
@@ -792,7 +803,7 @@ same branch.
 
 - **A campaign's `parentRunId` is its ANCESTOR run**, written once at creation from the creator's
   `x-run-id`, and every execution's run tree chains under it. A creator carrying no run of its own
-  — the per-funnel provisioner, the idle-brand sweep — leaves it NULL, which is where the minting
+  — the per-funnel provisioner, the quiet-brand sweep — leaves it NULL, which is where the minting
   came from.
 - **`ensureCampaignRunId` (`src/lib/trigger-run.ts`) is the ONE place a missing ancestor is
   filled**, shared by the leg that TRIGGERS (scheduler) and the leg that RESUMES
