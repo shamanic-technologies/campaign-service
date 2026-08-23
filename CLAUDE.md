@@ -305,7 +305,15 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
   never a fixed order and never "the primary first". A fixed order starves whatever sits last —
   if the first funnel can absorb the whole day the others never run, and that shows up in no log
   at all. A funnel at its ceiling yields with no special case (ratio ≥ 1 → not a candidate); all
-  funnels full → parked until the day rollover. EVERY alive campaign of the brand is a candidate
+  funnels full → parked, but on the FUNDING cadence (`min(nextDayStart, now + FUNDING_RECHECK_MS)`),
+  never on the day rollover alone. That defer is written ONCE from the ceiling current at that
+  instant and nothing re-checks an ongoing campaign due tomorrow — not the claim
+  (`next_run_at <= now()`), not `claimStuckCampaigns` (`next_run_at IS NULL`), not the resume sweep
+  (stopped rows only) — so a customer who RAISES a ceiling mid-day saw the money spent the next day
+  (prod 2026-08-23, brand `75d7e3e8`: $39.13 of a $40 ceiling, raised to $50 at 14:57, zero runs
+  after 13:24). `FUNDING_RECHECK_MS` already carries that promise for a campaign funded from ZERO;
+  one funded MORE is the same rule, missing branch. A brand still at its ceiling simply re-ranks and
+  defers again — no run, no spend, gate untouched. EVERY alive campaign of the brand is a candidate
   every tick — one that states no funnel is ranked on the brand daily budget, the ceiling the gate
   actually binds it to. No campaign is ever held out of the running because another one covers its
   funnel; there is no superseded state, and `tests/unit/no-legacy.test.ts` fails if the concept
@@ -352,13 +360,24 @@ holding 11 `ongoing` campaigns the scheduler would never claim. The flag is reti
   Turn-taking is fail-soft because it only reorders work already allowed; this decides whether to
   spend, and the gate refuses the same run on the same unreadable read anyway — firing it could
   only burn a run.
-- **A brand with NOTHING running is claimed by nobody, so it is swept.**
-  `provisionFundedFunnelsForIdleBrands` (own 10-min cadence) reads the (org, brand) pairs that
-  have sales campaigns and no `ongoing` one — 27 of 44 today — and stands up one campaign per
-  funded, DECLARED funnel. Without it, funding a funnel on a brand whose campaigns are all stopped
-  would mean nothing forever, which is precisely the brand this exists for. The scheduler's idle
-  sleep is capped at that interval for the same reason the resume sweep needed it: a brand with
-  nothing ongoing yields an empty snapshot and would otherwise be looked at hourly.
+- **A brand nothing will CLAIM soon is swept, and "soon" is the selection — not "has nothing
+  running".** `provisionFundedPairsForQuietBrands` (own 10-min cadence) reads the (org, brand)
+  pairs that have sales campaigns and none of them in flight or due within the sweep interval,
+  and stands up one campaign per funded, DECLARED pair. Selecting on "no `ongoing` campaign" was
+  right for the brand whose campaigns are all STOPPED (27 of 44 the day it shipped) and blind to
+  the brand PARKED AT ITS CEILING: the turn planner defers it to the day rollover, so the claim
+  path — where provisioning otherwise lives — does not look at it again until midnight UTC, and a
+  channel funded in the meantime waits for the rollover. That brand is too alive for an
+  idle-selection sweep and too quiet for the claim path, and it fell between them for nineteen
+  hours in prod (brand `75d7e3e8`, second channel funded 2026-08-19 13:59, no campaign until the
+  next day — issue #386). Read volume is unchanged for a brand that is working: it is EXCLUDED
+  here precisely because the claim path reaches it sooner, so the cost is one billing read per
+  QUIET brand per ten minutes — the same cadence and the same argument as `FUNDING_RECHECK_MS`.
+  The scheduler's idle sleep is capped at that interval for the same reason the resume sweep
+  needed it: a brand with nothing ongoing yields an empty snapshot and would otherwise be looked
+  at hourly. The seed prefers an `ongoing` row (it carries the current owner, workflow and offer),
+  and the declared-funnel question is asked over every offer the pair's sales campaigns state, not
+  just the seed's. (Widened 2026-08-23.)
 - **Funding brings back the campaign that was HELD, never the campaign that stopped for a reason
   of its own.** A row carrying `audience_exhausted`, `max_leads_reached`, `manual` or
   `org_teardown` said why it stopped and money answers none of them (the exhaustion sweep owns the
@@ -510,7 +529,7 @@ offer, ten answers on the brand ten orgs claim.
 - **A campaign provisioned from an offer's declaration CARRIES that offer** (`offerId` on the
   insert). Still carried, never derived: the value comes from the campaign whose declaration put the
   funnel in scope, not from the funnel, the goal or the workflow.
-- The idle-brand funding sweep asks the same way, off its seed row's `offer_id`.
+- The quiet-brand funding sweep asks the same way, over the offers its pair's campaigns state.
 (Set 2026-08-19.)
 
 ## Nothing can be unattributable — so nothing holds a brand's provisioning back
@@ -583,7 +602,7 @@ Unit tests (`pnpm test:unit`) need neither — they fully mock db/runs-client.
 
 ## Raw-`sql` list params need `sql.join`, NOT a bare JS array — and workflow dynasties live in the DB, not src
 
-**Interpolating a JS array into a drizzle raw `sql` template does NOT expand it into a param list.** `sql\`... IN (${arr})\`` binds the whole array as ONE composite → `operator does not exist: text = record`; `= ANY(${arr})` → `op ANY/ALL (array) requires array on right side`. Neither works. To expand a small in-code list (e.g. the sales-outreach feature family in `funnel-campaigns.ts`'s idle-brand sweep), use `sql.join([...set].map((v) => sql\`${v}\`), sql\`, \`)` inside `IN (...)`. Caught only by the integration tests (unit tests mock the DB), so run `pnpm test:integration` after any raw-`sql` list change. (Set 2026-07-24, sales-crm feature-family pause clause; the clause itself is gone, the trap is not.)
+**Interpolating a JS array into a drizzle raw `sql` template does NOT expand it into a param list.** `sql\`... IN (${arr})\`` binds the whole array as ONE composite → `operator does not exist: text = record`; `= ANY(${arr})` → `op ANY/ALL (array) requires array on right side`. Neither works. To expand a small in-code list (e.g. the sales-outreach feature family in `funnel-campaigns.ts`'s idle-brand sweep), use `sql.join([...set].map((v) => sql\`${v}\`), sql\`, \`)` inside `IN (...)`. Caught only by the integration tests (unit tests mock the DB), so run `pnpm test:integration` after any raw-`sql` change. **Same template, second trap: a JS `Date` parameter is REFUSED outright** — postgres.js binds raw-`sql` params itself and throws `The "string" argument must be of type string ... Received an instance of Date`. Pass `d.toISOString()` and cast (`::timestamptz`). (2026-08-23, the quiet-brand sweep's due-soon bound.) (Set 2026-07-24, sales-crm feature-family pause clause; the clause itself is gone, the trap is not.)
 
 **Workflow dynasties/slugs are DB-resident (workflow-service `workflows` table), NOT seeded in workflow-service `src`.** To answer "does feature X have a workflow dynasty / which slugs exist / has it ever run," query the workflow-service Neon DB (`workflows` grouped by `feature_slug, workflow_dynasty_slug`; runs via `workflow_runs`), do NOT `git grep` workflow-service src — a src grep returns only test fixtures and misses every real dynasty. Cost 2026-07-24: grepped workflow-service src, wrongly concluded `sales-crm-email-outreach` had no dynasty (blocking a plan); the DB showed 5 active CRM dynasties seeded the day before. features-service also cannot resolve "which feature is a brand on" — all 31 of its endpoints take `featureSlug` as INPUT; the feature identity comes from the caller (`x-feature-slug`), never from features-service.
 
@@ -691,6 +710,18 @@ real audience.
   ten seconds after birth on a channel funded at $10/day) and `cb965e9d` (Lux Projects Bali, the
   0-audience brand above). Pinned by `tests/integration/unpark-never-served-migration.test.ts`,
   which applies the file itself twice.
+- **It WAITS on the reason's cadence, it does not retry on the run's.** Rescheduling that campaign
+  on `RERUN_GRACE_MS` (10s) fired a workflow every eleven seconds, forever, for a campaign whose
+  situation cannot change in eleven seconds — 33 runs in the first minutes on `4769db14` and the
+  same on `cb965e9d`, each unable to reach anything, flooding every service in the chain. "Nobody
+  to contact" is the MONEY kind of wait, not the TURN kind: it moves when a customer edits their
+  audiences or when a never-run channel finally accumulates evidence, hours or days apart. So it
+  reschedules at `NO_SERVEABLE_AUDIENCE_RECHECK_MS` (10 min, the same figure and the same argument
+  as `FUNDING_RECHECK_MS`), which IS the latency — the campaign runs within ten minutes of having
+  somebody, with no manual step. The wait is a RESCHEDULE, never a stop: it stays `ongoing`, so
+  nothing has to be undone when the audience appears. One line says it is waiting and why, on that
+  cadence; the generic reschedule line is suppressed under it and the no-audience-ran line is
+  `info`, not `warn` — an expected business state.
 - WHY that campaign's first serve came back empty on a brand whose sibling served 109 leads the
   same day is a separate lead-service investigation. This service's job was to stop reading an
   empty answer as a finished one. (Set 2026-08-20.)
@@ -791,7 +822,7 @@ same branch.
 
 - **A campaign's `parentRunId` is its ANCESTOR run**, written once at creation from the creator's
   `x-run-id`, and every execution's run tree chains under it. A creator carrying no run of its own
-  — the per-funnel provisioner, the idle-brand sweep — leaves it NULL, which is where the minting
+  — the per-funnel provisioner, the quiet-brand sweep — leaves it NULL, which is where the minting
   came from.
 - **`ensureCampaignRunId` (`src/lib/trigger-run.ts`) is the ONE place a missing ancestor is
   filled**, shared by the leg that TRIGGERS (scheduler) and the leg that RESUMES
