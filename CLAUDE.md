@@ -294,7 +294,15 @@ funded funnels get worked, each spending up to its own ceiling and stopping ther
   never a fixed order and never "the primary first". A fixed order starves whatever sits last —
   if the first funnel can absorb the whole day the others never run, and that shows up in no log
   at all. A funnel at its ceiling yields with no special case (ratio ≥ 1 → not a candidate); all
-  funnels full → parked until the day rollover. EVERY alive campaign of the brand is a candidate
+  funnels full → parked, but on the FUNDING cadence (`min(nextDayStart, now + FUNDING_RECHECK_MS)`),
+  never on the day rollover alone. That defer is written ONCE from the ceiling current at that
+  instant and nothing re-checks an ongoing campaign due tomorrow — not the claim
+  (`next_run_at <= now()`), not `claimStuckCampaigns` (`next_run_at IS NULL`), not the resume sweep
+  (stopped rows only) — so a customer who RAISES a ceiling mid-day saw the money spent the next day
+  (prod 2026-08-23, brand `75d7e3e8`: $39.13 of a $40 ceiling, raised to $50 at 14:57, zero runs
+  after 13:24). `FUNDING_RECHECK_MS` already carries that promise for a campaign funded from ZERO;
+  one funded MORE is the same rule, missing branch. A brand still at its ceiling simply re-ranks and
+  defers again — no run, no spend, gate untouched. EVERY alive campaign of the brand is a candidate
   every tick — one that states no funnel is ranked on the brand daily budget, the ceiling the gate
   actually binds it to. No campaign is ever held out of the running because another one covers its
   funnel; there is no superseded state, and `tests/unit/no-legacy.test.ts` fails if the concept
