@@ -192,6 +192,40 @@ work ONE funnel through BOTH, and each is a campaign of its own.
   stopped campaigns funding may resume — is UNCHANGED and applies per campaign, so it applies per
   pair without a special case. (Set 2026-08-18.)
 
+## The ceiling a campaign paces on is its OWN OFFER's — the pair figure holds a sibling's money too
+
+billing states daily ceilings at THREE grains on one read (`GET /internal/brands/:id/funnel-budgets`):
+`funnels[]`, `channels[]` (per funnel × channel) and `offers[]` (per funnel × channel × OFFER, the
+STORED grain — one row per campaign). The first two are SUMS of the third, so a funnel worked
+through one channel for TWO offers is one summed `channels` row, and pacing both campaigns on it
+lets each spend what the other was funded for. That is the exact failure the pair grain closed one
+level up, re-opened one level down.
+
+- **Precedence, one line, shared by the gate and the turn planner**: the campaign's own
+  `dailyBudgetCents` → its (funnel, channel, OFFER) ceiling → its (funnel, channel) PAIR ceiling →
+  its funnel ceiling → the brand pot. `offerCeilingCents` (`src/lib/funnel-budget-client.ts`) sits
+  one notch below `channelCeilingCents` and answers the same three-way shape.
+- **WHICH ROWS AN OFFER MAY CLAIM IS BILLING'S RULE, READ FROM BILLING** (`offerBudgetRows` /
+  `resolveEntryOfferId`, billing `src/lib/brand-funnel-budgets.ts`): a ceiling that NAMES the offer
+  always counts, and an UNSCOPED one (`offerId: null`, every ceiling written before offers existed)
+  counts only when this offer is the brand's SOLE named one — then the money has exactly one
+  campaign-owner. A brand naming two offers has no honest owner for an unscoped remainder, so it
+  belongs to neither. Do not invent a second rule here; the two services would drift the day
+  billing changes theirs.
+- **Four cases answer `grain: "none"` and fall through to the pair figure, byte-identical to
+  before**: a billing deploy that serves no `offers` field, a campaign stating NO offer (the
+  pre-offer population — an offer is never fabricated for it), a brand whose stored ceilings name
+  no offer AT ALL (20 of the fleet's 21 rows the day this shipped), and a funnel billing states no
+  row for. The third is load-bearing: campaigns DO carry `offer_id` on brands billing still funds
+  unscoped, and reading billing's per-offer rule literally there would unfund every one of them.
+- **An offer the brand's money is not scoped to is UNFUNDED** (`cents: null`) — never a fallback to
+  the pair, funnel or brand total. That is the whole point of the grain.
+- **A channel mismatch resolves the same way one grain up**: an offer whose funnel is worked through
+  exactly ONE channel binds whatever feature the campaign states (billing's default-channel
+  attribution); a funnel SPLIT across channels funds only the channels it names.
+- Nothing new is stored, cached or summed here: `channels` stays billing's own sum and provisioning,
+  identity and the turn planner are untouched. (Set 2026-08-24.)
+
 ## Per-funnel funding: every funded funnel runs, each paced on its OWN ceiling
 
 billing-service lets a customer fund each of a brand's SALES FUNNELS separately. Its brand-level

@@ -19,6 +19,7 @@ function read(
     brandDailyBudgetCents: 3000,
     funnels: [{ funnelKey: "sales_meetings_from_conversation", dailyBudgetCents: 3000 }],
     channels: channels as never,
+    offers: [],
   };
 }
 

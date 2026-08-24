@@ -49,6 +49,30 @@ export interface FunnelChannelBudget {
   dailyBudgetCents: number;
 }
 
+/**
+ * One (sales funnel, ACQUISITION CHANNEL, OFFER) ceiling — the STORED grain, one row per campaign.
+ *
+ * A brand sells several OFFERS, and one offer can be worked through the same funnel and the same
+ * channel as another. `channels` above is the per-PAIR SUM of these rows, so two offers sharing a
+ * (funnel, channel) collapse into one figure there — and pacing both campaigns on that sum is
+ * exactly the failure the pair grain was introduced to close, one level down: each offer is free
+ * to consume what the other was funded for.
+ *
+ * billing OWNS the offer entity's id (brand-service's UUID, carried by both services and derived
+ * by neither). `offerId` is null for a ceiling written before offers existed — the pre-offer
+ * world, whose rules are billing's and are mirrored in `offerCeilingCents`.
+ */
+export interface FunnelOfferBudget {
+  /** Canonical funnel key, same canonicalisation as `FunnelBudget.funnelKey`. */
+  funnelKey: SalesFunnelKey;
+  /** The acquisition channel this ceiling funds, as a features-service feature slug. */
+  featureSlug: string;
+  /** The offer this ceiling funds, or null for an UNSCOPED (pre-offer) ceiling. */
+  offerId: string | null;
+  /** This ROW's own daily ceiling, in CENTS. */
+  dailyBudgetCents: number;
+}
+
 export type FunnelBudgetsRead =
   | {
       ok: true;
@@ -61,6 +85,13 @@ export type FunnelBudgetsRead =
        * through to the funnel figure and behaves exactly as it did before.
        */
       channels: FunnelChannelBudget[];
+      /**
+       * ADDITIVE grain, one level below `channels`. Empty for a brand that funds nothing per
+       * funnel — and, exactly as for `channels`, an ABSENT `offers` field is read as "no offer
+       * grain" rather than "nothing is funded", so a billing deploy that predates it leaves every
+       * consumer on the pair figure and behaves byte for byte as it did.
+       */
+      offers: FunnelOfferBudget[];
     }
   | { ok: false };
 
@@ -104,6 +135,12 @@ export async function fetchFunnelBudgets(
       dailyBudgetCents?: string | null;
       funnels?: Array<{ funnelKey?: string; dailyBudgetCents?: string }>;
       channels?: Array<{ funnelKey?: string; featureSlug?: string; dailyBudgetCents?: string }>;
+      offers?: Array<{
+        funnelKey?: string;
+        featureSlug?: string;
+        offerId?: string | null;
+        dailyBudgetCents?: string;
+      }>;
     };
 
     let brandDailyBudgetCents: number | null = null;
@@ -147,7 +184,33 @@ export async function fetchFunnelBudgets(
       }
     }
 
-    return { ok: true, brandDailyBudgetCents, funnels, channels };
+    // The offer grain, read exactly as the pair grain above and for the same reasons: absent is
+    // "no finer grain" (an older billing deploy), unparseable is refused, a funnel no catalogue
+    // names is dropped. `offerId` is nullable ON THE WIRE — a ceiling written before offers
+    // existed states none, and that null is a VALUE (see `offerCeilingCents`), not a missing
+    // field, so it is carried rather than refused.
+    const offers: FunnelOfferBudget[] = [];
+    if (data.offers !== undefined) {
+      if (!Array.isArray(data.offers)) return { ok: false };
+      for (const raw of data.offers) {
+        if (!raw?.funnelKey || !raw?.featureSlug) return { ok: false };
+        if (raw.offerId !== null && raw.offerId !== undefined && typeof raw.offerId !== "string") {
+          return { ok: false };
+        }
+        const cents = parseFloat(raw.dailyBudgetCents ?? "");
+        if (!Number.isFinite(cents)) return { ok: false };
+        const funnelKey = toFunnelKey(raw.funnelKey);
+        if (!funnelKey) continue; // a funnel no catalogue names — same treatment as above
+        offers.push({
+          funnelKey,
+          featureSlug: raw.featureSlug,
+          offerId: raw.offerId ?? null,
+          dailyBudgetCents: cents,
+        });
+      }
+    }
+
+    return { ok: true, brandDailyBudgetCents, funnels, channels, offers };
   } catch {
     return { ok: false };
   }
@@ -184,6 +247,83 @@ export function channelCeilingCents(
   if (rows.length === 1) return { grain: "pair", cents: rows[0]!.dailyBudgetCents };
   const match = featureSlug ? rows.find((c) => c.featureSlug === featureSlug) : undefined;
   return { grain: "pair", cents: match ? match.dailyBudgetCents : null };
+}
+
+/**
+ * The ceiling that binds ONE (funnel, acquisition channel, OFFER) triple — the grain BELOW the
+ * pair, and the finest billing stores.
+ *
+ * Two campaigns of one brand can work the same funnel through the same channel for two different
+ * OFFERS. billing serves their pair figure as the SUM of both, so pacing either campaign on it
+ * hands each the money the other was funded for — the same failure `channelCeilingCents` closed
+ * one level up, re-opened one level down.
+ *
+ * Three answers, and the middle one is what keeps every brand alive today behaving identically:
+ *
+ *   - `grain: "none"` — there is no offer question to ask here, so the caller falls through to the
+ *     pair figure, i.e. today's behaviour byte for byte. That covers a billing deploy that does not
+ *     serve `offers` yet, a campaign that states NO offer (the pre-offer population — an offer is
+ *     never fabricated for it), a brand whose stored ceilings name no offer AT ALL, and a funnel
+ *     billing states no row for.
+ *   - `cents` — this triple is funded at that amount.
+ *   - `cents: null` — this brand's money IS scoped to offers and none of it is this offer's, so the
+ *     campaign is unfunded. Never a fallback to the pair or funnel total: that is the whole point
+ *     of the grain.
+ *
+ * WHICH ROWS AN OFFER MAY CLAIM IS BILLING'S RULE, READ FROM BILLING, NOT INVENTED HERE
+ * (`offerBudgetRows` / `resolveEntryOfferId`, billing-service `src/lib/brand-funnel-budgets.ts`):
+ * a ceiling that NAMES the offer always counts, and an UNSCOPED ceiling (`offerId: null`, every
+ * ceiling written before offers existed) counts only when this offer is the brand's SOLE named
+ * one — then the brand's money has exactly one campaign-owner. A brand split across several named
+ * offers has no honest owner for an unscoped remainder, so it belongs to none of them.
+ *
+ * A triple's offer funded through exactly ONE channel binds whatever feature the campaign states,
+ * the same rule and the same reason as `channelCeilingCents` one grain up.
+ */
+export function offerCeilingCents(
+  read: Extract<FunnelBudgetsRead, { ok: true }>,
+  funnelKey: SalesFunnelKey,
+  featureSlug: string | null | undefined,
+  offerId: string | null | undefined,
+): { grain: "none" } | { grain: "offer"; cents: number | null } {
+  const stored = read.offers ?? [];
+  if (stored.length === 0) return { grain: "none" };
+  // The pre-offer population. Never fabricate an offer for it: it resolves exactly as it always
+  // has, on the pair figure.
+  if (!offerId) return { grain: "none" };
+
+  // A brand whose ceilings name no offer at all has not entered the offer world, so neither does
+  // this read — every such brand keeps pacing on its pair figure. (20 of the fleet's 21 stored
+  // ceilings were unscoped the day this shipped.)
+  const named = new Set(
+    stored.map((o) => o.offerId).filter((id): id is string => id !== null),
+  );
+  if (named.size === 0) return { grain: "none" };
+
+  const rowsForFunnel = stored.filter((o) => o.funnelKey === funnelKey);
+  if (rowsForFunnel.length === 0) return { grain: "none" };
+
+  // billing's rule, verbatim: the unscoped remainder is this offer's only when this offer is the
+  // brand's sole named one.
+  const soleNamed = named.size === 1 && named.has(offerId);
+  const owned = rowsForFunnel.filter(
+    (o) => o.offerId === offerId || (soleNamed && o.offerId === null),
+  );
+
+  if (owned.length === 0) return { grain: "offer", cents: null };
+
+  const match = featureSlug ? owned.find((o) => o.featureSlug === featureSlug) : undefined;
+  if (match) return { grain: "offer", cents: match.dailyBudgetCents };
+
+  // No row for the channel this campaign states. The funnel is worked through exactly ONE channel
+  // here, so there is nothing to confuse this ceiling with and it binds whatever feature the
+  // campaign states — billing's rule for a write naming no channel, and what keeps a brand whose
+  // single ceiling was filed under the DEFAULT channel while its campaign runs another sales
+  // feature funded. A funnel SPLIT across channels is a different matter: a channel the split does
+  // not fund is unfunded, never the neighbour's money.
+  const channelsOfFunnel = new Set(rowsForFunnel.map((o) => o.featureSlug));
+  if (channelsOfFunnel.size === 1) return { grain: "offer", cents: owned[0]!.dailyBudgetCents };
+  return { grain: "offer", cents: null };
 }
 
 /**

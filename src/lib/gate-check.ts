@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
-import { channelCeilingCents, fetchFunnelBudgets } from "./funnel-budget-client.js";
+import { channelCeilingCents, fetchFunnelBudgets, offerCeilingCents } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { STOP_REASONS } from "./stop-reason.js";
 
@@ -48,6 +48,11 @@ export interface GateCheckInput {
   // daily ceiling read from billing — so a brand funding two funnels has each worked up to its
   // own ceiling, and the brand's total for the day cannot exceed the sum.
   funnelKey: string | null;
+  // The OFFER this campaign sells — brand-service's id, carried and never derived. When billing
+  // scopes any of this brand's money to an offer, the ceiling that binds this campaign is its own
+  // offer's, not the (funnel, channel) SUM that also contains a sibling offer's ceiling. NULL is
+  // the pre-offer population and paces exactly as it always did.
+  offerId: string | null;
   maxLeads: number | null;
 }
 
@@ -275,7 +280,25 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         // one offer spends the money the other was funded for. A funnel billing states no pair for
         // falls through to the funnel figure below, which is every brand funding one channel per
         // funnel — unchanged.
+        // (a2'') And one grain below the pair: the same funnel and the same channel can be worked
+        // for two OFFERS at once, and billing serves the pair figure as their SUM — so pacing both
+        // campaigns on it lets each spend what the other was funded for. A campaign that states no
+        // offer, or a brand whose stored ceilings name none, falls through to the pair figure
+        // below, unchanged.
         if (funnelKey) {
+          const offer = offerCeilingCents(budgets, funnelKey, campaign.featureSlug, campaign.offerId);
+          if (offer.grain === "offer") {
+            // This brand's money is scoped to offers and none of it is this one's — a deliberate
+            // customer decision, so never a fallback to the pair, funnel or brand total.
+            if (offer.cents === null || offer.cents <= 0) {
+              return { allowed: false, reason: "Funnel not funded for this offer" };
+            }
+            if (spentCents >= offer.cents) {
+              return { allowed: false, reason: "Funnel daily budget reached" };
+            }
+            continue;
+          }
+
           const pair = channelCeilingCents(budgets, funnelKey, campaign.featureSlug);
           if (pair.grain === "pair") {
             // Funded through OTHER channels but not this one, or funded at zero: a deliberate
