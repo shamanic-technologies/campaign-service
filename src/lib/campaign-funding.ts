@@ -1,5 +1,10 @@
 import type { IdentityHeaders } from "@distribute/runs-client";
-import { channelCeilingCents, fetchFunnelBudgets, type FunnelBudgetsRead } from "./funnel-budget-client.js";
+import {
+  channelCeilingCents,
+  fetchFunnelBudgets,
+  offerCeilingCents,
+  type FunnelBudgetsRead,
+} from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 
 /**
@@ -14,7 +19,8 @@ import { toFunnelKey } from "./sales-funnel-vocabulary.js";
  * that, so there is one now, and it is billing's.
  *
  * The precedence is gate-check's, exactly — the campaign's OWN daily budget, else its own (funnel,
- * acquisition channel) pair's ceiling, else its funnel's ceiling, else the brand's daily budget —
+ * acquisition channel, offer) triple's ceiling, else its (funnel, acquisition channel) pair's, else
+ * its funnel's, else the brand's daily budget —
  * because a campaign the gate would refuse to let spend must not be handed a turn, and a campaign
  * the gate WOULD let spend must not be held.
  *
@@ -38,6 +44,11 @@ export function fundingFromBudgets(
     funnelKey?: string | null;
     /** The acquisition CHANNEL this campaign works its funnel through — a feature slug. */
     featureSlug?: string | null;
+    /**
+     * The OFFER this campaign sells — brand-service's id, carried and never derived. Null is the
+     * pre-offer population and paces on the pair figure exactly as it always did.
+     */
+    offerId?: string | null;
   },
   budgets: Extract<FunnelBudgetsRead, { ok: true }>,
 ): FundingVerdict {
@@ -61,6 +72,27 @@ export function fundingFromBudgets(
     // pair for falls through to the funnel figure below — that is every brand funding one channel
     // per funnel, unchanged.
     if (funnelKey) {
+      // And the ceiling that binds it before THAT is its own OFFER's, whenever billing scopes any
+      // of this brand's money to an offer: one funnel worked through one channel for two offers is
+      // served as a single summed pair figure, so pacing both campaigns on it hands each the money
+      // the other was funded for. A campaign stating no offer, or a brand whose ceilings name
+      // none, answers `none` here and falls through to the pair figure unchanged.
+      const offer = offerCeilingCents(budgets, funnelKey, campaign.featureSlug, campaign.offerId);
+      if (offer.grain === "offer") {
+        if (offer.cents === null) {
+          return {
+            funded: false,
+            reason: `funnel ${campaign.funnelKey} is not funded for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
+          };
+        }
+        return offer.cents > 0
+          ? { funded: true, ceilingCents: offer.cents }
+          : {
+              funded: false,
+              reason: `funnel ${campaign.funnelKey} is funded at zero for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
+            };
+      }
+
       const pair = channelCeilingCents(budgets, funnelKey, campaign.featureSlug);
       if (pair.grain === "pair") {
         if (pair.cents === null) {
@@ -109,6 +141,7 @@ export async function campaignFunding(
     dailyBudgetCents?: number | null;
     funnelKey?: string | null;
     featureSlug?: string | null;
+    offerId?: string | null;
   },
   brandId: string,
   identity: IdentityHeaders,
