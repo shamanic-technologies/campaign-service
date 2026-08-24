@@ -22,6 +22,7 @@ import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { acquisitionChannelForFeature, campaignIdentityColumns } from "./campaign-identity.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
 import { adoptFunnellessAncestorsSafely } from "./funnel-ancestor-adoption.js";
+import { adoptOfferForPairSafely } from "./campaign-offer-adoption.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
 // re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
@@ -456,6 +457,14 @@ async function ensureFundedFunnelCampaigns({
   identity: ProvisioningIdentity;
   now: Date;
 }): Promise<void> {
+  // A campaign that already exists with NO offer is invisible on every offer-scoped surface, and
+  // provisioning is the one thing that looks at this pair on this service's own cadence. Asked
+  // FIRST, before any early return below: a pair whose funnel declaration is empty or unreadable
+  // still has a live campaign the customer cannot see, and that is exactly the pair this closes.
+  // Fail-soft and a no-op on every ordinary tick (nothing is read at all unless a campaign of the
+  // pair states no offer). See campaign-offer-adoption.ts for the rule and why it is not a script.
+  await adoptOfferForPairSafely({ orgId: seed.orgId, brandId }, identity, now);
+
   // No readable funnel declaration → nothing says the brand still sells through these funnels.
   // Provisioning waits; whatever campaigns already exist keep running.
   if (declared.offerByFunnel.size === 0) return;
