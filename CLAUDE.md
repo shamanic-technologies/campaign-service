@@ -162,8 +162,19 @@ work ONE funnel through BOTH, and each is a campaign of its own.
   rejected on every sweep look exactly like a channel with no dynasty. Skipping stays correct;
   only the silence was wrong. Fail-SOFT still: an unreadable statement provisions nothing and does
   NOT hold the brand — this decides which questions can be asked, not whether money may be spent.
+- **THE STATEMENT IS NESTED UNDER THE FEATURE THE REQUEST NAMED — `{ feature: { …, salesFunnels } }`
+  — and reading it a level up looks EXACTLY like a channel that declares nothing.** features-service
+  answers 200 with the envelope; the client read `salesFunnels` at the top level, found nothing, and
+  reported that the service had stated none, so every funded pair fleet-wide was passed over as
+  unevaluatable for the whole life of the feature. Nothing contradicted it because every test mocked
+  the shape the client expected — a client agreeing with itself and with nothing else — which is why
+  `tests/unit/feature-sales-funnels-client.test.ts` pins the read to the nested level AND asserts a
+  TOP-LEVEL payload is REFUSED. A payload assumption that no test states against the DEPLOYED
+  contract is not an assumption anything can catch. The sibling read (workflow-service `GET
+  /workflows` → `workflows`) really is top-level; check the contract per endpoint rather than
+  assuming one envelope for the fleet. (2026-08-20.)
 - **Which funnels a channel may be SOLD THROUGH is features-service's statement, asked per feature**
-  (`GET /features/{slug}` → `salesFunnels`, `src/lib/feature-sales-funnels-client.ts`). The feedback
+  (`GET /features/{slug}` → `feature.salesFunnels`, `src/lib/feature-sales-funnels-client.ts`). The feedback
   request states `sales_meetings_from_conversation` alone: its offer buys a CONVERSATION, and the
   other three chains buy their first step with a website click it has no way to sell. A funded pair
   the feature may not sell gets NO campaign, the same way a funnel billing funds but brand-service
@@ -544,6 +555,41 @@ attribution and on the customer's screen.
   and a pair with no single offer. Only the SECOND exits non-zero: a campaign that names no single
   brand is the permanent honest answer and never changes, so failing the run on it would make this
   job red forever and teach everyone to ignore its exit code.
+- **A campaign that ALREADY EXISTS with no offer is ADOPTED on the tick — the script is not the
+  loop.** A campaign attributed to no offer is invisible on every offer-scoped surface: the
+  dashboard's offer page lists the campaigns OF THAT OFFER, so an unattributed one belongs to none
+  of them and appears nowhere, while it runs and spends. Provisioning found a live campaign for the
+  triple and moved on, so the row stayed unattributed forever and only a hand-run script closed it.
+  Prod 2026-08-24: org `100ed4eb` / brand `fbe3ce77`, campaign `16705a37` ongoing on
+  `sales_meetings_from_conversation`, no offer — the pair's one offer `231bb036` was created 28
+  minutes BEFORE it. Resolvable at create time, resolvable now, and nothing on this service's own
+  cadence was ever going to state it. `adoptOfferForPairSafely`
+  (`src/lib/campaign-offer-adoption.ts`) applies the SAME rule the script states, from
+  `ensureFundedFunnelCampaigns` — asked FIRST, before every early return there, because a pair whose
+  funnel declaration is empty or unreadable still has a live campaign the customer cannot see.
+  Same argument as the funnel-less-ancestor adoption (#377): an invariant a migration can only ever
+  state once is not an invariant, so this is NOT shipped as a one-shot migration and adds no table,
+  column or accumulator.
+  - **The rule is NOT widened**: exactly one offer on the (org, brand) PAIR, or nothing is written.
+    `x-org-id` on `GET /internal/brands/{brandId}/offers` (`src/lib/brand-offers-client.ts`) and
+    `org_id` on both statements are load-bearing — a brand row carries one offer per claiming org,
+    so resolving by brand alone writes another org's offer onto this org's campaign, inside the very
+    grouping the column exists to make correct. Pinned by `tests/unit/no-legacy.test.ts`.
+  - **Nothing is read unless something is missing.** The pre-check selects the pair's offer-less
+    campaigns; none → no brand-service read, no log, on every tick of every brand. A pair that IS
+    missing one is asked at most once per `OFFER_ADOPTION_RECHECK_MS` (10 min, the same figure and
+    argument as `FUNDING_RECHECK_MS` — an offer comes into being when a person creates one).
+  - **Zero or several offers is SAID, not silent — but only when a LIVE campaign is affected.** A
+    live campaign nobody can see on their offer page is the customer-visible harm. A pair whose only
+    unattributed rows are stopped is the pre-offers population the script proved permanently
+    unattributable (145 rows, most belonging to orgs brand-service does not know at all), and
+    repeating that every ten minutes forever would bury the signal.
+  - **A stopped row IS written when its own pair genuinely resolves** — it decides whose offer
+    totals its history lands in, exactly as its funnel does. Only `offer_id` moves: status, stop
+    reason, funnel, schedule and budget are untouched, and the offer still decides no money
+    question. Idempotent (the `offer_id IS NULL` guard is restated in the UPDATE, so a re-run
+    writes nothing and a race with a live create cannot overwrite it) and fail-SOFT (an attribution
+    correction must never hold up the provisioning that called it).
 
 ## "Which funnels are sold here?" is asked of the OFFER — the only grain with ONE answer
 
