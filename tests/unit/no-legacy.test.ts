@@ -71,6 +71,27 @@ describe('No Legacy Patterns - CRITICAL', () => {
     expect(code).not.toMatch(/\bcurrentGoal\b/);
   });
 
+  it('should NEVER resolve a campaign offer by BRAND alone', () => {
+    // An offer belongs to the (org, brand) PAIR: a brand row is a shared global identity and
+    // carries one offer per claiming org, frequently all named the same thing. Reading the brand's
+    // offers without naming the org attributes this org's campaign to ANOTHER org's offer, inside
+    // the very per-offer grouping the column exists to make correct. `x-org-id` on the read and
+    // `org_id` on the write are load-bearing, not tracking.
+    const client = fs.readFileSync(path.join(srcDir, 'lib/brand-offers-client.ts'), 'utf-8');
+    expect(client).toMatch(/"x-org-id": identity\.orgId/);
+    expect(client).not.toMatch(/if \(identity\.orgId\)/);
+
+    const adoption = fs.readFileSync(path.join(srcDir, 'lib/campaign-offer-adoption.ts'), 'utf-8');
+    // Every statement this rule makes about campaigns is scoped to the campaign's own org.
+    const statements = adoption.split(/db\.execute/).slice(1);
+    expect(statements.length).toBeGreaterThan(0);
+    for (const statement of statements) {
+      expect(statement).toMatch(/"org_id" = \$\{scope\.orgId\}/);
+    }
+    // And the offer is never derived from the funnel, the goal or the workflow.
+    expect(adoption).not.toMatch(/funnelKey\s*[:=]/);
+  });
+
   it('should NOT collapse a sales-funnels refusal back onto a nullable answer', () => {
     // The three outcomes — a truthful answer (possibly EMPTY), a refusal to answer at this grain,
     // and a transport failure — were one `null`, and that is what made the offer level silent: the
