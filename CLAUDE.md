@@ -192,6 +192,33 @@ work ONE funnel through BOTH, and each is a campaign of its own.
   stopped campaigns funding may resume — is UNCHANGED and applies per campaign, so it applies per
   pair without a special case. (Set 2026-08-18.)
 
+## A sales campaign row states the money that governs it — `maxBudget*` is REFUSED for the family
+
+`gate-check` runs the whole campaign-budget-windows block under `if (!isSalesFeature)`, so a
+`max_budget_daily_usd` / `weekly` / `monthly` / `total` on a sales-family row is inert BY
+CONSTRUCTION: the family paces on billing's per-(funnel, channel, offer) ceiling, read live on
+every plan. Correct behaviour, silent presentation — the row shows a dollar ceiling that decides
+nothing, and it already cost a live diagnosis a detour (#396: `max_budget_daily_usd | 10.00` on a
+campaign whose real ceiling was $50 read as a stale mirror).
+
+- **`POST /campaigns` and `PATCH /campaigns/:id` 400 a sales-family campaign that STATES one**
+  (`salesMaxBudgetRefusal`, `src/lib/sales-outreach-campaign.ts`), naming every field stated and
+  where the ceiling belongs. The update leg tests the feature the update LEAVES the campaign on
+  (the body's when it restates one, the row's otherwise). Presence is what is refused — the
+  schema does not accept null there, so there is no "clear it" spelling to allow.
+- **NON-sales campaigns are untouched and the columns are NEVER dropped**: every other feature
+  family paces on them and `gate-check` enforces them. The `!isSalesFeature` branch is correct
+  and is not to be touched.
+- **No per-campaign ceiling is ever introduced for the sales family.** `daily_budget_cents` is a
+  different thing (the funding mirror `fundingFromBudgets` prefers over billing) and is untouched
+  by any of this — it was verified null on all 22 live sales campaigns.
+- **Migration 0053** nulls the legacy values, scoped to the three sales slugs, auditing each row's
+  previous four values in `campaign_max_budget_decisions` with the migration tag. It touched 20
+  ongoing and 348 stopped rows in prod. Idempotent (a second run selects nothing) and reversible
+  by the audit table. The values were legacy from before the funnel model: provisioning inserts
+  sales campaigns with the columns null and the dashboard writes billing, so nothing was writing
+  them even before the guard. (Set 2026-08-24, issue #398.)
+
 ## The ceiling a campaign paces on is its OWN OFFER's — the pair figure holds a sibling's money too
 
 billing states daily ceilings at THREE grains on one read (`GET /internal/brands/:id/funnel-budgets`):

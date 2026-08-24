@@ -520,4 +520,74 @@ describe("Campaign CRUD", () => {
       expect(stopped.body.campaign.funnelKey).toBe("form_magnet");
     });
   });
+  // A sales campaign's money is billing's, per (funnel, channel, offer). gate-check runs the
+  // campaign-budget-windows block under `if (!isSalesFeature)`, so a `maxBudget*` on a sales row
+  // decides nothing — and a row stating a ceiling nothing reads is what misled a live diagnosis.
+  describe("per-campaign budget windows on the sales family", () => {
+    const SALES = "sales-cold-email-outreach";
+    const NON_SALES = "pr-expert-quote-outreach";
+
+    it("refuses a sales create that states one, naming where the ceiling belongs", async () => {
+      const res = await createCampaign(
+        {
+          ...validBody,
+          name: "Sales campaign stating a dead ceiling",
+          brandIds: freshBrand(),
+          funnelKey: "sales_meetings_from_conversation",
+          maxBudgetDailyUsd: "10.00",
+        },
+        "org_test_crud",
+        SALES,
+      ).expect(400);
+
+      expect(res.body.error).toContain("maxBudgetDailyUsd");
+      expect(res.body.error).toContain("billing");
+    });
+
+    it("refuses a sales update that states one", async () => {
+      const created = await createCampaign(
+        {
+          ...validBody,
+          name: "Sales campaign updated later",
+          brandIds: freshBrand(),
+          funnelKey: "sales_meetings_from_conversation",
+        },
+        "org_test_crud",
+        SALES,
+      ).expect(201);
+
+      const res = await request(app)
+        .patch(`/campaigns/${created.body.campaign.id}`)
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({ maxBudgetWeeklyUsd: "70.00" })
+        .expect(400);
+
+      expect(res.body.error).toContain("maxBudgetWeeklyUsd");
+    });
+
+    it("leaves a NON-sales campaign alone — the column is live for it", async () => {
+      const created = await createCampaign(
+        {
+          ...validBody,
+          name: "PR campaign pacing on its own ceiling",
+          brandIds: freshBrand(),
+          maxBudgetDailyUsd: "10.00",
+        },
+        "org_test_crud",
+        NON_SALES,
+      ).expect(201);
+
+      expect(created.body.campaign.maxBudgetDailyUsd).toBe("10.00");
+
+      const patched = await request(app)
+        .patch(`/campaigns/${created.body.campaign.id}`)
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", "org_test_crud")
+        .send({ maxBudgetTotalUsd: "500.00" })
+        .expect(200);
+
+      expect(patched.body.campaign.maxBudgetTotalUsd).toBe("500.00");
+    });
+  });
 });
