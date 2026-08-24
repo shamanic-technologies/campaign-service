@@ -11,7 +11,7 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { campaignIdentityColumns } from "../lib/campaign-identity.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
-import { isSalesOutreachFeature } from "../lib/sales-outreach-campaign.js";
+import { isSalesOutreachFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
 import { acceptedFunnelKeys, toFunnelKey } from "../lib/sales-funnel-vocabulary.js";
 
 const router = Router();
@@ -158,6 +158,13 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           : `Cannot create a ${resolvedFeatureSlug} campaign without stating its sales funnel — ` +
             `funnelKey is required (one of: ${acceptedFunnelKeys().join(", ")})`,
       });
+    }
+
+    // A sales campaign paces on billing's ceiling, never on a column of its own — see
+    // salesMaxBudgetRefusal. Refused at the door so no new inert value can appear.
+    const createMaxBudgetRefusal = salesMaxBudgetRefusal(resolvedFeatureSlug, req.body);
+    if (createMaxBudgetRefusal) {
+      return res.status(400).json({ error: createMaxBudgetRefusal });
     }
 
     // Validate all required workflow fields BEFORE creating the campaign
@@ -385,6 +392,16 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     if (!existing) {
       return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    // Same refusal as the create leg, against the feature this update LEAVES the campaign on
+    // (the body's when it restates one, the row's otherwise).
+    const updateMaxBudgetRefusal = salesMaxBudgetRefusal(
+      req.body.featureSlug ?? existing.featureSlug,
+      req.body,
+    );
+    if (updateMaxBudgetRefusal) {
+      return res.status(400).json({ error: updateMaxBudgetRefusal });
     }
 
     // Validate required workflow fields BEFORE activating
