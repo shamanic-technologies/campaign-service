@@ -8,12 +8,17 @@ import { validateBody } from "../middleware/validate.js";
 import { SetBrandCampaignsDailyBudgetBody } from "../schemas.js";
 import { fetchFunnelBudgets } from "../lib/funnel-budget-client.js";
 import { brandHeldFromBudgets } from "../lib/campaign-funding.js";
-import { SALES_OUTREACH_FEATURE_SLUGS } from "../lib/sales-outreach-campaign.js";
+import { OUTBOUND_SALES_FEATURE_SLUGS } from "../lib/sales-outreach-campaign.js";
 
-// The daily budget is a sales-outreach pacing lever (the ONLY feature family the sales gate
-// enforces it for), so the brand-page propagation targets that family's campaigns
-// (every acquisition channel that sells a sales funnel).
-const SALES_FEATURE_SLUGS = [...SALES_OUTREACH_FEATURE_SLUGS];
+// The per-campaign `daily_budget_cents` MIRROR — the legacy brand-page lever, which gate-check
+// still prefers over every billing ceiling when it is set. Scoped to the OUTBOUND cold-email
+// channels, i.e. exactly the campaigns that carry it today.
+//
+// A paid-reach campaign is deliberately NOT stamped: its ceiling is billing's, stated per (funnel,
+// channel, offer) and read live on every plan, and writing a brand-level number onto its row would
+// bind it AHEAD of the offer ceiling it was funded on — a second representation of one fact, which
+// is the thing this service keeps deleting.
+const SALES_FEATURE_SLUGS = [...OUTBOUND_SALES_FEATURE_SLUGS];
 
 const router = Router();
 
@@ -67,8 +72,8 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
  * on the brand page, that number must flow down to the brand's campaign(s) so per-campaign
  * pacing enforces it immediately. Org-scoped (only this org's campaigns for the brand are
  * touched). dailyBudgetCents:null clears each campaign's own budget → they fall back to the
- * brand daily budget again. Scoped to the sales-outreach feature family
- * (every acquisition channel that sells a sales funnel) — the only features the daily budget paces.
+ * brand daily budget again. Scoped to the OUTBOUND cold-email channels — see SALES_FEATURE_SLUGS
+ * for why a paid-reach campaign is left to the live billing ceiling instead.
  */
 router.patch("/brands/:brandId/daily-budget", requireApiKey, serviceAuth, validateBody(SetBrandCampaignsDailyBudgetBody), async (req: AuthenticatedRequest, res) => {
   try {

@@ -17,7 +17,11 @@ import {
   fetchOfferSalesFunnels,
   type SalesFunnelsRead,
 } from "./brand-sales-funnels-client.js";
-import { isSalesOutreachFeature, SALES_OUTREACH_FEATURE_SLUGS } from "./sales-outreach-campaign.js";
+import {
+  isOutboundSalesFeature,
+  isSalesFunnelFeature,
+  SALES_FUNNEL_FEATURE_SLUGS,
+} from "./sales-outreach-campaign.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { acquisitionChannelForFeature, campaignIdentityColumns } from "./campaign-identity.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
@@ -135,7 +139,9 @@ export function selectLowestFillRatio(candidates: FunnelTurnCandidate[]): string
  *      the same runs-service liveness read the per-campaign guard already uses, asked of each of
  *      the brand's sales campaigns. It deliberately does NOT count the brand's PR / AI-visibility
  *      / hiring / VC runs — those share neither leads nor sending accounts, and counting them
- *      stopped a brand's sales outreach outright (see hasLiveSalesRunForBrand).
+ *      stopped a brand's sales outreach outright (see hasLiveRunForBrandCohort), and it counts
+ *      only the campaigns of the SAME cohort — a paid-reach run and a cold-email run share
+ *      neither leads nor mailboxes, so neither holds the other.
  *   3. Rank — the funded funnel with the lowest spent/ceiling ratio takes the turn.
  *
  * Turn-taking is fail-SOFT (it only reorders work already allowed); the HOLD is fail-CLOSED, and
@@ -151,7 +157,7 @@ export async function planFunnelTurns(
   // its own per-campaign serialization, untouched.
   const groups = new Map<string, ClaimedFunnelCampaign[]>();
   for (const c of claimed) {
-    if (!isSalesOutreachFeature(c.featureSlug)) continue;
+    if (!isSalesFunnelFeature(c.featureSlug)) continue;
     const brandId = c.brandIds?.[0];
     if (!brandId) continue;
     const key = `${c.orgId}::${brandId}`;
@@ -234,29 +240,76 @@ async function planOneBrand(
   // out because another one covers its funnel: each is ranked on what IT has already spent today
   // against the ceiling that actually binds IT, so nothing starves and nothing overspends.
   const candidates: FunnelTurnCandidate[] = [];
+  const cohortOf = new Map<string, string>();
   for (const c of group) {
     const verdict = fundingFromBudgets(c, budgets);
     if (!verdict.funded) {
       deferred.set(c.id, heldAt);
       continue;
     }
+    cohortOf.set(c.id, serializationCohort(c.featureSlug));
     // A row written before the rename still carries the pre-rename spelling until migration 0043
     // reaches it — and a mixed fleet must rank on one vocabulary or a funnel silently loses its
     // ceiling and never takes a turn.
     candidates.push({
       campaignId: c.id,
       funnelKey: toFunnelKey(c.funnelKey) ?? "",
-      spentCents: await spentTodayCents(orgId, c.id, featureSlug),
+      // The campaign's OWN feature, never the seed's: the spend read filters on it, so asking
+      // runs-service for a Google Ads campaign's spend under the seed's cold-email slug answers
+      // ZERO — the ad campaign then reads as perfectly empty and takes every turn, forever.
+      spentCents: await spentTodayCents(orgId, c.id, c.featureSlug ?? featureSlug),
       ceilingCents: verdict.ceilingCents,
     });
   }
 
   if (candidates.length === 0) return;
 
-  // Serial, for now: at most one SALES run in flight per brand. Running funnels concurrently needs
-  // an audit of lead de-duplication and of sending-account load that nobody has done, so it is
-  // deliberately out of scope — delete this block and the funnels run in parallel.
-  if (await hasLiveSalesRunForBrand(orgId, brandId, now)) {
+  // Serial WITHIN A COHORT, and a cohort is what actually shares something: the outbound
+  // cold-email channels share the brand's lead population and its sending accounts, so two of
+  // their runs at once would contact the same people from the same mailboxes. A paid-reach
+  // channel shares neither with them — it buys impressions — so serializing it behind cold email
+  // would hold a funded Google Ads campaign for a reason that is not true of it, every tick,
+  // showing up in no log at all. That is the same mistake `hasLiveRunForBrandCohort` was written to
+  // undo one level up, where a brand's PR runs were holding its sales outreach.
+  //
+  // Concurrency INSIDE a cohort still needs the lead-de-duplication and sending-account audit
+  // nobody has done, so it stays serial; a paid channel is serial against ITSELF for the same
+  // conservatism (one live run per external ad account per brand).
+  const cohorts = new Map<string, FunnelTurnCandidate[]>();
+  for (const c of candidates) {
+    const key = cohortOf.get(c.campaignId)!;
+    const bucket = cohorts.get(key);
+    if (bucket) bucket.push(c);
+    else cohorts.set(key, [c]);
+  }
+
+  for (const [cohort, members] of cohorts) {
+    await planOneCohort(orgId, brandId, cohort, members, now, deferred);
+  }
+}
+
+/**
+ * The runs that must not overlap this campaign's: the campaigns of the brand it genuinely shares
+ * something with.
+ *
+ * The three outbound cold-email channels are ONE cohort — same leads, same mailboxes, whichever
+ * offer they carry. Every other channel is its own, keyed on the acquisition channel it already
+ * states, so a paid-reach campaign is serial against itself and against nothing else.
+ */
+function serializationCohort(featureSlug: string | null | undefined): string {
+  if (isOutboundSalesFeature(featureSlug)) return "outbound_cold_email";
+  return acquisitionChannelForFeature(featureSlug) ?? "unknown_channel";
+}
+
+async function planOneCohort(
+  orgId: string,
+  brandId: string,
+  cohort: string,
+  candidates: FunnelTurnCandidate[],
+  now: Date,
+  deferred: Map<string, Date>,
+): Promise<void> {
+  if (await hasLiveRunForBrandCohort(orgId, brandId, cohort, now)) {
     for (const c of candidates) {
       deferred.set(c.campaignId, new Date(now.getTime() + FUNNEL_TURN_DEFER_MS));
     }
@@ -701,7 +754,7 @@ export async function provisionFundedPairsForQuietBrands(now: Date = new Date())
   if (now.getTime() - lastFundingSweepAt < FUNDING_SWEEP_INTERVAL_MS) return 0;
   lastFundingSweepAt = now.getTime();
 
-  const slugs = [...SALES_OUTREACH_FEATURE_SLUGS];
+  const slugs = [...SALES_FUNNEL_FEATURE_SLUGS];
 
   // A brand whose sales campaigns are in flight or due within the sweep interval is looked at by
   // the CLAIM path sooner than this sweep would look at it, so it is not examined here at all —
@@ -850,7 +903,7 @@ async function offerStatingCampaigns(
   const rows = await db.query.campaigns.findMany({
     where: and(
       eq(campaigns.orgId, orgId),
-      inArray(campaigns.featureSlug, [...SALES_OUTREACH_FEATURE_SLUGS]),
+      inArray(campaigns.featureSlug, [...SALES_FUNNEL_FEATURE_SLUGS]),
       arrayContains(campaigns.brandIds, [brandId]),
     ),
     columns: { offerId: true },
@@ -865,7 +918,7 @@ async function countOngoingSalesCampaigns(orgId: string, brandId: string): Promi
     where: and(
       eq(campaigns.orgId, orgId),
       eq(campaigns.status, "ongoing"),
-      inArray(campaigns.featureSlug, [...SALES_OUTREACH_FEATURE_SLUGS]),
+      inArray(campaigns.featureSlug, [...SALES_FUNNEL_FEATURE_SLUGS]),
       arrayContains(campaigns.brandIds, [brandId]),
     ),
     columns: { id: true },
@@ -903,7 +956,7 @@ async function spentTodayCents(orgId: string, campaignId: string, featureSlug: s
 const LIVE_RUN_FRESHNESS_MS = 15 * 60_000;
 
 /**
- * Is one of this brand's SALES campaigns running right now?
+ * Is one of this brand's campaigns OF THIS COHORT running right now?
  *
  * Asked campaign by campaign, and that is the whole point: a brand-wide `listRuns({ brandId })`
  * also counts the runs of the brand's PR, AI-visibility, hiring and VC campaigns, which are tagged
@@ -913,14 +966,22 @@ const LIVE_RUN_FRESHNESS_MS = 15 * 60_000;
  * shows up in no log at all because the defer is the routine path. It halted brand
  * f4d73dab-1f9d-49b2-b16e-63ecde76a5eb outright (prod, 2026-08-02).
  *
- * The constraint this serialization exists for is about SALES funnels sharing leads and sending
- * accounts. A PR pitch shares neither, so it was never meant to hold a sales funnel back.
+ * The constraint this serialization exists for is about channels sharing LEADS and SENDING
+ * ACCOUNTS. A PR pitch shares neither, so it was never meant to hold a sales funnel back — and
+ * neither is a paid-reach campaign, which buys impressions and touches no mailbox. So the question
+ * is asked per cohort (see serializationCohort), not per family: counting a cold-email run against
+ * a Google Ads campaign would be the same mistake one level down.
  *
  * The candidate set is read from the DB rather than from the campaigns claimed this tick: the one
  * that is actually running is precisely the one NOT claimed (its nextRunAt is null while in
  * flight), so a group-scoped check would be blind to it.
  */
-async function hasLiveSalesRunForBrand(orgId: string, brandId: string, now: Date): Promise<boolean> {
+async function hasLiveRunForBrandCohort(
+  orgId: string,
+  brandId: string,
+  cohort: string,
+  now: Date,
+): Promise<boolean> {
   const alive = await db.query.campaigns.findMany({
     where: and(
       eq(campaigns.orgId, orgId),
@@ -932,7 +993,8 @@ async function hasLiveSalesRunForBrand(orgId: string, brandId: string, now: Date
 
   const startedAfter = new Date(now.getTime() - LIVE_RUN_FRESHNESS_MS).toISOString();
   for (const c of alive) {
-    if (!isSalesOutreachFeature(c.featureSlug)) continue;
+    if (!isSalesFunnelFeature(c.featureSlug)) continue;
+    if (serializationCohort(c.featureSlug) !== cohort) continue;
     const { runs } = await listRuns({
       orgId,
       campaignId: c.id,

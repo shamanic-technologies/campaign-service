@@ -11,7 +11,7 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { campaignIdentityColumns } from "../lib/campaign-identity.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
-import { isSalesOutreachFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
+import { isSalesFunnelFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
 import { acceptedFunnelKeys, toFunnelKey } from "../lib/sales-funnel-vocabulary.js";
 
 const router = Router();
@@ -148,10 +148,10 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     // the brand's declared set, not ever. A sales campaign with no funnel is what left a customer
     // funding a funnel and never getting a campaign for it, so this is a hard 400 rather than a
     // row nobody can attribute. Every other feature sells through no sales funnel and states none.
-    const funnelKey = isSalesOutreachFeature(resolvedFeatureSlug)
+    const funnelKey = isSalesFunnelFeature(resolvedFeatureSlug)
       ? toFunnelKey(bodyFunnelKey)
       : null;
-    if (isSalesOutreachFeature(resolvedFeatureSlug) && !funnelKey) {
+    if (isSalesFunnelFeature(resolvedFeatureSlug) && !funnelKey) {
       return res.status(400).json({
         error: bodyFunnelKey
           ? `Unknown sales funnel "${bodyFunnelKey}" — expected one of: ${acceptedFunnelKeys().join(", ")}`
@@ -357,7 +357,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     // Two creates raced the same identity. The loser does not get a second campaign for it — the
     // one that won IS this identity's campaign, so hand that one back rather than an error.
     if (error?.code === "23505" && constraint === "uniq_campaigns_org_brand_funnel_channel") {
-      const racedFunnelKey = isSalesOutreachFeature(req.featureSlug)
+      const racedFunnelKey = isSalesFunnelFeature(req.featureSlug)
         ? toFunnelKey(req.body.funnelKey)
         : null;
       const winner = await db.query.campaigns.findFirst({

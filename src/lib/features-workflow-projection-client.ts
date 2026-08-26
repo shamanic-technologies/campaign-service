@@ -1,7 +1,7 @@
 import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-headers.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "./brand-runtime-client.js";
 import { thompsonArgminCost, type Arm, type Rng } from "./bandit.js";
-import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
+import { isOutboundSalesFeature } from "./sales-outreach-campaign.js";
 
 // Audience-grain, send-tagged evidence for one (audience × workflow dynasty) couple.
 // Present ONLY on audienceId != null rows whose audience actually spent under this couple
@@ -397,15 +397,18 @@ export function serveableAudienceIdsInProjection(
  * Whether the greedy workflow rotation applies to a given feature. When false, the
  * trigger keeps the campaign's configured workflowSlug (no features-service call).
  *
- * Scoped to the sales-outreach feature family (every acquisition CHANNEL that sells a sales
- * funnel) — those vary their workflow across runs. Every other feature
+ * Scoped to the OUTBOUND cold-email channels — those vary their workflow across runs, and the
+ * projection prices a DAG on the send-tagged outcome evidence only they produce. A paid-reach
+ * channel runs the workflow its campaign states, run after run: there is no second dynasty to
+ * rotate onto and no send evidence to rank one against another. Every other feature
  * always runs its campaign's configured workflowSlug, run after run, with no
  * features-service call and no rotation. (Product decision 2026-07-07: rotation is a
- * sales-outreach lever; extended to sales-crm-email-outreach 2026-07-24 and to every sales
- * channel since — a second channel is a second feature, and it rotates like the first.)
+ * sales-outreach lever; extended to sales-crm-email-outreach 2026-07-24 and to every OUTBOUND
+ * sales channel since — a second cold-email channel is a second feature, and it rotates like the
+ * first.)
  */
 export function isWorkflowRotationEnabled(featureSlug: string): boolean {
-  return isSalesOutreachFeature(featureSlug);
+  return isOutboundSalesFeature(featureSlug);
 }
 
 /**

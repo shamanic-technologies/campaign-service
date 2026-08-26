@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SALES_FUNNEL_KEYS } from "../../src/lib/sales-funnel-vocabulary.js";
-import { SALES_OUTREACH_FEATURE_SLUGS } from "../../src/lib/sales-outreach-campaign.js";
+import { SALES_FUNNEL_FEATURE_SLUGS } from "../../src/lib/sales-outreach-campaign.js";
 
 const TAG = "0045_owner_funnel_decision_f4d73dab";
 const SQL = readFileSync(join(process.cwd(), "drizzle", `${TAG}.sql`), "utf8");
@@ -34,7 +34,7 @@ describe("the funnel of a brand that sells through several is UNKNOWN until its 
     const quotedFeatureSlugs = STATEMENTS.match(/'[a-z]+(?:-[a-z]+)+'/g) ?? [];
     expect(quotedFeatureSlugs.length).toBeGreaterThan(0);
     for (const quoted of quotedFeatureSlugs) {
-      expect(SALES_OUTREACH_FEATURE_SLUGS.has(quoted.slice(1, -1))).toBe(true);
+      expect(SALES_FUNNEL_FEATURE_SLUGS.has(quoted.slice(1, -1))).toBe(true);
     }
   });
 

@@ -8,6 +8,11 @@ describe("acquisitionChannelForFeature", () => {
   it("names the medium for the features that state a sales funnel", () => {
     expect(acquisitionChannelForFeature("sales-cold-email-outreach")).toBe("cold_email");
     expect(acquisitionChannelForFeature("sales-crm-email-outreach")).toBe("crm_email");
+    expect(acquisitionChannelForFeature("feedback-request-cold-email-outreach")).toBe("feedback_request_email");
+    // Paid reach. Stated explicitly rather than left to the slug fallback: the fallback is total by
+    // construction, so an upstream RENAME would file the campaign under a channel nothing else
+    // uses — silently, with no error and no failing test.
+    expect(acquisitionChannelForFeature("google-ads")).toBe("google_ads");
   });
 
   it("never folds two different products onto one channel", () => {
@@ -20,6 +25,8 @@ describe("acquisitionChannelForFeature", () => {
       "hiring-cold-email-outreach",
       "vc-cold-email-outreach",
       "sales-crm-email-outreach",
+      "feedback-request-cold-email-outreach",
+      "google-ads",
       "pr-expert-quote-outreach",
       "pr-expert-quote-opportunities",
       "ai-visibility-scoring",
