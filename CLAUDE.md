@@ -104,7 +104,7 @@ legacy `campaign.goal`, which nothing writes any more.
 ## A test that pins FROZEN history against a GROWING constant fails the day the constant grows
 
 `tests/unit/funnel-owner-decision.test.ts` asserted both directions between a shipped migration's
-SQL and `SALES_OUTREACH_FEATURE_SLUGS`: every slug in the SQL is a sales one (true forever) AND
+SQL and `SALES_FUNNEL_FEATURE_SLUGS`: every slug in the SQL is a sales one (true forever) AND
 every sales slug appears in the SQL (true only until the family grows). Adding the second
 acquisition channel failed it, on a migration that is correct and can never mention a feature that
 did not exist when it ran. Assert the direction that stays true — what the frozen file names is
@@ -120,7 +120,7 @@ work ONE funnel through BOTH, and each is a campaign of its own.
 
 - **A CHANNEL IS A FEATURES-SERVICE FEATURE SLUG.** There is no channel table, enum or vocabulary
   in this service and none is to be introduced. Adding a further channel is one line in
-  `SALES_OUTREACH_FEATURE_SLUGS` (`src/lib/sales-outreach-campaign.ts`) plus its
+  `SALES_FUNNEL_FEATURE_SLUGS` (`src/lib/sales-outreach-campaign.ts`) plus its
   `CHANNEL_BY_FEATURE` token — a second offer on the same medium needs its OWN channel token
   (`feedback_request_email`, not `cold_email`), or the two campaigns of one funnel would collide on
   the identity index and only one could exist.
@@ -202,6 +202,52 @@ work ONE funnel through BOTH, and each is a campaign of its own.
 - Everything below — the turn-taking, the fail-closed hold, the per-brand serialization, which
   stopped campaigns funding may resume — is UNCHANGED and applies per campaign, so it applies per
   pair without a special case. (Set 2026-08-18.)
+
+## Google Ads is a channel like any other — PAID REACH joins the funnel-funded family, and only the three behaviours that are genuinely about MAILBOXES stay outbound-only
+
+A channel IS a features-service feature slug, so the first paid-reach channel is one line in the
+family constant plus its `CHANNEL_BY_FEATURE` token, and NOT a second mechanism. Everything already
+true of a provisioned campaign is true of it: it states its (offer, funnel, channel) identity at
+birth, is provisioned one per funded pair off billing's `channels`/`offers` grains, is HELD when the
+customer funds nothing for it, takes its turn on its own fill ratio, is gated and paced on the
+ceiling that binds IT, and refuses a `maxBudget*` of its own.
+
+- **Membership in `SALES_FUNNEL_FEATURE_SLUGS` is a MONEY statement, not a medium one** — "this
+  campaign's ceiling is billing's, per (funnel, channel, offer), read live on every plan." Google
+  Ads answers that identically to a cold email, which is why it is a member and not a family of its
+  own. `isSalesFunnelFeature` is what every gate keyed on that question tests (gate-check's
+  `isSalesFeature`, the `maxBudget*` refusal, the create-time funnel requirement, the turn planner,
+  the funding sweep).
+- **`OUTBOUND_SALES_FEATURE_SLUGS` is the narrower question — "does this share the brand's LEADS and
+  SENDING ACCOUNTS?"** — and exactly three behaviours ask it, because all three are about contacting
+  named people: the per-brand serialization cohort, the greedy workflow rotation (which prices a DAG
+  on send-tagged outcome evidence a paid channel does not produce), and the extend-audience
+  lifecycle email (which asks a customer for more PEOPLE to contact — nonsense for a campaign that
+  buys impressions). A fourth, the legacy per-campaign `daily_budget_cents` MIRROR written by
+  `PATCH /brands/:brandId/daily-budget`, is outbound-scoped for the same reason it exists at all:
+  stamping a brand-level number on a paid-reach row would bind it AHEAD of the offer ceiling it was
+  funded on, i.e. a second representation of one fact.
+- **WHICH funnels it may sell is features-service's statement, asked per feature, never held here.**
+  Google Ads states the three VISIT-led chains: an ad buys a click, and the conversation chain
+  starts with a reply it has no way to sell. A funded pair the channel may not sell gets no
+  campaign, exactly as before, and `tests/unit/no-legacy.test.ts` fails on a feature slug and a
+  funnel key on one line of code outside the client that ASKS.
+- **Only Google Ads.** features-service publishes a dozen paid-reach channels; workflow-service has
+  a dynasty for none of them, and `fetchActiveWorkflowSlugForFeature` fail-CLOSES on that, so
+  nothing would be provisioned even if they were swept in. They are still not swept in: a campaign
+  for a channel nothing can execute would sit ongoing and produce nothing forever. Adding the next
+  one is one line, once something can run it. **At the time of writing workflow-service has no
+  `google-ads` workflow either** — the provisioning says so per sweep and stands the campaign up the
+  moment the dynasty ships, which is the same fail-closed the feedback-request channel shipped under.
+- **Each candidate's spend is read under ITS OWN feature.** The turn planner used to ask
+  runs-service for every candidate's spend under the SEED's slug; the read filters on it, so a
+  campaign of another channel answered ZERO, read as perfectly empty and took every turn. Harmless
+  while a brand's campaigns were all cold email in practice, a live overspend the moment one brand
+  mixes channels.
+- **Nothing is special-cased anywhere else**: no new column, table, vocabulary or accumulator, and
+  no branch in gate-check, campaign-funding, the offer/funnel adoption or the resume sweep.
+
+(Set 2026-08-26.)
 
 ## A sales campaign row states the money that governs it — `maxBudget*` is REFUSED for the family
 
@@ -656,16 +702,27 @@ funnel set), and migration **0048** (the 45 stopped ancestors of the one live ca
 that a brand row is claimed by several orgs — the stopped campaigns other orgs hold on `f4d73dab`
 are other customers' and keep a NULL funnel, and 0048's rule joins on the org for the same reason.
 
-## Brand serialization counts SALES runs only — a brand's PR run is not its sales outreach's business
+## Brand serialization counts the runs of the SAME COHORT — a brand's PR run, and its ad run, are not its cold email's business
 
-`hasLiveSalesRunForBrand` asks runs-service campaign by campaign, over the brand's `ongoing`
-sales-family campaigns. It must NOT be a brand-wide `listRuns({ brandId })`: runs of the brand's PR,
+`hasLiveRunForBrandCohort` asks runs-service campaign by campaign, over the brand's `ongoing`
+sales-family campaigns **of one cohort**. It must NOT be a brand-wide `listRuns({ brandId })`: runs of the brand's PR,
 AI-visibility, hiring and VC campaigns carry the same brand, so a brand whose PR outreach ticks
 continuously (736 completed runs in one morning, one always in flight) reads as permanently busy and
 EVERY sales campaign of that brand is deferred 60s, every tick, forever. That is a full stop, and it
 appears in no log at all because the defer is the routine path. The candidate set is read from the
 DB, not from the campaigns claimed this tick — the one actually running is precisely the one NOT
 claimed (its `nextRunAt` is null while in flight). (Set 2026-08-02.)
+
+**A cohort is what genuinely SHARES something** (`serializationCohort`, funnel-campaigns.ts): the
+three OUTBOUND cold-email channels are one cohort — same lead population, same sending accounts, so
+two of their runs at once would contact the same people from the same mailboxes — and every other
+channel is its own, keyed on the acquisition channel it already states. A paid-reach campaign is
+therefore serial against ITSELF (one live run per external ad account per brand, the same
+conservatism) and against nothing else. Holding a funded Google Ads campaign behind a cold-email run
+would be the identical mistake one level down from the PR one above: a defer that fires every tick,
+for a reason that is not true of it, appearing in no log at all. The TURN is per cohort too, so a
+brand working one funnel by cold email and another by ads fires one of each rather than one in
+total. (Set 2026-08-26.)
 
 The per-campaign audience SUBSET (`campaigns.audience_ids`, Campaign v2) is a HARD filter on the audience bandit (`requiredAudienceIds` in `selectAudienceFromProjection`): a campaign never contacts an audience outside its targeted subset (no fallback). NULL/empty → inherit the brand's full active audience set. (The old workflow-conditioning `eligibleAudienceIds` soft-filter was REMOVED in v0.44.1 — see the single-endpoint note below.) Distinct from the singular `audienceId` column (per-campaign attribution; the per-RUN chosen audience is re-selected fresh at /start-run).
 
@@ -930,7 +987,7 @@ same branch.
   feature — and is `completed` immediately. Nothing per-execution, for two different reasons that
   both end in a silent full stop:
   - No **`campaignId`**: every campaign-scoped read here (gate-check's stale cleanup and lifetime
-    `completed` count, `hasLiveRunForCampaign`, `hasLiveSalesRunForBrand`) filters on it, so
+    `completed` count, `hasLiveRunForCampaign`, `hasLiveRunForBrandCohort`) filters on it, so
     tagging the anchor recreates exactly the orphan run that stopped this service creating runs at
     trigger time in the first place.
   - No **`workflowSlug`**: the workflow is re-picked EVERY run by the greedy bandit, and

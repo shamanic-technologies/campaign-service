@@ -781,6 +781,59 @@ describe("Gate Check", () => {
       expect(result.reason).toBe("Funnel not funded for this channel");
     });
 
+    it("paces a Google Ads campaign on its own (funnel, channel) ceiling, like any other channel", async () => {
+      // A paid-reach campaign is in the funnel-funded family for exactly one reason: its money is
+      // billing's, per (funnel, channel, offer). So the same gate, the same precedence, the same
+      // fail-CLOSED — nothing about the medium reaches this block.
+      mockFunnelBudgets(
+        [{ funnelKey: "visit_signup", dailyBudgetCents: "3000" }],
+        "3000",
+        [
+          { funnelKey: "visit_signup", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "2000" },
+          { funnelKey: "visit_signup", featureSlug: "google-ads", dailyBudgetCents: "1000" },
+        ],
+      );
+      mockGetStatsBudget.mockResolvedValue(
+        // Under the funnel TOTAL and under cold email's share, but AT the ad channel's own $10.
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1000" }]),
+      );
+
+      const result = await runGateChecks(
+        makeCampaign({
+          brandIds: ["brand-1"],
+          funnelKey: "website_purchases",
+          featureSlug: "google-ads",
+        }),
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Funnel daily budget reached");
+    });
+
+    it("never paces a Google Ads campaign on a per-campaign budget column", async () => {
+      // The whole campaign-budget-windows block runs under `if (!isSalesFeature)`. A legacy row
+      // carrying a dollar ceiling must not suddenly start binding a paid-reach campaign — its
+      // money is billing's, read live, and creation refuses a new one outright.
+      mockFunnelBudgets(
+        [{ funnelKey: "visit_signup", dailyBudgetCents: "3000" }],
+        "3000",
+        [{ funnelKey: "visit_signup", featureSlug: "google-ads", dailyBudgetCents: "3000" }],
+      );
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "500" }]),
+      );
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
+
+      const result = await runGateChecks(
+        makeCampaign({
+          brandIds: ["brand-1"],
+          funnelKey: "website_purchases",
+          featureSlug: "google-ads",
+          maxBudgetDailyUsd: "1.00", // $1, long since exceeded by the $5 spent — and inert
+        }),
+      );
+      expect(result.allowed).toBe(true);
+    });
+
     it("a funnel funded through exactly ONE channel binds whatever feature the campaign states", async () => {
       // billing attributed some brands' single ceiling to the default channel while their campaign
       // runs another sales feature. Blocking those would break a brand that has funded one channel

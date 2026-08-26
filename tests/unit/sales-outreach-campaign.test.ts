@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  isSalesOutreachFeature,
+  GOOGLE_ADS_FEATURE_SLUG,
+  isOutboundSalesFeature,
+  isSalesFunnelFeature,
   MAX_BUDGET_FIELDS,
   salesMaxBudgetRefusal,
   SALES_CRM_FEATURE_SLUG,
+  SALES_FEEDBACK_REQUEST_FEATURE_SLUG,
   SALES_OUTREACH_FEATURE_SLUG,
-  SALES_OUTREACH_WORKFLOW_SLUG,
 } from "../../src/lib/sales-outreach-campaign.js";
 import type { Campaign } from "../../src/db/schema.js";
 
@@ -17,7 +19,7 @@ function campaign(overrides: Partial<Campaign> = {}): Campaign {
     createdByUserId: "user-1",
     parentRunId: null,
     name: "Sales",
-    workflowSlug: SALES_OUTREACH_WORKFLOW_SLUG,
+    workflowSlug: "sales-email-cold-outreach",
     brandIds: ["brand-1"],
     featureSlug: SALES_OUTREACH_FEATURE_SLUG,
     featureInputs: null,
@@ -54,20 +56,50 @@ function mutation(returned: Campaign[]) {
   };
 }
 
-describe("isSalesOutreachFeature", () => {
+describe("isSalesFunnelFeature", () => {
+  it("includes every acquisition channel that sells a sales funnel — paid reach included", () => {
+    // Membership is a MONEY statement, not a medium one: this campaign's ceiling is billing's,
+    // per (funnel, channel, offer). Google Ads answers that identically to a cold email.
+    expect(isSalesFunnelFeature(GOOGLE_ADS_FEATURE_SLUG)).toBe(true);
+    expect(isSalesFunnelFeature("google-ads")).toBe(true);
+  });
+
+  it("does NOT sweep in the rest of the published paid-reach catalogue", () => {
+    // Published by features-service, executable by nothing — a campaign for one would sit ongoing
+    // and produce nothing forever.
+    for (const slug of ["meta-ads", "linkedin-ads", "tiktok-ads", "bing-ads", "cold-call-outreach"]) {
+      expect(isSalesFunnelFeature(slug)).toBe(false);
+    }
+  });
+
   it("includes both cold and CRM sales-outreach features (full parity)", () => {
-    expect(isSalesOutreachFeature(SALES_OUTREACH_FEATURE_SLUG)).toBe(true);
-    expect(isSalesOutreachFeature(SALES_CRM_FEATURE_SLUG)).toBe(true);
-    expect(isSalesOutreachFeature("sales-cold-email-outreach")).toBe(true);
-    expect(isSalesOutreachFeature("sales-crm-email-outreach")).toBe(true);
+    expect(isSalesFunnelFeature(SALES_OUTREACH_FEATURE_SLUG)).toBe(true);
+    expect(isSalesFunnelFeature(SALES_CRM_FEATURE_SLUG)).toBe(true);
+    expect(isSalesFunnelFeature("sales-cold-email-outreach")).toBe(true);
+    expect(isSalesFunnelFeature("sales-crm-email-outreach")).toBe(true);
   });
 
   it("excludes non-sales features and empty/nullish slugs", () => {
-    expect(isSalesOutreachFeature("pr-expert-quote-outreach")).toBe(false);
-    expect(isSalesOutreachFeature("hiring-cold-email-outreach")).toBe(false);
-    expect(isSalesOutreachFeature("")).toBe(false);
-    expect(isSalesOutreachFeature(null)).toBe(false);
-    expect(isSalesOutreachFeature(undefined)).toBe(false);
+    expect(isSalesFunnelFeature("pr-expert-quote-outreach")).toBe(false);
+    expect(isSalesFunnelFeature("hiring-cold-email-outreach")).toBe(false);
+    expect(isSalesFunnelFeature("")).toBe(false);
+    expect(isSalesFunnelFeature(null)).toBe(false);
+    expect(isSalesFunnelFeature(undefined)).toBe(false);
+  });
+});
+
+describe("isOutboundSalesFeature", () => {
+  it("is the cold-email subset — the channels that share leads and sending accounts", () => {
+    expect(isOutboundSalesFeature(SALES_OUTREACH_FEATURE_SLUG)).toBe(true);
+    expect(isOutboundSalesFeature(SALES_CRM_FEATURE_SLUG)).toBe(true);
+    expect(isOutboundSalesFeature(SALES_FEEDBACK_REQUEST_FEATURE_SLUG)).toBe(true);
+  });
+
+  it("EXCLUDES paid reach — an ad shares no lead population and no mailbox", () => {
+    // Three behaviours key on this and must not reach a Google Ads campaign: the per-brand
+    // serialization, the greedy workflow rotation, and the extend-audience lifecycle email.
+    expect(isOutboundSalesFeature(GOOGLE_ADS_FEATURE_SLUG)).toBe(false);
+    expect(isOutboundSalesFeature(null)).toBe(false);
   });
 });
 
@@ -76,7 +108,7 @@ describe("salesMaxBudgetRefusal", () => {
   const NON_SALES = "pr-expert-quote-outreach";
 
   it("refuses each per-campaign budget window on a sales-family campaign, naming where the ceiling belongs", () => {
-    for (const slug of [SALES, "sales-crm-email-outreach", "feedback-request-cold-email-outreach"]) {
+    for (const slug of [SALES, "sales-crm-email-outreach", "feedback-request-cold-email-outreach", "google-ads"]) {
       for (const field of MAX_BUDGET_FIELDS) {
         const message = salesMaxBudgetRefusal(slug, { [field]: "10.00" });
         expect(message).toContain(field);
