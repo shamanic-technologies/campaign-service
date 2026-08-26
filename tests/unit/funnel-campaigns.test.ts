@@ -88,6 +88,7 @@ import {
 
 const SALES = "sales-cold-email-outreach";
 const FEEDBACK = "feedback-request-cold-email-outreach";
+const GOOGLE_ADS = "google-ads";
 const ANCESTOR_RUN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -929,5 +930,197 @@ describe("planFunnelTurns", () => {
 
     expect(deferred.has("c-reply")).toBe(false);
     expect(deferred.get("c-visit")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
+  });
+  // ── Google Ads: the first PAID-REACH channel ──────────────────────────────────────────────────
+  // A channel is a feature slug, so nothing here is special-cased: the funded pair is provisioned,
+  // scheduled and paced by the same rules. What IS different is what it shares with a cold-email
+  // campaign — no leads, no mailboxes — so neither holds the other back.
+
+  it("gives a funded (funnel, google-ads) pair its own campaign, on that channel's own workflow", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "visit_signup", featureSlug: GOOGLE_ADS, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "website_purchases" }]);
+    mockFindFirst.mockResolvedValue(undefined); // the pair has no campaign yet
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
+    const inserted = mockInsertValues.mock.calls[0][0];
+    expect(inserted.featureSlug).toBe(GOOGLE_ADS);
+    expect(inserted.funnelKey).toBe("website_purchases");
+    // The identity is (org, brand, funnel, CHANNEL) — a paid-reach campaign holds its own, so a
+    // brand may work one funnel through an ad and a cold email at the same time.
+    expect(inserted.acquisitionChannel).toBe("google_ads");
+    // A workflow belongs to a FEATURE: the seed's cold-email slug would run the wrong DAG.
+    expect(inserted.workflowSlug).toBe("google-ads-seed");
+    expect(inserted.status).toBe("ongoing");
+    // No per-campaign ceiling is ever written for this family: the money is billing's, read live.
+    expect(inserted.dailyBudgetCents).toBeUndefined();
+  });
+
+  it("provisions NO Google Ads campaign for a funnel that channel cannot sell", async () => {
+    // An ad buys a click. The conversation chain starts with a reply it has no way to sell, and
+    // features-service states that per channel rather than leaving it to be inferred here.
+    mockFetch.mockImplementation(async (input: URL | string) => {
+      const url = String(input);
+      if (url.includes("/features/")) {
+        const slug = new URL(url).pathname.split("/features/")[1];
+        return {
+          ok: true,
+          json: async () => ({
+            feature: {
+              slug,
+              salesFunnels: slug === GOOGLE_ADS
+                ? ["website_purchases", "sales_meetings_from_website", "form_magnet"]
+                : [...SALES_FUNNEL_KEYS],
+            },
+          }),
+        };
+      }
+      if (url.includes("/workflows")) {
+        return {
+          ok: true,
+          json: async () => ({
+            workflows: [{ workflowSlug: `${new URL(url).searchParams.get("featureSlug")}-seed`, createdAt: "2026-08-18T00:00:00.000Z" }],
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    });
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: GOOGLE_ADS, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it("a live cold-email run does NOT hold a funded Google Ads campaign, and neither holds the other", async () => {
+    // Serialization exists because two outbound runs would contact the same people from the same
+    // mailboxes. An ad shares neither, so counting a cold-email run against it would hold a funded
+    // channel every tick for a reason that is not true of it — and say so in no log at all.
+    mockFunnelBudgets(
+      [
+        { funnelKey: "reply_meeting", dailyBudgetCents: "2000" },
+        { funnelKey: "visit_signup", dailyBudgetCents: "1000" },
+      ],
+      "3000",
+      [
+        { funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "2000" },
+        { funnelKey: "visit_signup", featureSlug: GOOGLE_ADS, dailyBudgetCents: "1000" },
+      ],
+    );
+    mockDeclaredFunnels([
+      { funnelKey: "sales_meetings_from_conversation" },
+      { funnelKey: "website_purchases" },
+    ]);
+    mockFindFirst.mockResolvedValue({ id: "existing", name: "x", status: "ongoing", stopReason: null });
+    mockSpend("0"); // c-sales
+    mockSpend("0"); // c-ads
+
+    aliveBrandCampaigns = [
+      { id: "c-sales", featureSlug: SALES },
+      { id: "c-ads", featureSlug: GOOGLE_ADS },
+    ];
+    mockListRuns.mockImplementation(async ({ campaignId }: { campaignId?: string }) =>
+      campaignId === "c-sales" ? { runs: [{ id: "live-cold-email" }] } : { runs: [] },
+    );
+
+    const now = new Date("2026-08-26T10:00:00Z");
+    const deferred = await planFunnelTurns(
+      [
+        claimed({ id: "c-sales", funnelKey: "sales_meetings_from_conversation", featureSlug: SALES }),
+        claimed({ id: "c-ads", funnelKey: "website_purchases", featureSlug: GOOGLE_ADS }),
+      ],
+      now,
+    );
+
+    expect(deferred.has("c-ads")).toBe(false); // takes its turn while cold email is mid-run
+    expect(deferred.get("c-sales")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
+  });
+
+  it("asks each campaign's spend under its OWN feature — the seed's slug would answer zero", async () => {
+    // The spend read filters on featureSlug. Asking for the ad campaign's spend under the seed's
+    // cold-email slug answers ZERO, so a campaign at its ceiling would read as perfectly empty and
+    // take every turn — overspending its own ceiling with nothing in any log.
+    mockFunnelBudgets(
+      [
+        { funnelKey: "reply_meeting", dailyBudgetCents: "2000" },
+        { funnelKey: "visit_signup", dailyBudgetCents: "1000" },
+      ],
+      "3000",
+      [
+        { funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "2000" },
+        { funnelKey: "visit_signup", featureSlug: GOOGLE_ADS, dailyBudgetCents: "1000" },
+      ],
+    );
+    mockDeclaredFunnels([
+      { funnelKey: "sales_meetings_from_conversation" },
+      { funnelKey: "website_purchases" },
+    ]);
+    mockFindFirst.mockResolvedValue({ id: "existing", name: "x", status: "ongoing", stopReason: null });
+    mockSpend("0");
+    mockSpend("0");
+
+    aliveBrandCampaigns = [
+      { id: "c-sales", featureSlug: SALES },
+      { id: "c-ads", featureSlug: GOOGLE_ADS },
+    ];
+    await planFunnelTurns(
+      [
+        claimed({ id: "c-sales", funnelKey: "sales_meetings_from_conversation", featureSlug: SALES }),
+        claimed({ id: "c-ads", funnelKey: "website_purchases", featureSlug: GOOGLE_ADS }),
+      ],
+      new Date("2026-08-26T10:00:00Z"),
+    );
+
+    expect(mockGetStatsBudget).toHaveBeenCalledWith(
+      expect.objectContaining({ campaignId: "c-ads", featureSlug: GOOGLE_ADS }),
+    );
+    expect(mockGetStatsBudget).toHaveBeenCalledWith(
+      expect.objectContaining({ campaignId: "c-sales", featureSlug: SALES }),
+    );
+  });
+
+  it("two funded Google Ads funnels of one brand still take turns — one live run per ad account", async () => {
+    mockFunnelBudgets(
+      [
+        { funnelKey: "visit_signup", dailyBudgetCents: "1000" },
+        { funnelKey: "visit_form", dailyBudgetCents: "1000" },
+      ],
+      "2000",
+      [
+        { funnelKey: "visit_signup", featureSlug: GOOGLE_ADS, dailyBudgetCents: "1000" },
+        { funnelKey: "visit_form", featureSlug: GOOGLE_ADS, dailyBudgetCents: "1000" },
+      ],
+    );
+    mockDeclaredFunnels([{ funnelKey: "website_purchases" }, { funnelKey: "form_magnet" }]);
+    mockFindFirst.mockResolvedValue({ id: "existing", name: "x", status: "ongoing", stopReason: null });
+    mockSpend("900"); // c-purchases: 90% full
+    mockSpend("100"); // c-form: 10% full
+
+    aliveBrandCampaigns = [
+      { id: "c-purchases", featureSlug: GOOGLE_ADS },
+      { id: "c-form", featureSlug: GOOGLE_ADS },
+    ];
+    const now = new Date("2026-08-26T10:00:00Z");
+    const deferred = await planFunnelTurns(
+      [
+        claimed({ id: "c-purchases", funnelKey: "website_purchases", featureSlug: GOOGLE_ADS }),
+        claimed({ id: "c-form", funnelKey: "form_magnet", featureSlug: GOOGLE_ADS }),
+      ],
+      now,
+    );
+
+    expect(deferred.has("c-form")).toBe(false); // the emptiest relative to its own ceiling
+    expect(deferred.get("c-purchases")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
   });
 });

@@ -2,7 +2,7 @@ import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type 
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
-import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
+import { isSalesFunnelFeature } from "./sales-outreach-campaign.js";
 import { channelCeilingCents, fetchFunnelBudgets, offerCeilingCents } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { STOP_REASONS } from "./stop-reason.js";
@@ -20,7 +20,7 @@ const RUNNING_RUNS_LIMIT = 200;
 // The sales-outreach feature family (every acquisition channel that sells a sales funnel) is
 // paced by the brand daily budget (billing-service brand_daily_budgets) and held on brand pause.
 // Every other feature is paced by the campaign's own budget windows and runs through a pause.
-// See isSalesOutreachFeature (sales-outreach-campaign.ts) for membership.
+// See isSalesFunnelFeature (sales-outreach-campaign.ts) for membership.
 
 export interface GateCheckInput {
   campaignId: string;
@@ -119,7 +119,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // paced by the brand daily budget (block 3c below) instead. For non-sales campaigns the
   // campaign's own configured caps govern at their cadence: daily (today's spend, resets at day
   // rollover), weekly, monthly, and total (one-off — auto-stops the campaign when hit).
-  const isSalesFeature = isSalesOutreachFeature(campaign.featureSlug);
+  const isSalesFeature = isSalesFunnelFeature(campaign.featureSlug);
 
   if (!isSalesFeature) {
     const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean; nextRunAt?: Date }> = [];

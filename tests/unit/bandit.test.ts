@@ -208,6 +208,13 @@ describe("isWorkflowRotationEnabled", () => {
     expect(isWorkflowRotationEnabled("sales-crm-email-outreach")).toBe(true);
   });
 
+  it("disables rotation for a PAID-REACH channel — there is no send evidence to rank a DAG on", () => {
+    // The projection prices a workflow on send-tagged outcome evidence only an outbound channel
+    // produces. A Google Ads campaign runs the workflow its campaign states, run after run, and
+    // makes no features-service call at all.
+    expect(isWorkflowRotationEnabled("google-ads")).toBe(false);
+  });
+
   it("disables rotation for pr-expert features", () => {
     expect(isWorkflowRotationEnabled("pr-expert-quote-outreach")).toBe(false);
     expect(isWorkflowRotationEnabled("pr-expert-quote-opportunities")).toBe(false);

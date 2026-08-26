@@ -7,7 +7,7 @@
 // EVERYTHING here is fire-and-forget: it must NEVER block, delay, or fail the outreach
 // loop / run finalization. Every path swallows its error (logged, not thrown).
 import type { Campaign } from "../db/schema.js";
-import { isSalesOutreachFeature } from "./sales-outreach-campaign.js";
+import { isOutboundSalesFeature } from "./sales-outreach-campaign.js";
 import { hasExhaustedAudience } from "./audience-exhaustion.js";
 import { fetchBrandRuntimeContext } from "./brand-runtime-client.js";
 
@@ -263,7 +263,10 @@ async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId
  */
 export async function maybeSendExtendAudienceEmail(campaign: Campaign, opts: { runId: string }): Promise<void> {
   try {
-    if (!isSalesOutreachFeature(campaign.featureSlug)) return;
+    // OUTBOUND only. This email asks the customer for more PEOPLE to contact, which is a request
+    // that means nothing to a paid-reach campaign: it buys impressions, it does not work its way
+    // through a list of names, and it has no audience to extend.
+    if (!isOutboundSalesFeature(campaign.featureSlug)) return;
 
     const userId = campaign.createdByUserId;
     if (!userId) return;

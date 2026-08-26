@@ -458,7 +458,9 @@ describe('No Legacy Patterns - CRITICAL', () => {
     // A channel IS a feature slug, and which funnels a feature may be SOLD THROUGH is
     // features-service's product statement — asked per feature, never copied here. A second copy
     // drifts the day a channel gains or loses a chain, and the customer's money is on the outcome.
-    // The one file allowed to name a funnel beside a feature slug is the one that ASKS.
+    // The one file allowed to name a funnel beside a feature slug is the one that ASKS. Every
+    // channel is covered, paid reach included — Google Ads sells the visit-led chains and not the
+    // conversation one, and that is features-service's sentence to say, not ours to copy.
     const files = getAllTsFiles(srcDir);
     const violations: { file: string; line: number; code: string }[] = [];
 
@@ -469,7 +471,7 @@ describe('No Legacy Patterns - CRITICAL', () => {
       content.split('\n').forEach((line, index) => {
         const code = line.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
         // A feature slug and a funnel key on the same line of CODE is a matrix being written down.
-        if (/["'][a-z-]*sales-[a-z-]+["']/.test(code)
+        if (/["'](google-ads|[a-z-]*sales-[a-z-]+|feedback-request-[a-z-]+)["']/.test(code)
           && /["'](sales_meetings_from_\w+|website_purchases|form_magnet|reply_meeting|visit_\w+)["']/.test(code)) {
           violations.push({ file: relative, line: index + 1, code: line.trim().substring(0, 100) });
         }

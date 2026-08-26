@@ -39,6 +39,12 @@ const CHANNEL_BY_FEATURE: Readonly<Record<string, string>> = Object.freeze({
   // token: a brand may work one funnel through both offers at once, and those are two campaigns,
   // so they must hold two identities or the unique index would let only one of them exist.
   "feedback-request-cold-email-outreach": "feedback_request_email",
+  // Paid reach. Bought impressions rather than an outbound message, so it shares no identity with
+  // any cold-email channel and a brand may work one funnel through both at once. Stated
+  // explicitly rather than left to the fallback below: the fallback is total by construction, so
+  // an upstream RENAME of this slug would file the campaign under a channel nothing else uses,
+  // silently, with no error and no failing test.
+  "google-ads": "google_ads",
 
   // Everything else. A sales funnel is not something these run — their funnel stays NULL — but
   // they still carry a channel so the identity key is enforceable for them too.
