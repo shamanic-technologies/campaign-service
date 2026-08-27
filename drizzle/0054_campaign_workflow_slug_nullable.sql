@@ -1,0 +1,19 @@
+-- A campaign whose channel the CUSTOMER operates has NO workflow, and that absence is the point.
+--
+-- The product sells a sales chain one leg at a time. The legs the platform does not automate are
+-- performed by a human at the customer's side: they work the replies, they run the meeting, they
+-- close the deal. There is no DAG for that and there must not be one — the work happens
+-- off-platform and the customer reports what happened, lead by lead. features-service publishes
+-- WHO operates each channel (`operatedBy` on the public acquisition-channel catalogue), which is
+-- what tells that case apart from a platform channel nothing can execute yet.
+--
+-- So `workflow_slug` stops being NOT NULL. NULL states "this campaign has no DAG" rather than
+-- naming an invented no-op workflow, which would be a second, false representation of the same
+-- fact. Such a campaign is never claimed by the scheduler, never triggered and never spends: it
+-- exists so the customer's own work has something to be attributed to — a budget line, a scope
+-- for stats, a thing they can pause.
+--
+-- Nothing is written by this migration: every existing row keeps the slug it states, and the
+-- create/update API still requires one. Idempotent — dropping a NOT NULL that is already dropped
+-- is a no-op in Postgres.
+ALTER TABLE "campaigns" ALTER COLUMN "workflow_slug" DROP NOT NULL;

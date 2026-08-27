@@ -265,7 +265,11 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         }, req.headers).catch(() => {});
       }
 
-      executeCampaignWorkflow(updated.workflowSlug, {
+      // Every campaign created or updated through this route states a workflow (the request
+      // schema requires one), so this is the ordinary path. The guard is what keeps a
+      // workflow-less row — a channel the customer operates, provisioned with no DAG — from ever
+      // being handed to workflow-service.
+      if (updated.workflowSlug) executeCampaignWorkflow(updated.workflowSlug, {
         campaignId: updated.id,
         orgId: req.orgId!,
         brandId: (updated.brandIds ?? []).join(","),
@@ -341,7 +345,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       brandProfileId: campaign.brandProfileId,
       audienceId: campaign.audienceId,
     };
-    executeCampaignWorkflow(campaign.workflowSlug, workflowInputs).catch((err) => {
+    if (campaign.workflowSlug) executeCampaignWorkflow(campaign.workflowSlug, workflowInputs).catch((err) => {
       console.error(`[campaign-service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
 
@@ -465,7 +469,10 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         brandProfileId: updated.brandProfileId,
         audienceId: updated.audienceId,
       };
-      executeCampaignWorkflow(updated.workflowSlug, activateInputs).catch((err) => {
+      // A campaign whose channel the customer operates carries no workflow: activating it makes
+      // it ongoing (a live scope for their own work) and triggers nothing, because there is
+      // nothing to trigger.
+      if (updated.workflowSlug) executeCampaignWorkflow(updated.workflowSlug, activateInputs).catch((err) => {
         console.error(`[campaign-service] Failed to trigger workflow for campaign ${id}:`, err);
       });
       // Campaign just activated (status → ongoing) → wake the scheduler from idle.

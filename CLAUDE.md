@@ -203,6 +203,51 @@ work ONE funnel through BOTH, and each is a campaign of its own.
   stopped campaigns funding may resume — is UNCHANGED and applies per campaign, so it applies per
   pair without a special case. (Set 2026-08-18.)
 
+## A channel the CUSTOMER operates gets its campaign with NO workflow — the absence of a DAG is the statement
+
+A sales chain is sold LEG BY LEG, and the legs the platform does not automate are performed by a
+human at the customer's side: they work the replies, they run the meeting, they close the deal.
+There is no DAG for that and there must not be one — the work happens off-platform and the customer
+reports what happened, lead by lead (declared per lead against lead-service). So provisioning's rule
+"a channel with no active workflow is not provisioned, because a campaign with no DAG would sit
+ongoing and produce nothing" is right for a channel the PLATFORM operates and wrong for one the
+CUSTOMER operates, where funding used to produce nothing at all, forever, with nothing erroring.
+
+- **WHO operates a channel is features-service's statement, asked and never held.** Its public
+  acquisition-channel catalogue (`GET /public/channels` -> `channels[].operatedBy`,
+  `src/lib/channel-operator-client.ts`) publishes `platform` | `customer` for every channel, and a
+  customer-operated one states a daily operating cost of 0 because the platform spends nothing on
+  it. No list of manual slugs exists here and none is to be introduced: the ninth customer-operated
+  channel published upstream works with no change in this repo. `tests/unit/no-legacy.test.ts` fails
+  on such a literal in src and on a second reader of `operatedBy`.
+- **The read carries NO identity, because that path carries none** — the marketing site is generated
+  from the same catalogue. It is made at most once per provisioning pass, and only when a pair
+  actually needs deciding.
+- **A slug the catalogue does not publish, and a catalogue that cannot be READ, both answer
+  "platform"** — i.e. today's behaviour exactly. That direction is deliberate in both halves: an
+  outage of this read must never stop a platform channel being provisioned, and it must never stand
+  up a workflow-less campaign on a guess. The customer-operated pair waits for the next sweep, and
+  the failure warns rather than passing in silence.
+- **`campaigns.workflow_slug` is NULLABLE (migration 0054)**, and NULL means "this campaign has no
+  DAG". Inventing a no-op workflow to satisfy the old NOT NULL would be a second, false
+  representation of the same fact — the same translation table this service keeps deleting. The
+  create/update API still REQUIRES a slug: only provisioning writes NULL, for a channel the
+  catalogue states the customer operates.
+- **Such a campaign is never scheduled, never triggered and never spends.** The scheduler states it
+  on the ROW, not on a list of slugs: `workflow_slug IS NOT NULL` on the due-campaign claim, on
+  `claimStuckCampaigns` (whose `(ongoing, nextRunAt=NULL)` is this campaign's PERMANENT resting
+  state — nothing is stuck) and on the cadence snapshot (or it would read as in-flight and pin the
+  60s active cadence forever). Never claimed means never planned, so it takes no turn either.
+  `/start-run` 400s for it, and activation makes it ongoing and triggers nothing.
+- **It exists so the customer's own work has something to be attributed to**: a budget line, a scope
+  for stats, a thing they can pause. It holds its own (org, brand, funnel, channel) identity, so it
+  never collides with the platform campaign working the same funnel.
+- **A PLATFORM channel with no active workflow still produces nothing, with the same log line.**
+  Nothing else changed: the funnels a channel may sell, the funding, the ceilings, the turn planner,
+  the identity and the existing campaigns are all untouched.
+
+(Set 2026-08-27.)
+
 ## Google Ads is a channel like any other — PAID REACH joins the funnel-funded family, and only the three behaviours that are genuinely about MAILBOXES stay outbound-only
 
 A channel IS a features-service feature slug, so the first paid-reach channel is one line in the

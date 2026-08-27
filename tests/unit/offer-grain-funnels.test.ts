@@ -189,6 +189,9 @@ beforeEach(() => {
         }),
       };
     }
+    if (url.includes("/public/channels")) {
+      return { ok: true, json: async () => ({ channels: [], steps: [] }) };
+    }
     throw new Error(`unexpected fetch in test: ${url}`);
   });
   mockListRuns.mockResolvedValue({ runs: [] });
