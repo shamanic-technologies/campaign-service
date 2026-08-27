@@ -334,3 +334,79 @@ export const DeleteCampaignsByOrgResponse = z.object({
     count: z.number().int(),
   })),
 }).openapi("DeleteCampaignsByOrgResponse");
+
+// --- Brand spendable budget (configured vs running) ---
+
+/**
+ * "Of the money configured for this brand, how much is attached to a campaign that is actually
+ * running?" Both figures are always served: a paused campaign's own settings screen must still
+ * show the amount the customer set, or it reads as zero and looks like the setting was lost.
+ *
+ * Nothing is left for a consumer to add up — the brand total, each offer's total and each
+ * campaign's total are all stated, alongside the ceiling rows that produced them.
+ */
+export const SpendableBudgetRow = z.object({
+  funnelKey: z.string().nullable(),
+  featureSlug: z.string().nullable(),
+  offerId: z.string().nullable(),
+  resolvedOfferId: z.string().nullable(),
+  dailyBudgetCents: z.number().int(),
+  running: z.boolean(),
+  campaignId: z.string().nullable(),
+  campaignStatus: z.string().nullable(),
+}).openapi("SpendableBudgetRow");
+
+export const SpendableBudgetOffer = z.object({
+  offerId: z.string().nullable(),
+  configuredDailyBudgetCents: z.number().int(),
+  runningDailyBudgetCents: z.number().int(),
+  campaignIds: z.array(z.string()),
+}).openapi("SpendableBudgetOffer");
+
+export const SpendableBudgetCampaign = z.object({
+  campaignId: z.string(),
+  status: z.string(),
+  running: z.boolean(),
+  funnelKey: z.string().nullable(),
+  featureSlug: z.string().nullable(),
+  offerId: z.string().nullable(),
+  configuredDailyBudgetCents: z.number().int(),
+  runningDailyBudgetCents: z.number().int(),
+}).openapi("SpendableBudgetCampaign");
+
+export const SpendableBudgetResponse = z.object({
+  orgId: z.string(),
+  brandId: z.string(),
+  grain: z.enum(["offer", "channel", "funnel", "brand", "none"]),
+  configuredDailyBudgetCents: z.number().int(),
+  runningDailyBudgetCents: z.number().int(),
+  offers: z.array(SpendableBudgetOffer),
+  campaigns: z.array(SpendableBudgetCampaign),
+  rows: z.array(SpendableBudgetRow),
+}).openapi("SpendableBudgetResponse");
+
+/**
+ * The fleet-wide ask. A staff audit walks every account, so one request per brand is not an
+ * option — the pairs come in a body because the answer is per (org, brand) and a staff caller
+ * crosses orgs.
+ */
+export const BatchSpendableBudgetBody = z.object({
+  brands: z.array(z.object({
+    orgId: z.string().min(1),
+    brandId: z.string().min(1),
+  })).min(1).max(500),
+}).openapi("BatchSpendableBudgetBody");
+
+export const BatchSpendableBudgetResponse = z.object({
+  brands: z.array(SpendableBudgetResponse),
+  /**
+   * The pairs whose ceilings billing could not be read for. They carry NO figures at all — never
+   * a zero, which would silently shrink a fleet total — and are named here so a caller knows its
+   * sweep is incomplete.
+   */
+  unavailable: z.array(z.object({
+    orgId: z.string(),
+    brandId: z.string(),
+    reason: z.string(),
+  })),
+}).openapi("BatchSpendableBudgetResponse");

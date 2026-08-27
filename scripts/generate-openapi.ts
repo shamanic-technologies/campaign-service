@@ -24,6 +24,9 @@ import {
   SetBrandCampaignsDailyBudgetBody,
   SetBrandCampaignsDailyBudgetResponse,
   BrandPauseHistoryResponse,
+  SpendableBudgetResponse,
+  BatchSpendableBudgetBody,
+  BatchSpendableBudgetResponse,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -186,6 +189,39 @@ registry.registerPath({
   responses: {
     200: { description: "Brand pause transition timeline", content: { "application/json": { schema: BrandPauseHistoryResponse } } },
     400: { description: "Missing x-org-id", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+// === SPENDABLE BUDGET (configured vs running) ===
+
+registry.registerPath({
+  method: "get",
+  path: "/brands/{brandId}/spendable-budget",
+  tags: ["Brands"],
+  summary: "Configured vs actually-running daily budget for a brand",
+  description: "Answers, for one (org, brand), BOTH figures: configuredDailyBudgetCents (every ceiling the customer set in billing-service) and runningDailyBudgetCents (the part of it attached to a campaign that is ongoing right now). Both are always served — a paused campaign's settings screen must still show the amount the customer set. The answer is decomposed in the SAME response by offer (`offers`), by campaign (`campaigns`) and by individual ceiling (`rows`, each naming the campaign standing behind it and whether it is running), so a consumer never sums anything and can tell which campaigns contributed and which did not. `grain` names which billing width the figures were computed at (offer | channel | funnel | brand | none) — exactly one is ever counted, since the coarser ones are billing's own sums of the finer. A ceiling written before the offer level (offerId null) still counts as running when a campaign on its funnel and channel is ongoing. 502 when billing cannot be read — never a smaller figure. Org-scoped via x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { params: z.object({ brandId: z.string() }) },
+  responses: {
+    200: { description: "Configured and running daily budget", content: { "application/json": { schema: SpendableBudgetResponse } } },
+    400: { description: "Missing x-org-id", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "Billing could not be read", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/brands/spendable-budget",
+  tags: ["Brands"],
+  summary: "Configured vs actually-running daily budget for MANY brands",
+  description: "The same answer as GET /brands/{brandId}/spendable-budget, for up to 500 (org, brand) pairs in one request — a staff audit walks every account and cannot afford one request per brand. The pairs are stated in the body because the answer is per (org, brand): one brand row is claimed by several orgs and each claim configures its own money. A pair whose billing ceilings cannot be read is listed in `unavailable` and carries NO figures at all — never a zero, which would silently shrink a fleet total. Same computation as the per-brand route, so the two cannot disagree.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: BatchSpendableBudgetBody } } } },
+  responses: {
+    200: { description: "Configured and running daily budget per brand", content: { "application/json": { schema: BatchSpendableBudgetResponse } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
