@@ -507,6 +507,33 @@ describe("Scheduler - reRunDueCampaigns", () => {
   });
 });
 
+describe("Scheduler - a campaign with NO workflow is never scheduled", () => {
+  // Its acquisition channel is operated by the CUSTOMER's own team: they work the replies, run
+  // the meeting, close the deal, off-platform. There is no DAG to run, so the row must never be
+  // claimed, never take a turn and never trigger an execution — it exists to be a budget line, a
+  // scope for stats and a thing they can pause. The claim states that on the row (workflow_slug
+  // IS NOT NULL), never on a list of slugs kept here.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDbReturning.mockResolvedValue([]);
+    mockDbFindMany.mockResolvedValue([]);
+    mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
+  });
+
+  it("the due-campaign claim requires a workflow slug", async () => {
+    const { isNotNull } = await import("drizzle-orm");
+    await reRunDueCampaigns();
+    expect(isNotNull).toHaveBeenCalledWith("workflow_slug");
+  });
+
+  it("the stuck-campaign sweep requires a workflow slug", async () => {
+    const { isNotNull } = await import("drizzle-orm");
+    await claimStuckCampaigns();
+    // (ongoing, nextRunAt=NULL) is this campaign's PERMANENT resting state — nothing is stuck.
+    expect(isNotNull).toHaveBeenCalledWith("workflow_slug");
+  });
+});
+
 describe("Scheduler - claimStuckCampaigns", () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -90,6 +90,12 @@ export async function reRunDueCampaigns(): Promise<number> {
     .where(
       and(
         eq(campaigns.status, "ongoing"),
+        // A campaign with no workflow has no DAG to run — its channel is operated by the
+        // CUSTOMER's own team, off-platform. It is never claimed, so it never takes a turn, never
+        // triggers an execution and never spends. It exists to be a scope for the work they do
+        // themselves. NOT a filter on a list of slugs: the row states the absence, and the
+        // catalogue decided it at provisioning time.
+        isNotNull(campaigns.workflowSlug),
         isNotNull(campaigns.nextRunAt),
         lte(campaigns.nextRunAt, now),
       ),
@@ -188,10 +194,11 @@ export async function reRunDueCampaigns(): Promise<number> {
             runId,
             campaignId: campaign.id,
             brandId: brandIdCsv,
-            workflowSlug: campaign.workflowSlug,
+            workflowSlug: campaign.workflowSlug!,
             featureSlug,
           },
-          fallbackSlug: campaign.workflowSlug,
+          // The claim above filters out the workflow-less rows, so this is always a real slug.
+          fallbackSlug: campaign.workflowSlug!,
           // Price the pick on the funnel the campaign STATES — the only word that separates the
           // two meeting funnels. A campaign that states one is never goal-arbitrated.
           funnelKey: campaign.funnelKey,
@@ -236,6 +243,10 @@ export async function claimStuckCampaigns(): Promise<number> {
   const ongoingCampaigns = await db.query.campaigns.findMany({
     where: and(
       eq(campaigns.status, "ongoing"),
+      // (status=ongoing, nextRunAt=NULL) is the PERMANENT resting state of a campaign whose
+      // channel the customer operates — there is nothing to run, so nothing is stuck. Claiming it
+      // here would set nextRunAt=now every tick forever for a campaign that must never fire.
+      isNotNull(campaigns.workflowSlug),
       isNull(campaigns.nextRunAt),
     ),
     columns: { id: true, orgId: true },
@@ -313,7 +324,9 @@ async function loadOngoingSnapshot(): Promise<Array<{ nextRunAt: Date | null }>>
     // A held campaign carries a nextRunAt on the funding cadence rather than being absent from
     // this snapshot, so a brand that funds nothing sleeps for ten minutes at a time instead of
     // pinning the 60s active cadence — and is still looked at without anyone asking.
-    where: eq(campaigns.status, "ongoing"),
+    // A campaign with no workflow rests at nextRunAt=NULL forever. Counting it would read as
+    // "something is in flight" and pin the 60s active cadence for a service with nothing to do.
+    where: and(eq(campaigns.status, "ongoing"), isNotNull(campaigns.workflowSlug)),
     columns: { nextRunAt: true },
   });
 }

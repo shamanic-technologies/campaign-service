@@ -125,7 +125,13 @@ async function resumeOneCampaign(
     featureSlug,
   };
 
-  const funding = await fundingCeiling(campaign, brandId, identity);
+  const funding = await fundingCeiling(
+    campaign,
+    brandId,
+    // runs-client states the header as optional; a campaign with no workflow simply does not send
+    // one, which is what `undefined` means on the wire.
+    { ...identity, workflowSlug: identity.workflowSlug ?? undefined },
+  );
   if (funding !== null) return skip(campaign, funding);
 
   const serveableAudienceIds = await serveableAudienceIdsForCampaign(campaign, featureSlug, identity);

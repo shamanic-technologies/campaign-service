@@ -140,7 +140,9 @@ router.get("/stats", requireApiKey, validateQuery(StatsFilterQuery), async (req,
       let key: string;
 
       if (groupBy === "workflowSlug") {
-        key = c.workflowSlug;
+        // A campaign whose channel the customer operates runs no workflow, and groups with the
+        // other rows that state none rather than inventing a slug for it.
+        key = c.workflowSlug || "__null__";
       } else {
         // featureSlug
         key = c.featureSlug || "__null__";

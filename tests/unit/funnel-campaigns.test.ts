@@ -89,6 +89,9 @@ import {
 const SALES = "sales-cold-email-outreach";
 const FEEDBACK = "feedback-request-cold-email-outreach";
 const GOOGLE_ADS = "google-ads";
+// A channel the CUSTOMER's own team operates: they work the replies and book the meeting
+// themselves. features-service publishes who operates each channel; nothing here holds a list.
+const IN_HOUSE_BOOKING = "in-house-meeting-booking";
 const ANCESTOR_RUN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -156,6 +159,26 @@ function mockDeclaredFunnels(funnels: Array<{ funnelKey: string; active?: boolea
       })),
     }),
   });
+}
+
+/**
+ * features-service's PUBLIC acquisition-channel catalogue — the one statement of WHO operates a
+ * channel. Every slug the tests use is platform-operated except the in-house one, which is what
+ * the provisioning tells the two cases apart by; nothing in the service holds that list.
+ */
+function catalogueResponse() {
+  return {
+    ok: true,
+    json: async () => ({
+      channels: [
+        { slug: SALES, operatedBy: "platform" },
+        { slug: FEEDBACK, operatedBy: "platform" },
+        { slug: GOOGLE_ADS, operatedBy: "platform" },
+        { slug: IN_HOUSE_BOOKING, operatedBy: "customer" },
+      ],
+      steps: [],
+    }),
+  };
 }
 
 /** Run something and return everything it said on console.warn, joined. */
@@ -260,6 +283,7 @@ describe("planFunnelTurns", () => {
           }),
         };
       }
+      if (url.includes("/public/channels")) return catalogueResponse();
       throw new Error(`unexpected fetch in test: ${url}`);
     });
     mockListRuns.mockResolvedValue({ runs: [] });
@@ -509,6 +533,7 @@ describe("planFunnelTurns", () => {
     mockFindFirst.mockResolvedValue(undefined);
     mockFetch.mockImplementation(async (input: URL | string) => {
       const url = String(input);
+      if (url.includes("/public/channels")) return catalogueResponse();
       if (url.includes("/features/")) {
         return { ok: true, json: async () => ({ feature: { slug: new URL(url).pathname.split("/features/")[1], salesFunnels: [...SALES_FUNNEL_KEYS] } }) };
       }
@@ -517,7 +542,8 @@ describe("planFunnelTurns", () => {
 
     await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
 
-    // A campaign with no DAG to run would sit ongoing and produce nothing forever.
+    // A campaign with no DAG to run would sit ongoing and produce nothing forever — for a channel
+    // the PLATFORM operates, which is what the catalogue says of this one.
     expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
@@ -988,6 +1014,7 @@ describe("planFunnelTurns", () => {
           }),
         };
       }
+      if (url.includes("/public/channels")) return catalogueResponse();
       throw new Error(`unexpected fetch in test: ${url}`);
     });
     mockFunnelBudgets(
@@ -1122,5 +1149,108 @@ describe("planFunnelTurns", () => {
 
     expect(deferred.has("c-form")).toBe(false); // the emptiest relative to its own ceiling
     expect(deferred.get("c-purchases")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
+  });
+  // ── Customer-operated channels: a funded pair with NO workflow, on purpose ────────────────────
+  // Some legs of a chain are performed by a human at the CUSTOMER's side — they work the replies,
+  // run the meeting, close the deal. There is no DAG for that and there must not be one, so the
+  // campaign is provisioned with no workflow at all. features-service's public catalogue is what
+  // tells that case apart from a platform channel nothing can execute yet; no list lives here.
+
+  it("gives a funded pair on a CUSTOMER-OPERATED channel its campaign, with no workflow", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: IN_HOUSE_BOOKING, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined); // the pair has no campaign yet
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
+    const inserted = mockInsertValues.mock.calls[0][0];
+    expect(inserted.featureSlug).toBe(IN_HOUSE_BOOKING);
+    expect(inserted.funnelKey).toBe("sales_meetings_from_conversation");
+    // NULL, never a seed slug and never an invented no-op workflow: the absence is the statement.
+    expect(inserted.workflowSlug).toBeNull();
+    expect(inserted.status).toBe("ongoing");
+    // Its own identity, so it never collides with the cold-email campaign of the same funnel.
+    expect(inserted.acquisitionChannel).toBe("in_house_meeting_booking");
+  });
+
+  it("never asks workflow-service about a customer-operated channel — there is nothing to run", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: IN_HOUSE_BOOKING, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    const asked = mockFetch.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(asked.some((u) => u.includes("/workflows"))).toBe(false);
+    expect(asked.some((u) => u.includes("/public/channels"))).toBe(true);
+  });
+
+  it("a PLATFORM channel with no active workflow still produces nothing, saying exactly that", async () => {
+    mockFetch.mockImplementation(async (input: URL | string) => {
+      const url = String(input);
+      if (url.includes("/public/channels")) return catalogueResponse();
+      if (url.includes("/features/")) {
+        return { ok: true, json: async () => ({ feature: { slug: new URL(url).pathname.split("/features/")[1], salesFunnels: [...SALES_FUNNEL_KEYS] } }) };
+      }
+      if (url.includes("/workflows")) return { ok: true, json: async () => ({ workflows: [] }) };
+      throw new Error(`unexpected fetch in test: ${url}`);
+    });
+    mockFunnelBudgets(
+      [{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "visit_signup", featureSlug: GOOGLE_ADS, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "website_purchases" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    const said: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      said.push(args.map(String).join(" "));
+    });
+    try {
+      await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(said.join("\n")).toContain("workflow-service states no active workflow for that channel");
+  });
+
+  it("an unreadable catalogue provisions nothing new for that channel, and says so", async () => {
+    mockFetch.mockImplementation(async (input: URL | string) => {
+      const url = String(input);
+      if (url.includes("/public/channels")) return { ok: false, status: 503, text: async () => "down" };
+      if (url.includes("/features/")) {
+        return { ok: true, json: async () => ({ feature: { slug: new URL(url).pathname.split("/features/")[1], salesFunnels: [...SALES_FUNNEL_KEYS] } }) };
+      }
+      if (url.includes("/workflows")) return { ok: true, json: async () => ({ workflows: [] }) };
+      throw new Error(`unexpected fetch in test: ${url}`);
+    });
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: IN_HOUSE_BOOKING, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    const warnings = await captureWarnings(() =>
+      planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]),
+    );
+
+    // Treated as platform-operated, i.e. today's behaviour: workflow-service is asked, has no
+    // dynasty for it, and nothing is stood up on a guess. The failure is never silent.
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(warnings).toContain("channel catalogue");
   });
 });

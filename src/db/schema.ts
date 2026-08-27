@@ -14,8 +14,15 @@ export const campaigns = pgTable(
 
     name: text("name").notNull(),
 
-    // Workflow slug — resolved by workflow-service, passed at campaign creation
-    workflowSlug: text("workflow_slug").notNull(),
+    // Workflow slug — resolved by workflow-service, passed at campaign creation.
+    //
+    // NULL means this campaign has NO DAG, and that is a statement rather than a gap: its channel
+    // is operated by the CUSTOMER's own team (they work the replies, run the meeting, close the
+    // deal), so the work happens off-platform and there is nothing here to execute. Such a
+    // campaign is never claimed, never triggered and never spends — it exists so the customer's
+    // own work has something to be attributed to. Every platform-operated campaign states one,
+    // and the create/update API still requires one.
+    workflowSlug: text("workflow_slug"),
 
     // Brand IDs from brand-service (CSV in x-brand-id header, stored as array)
     // Nullable initially, populated when brands are created/found in brand-service

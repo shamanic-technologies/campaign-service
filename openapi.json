@@ -42,7 +42,8 @@
             "type": "string"
           },
           "workflowSlug": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "brandIds": {
             "type": "array",

@@ -379,6 +379,13 @@
       "when": 1777800000000,
       "tag": "0053_null_inert_sales_max_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1777900000000,
+      "tag": "0054_campaign_workflow_slug_nullable",
+      "breakpoints": true
     }
   ]
 }

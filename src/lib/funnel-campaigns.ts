@@ -10,6 +10,11 @@ import {
 } from "./funnel-budget-client.js";
 import { fetchFeatureSalesFunnels, type FeatureSalesFunnelsRead } from "./feature-sales-funnels-client.js";
 import { fetchActiveWorkflowSlugForFeature, type ActiveWorkflowRead } from "./feature-workflow-client.js";
+import {
+  fetchChannelOperators,
+  type ChannelCatalogueRead,
+  type ChannelOperator,
+} from "./channel-operator-client.js";
 import { buildProvisioningIdentity, type ProvisioningIdentity } from "./provisioning-identity.js";
 import type { SalesFunnelKey } from "./sales-funnel-vocabulary.js";
 import {
@@ -63,7 +68,12 @@ export interface ClaimedFunnelCampaign {
    * minted uuid, which runs-service refuses.
    */
   parentRunId: string | null;
-  workflowSlug: string;
+  /**
+   * The DAG this campaign runs. NULL for a campaign whose channel the CUSTOMER operates — there is
+   * none, on purpose. The scheduler never claims such a row, so one never reaches the planner; the
+   * type states the absence rather than pretending every campaign has a workflow.
+   */
+  workflowSlug: string | null;
   brandIds: string[] | null;
   featureSlug: string | null;
   funnelKey: string | null;
@@ -196,7 +206,7 @@ async function planOneBrand(
     userId: seed.createdByUserId ?? undefined,
     campaignId: seed.id,
     brandId,
-    workflowSlug: seed.workflowSlug,
+    workflowSlug: seed.workflowSlug ?? undefined,
   };
 
   const heldAt = new Date(now.getTime() + FUNDING_RECHECK_MS);
@@ -527,6 +537,26 @@ async function ensureFundedFunnelCampaigns({
   const sellableByFeature = new Map<string, FeatureSalesFunnelsRead>();
   const workflowByFeature = new Map<string, ActiveWorkflowRead>();
 
+  // WHO operates a channel — one read for the WHOLE catalogue, made at most once per pass and
+  // only when a pair actually needs deciding. A slug the catalogue does not publish, and a
+  // catalogue that cannot be read, both answer "platform", which IS today's behaviour: a read
+  // that is down must never stop a platform channel being provisioned, and must never stand up a
+  // workflow-less campaign on a guess. The customer-operated pair waits for the next sweep, and
+  // the failure says so rather than passing in silence.
+  let catalogue: ChannelCatalogueRead | null = null;
+  const operatorFor = async (slug: string): Promise<ChannelOperator> => {
+    if (catalogue === null) {
+      catalogue = await fetchChannelOperators();
+      if (!catalogue.ok) {
+        console.warn(
+          `[campaign-service] Could not read features-service's channel catalogue (brand ${brandId}, org ${seed.orgId}) — ${catalogue.detail}. Every channel is treated as platform-operated this sweep, which is the behaviour that predates customer-operated channels.`,
+        );
+      }
+    }
+    if (!catalogue.ok) return "platform";
+    return catalogue.operatorBySlug.get(slug) ?? "platform";
+  };
+
   // The (org, brand, acquisition channel) triples a funnel campaign is provisioned for on this
   // tick. Collected rather than acted on inline BECAUSE the existing-campaign check below returns
   // early with `continue`: a brand whose twin already exists — which is precisely the brand this
@@ -622,8 +652,21 @@ async function ensureFundedFunnelCampaigns({
     // A workflow belongs to a FEATURE, so the seed's slug is only right for the seed's own
     // channel. Every other channel is asked for its own; a channel with no active workflow is not
     // provisioned, because a campaign with no DAG to run would sit ongoing and produce nothing.
+    //
+    // That reasoning is right for a channel the PLATFORM operates and wrong for one the CUSTOMER
+    // operates: their own founder or team works the replies, runs the meeting and closes the deal,
+    // and there is no DAG for that — the absence is the point, not a gap waiting on a dynasty. So
+    // WHO operates the channel is asked first (features-service's public catalogue, never a list
+    // of slugs here), and a customer-operated channel gets its campaign with NO workflow at all.
     let workflowSlug: string | null = seed.workflowSlug;
-    if (featureSlug !== seed.featureSlug) {
+    const customerOperated =
+      featureSlug !== seed.featureSlug && (await operatorFor(featureSlug)) === "customer";
+    if (customerOperated) {
+      // The work is off-platform, so there is nothing to run and nothing to ask workflow-service
+      // about. The campaign exists so the customer's own work has something to be attributed to:
+      // a budget line, a scope for stats, a thing they can pause.
+      workflowSlug = null;
+    } else if (featureSlug !== seed.featureSlug) {
       if (!workflowByFeature.has(featureSlug)) {
         workflowByFeature.set(
           featureSlug,
@@ -641,7 +684,7 @@ async function ensureFundedFunnelCampaigns({
       }
       workflowSlug = read.workflowSlug;
     }
-    if (!workflowSlug) {
+    if (!workflowSlug && !customerOperated) {
       console.log(
         `[campaign-service] Not provisioning ${featureSlug} for funnel ${f.funnelKey} (brand ${brandId}) — workflow-service states no active workflow for that channel`,
       );

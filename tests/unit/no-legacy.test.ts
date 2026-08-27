@@ -52,6 +52,47 @@ describe('No Legacy Patterns - CRITICAL', () => {
     ).toHaveLength(0);
   });
 
+  it('should NOT hold a list of customer-operated channels', () => {
+    // WHO operates a channel is features-service's statement, published on its public catalogue and
+    // read per sweep. A slug named here would be a second copy of one product fact: the ninth
+    // customer-operated channel published upstream must work with no change in this repo, exactly
+    // as the funnels a channel may be sold through are asked rather than held.
+    const files = getAllTsFiles(srcDir);
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const file of files) {
+      const content = fs.readFileSync(file, 'utf-8');
+      content.split('\n').forEach((line, index) => {
+        // The published customer-operated channels of the day this shipped. Any of them appearing
+        // as a literal in source means the catalogue is being second-guessed.
+        if (/["'`](in-house-[a-z-]+|founder-led-[a-z-]+|managed-[a-z-]+)["'`]/.test(line)) {
+          violations.push({
+            file: path.relative(srcDir, file),
+            line: index + 1,
+            code: line.trim().substring(0, 80),
+          });
+        }
+      });
+    }
+
+    expect(
+      violations,
+      `A channel's operator is asked, never held:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`
+    ).toHaveLength(0);
+  });
+
+  it('should read operatedBy in exactly ONE place', () => {
+    // One reader, one contract. A second one drifts the day features-service publishes a third
+    // operator, and the fail-soft decision ("unknown means platform, i.e. today's behaviour")
+    // has to be made once or it is not a rule.
+    const files = getAllTsFiles(srcDir);
+    const readers = files
+      .filter((f) => /operatedBy/.test(fs.readFileSync(f, 'utf-8')))
+      .map((f) => path.relative(srcDir, f));
+
+    expect(readers).toEqual(['lib/channel-operator-client.ts']);
+  });
+
   it('should NOT read a goal off brand-service beyond the brand-level currentGoal', () => {
     // brand-service retired the goal set: the funnel is the only word it emits for what a brand
     // sells. Reading a goal off a DECLARED FUNNEL is what silently stopped every funnel campaign
