@@ -92,7 +92,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       runId: req.runId,
       brandId: resolvedBrandIds.join(","),
       brandIds: resolvedBrandIds,
-      workflowSlug: req.workflowSlug || campaign.workflowSlug,
+      workflowSlug: req.workflowSlug || campaign.workflowSlug || undefined,
       featureSlug: req.featureSlug || campaign.featureSlug || undefined,
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
@@ -205,6 +205,14 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     const brandIdCsv = campaign.brandIds!.join(",");
     const primaryBrandId = campaign.brandIds[0];
     const workflowSlug = req.workflowSlug || campaign.workflowSlug;
+    if (!workflowSlug) {
+      // A campaign whose channel the CUSTOMER operates runs no DAG, so nothing should ever have
+      // reached this route for it — the scheduler never claims it and never triggers it. Fail
+      // loud rather than minting a slug or starting a run nothing can execute.
+      return res.status(400).json({
+        error: `Campaign ${campaignId} states no workflow — its acquisition channel is operated by the customer, so it has no DAG to run`,
+      });
+    }
 
     // Re-decide the priority audience for THIS run with fresh cost data, BEFORE creating
     // the run row — so the chosen audience is stamped on campaign-service's own run AND

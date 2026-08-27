@@ -28,7 +28,11 @@ export const CampaignSchema = z.object({
   createdByUserId: z.string().nullable(),
   parentRunId: z.string().nullable(),
   name: z.string(),
-  workflowSlug: z.string(),
+  // NULL for a campaign whose acquisition channel the CUSTOMER operates: the work is performed by
+  // their own team off-platform, so there is no DAG and none is invented. Such a campaign is never
+  // scheduled and never runs — it is a budget line, a scope for stats and a thing they can pause.
+  // Every platform-operated campaign states one, and CreateCampaignBody still requires one.
+  workflowSlug: z.string().nullable(),
   brandIds: z.array(z.string().uuid()).nullable(),
   featureSlug: z.string().nullable(),
   featureInputs: z.record(z.string(), z.unknown()).nullable(),

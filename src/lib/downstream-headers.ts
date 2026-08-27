@@ -4,12 +4,17 @@ export interface DownstreamIdentity {
   runId: string;
   campaignId: string;
   brandId: string;
-  workflowSlug: string;
+  /**
+   * The DAG this campaign runs, when it runs one. NULL for a campaign whose channel the CUSTOMER
+   * operates: the work happens off-platform, so there is no workflow to name and the header is
+   * simply not sent rather than carrying an invented value.
+   */
+  workflowSlug: string | null;
   featureSlug: string;
 }
 
 export function buildServiceHeaders(apiKey: string, identity: DownstreamIdentity): Record<string, string> {
-  return {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "x-api-key": apiKey,
     "x-org-id": identity.orgId,
@@ -17,7 +22,8 @@ export function buildServiceHeaders(apiKey: string, identity: DownstreamIdentity
     "x-run-id": identity.runId,
     "x-brand-id": identity.brandId,
     "x-campaign-id": identity.campaignId,
-    "x-workflow-slug": identity.workflowSlug,
     "x-feature-slug": identity.featureSlug,
   };
+  if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
+  return headers;
 }
