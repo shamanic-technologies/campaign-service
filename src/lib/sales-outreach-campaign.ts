@@ -18,7 +18,7 @@ export const SALES_FEEDBACK_REQUEST_FEATURE_SLUG = "feedback-request-cold-email-
  * A channel is still a feature slug, so this is one line and no new vocabulary — google-service
  * wraps the Google Ads API and declares the spend an org's campaigns incur as that org's cost,
  * features-service publishes the channel and states which funnels it may be sold through (the
- * visit-led chains: an ad buys a click, and there is no reply in it to sell a conversation with),
+ * visit-led funnels: an ad buys a click, and there is no reply in it to sell a conversation with),
  * and billing states its per-(funnel, channel, offer) ceiling like any other. What was missing was
  * the one thing that makes a funded channel happen at all: a campaign, provisioned and scheduled.
  *

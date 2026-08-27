@@ -359,7 +359,7 @@ describe("provisioning asks at the grain that has one answer", () => {
   it("a funnel SEVERAL offers of one brand declare is not provisioned for either — none outranks another", async () => {
     mockFunnelBudgets([{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }]);
     mockDeclared([{ funnelKey: "website_purchases" }]); // offer A
-    mockDeclared([{ funnelKey: "website_purchases" }]); // offer B sells the same chain
+    mockDeclared([{ funnelKey: "website_purchases" }]); // offer B sells the same funnel
     mockSpend("0");
     mockSpend("0");
 

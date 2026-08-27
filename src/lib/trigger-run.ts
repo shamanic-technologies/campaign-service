@@ -22,7 +22,7 @@ export interface AnchorableCampaign {
  * The run id this campaign hands downstream — guaranteed to EXIST in runs-service.
  *
  * A campaign's `parentRunId` is its static ancestor: the run of whoever created it, which every
- * execution's run tree then chains under. It is written once, at creation, from the caller's
+ * execution's run tree then funnels under. It is written once, at creation, from the caller's
  * `x-run-id` — and a creator that carries no run of its own (the per-funnel provisioner, the idle
  * sweep) leaves it NULL. That NULL used to be filled with a freshly minted uuid at trigger time,
  * which can never work: workflow-service uses the `x-run-id` we send as the `parentRunId` of the
