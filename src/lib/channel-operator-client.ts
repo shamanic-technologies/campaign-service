@@ -1,7 +1,7 @@
 /**
  * WHO OPERATES AN ACQUISITION CHANNEL — features-service's statement, asked rather than held.
  *
- * A chain is sold LEG BY LEG, and the legs the platform does not automate are performed by a human
+ * A funnel is sold LEG BY LEG, and the legs the platform does not automate are performed by a human
  * at the CUSTOMER's side: they work the replies, they run the meeting, they close the deal. There
  * is no DAG for that and there must not be one — the work happens off-platform and the customer
  * reports what happened, lead by lead. So "this channel has no active workflow" means two opposite

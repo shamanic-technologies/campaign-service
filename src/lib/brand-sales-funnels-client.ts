@@ -4,7 +4,7 @@ import { toFunnelKey, type SalesFunnelKey } from "./sales-funnel-vocabulary.js";
 /**
  * One sales funnel a brand has declared it sells through, as brand-service reports it.
  *
- * A funnel is one chain from the first signal outreach can buy (a positive reply, or a click
+ * A funnel is one funnel from the first signal outreach can buy (a positive reply, or a click
  * onto the site) down to a paid client. The KEY is the only field this service needs: it names
  * what the campaign sells, it is what the campaign states on its own row, and it is what billing
  * holds that funnel's ceiling under.

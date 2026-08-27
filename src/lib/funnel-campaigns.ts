@@ -454,7 +454,7 @@ async function resolveDeclaredFunnels(
     for (const f of read.funnels) {
       const seen = offerByFunnel.get(f.funnelKey);
       if (seen !== undefined && seen !== null && seen !== offerId) {
-        // Two offers of one brand sell through the same chain. Both are equals and neither
+        // Two offers of one brand sell through the same funnel. Both are equals and neither
         // outranks the other, so there is nobody to attribute a new campaign to.
         contested.add(f.funnelKey);
         continue;
@@ -491,7 +491,7 @@ async function resolveDeclaredFunnels(
  * A funnel billing funds but brand-service does not declare (or declares inactive) is skipped: a
  * switched-off funnel must never be worked, whatever ceiling billing still holds for it. A PAIR the
  * channel may not sell through is skipped the same way, and for the same reason — the feedback
- * request buys a conversation, so it cannot sell the three chains that start with a website click.
+ * request buys a conversation, so it cannot sell the three funnels that start with a website click.
  * That statement is features-service's and is asked per channel; no matrix is held here.
  *
  * A channel workflow-service has no ACTIVE workflow for is also skipped: a campaign with no DAG to
@@ -566,7 +566,7 @@ async function ensureFundedFunnelCampaigns({
 
   for (const f of funded) {
     if (declared.contested.has(f.funnelKey)) {
-      // Several offers of this brand sell through this chain. Provisioning one campaign would file
+      // Several offers of this brand sell through this funnel. Provisioning one campaign would file
       // it under one of them, i.e. rank it on another product's economics — so it waits for a
       // caller that states which offer it means, and it is not silent about waiting.
       console.warn(
@@ -594,7 +594,7 @@ async function ensureFundedFunnelCampaigns({
     }
     if (!sellable.funnels.has(f.funnelKey)) {
       // A pair nobody can run: the customer funds it, but this channel has no way to sell that
-      // chain. Logged once per sweep rather than silently dropped — the money is real and the
+      // funnel. Logged once per sweep rather than silently dropped — the money is real and the
       // customer is owed an answer about it eventually.
       console.log(
         `[campaign-service] Not provisioning ${featureSlug} for funnel ${f.funnelKey} (brand ${brandId}) — features-service does not state that pair`,

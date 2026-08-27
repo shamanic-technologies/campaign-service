@@ -246,7 +246,7 @@ export async function fetchGoalArbitration({
 // later at /start-run, keeps Thompson — see selectAudienceFromProjection).
 //
 // features-service already computes `resolved.costPerOutcomeUsd` per row (cost per
-// goal-outcome — e.g. per signup — over the upgrade chain × the brand's effective
+// goal-outcome — e.g. per signup — over the upgrade funnel × the brand's effective
 // economics, for the goal we queried). So the "best" workflow is simply
 // argmin(resolved.costPerOutcomeUsd) over the rows. GRAIN IS IRRELEVANT: whether the
 // evidence resolved at brand level or cross-org, we take the cheapest — "always the

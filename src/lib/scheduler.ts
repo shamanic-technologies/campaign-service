@@ -48,7 +48,7 @@ const STUCK_RUN_FRESHNESS_THRESHOLD_MS = 15 * 60_000; // 15 minutes
  * the campaign-service parent run is an ephemeral ~2s marker (start-run → end-run
  * within seconds), NOT an enclosing span. The real work — lead-service buffer/next —
  * runs up to ~12min in a separate `lead-service/lead-serve` run that is NOT linked
- * under the marker (no parent_run_id chain). Scoping the inflight check to the marker
+ * under the marker (no parent_run_id funnel). Scoping the inflight check to the marker
  * saw a corpse and re-fired mid-fill, colliding with the still-running buffer/next
  * → lead-service rejects the duplicate with 409 → windmill job hard-fails. Scoping to
  * campaignId + running + freshness sees the genuinely-live descendant instead.
