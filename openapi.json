@@ -555,6 +555,242 @@
           "transitionedAt"
         ]
       },
+      "SpendableBudgetResponse": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "grain": {
+            "type": "string",
+            "enum": [
+              "offer",
+              "channel",
+              "funnel",
+              "brand",
+              "none"
+            ]
+          },
+          "configuredDailyBudgetCents": {
+            "type": "integer"
+          },
+          "runningDailyBudgetCents": {
+            "type": "integer"
+          },
+          "offers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpendableBudgetOffer"
+            }
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpendableBudgetCampaign"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpendableBudgetRow"
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "brandId",
+          "grain",
+          "configuredDailyBudgetCents",
+          "runningDailyBudgetCents",
+          "offers",
+          "campaigns",
+          "rows"
+        ]
+      },
+      "SpendableBudgetOffer": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "configuredDailyBudgetCents": {
+            "type": "integer"
+          },
+          "runningDailyBudgetCents": {
+            "type": "integer"
+          },
+          "campaignIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "offerId",
+          "configuredDailyBudgetCents",
+          "runningDailyBudgetCents",
+          "campaignIds"
+        ]
+      },
+      "SpendableBudgetCampaign": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "funnelKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "featureSlug": {
+            "type": "string",
+            "nullable": true
+          },
+          "offerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "configuredDailyBudgetCents": {
+            "type": "integer"
+          },
+          "runningDailyBudgetCents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "campaignId",
+          "status",
+          "running",
+          "funnelKey",
+          "featureSlug",
+          "offerId",
+          "configuredDailyBudgetCents",
+          "runningDailyBudgetCents"
+        ]
+      },
+      "SpendableBudgetRow": {
+        "type": "object",
+        "properties": {
+          "funnelKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "featureSlug": {
+            "type": "string",
+            "nullable": true
+          },
+          "offerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "resolvedOfferId": {
+            "type": "string",
+            "nullable": true
+          },
+          "dailyBudgetCents": {
+            "type": "integer"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "campaignId": {
+            "type": "string",
+            "nullable": true
+          },
+          "campaignStatus": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "funnelKey",
+          "featureSlug",
+          "offerId",
+          "resolvedOfferId",
+          "dailyBudgetCents",
+          "running",
+          "campaignId",
+          "campaignStatus"
+        ]
+      },
+      "BatchSpendableBudgetResponse": {
+        "type": "object",
+        "properties": {
+          "brands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpendableBudgetResponse"
+            }
+          },
+          "unavailable": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "orgId": {
+                  "type": "string"
+                },
+                "brandId": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "orgId",
+                "brandId",
+                "reason"
+              ]
+            }
+          }
+        },
+        "required": [
+          "brands",
+          "unavailable"
+        ]
+      },
+      "BatchSpendableBudgetBody": {
+        "type": "object",
+        "properties": {
+          "brands": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "orgId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "brandId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "orgId",
+                "brandId"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 500
+          }
+        },
+        "required": [
+          "brands"
+        ]
+      },
       "StatsResponse": {
         "type": "object",
         "properties": {
@@ -1395,6 +1631,127 @@
           },
           "400": {
             "description": "Missing x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/brands/{brandId}/spendable-budget": {
+      "get": {
+        "tags": [
+          "Brands"
+        ],
+        "summary": "Configured vs actually-running daily budget for a brand",
+        "description": "Answers, for one (org, brand), BOTH figures: configuredDailyBudgetCents (every ceiling the customer set in billing-service) and runningDailyBudgetCents (the part of it attached to a campaign that is ongoing right now). Both are always served — a paused campaign's settings screen must still show the amount the customer set. The answer is decomposed in the SAME response by offer (`offers`), by campaign (`campaigns`) and by individual ceiling (`rows`, each naming the campaign standing behind it and whether it is running), so a consumer never sums anything and can tell which campaigns contributed and which did not. `grain` names which billing width the figures were computed at (offer | channel | funnel | brand | none) — exactly one is ever counted, since the coarser ones are billing's own sums of the finer. A ceiling written before the offer level (offerId null) still counts as running when a campaign on its funnel and channel is ongoing. 502 when billing cannot be read — never a smaller figure. Org-scoped via x-org-id.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configured and running daily budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendableBudgetResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Billing could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/brands/spendable-budget": {
+      "post": {
+        "tags": [
+          "Brands"
+        ],
+        "summary": "Configured vs actually-running daily budget for MANY brands",
+        "description": "The same answer as GET /brands/{brandId}/spendable-budget, for up to 500 (org, brand) pairs in one request — a staff audit walks every account and cannot afford one request per brand. The pairs are stated in the body because the answer is per (org, brand): one brand row is claimed by several orgs and each claim configures its own money. A pair whose billing ceilings cannot be read is listed in `unavailable` and carries NO figures at all — never a zero, which would silently shrink a fleet total. Same computation as the per-brand route, so the two cannot disagree.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchSpendableBudgetBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Configured and running daily budget per brand",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchSpendableBudgetResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
