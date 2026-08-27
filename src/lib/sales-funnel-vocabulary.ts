@@ -1,7 +1,7 @@
 /**
  * The sales-funnel vocabulary — the ONE word for what a campaign sells, and the ONLY one.
  *
- * A campaign runs one sales funnel: one chain from the first signal outreach can buy (a positive
+ * A campaign runs one sales funnel: one funnel from the first signal outreach can buy (a positive
  * reply, or a click onto the site) down to a paid client. The campaign STATES that funnel on its
  * own row (`campaigns.funnel_key`), at birth, and every consumer reads it there. Nothing infers
  * it — not at creation, not at read time, not as a fallback when it is missing. A sales campaign

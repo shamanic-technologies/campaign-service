@@ -35,7 +35,7 @@ const router = Router();
  *
  * The answer is the MONEY's, not a flag's. It used to be a stored boolean (`brand_pause.paused`)
  * that the customer dashboard wrote; that control was deleted when the product decided a customer
- * stops a chain by dropping its ceiling to zero, and the flag outlived its writer — 27 brands
+ * stops a funnel by dropping its ceiling to zero, and the flag outlived its writer — 27 brands
  * stored paused, 10 of them funded, holding campaigns with no API path back. The flag is gone and
  * this route answers from billing's per-funnel ceilings, which is the same fact the customer is
  * already editing.

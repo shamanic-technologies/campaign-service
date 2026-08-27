@@ -405,7 +405,7 @@ describe("planFunnelTurns", () => {
     );
     mockDeclaredFunnels([{ funnelKey: "website_purchases" }]);
     mockFindFirst.mockResolvedValue(undefined);
-    // features-service states the feedback request sells the CONVERSATION chain alone: it buys a
+    // features-service states the feedback request sells the CONVERSATION funnel alone: it buys a
     // conversation and has no website step to sell.
     mockFetch.mockImplementationOnce(async () => ({
       ok: true,
@@ -988,7 +988,7 @@ describe("planFunnelTurns", () => {
   });
 
   it("provisions NO Google Ads campaign for a funnel that channel cannot sell", async () => {
-    // An ad buys a click. The conversation chain starts with a reply it has no way to sell, and
+    // An ad buys a click. The conversation funnel starts with a reply it has no way to sell, and
     // features-service states that per channel rather than leaving it to be inferred here.
     mockFetch.mockImplementation(async (input: URL | string) => {
       const url = String(input);
@@ -1151,7 +1151,7 @@ describe("planFunnelTurns", () => {
     expect(deferred.get("c-purchases")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
   });
   // ── Customer-operated channels: a funded pair with NO workflow, on purpose ────────────────────
-  // Some legs of a chain are performed by a human at the CUSTOMER's side — they work the replies,
+  // Some legs of a funnel are performed by a human at the CUSTOMER's side — they work the replies,
   // run the meeting, close the deal. There is no DAG for that and there must not be one, so the
   // campaign is provisioned with no workflow at all. features-service's public catalogue is what
   // tells that case apart from a platform channel nothing can execute yet; no list lives here.

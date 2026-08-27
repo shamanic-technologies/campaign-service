@@ -392,7 +392,7 @@ describe('No Legacy Patterns - CRITICAL', () => {
   it('should NOT bring back the brand pause flag — funding is the one statement of held', () => {
     // `brand_pause.paused` was a second source of truth for a fact billing already states, and it
     // outlived its writer: the customer dashboard's pause control was deleted (a customer stops a
-    // chain by defunding it), nothing in the fleet wrote the flag any more, and 27 brands sat
+    // funnel by defunding it), nothing in the fleet wrote the flag any more, and 27 brands sat
     // stored-paused with no API path back. A campaign is held when the customer funds nothing for
     // it, decided in ONE place (src/lib/campaign-funding.ts). The flag, its table and its helpers
     // must not come back — a second representation is what produced the contradiction.
@@ -498,9 +498,9 @@ describe('No Legacy Patterns - CRITICAL', () => {
   it('should NOT hold which acquisition channel sells which sales funnel', () => {
     // A channel IS a feature slug, and which funnels a feature may be SOLD THROUGH is
     // features-service's product statement — asked per feature, never copied here. A second copy
-    // drifts the day a channel gains or loses a chain, and the customer's money is on the outcome.
+    // drifts the day a channel gains or loses a funnel, and the customer's money is on the outcome.
     // The one file allowed to name a funnel beside a feature slug is the one that ASKS. Every
-    // channel is covered, paid reach included — Google Ads sells the visit-led chains and not the
+    // channel is covered, paid reach included — Google Ads sells the visit-led funnels and not the
     // conversation one, and that is features-service's sentence to say, not ours to copy.
     const files = getAllTsFiles(srcDir);
     const violations: { file: string; line: number; code: string }[] = [];

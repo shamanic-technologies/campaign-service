@@ -29,7 +29,7 @@ describe("the funnel a value names", () => {
   });
 
   it("never invents a funnel for a token no catalogue names", () => {
-    expect(toFunnelKey("whatsapp_chain")).toBeNull();
+    expect(toFunnelKey("whatsapp_funnel")).toBeNull();
     expect(toFunnelKey(null)).toBeNull();
     expect(toFunnelKey(undefined)).toBeNull();
     expect(toFunnelKey("")).toBeNull();

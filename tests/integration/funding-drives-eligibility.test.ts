@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
  *
  * This file replaces the brand-pause suite. `brand_pause` was a second source of truth for a fact
  * the money already states: the customer surface that wrote it was deleted when the product
- * decided a customer stops a chain by defunding it, no writer replaced it anywhere in the fleet,
+ * decided a customer stops a funnel by defunding it, no writer replaced it anywhere in the fleet,
  * and the flag kept holding campaigns nobody could release — 27 brands stored paused, 10 of them
  * funded, 11 ongoing campaigns that could never be claimed.
  *
@@ -60,7 +60,7 @@ function billingAnswers(
   // not serve it, which is what every case that does not pass it relies on.
   channels?: Array<{ funnelKey: string; featureSlug: string; dailyBudgetCents: string }>,
   // Which sales funnels each channel may be SOLD THROUGH, as features-service states it. Default:
-  // every channel sells every chain.
+  // every channel sells every funnel.
   sellableByFeature?: Record<string, string[]>,
 ) {
   mockFetch.mockImplementation(async (url: string) => {
@@ -87,7 +87,7 @@ function billingAnswers(
       };
     }
     // features-service's per-channel statement: which sales funnels this acquisition channel may
-    // be SOLD THROUGH. The cold-email pitch sells every chain.
+    // be SOLD THROUGH. The cold-email pitch sells every funnel.
     if (String(url).includes("/features/")) {
       const slug = decodeURIComponent(String(url).split("/features/")[1]!);
       return {
@@ -367,7 +367,7 @@ describe("funding brings back a brand nothing else will look at soon", () => {
         { funnelKey: "visit_signup", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" },
         { funnelKey: "visit_signup", featureSlug: "feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
       ],
-      // The feedback request buys a CONVERSATION; the website-purchase chain starts with a click it
+      // The feedback request buys a CONVERSATION; the website-purchase funnel starts with a click it
       // has no way to sell.
       { "feedback-request-cold-email-outreach": ["sales_meetings_from_conversation"] },
     );

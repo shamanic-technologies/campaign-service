@@ -13,7 +13,7 @@ import { toFunnelKey } from "./sales-funnel-vocabulary.js";
  * A campaign is eligible to run when the customer's money says so, and nowhere else. There used
  * to be a second answer: `brand_pause.paused`, a brand-wide flag this service stored and the
  * scheduler joined against. The customer surface that wrote it was deleted months ago (a customer
- * stops a chain by dropping its ceiling to zero), so it became a source of truth nobody could
+ * stops a funnel by dropping its ceiling to zero), so it became a source of truth nobody could
  * change: 27 brands sat stored-paused, 10 of them funded, holding 11 ongoing campaigns that could
  * never be claimed and had no API path back. Two representations of one fact is what produced
  * that, so there is one now, and it is billing's.

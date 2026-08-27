@@ -464,7 +464,7 @@ describe("Scheduler - reRunDueCampaigns", () => {
     await reRunDueCampaigns();
 
     // The atomic claim call uses .set({ nextRunAt: null, ... }) → returning(...).
-    // The reschedule call uses .set({ nextRunAt: <Date>, ... }) with no .returning() chain.
+    // The reschedule call uses .set({ nextRunAt: <Date>, ... }) with no .returning() funnel.
     // Find the call whose payload has a Date nextRunAt.
     const rescheduleCall = setMock.mock.calls.find((args) => args[0]?.nextRunAt instanceof Date);
     expect(rescheduleCall).toBeDefined();

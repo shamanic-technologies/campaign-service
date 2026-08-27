@@ -9,7 +9,7 @@ import type { ProvisioningIdentity } from "./provisioning-identity.js";
  * three of the four funnels start with a click onto the brand's website it has no way to sell. That
  * is a product fact about the feature, and features-service owns it — it states `salesFunnels` on
  * the feature row every consumer already reads. Hardcoding the matrix here would be a second copy
- * of one fact, drifting the day a channel gains or loses a chain.
+ * of one fact, drifting the day a channel gains or loses a funnel.
  *
  * Contract (features-service): GET /features/{slug} (x-api-key + FULL identity)
  *   -> { feature: { id, slug, ..., salesFunnels: string[] } }
@@ -28,7 +28,7 @@ import type { ProvisioningIdentity } from "./provisioning-identity.js";
  * this feature out of production for its whole life.
  *
  * ALWAYS PRESENT on the wire: a feature that sells through no sales funnel states `[]` and one that
- * sells through every declared chain states all four keys. So an EMPTY list is a real answer —
+ * sells through every declared funnel states all four keys. So an EMPTY list is a real answer —
  * "this feature sells through no sales funnel" — and never means "all of them".
  *
  * A failure is NEVER laundered into an empty declaration: `{ ok: false }` says the statement could

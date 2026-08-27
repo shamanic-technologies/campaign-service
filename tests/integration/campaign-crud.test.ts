@@ -431,7 +431,7 @@ describe("Campaign CRUD", () => {
 
     it("refuses a funnel token no catalogue names, rather than storing a fifth funnel", async () => {
       const res = await createCampaign(
-        { ...validBody, name: "Bad Funnel", brandIds: freshBrand(), funnelKey: "whatsapp_chain" },
+        { ...validBody, name: "Bad Funnel", brandIds: freshBrand(), funnelKey: "whatsapp_funnel" },
         "org_test_crud",
         SALES,
       ).expect(400);
