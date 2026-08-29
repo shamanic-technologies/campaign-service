@@ -14,6 +14,32 @@ A gate block caused by a **normal, expected** business state — out of credits,
 
 **Downgrading warn→info is NOT always enough — for a HIGH-FREQUENCY routine event, the right level is NO LOG.** Decide level on TWO axes: (1) expected-vs-fault → picks warn vs info; (2) frequency → a routine event that fires on a per-tick / per-minute cadence for **every** campaign × **every** client (scheduler dedup skips, "still in-flight, rescheduled", poll heartbeats) must not be logged at all — even `info` spams the logs minute-by-minute across the fleet and buries real signal. Ask "how often, across how many entities, does this line fire?" before logging it; if the answer is "every tick for everyone," drop it. The decision is already observable in durable state (persisted `nextRunAt` in DB, trace events) — a per-minute log is the wrong observability mechanism. (Set 2026-06-14, scheduler in-flight skip v0.26.1: first instinct was to downgrade the `console.warn` to `console.log`; Kevin: "tu ne vas pas faire un bip toutes les minutes pour toutes les campagnes, pour tous les clients… ça n'a aucun sens" — the log was deleted, not downgraded.)
 
+## The credit pre-filter is fail-OPEN, and it SAYS which of the two things happened
+
+`readCreditAffordability` (`src/lib/gate-check.ts`, block 3b) allows the run on every failure —
+unconfigured billing, non-2xx, a network throw, a 200 whose body states no `affordable`. That is
+deliberate and stays: a billing blip must not freeze every campaign of every client, and
+chat-service's own authorize is the hard gate downstream. What was wrong is that the fail-open path
+was indistinguishable from an authorization: both reached the run trace as the single word `PASSED`,
+so during an incident nobody could tell "billing said this org can pay" from "billing could not be
+asked and we let it through" — which is the only question worth asking about this gate.
+
+- **The ANSWER travels with the decision.** `GateCheckResult.creditCheck` is
+  `affordable | unaffordable | unreadable` (+ `creditCheckDetail` naming why billing could not be
+  read), and it rides the `gate-check-result` trace event that is **already emitted once per gate
+  check** — no new event, no new log line, no volume at all on the healthy path. The log-discipline
+  rule above is why: a `console` line here would fire per campaign per tick across the fleet.
+- **`unreadable` traces at `warn`, and it is the ONE outcome of this block that does.** A fail-OPEN
+  default-allow is a genuine anomaly (the class this repo reserves warn for); running out of credit
+  is an expected business state and stays `info`.
+- **Nothing about the gate's behaviour changed.** Same fail-open, same `Insufficient credits` block
+  with a 30-minute backoff, same silence on the expected path.
+- **Verified against the 2026-08-29 incident** (org `b645207b`): the last PASSED gate-check was
+  02:52:18 and the first `Insufficient credits` 02:53:28, 70 seconds later, and it has blocked every
+  ~30 minutes since. The pre-filter did its job; the burst of declined charges hours later was
+  Stripe invoice retries, with zero campaign runs behind it. The gap was that no artifact could
+  prove the PASSED verdicts had been authorizations. (Set 2026-08-29, issue #421.)
+
 ## Two distinct "goal" concepts — `activeGoalId` (attribution) vs `campaigns.goal` (pacing). Do NOT conflate.
 
 - **`activeGoalId`** (text, nullable) is an OPAQUE attribution id, threaded downstream as the `x-active-goal-id` header and returned on reads. It **never drives pacing** — no gate-check, workflow pick, or audience selection reads it.

@@ -56,11 +56,24 @@ export interface GateCheckInput {
   maxLeads: number | null;
 }
 
+/**
+ * What the credit pre-filter actually ANSWERED, as opposed to what the gate decided.
+ *
+ * `unreadable` is the fail-open path: billing could not be asked (unconfigured, non-2xx,
+ * network throw) and the run was allowed anyway. It is reported so an incident can tell a
+ * genuine authorization apart from a default-allow — the two used to be the same word.
+ * Absent when the gate returned before block 3b ever ran.
+ */
+export type CreditCheckOutcome = "affordable" | "unaffordable" | "unreadable";
+
 export interface GateCheckResult {
   allowed: boolean;
   reason?: string;
   autoStopped?: boolean;
   nextRunAt?: Date;
+  creditCheck?: CreditCheckOutcome;
+  // Why billing could not be read. Only set alongside `unreadable`.
+  creditCheckDetail?: string;
 }
 
 type BrandDailyBudgetRead =
@@ -343,10 +356,22 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // via nextRunAt, so a recharge auto-resumes it on the next check (no manual restart,
   // no webhook). A billing blip must not freeze ALL campaigns, and chat-service's own
   // authorize remains the hard gate downstream — so any billing-call failure allows.
-  const affordable = await checkAffordability(campaign.campaignId, identity);
-  if (!affordable) {
-    return { allowed: false, reason: "Insufficient credits", nextRunAt: nextHalfHour() };
+  //
+  // The fail-open ANSWER is carried out, because "billing said this org can pay" and
+  // "billing could not be asked, so we let it through" are different facts that used to
+  // reach the run trace as the same word (PASSED). During an incident that is the one
+  // question worth answering about this gate, and the trace was unable to answer it.
+  const credit = await readCreditAffordability(campaign.campaignId, identity);
+  if (credit.readable && !credit.affordable) {
+    return {
+      allowed: false,
+      reason: "Insufficient credits",
+      nextRunAt: nextHalfHour(),
+      creditCheck: "unaffordable",
+    };
   }
+  const creditCheck: CreditCheckOutcome = credit.readable ? "affordable" : "unreadable";
+  const creditCheckDetail = credit.readable ? undefined : credit.detail;
 
   // 4. Volume check
   if (campaign.maxLeads != null) {
@@ -376,17 +401,17 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       if (err instanceof Error && "status" in err && (err as { status: number }).status === 404) {
         totalServed = completedRuns.length;
       } else {
-        return { allowed: false, reason: "Lead stats unavailable (fail-closed)" };
+        return { allowed: false, reason: "Lead stats unavailable (fail-closed)", creditCheck, creditCheckDetail };
       }
     }
 
     if (totalServed >= campaign.maxLeads) {
       await autoStopCampaign(campaign.campaignId);
-      return { allowed: false, reason: "Max leads reached", autoStopped: true };
+      return { allowed: false, reason: "Max leads reached", autoStopped: true, creditCheck, creditCheckDetail };
     }
   }
 
-  return { allowed: true };
+  return { allowed: true, creditCheck, creditCheckDetail };
 }
 
 async function autoStopCampaign(campaignId: string): Promise<void> {
@@ -432,23 +457,34 @@ async function fetchLeadStats(
   return { totalServed: (data.totalServed as number) || (data.served as number) || 0 };
 }
 
+type CreditAffordabilityRead =
+  | { readable: true; affordable: boolean }
+  | { readable: false; detail: string };
+
 /**
- * Pre-flight credit affordability check against billing-service.
- * Returns true (allow the run) unless billing explicitly reports affordable=false.
+ * Pre-flight credit affordability read against billing-service.
  *
- * Fail-OPEN by design: missing config, network error, or non-2xx all return true.
- * Credit affordability is a PRE-FILTER, not the final gate — chat-service's own
- * authorize is the hard gate. A billing outage must never freeze every campaign.
+ * Fail-OPEN by design: missing config, network error, non-2xx and an unparseable body all
+ * come back `readable: false`, and the caller allows the run on every one of them. Credit
+ * affordability is a PRE-FILTER, not the final gate — chat-service's own authorize is the
+ * hard gate. A billing outage must never freeze every campaign.
+ *
+ * The one thing that changed is that the caller can now tell "billing said yes" from
+ * "billing could not be asked". Both still run; only one of them is an authorization.
  */
-async function checkAffordability(campaignId: string, identity: IdentityHeaders): Promise<boolean> {
+async function readCreditAffordability(
+  campaignId: string,
+  identity: IdentityHeaders,
+): Promise<CreditAffordabilityRead> {
   const url = process.env.BILLING_SERVICE_URL;
   const apiKey = process.env.BILLING_SERVICE_API_KEY;
-  // Silent fail-open. Every fail-open path below (missing config / non-2xx / throw) is
-  // hit per gate check, i.e. per ~minute per campaign across every client — logging it
-  // (even at info) spams the fleet for a deliberate pre-filter degradation. Billing's own
-  // monitoring owns billing's health; chat-service authorize stays the hard gate downstream.
+  // Fail-open, and the reason travels with the answer. Nothing is logged here: every path
+  // below is hit per gate check, i.e. per campaign per tick across every client, so a console
+  // line would spam the fleet. The outcome rides the gate-check-result trace event that is
+  // already emitted once per gate check — no new event, no new volume, and an incident can
+  // finally read whether the gate authorized or merely could not ask.
   if (!url || !apiKey) {
-    return true;
+    return { readable: false, detail: "billing not configured" };
   }
 
   const headers: Record<string, string> = {
@@ -464,13 +500,19 @@ async function checkAffordability(campaignId: string, identity: IdentityHeaders)
   try {
     const res = await fetch(`${url}/internal/campaigns/${campaignId}/affordability`, { headers });
     if (!res.ok) {
-      return true;
+      return { readable: false, detail: `billing responded ${res.status}` };
     }
     const data = await res.json() as { affordable?: boolean };
-    // Only an explicit affordable=false blocks. Anything else (true, missing) allows.
-    return data.affordable !== false;
-  } catch {
-    return true;
+    // An answer with no `affordable` field is not an answer — billing served something this
+    // service does not understand, so it is a read failure, not an authorization. The run is
+    // still allowed (same fail-open behaviour as before), it is just no longer reported as a
+    // billing authorization that never happened.
+    if (typeof data.affordable !== "boolean") {
+      return { readable: false, detail: "billing answered without an affordable field" };
+    }
+    return { readable: true, affordable: data.affordable };
+  } catch (err) {
+    return { readable: false, detail: err instanceof Error ? err.message : "billing call threw" };
   }
 }
 
