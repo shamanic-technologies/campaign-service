@@ -1,6 +1,7 @@
 import type { IdentityHeaders } from "@distribute/runs-client";
 import {
   channelCeilingCents,
+  legCeilingCents,
   fetchFunnelBudgets,
   offerCeilingCents,
   type FunnelBudgetsRead,
@@ -49,6 +50,12 @@ export function fundingFromBudgets(
      * pre-offer population and paces on the pair figure exactly as it always did.
      */
     offerId?: string | null;
+    /**
+     * The single funnel LEG this campaign was bought for — features-service's identifier, carried
+     * and never derived. Null is the pre-leg population and paces on the offer figure exactly as
+     * it always did.
+     */
+    legKey?: string | null;
   },
   budgets: Extract<FunnelBudgetsRead, { ok: true }>,
 ): FundingVerdict {
@@ -77,6 +84,33 @@ export function fundingFromBudgets(
       // served as a single summed pair figure, so pacing both campaigns on it hands each the money
       // the other was funded for. A campaign stating no offer, or a brand whose ceilings name
       // none, answers `none` here and falls through to the pair figure unchanged.
+      // And one grain below the offer: what the customer BUYS is a LEG, and one (funnel, channel,
+      // offer) can be worked for two legs at once — billing serves the offer figure as their SUM,
+      // so pacing both campaigns on it hands each the money the other was funded for. A campaign
+      // stating no leg, or a brand whose ceilings name none, answers `none` here and falls through
+      // to the offer figure unchanged.
+      const leg = legCeilingCents(
+        budgets,
+        funnelKey,
+        campaign.featureSlug,
+        campaign.offerId,
+        campaign.legKey,
+      );
+      if (leg.grain === "leg") {
+        if (leg.cents === null) {
+          return {
+            funded: false,
+            reason: `leg ${campaign.legKey} is not funded on channel ${campaign.featureSlug ?? "none"}`,
+          };
+        }
+        return leg.cents > 0
+          ? { funded: true, ceilingCents: leg.cents }
+          : {
+              funded: false,
+              reason: `leg ${campaign.legKey} is funded at zero on channel ${campaign.featureSlug ?? "none"}`,
+            };
+      }
+
       const offer = offerCeilingCents(budgets, funnelKey, campaign.featureSlug, campaign.offerId);
       if (offer.grain === "offer") {
         if (offer.cents === null) {

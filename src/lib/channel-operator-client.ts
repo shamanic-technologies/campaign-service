@@ -14,8 +14,15 @@
  * a ninth customer-operated channel published upstream works with no change in this repo, the same
  * posture this service holds for the goal, the funnel and the channel vocabularies.
  *
+ * The same catalogue is also the ONE place that says WHICH LEGS a channel performs. A leg is what
+ * a customer buys — one leg belongs to several funnels at once, so the funnel never identified the
+ * purchase — and the identifiers are minted and published there. They are carried verbatim: no leg
+ * vocabulary, list or matrix exists in this service, and the identifier is never SPLIT back into
+ * the two steps it connects (they ride beside it on the very same payload).
+ *
  * Contract (features-service): GET /public/channels (no auth, no identity)
- *   -> { channels: [{ slug, operatedBy: "platform" | "customer", ... }], steps: [...] }
+ *   -> { channels: [{ slug, operatedBy: "platform" | "customer",
+ *                     stepTransitions: [{ legKey, from, to }], ... }], legs: [...], steps: [...] }
  *
  * A channel the catalogue does not publish, and a catalogue that cannot be READ, both resolve to
  * "platform" at the call site — i.e. to today's behaviour exactly. That direction is deliberate:
@@ -26,10 +33,19 @@
 export type ChannelOperator = "platform" | "customer";
 
 export type ChannelCatalogueRead =
-  | { ok: true; operatorBySlug: Map<string, ChannelOperator> }
+  | {
+      ok: true;
+      operatorBySlug: Map<string, ChannelOperator>;
+      /**
+       * channel slug -> the legs that channel PERFORMS, as features-service's own identifiers.
+       * A slug the catalogue does not publish is absent, which is a different statement from a
+       * channel that publishes an empty set, and the call site treats it as such.
+       */
+      legsBySlug: Map<string, ReadonlySet<string>>;
+    }
   | { ok: false; detail: string };
 
-export async function fetchChannelOperators(): Promise<ChannelCatalogueRead> {
+export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
   if (!baseUrl) {
     return { ok: false, detail: "FEATURES_SERVICE_URL not configured" };
@@ -48,22 +64,39 @@ export async function fetchChannelOperators(): Promise<ChannelCatalogueRead> {
     }
 
     const data = await res.json() as {
-      channels?: Array<{ slug?: unknown; operatedBy?: unknown }>;
+      channels?: Array<{
+        slug?: unknown;
+        operatedBy?: unknown;
+        stepTransitions?: Array<{ legKey?: unknown }>;
+      }>;
     };
     if (!Array.isArray(data.channels)) {
       return { ok: false, detail: "response states no channels array" };
     }
 
     const operatorBySlug = new Map<string, ChannelOperator>();
+    const legsBySlug = new Map<string, ReadonlySet<string>>();
     for (const channel of data.channels) {
       if (typeof channel?.slug !== "string" || channel.slug.length === 0) continue;
+      // Which legs this channel performs. A channel that publishes none states an EMPTY set,
+      // which is a truthful answer ("this channel performs no leg of any declared funnel") and
+      // not the same thing as a slug the catalogue never names.
+      const legs = new Set<string>();
+      if (Array.isArray(channel.stepTransitions)) {
+        for (const transition of channel.stepTransitions) {
+          if (typeof transition?.legKey === "string" && transition.legKey.length > 0) {
+            legs.add(transition.legKey);
+          }
+        }
+      }
+      legsBySlug.set(channel.slug, legs);
       // Only the two published values are read. A third one this service has never heard of is
       // NOT guessed at: it is left out of the map, so the call site treats that channel exactly
       // as it treats one the catalogue does not publish.
       if (channel.operatedBy !== "platform" && channel.operatedBy !== "customer") continue;
       operatorBySlug.set(channel.slug, channel.operatedBy);
     }
-    return { ok: true, operatorBySlug };
+    return { ok: true, operatorBySlug, legsBySlug };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

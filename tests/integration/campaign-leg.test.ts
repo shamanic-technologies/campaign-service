@@ -124,6 +124,26 @@ describe("Campaign leg", () => {
     expect(booked.body.campaign.legKey).not.toBe(attended.body.campaign.legKey);
   });
 
+  it("never holds the same leg twice — a restated identity UPDATES the campaign it names", async () => {
+    const brandIds = [crypto.randomUUID()];
+    const channelFeature = "sales-cold-email-v1";
+
+    const first = await createCampaign(
+      { ...baseBody("Cold Email — booked meetings"), brandIds, legKey: BOOKED_FROM_CONVERSATION },
+      channelFeature,
+    ).expect(201);
+
+    // The SAME (org, brand, funnel, channel, leg). One live campaign per identity, so this is the
+    // same campaign restated — never a second row racing it for the brand's turn.
+    const again = await createCampaign(
+      { ...baseBody("Cold Email — booked meetings, restated"), brandIds, legKey: BOOKED_FROM_CONVERSATION },
+      channelFeature,
+    ).expect(200);
+
+    expect(again.body.campaign.id).toBe(first.body.campaign.id);
+    expect(again.body.campaign.legKey).toBe(BOOKED_FROM_CONVERSATION);
+  });
+
   it("a campaign created WITHOUT a leg states none — and nothing else about it changes", async () => {
     const body = baseBody("Legless Campaign");
 

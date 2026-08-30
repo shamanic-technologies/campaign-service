@@ -641,10 +641,8 @@ from a positive reply AND from a website visit), so the step a leg lands on does
   so a create that states no leg behaves EXACTLY as it did before the column existed and callers
   state it as they migrate. `PATCH` sets or clears it, which is how a campaign created before it
   could state a leg says which one it buys, without a second campaign.
-- **It decides no MONEY question.** No pacing, funding, gate, provisioning, scheduling,
-  serialization or ranking decision reads it; `idx_campaigns_org_leg` serves the per-leg
-  attribution read it exists for. Nothing about provisioning, the turn planner, the ceilings or the
-  serialization cohorts changed.
+- **It decided no MONEY question at first, and now it decides the FINEST one** — see the section
+  below. `idx_campaigns_org_leg` still serves the per-leg attribution read it was added for.
 - **It IS part of the uniqueness, because a campaign bought for one leg is not the campaign bought
   for another.** `uniq_campaigns_org_brand_funnel_channel` gained `coalesce(leg_key, '')`, and the
   create route's incumbent lookup and its `23505` winner lookup gained the same clause — without
@@ -659,6 +657,64 @@ from a positive reply AND from a website visit), so the step a leg lands on does
   ship; this one adds the leg beside it and changes nothing about what is required at create.
 
 (Set 2026-08-30.)
+
+## The LEG is what a campaign is PROVISIONED, FOUND and PACED on — the sales funnel becomes a way of READING legs
+
+Stating the leg was half of it: the funnel was still what this service provisioned on, keyed its
+existing-campaign lookup on, and asked other services about. A leg belongs to SEVERAL funnels at
+once, so a funnel can never say which of them the customer bought — and a (funnel, channel, offer)
+worked for TWO legs was one provisioning question, one identity and one summed ceiling, i.e. one
+campaign doing two jobs on money funded for two.
+
+- **billing's LEG grain is the finest it stores and the unit ONE campaign is provisioned per**
+  (`legs[]` on `GET /internal/brands/:id/funnel-budgets`: funnel, channel, offer, `legKey`). Every
+  coarser grain billing serves is a SUM of these rows, so nothing is added up here — `fundedPairs`
+  reads `legs` first, falls back to `channels`, then to `funnels`. **A row whose `legKey` is null
+  is a ceiling written before legs existed and provisions a leg-less campaign byte-identically to
+  what the pair grain provisioned for it**, which is why every brand alive today is untouched.
+- **`legCeilingCents` is one notch below `offerCeilingCents`**, in gate-check and in
+  `campaign-funding`, on the one shared precedence: own `dailyBudgetCents` → LEG → offer → pair →
+  funnel → brand pot. Same three answers and the same reasons as every grain above it, so a
+  campaign that states no leg — and a brand whose ceilings name none — answers `none` and paces
+  exactly as it always did. The offer half of the match is billing's own rule, mirrored rather
+  than re-invented. A leg the brand's money is not scoped to is UNFUNDED, never a fallback to the
+  offer or pair figure: that is the whole point of the grain.
+- **WHAT A CHANNEL CAN DO IS ASKED IN THE VOCABULARY OF WHAT WAS BOUGHT.** A pair that states a
+  LEG asks "does this channel perform this leg?" and names NO funnel — features-service publishes
+  every channel's legs as `channels[].stepTransitions[].legKey` on the same public catalogue this
+  pass already reads for who operates them, so one read answers both and the identifier is joined
+  verbatim. A pair that states no leg keeps asking the per-feature FUNNEL question, unchanged: that
+  IS the question for a ceiling written before a campaign could state a leg. An unreadable
+  catalogue provisions nothing for that leg and says so — a funded pair we failed to EVALUATE is
+  not a pair we evaluated and rejected.
+- **The existing-campaign lookup keys on the leg**, so a brand working ONE channel for TWO legs
+  gets two campaigns instead of finding the first one for the second pair and never provisioning
+  it. The insert states the leg, and the deterministic NAME appends it — two legs of one (funnel,
+  channel) would otherwise collide on `uniq_campaigns_org_name` and the second insert would be
+  swallowed as a race. **A leg-less campaign keeps the name it has always had, byte for byte.**
+- **A campaign already doing the work is ADOPTED, never twinned.** When a pair states a leg and no
+  campaign of that leg exists, the LEG-LESS campaign of the same (org, brand, funnel, channel) is
+  that pair's campaign — it has been doing exactly this work since before a campaign could say
+  which leg it was bought for — so the leg is stamped on it. Leaving it alone inserts a twin
+  beside it: two live campaigns doing one job, splitting one identity's history and spending on two
+  ceilings, which is the funnel-less-ancestor recurrence one word along. Nothing else about the row
+  moves (id, status, schedule, spend and history are untouched) and the money is the same money
+  restated at the grain it was funded at. Guarded on the row still stating no leg, so a re-run
+  writes nothing and a race with a live create cannot overwrite it; a `23505` leaves the row alone
+  and says so.
+- **`spendable-budget` counts at the LEG grain too**, or a (funnel, channel, offer) funding two
+  legs would give one campaign the whole summed figure and report the other as running on nothing —
+  a secondary surface contradicting the ceiling the gate actually binds. `legKey` rides on the row
+  and the campaign line; the grain enum gained `leg`.
+- **Nothing about pacing, scheduling or serialization changed.** The turn planner still ranks on
+  spent ÷ own ceiling (that ceiling is simply the leg's when one binds), the cohorts are still the
+  acquisition channel's, the cadences are the same, and no campaign changed id, status, money or
+  history because of this.
+- **The funnel COLUMN stays.** It is still part of the identity index, still what billing's rows
+  and brand-service's declarations are keyed on, and still what a leg-less campaign is provisioned
+  by. Dropping it is a later, separate step once nothing reads it.
+
+(Set 2026-08-31.)
 
 ## The OFFER a campaign sells is brand-service's UUID, carried and never derived
 

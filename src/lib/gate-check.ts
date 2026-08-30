@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { isSalesFunnelFeature } from "./sales-outreach-campaign.js";
-import { channelCeilingCents, fetchFunnelBudgets, offerCeilingCents } from "./funnel-budget-client.js";
+import { channelCeilingCents, fetchFunnelBudgets, legCeilingCents, offerCeilingCents } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { STOP_REASONS } from "./stop-reason.js";
 
@@ -53,6 +53,11 @@ export interface GateCheckInput {
   // offer's, not the (funnel, channel) SUM that also contains a sibling offer's ceiling. NULL is
   // the pre-offer population and paces exactly as it always did.
   offerId: string | null;
+  // The single funnel LEG this campaign was bought for — features-service's identifier, carried
+  // and never derived. When billing scopes any of this brand's money to a leg, the ceiling that
+  // binds this campaign is its own leg's, not the (funnel, channel, offer) SUM that also contains
+  // a sibling leg's ceiling. NULL is the pre-leg population and paces exactly as it always did.
+  legKey: string | null;
   maxLeads: number | null;
 }
 
@@ -298,7 +303,31 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         // campaigns on it lets each spend what the other was funded for. A campaign that states no
         // offer, or a brand whose stored ceilings name none, falls through to the pair figure
         // below, unchanged.
+        // (a2''') And one grain below the offer: what a customer BUYS is a LEG of a funnel, and
+        // one (funnel, channel, offer) can be worked for two legs at once — billing serves the
+        // offer figure as their SUM, so pacing both campaigns on it lets each spend what the other
+        // was funded for. A campaign that states no leg, or a brand whose stored ceilings name
+        // none, falls through to the offer figure below, unchanged.
         if (funnelKey) {
+          const leg = legCeilingCents(
+            budgets,
+            funnelKey,
+            campaign.featureSlug,
+            campaign.offerId,
+            campaign.legKey,
+          );
+          if (leg.grain === "leg") {
+            // This brand's money is scoped to legs and none of it is this leg's — a deliberate
+            // customer decision, so never a fallback to the offer, pair, funnel or brand total.
+            if (leg.cents === null || leg.cents <= 0) {
+              return { allowed: false, reason: "Leg not funded" };
+            }
+            if (spentCents >= leg.cents) {
+              return { allowed: false, reason: "Leg daily budget reached" };
+            }
+            continue;
+          }
+
           const offer = offerCeilingCents(budgets, funnelKey, campaign.featureSlug, campaign.offerId);
           if (offer.grain === "offer") {
             // This brand's money is scoped to offers and none of it is this one's — a deliberate

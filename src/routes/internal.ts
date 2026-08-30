@@ -102,6 +102,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       dailyBudgetCents: campaign.dailyBudgetCents,
       funnelKey: campaign.funnelKey,
       offerId: campaign.offerId,
+      legKey: campaign.legKey,
       maxLeads: campaign.maxLeads,
     });
 
