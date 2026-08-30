@@ -381,6 +381,7 @@ export const SpendableBudgetRow = z.object({
   funnelKey: z.string().nullable(),
   featureSlug: z.string().nullable(),
   offerId: z.string().nullable(),
+  legKey: z.string().nullable(),
   resolvedOfferId: z.string().nullable(),
   dailyBudgetCents: z.number().int(),
   running: z.boolean(),
@@ -402,6 +403,7 @@ export const SpendableBudgetCampaign = z.object({
   funnelKey: z.string().nullable(),
   featureSlug: z.string().nullable(),
   offerId: z.string().nullable(),
+  legKey: z.string().nullable(),
   configuredDailyBudgetCents: z.number().int(),
   runningDailyBudgetCents: z.number().int(),
 }).openapi("SpendableBudgetCampaign");
@@ -409,7 +411,7 @@ export const SpendableBudgetCampaign = z.object({
 export const SpendableBudgetResponse = z.object({
   orgId: z.string(),
   brandId: z.string(),
-  grain: z.enum(["offer", "channel", "funnel", "brand", "none"]),
+  grain: z.enum(["leg", "offer", "channel", "funnel", "brand", "none"]),
   configuredDailyBudgetCents: z.number().int(),
   runningDailyBudgetCents: z.number().int(),
   offers: z.array(SpendableBudgetOffer),

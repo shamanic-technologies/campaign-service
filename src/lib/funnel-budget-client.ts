@@ -73,6 +73,34 @@ export interface FunnelOfferBudget {
   dailyBudgetCents: number;
 }
 
+/**
+ * One (sales funnel, ACQUISITION CHANNEL, OFFER, LEG) ceiling — the finest grain billing stores,
+ * and the grain a campaign is bought at.
+ *
+ * A sales funnel is a chain of steps and what a customer BUYS is one of its LEGS: the leg that
+ * takes a lead sitting at one step and moves it to the next. One leg belongs to SEVERAL funnels at
+ * once, so the funnel never identified what was bought — the leg does. `offers` above is the SUM of
+ * these rows, so a (funnel, channel, offer) worked for two legs collapses into one figure there,
+ * and pacing both campaigns on it hands each the money the other was funded for: the same failure
+ * the offer grain closed one level up, re-opened one level down.
+ *
+ * `legKey` is features-service's canonical identifier, carried verbatim and NEVER parsed — the two
+ * steps it connects ride beside it on that service's catalogue. It is NULL for every ceiling
+ * written before legs existed, which is the population that keeps behaving exactly as it did.
+ */
+export interface FunnelLegBudget {
+  /** Canonical funnel key, same canonicalisation as `FunnelBudget.funnelKey`. */
+  funnelKey: SalesFunnelKey;
+  /** The acquisition channel this ceiling funds, as a features-service feature slug. */
+  featureSlug: string;
+  /** The offer this ceiling funds, or null for an UNSCOPED (pre-offer) ceiling. */
+  offerId: string | null;
+  /** The funnel leg this ceiling funds, or null for a ceiling written before legs existed. */
+  legKey: string | null;
+  /** This ROW's own daily ceiling, in CENTS. */
+  dailyBudgetCents: number;
+}
+
 export type FunnelBudgetsRead =
   | {
       ok: true;
@@ -92,6 +120,13 @@ export type FunnelBudgetsRead =
        * consumer on the pair figure and behaves byte for byte as it did.
        */
       offers: FunnelOfferBudget[];
+      /**
+       * ADDITIVE grain, one level below `offers` and the finest billing stores. Read exactly as
+       * the two grains above it: an ABSENT `legs` field is a billing deploy that predates it, so
+       * every consumer stays on the offer figure and behaves byte for byte as it did. A row whose
+       * `legKey` is null is a ceiling written before a campaign could state a leg.
+       */
+      legs: FunnelLegBudget[];
     }
   | { ok: false };
 
@@ -139,6 +174,13 @@ export async function fetchFunnelBudgets(
         funnelKey?: string;
         featureSlug?: string;
         offerId?: string | null;
+        dailyBudgetCents?: string;
+      }>;
+      legs?: Array<{
+        funnelKey?: string;
+        featureSlug?: string;
+        offerId?: string | null;
+        legKey?: string | null;
         dailyBudgetCents?: string;
       }>;
     };
@@ -210,7 +252,36 @@ export async function fetchFunnelBudgets(
       }
     }
 
-    return { ok: true, brandDailyBudgetCents, funnels, channels, offers };
+    // The leg grain, read exactly as the offer grain above and for the same reasons: absent is
+    // "no finer grain" (an older billing deploy), unparseable is refused, a funnel no catalogue
+    // names is dropped. `legKey` is nullable ON THE WIRE — a ceiling written before legs existed
+    // states none, and that null is a VALUE (see `legCeilingCents`), not a missing field.
+    const legs: FunnelLegBudget[] = [];
+    if (data.legs !== undefined) {
+      if (!Array.isArray(data.legs)) return { ok: false };
+      for (const raw of data.legs) {
+        if (!raw?.funnelKey || !raw?.featureSlug) return { ok: false };
+        if (raw.offerId !== null && raw.offerId !== undefined && typeof raw.offerId !== "string") {
+          return { ok: false };
+        }
+        if (raw.legKey !== null && raw.legKey !== undefined && typeof raw.legKey !== "string") {
+          return { ok: false };
+        }
+        const cents = parseFloat(raw.dailyBudgetCents ?? "");
+        if (!Number.isFinite(cents)) return { ok: false };
+        const funnelKey = toFunnelKey(raw.funnelKey);
+        if (!funnelKey) continue; // a funnel no catalogue names — same treatment as above
+        legs.push({
+          funnelKey,
+          featureSlug: raw.featureSlug,
+          offerId: raw.offerId ?? null,
+          legKey: raw.legKey ?? null,
+          dailyBudgetCents: cents,
+        });
+      }
+    }
+
+    return { ok: true, brandDailyBudgetCents, funnels, channels, offers, legs };
   } catch {
     return { ok: false };
   }
@@ -343,4 +414,94 @@ export function fundedChannelPairs(
   read: Extract<FunnelBudgetsRead, { ok: true }>,
 ): FunnelChannelBudget[] {
   return (read.channels ?? []).filter((c) => c.dailyBudgetCents > 0);
+}
+
+/**
+ * The ceiling that binds ONE (funnel, acquisition channel, offer, LEG) row — the grain BELOW the
+ * offer, and the finest billing stores.
+ *
+ * A customer buys a LEG of a sales funnel, and one (funnel, channel, offer) can be worked for two
+ * legs at once. billing serves the offer figure as the SUM of both, so pacing either campaign on
+ * it hands each the money the other was funded for — the same failure `offerCeilingCents` closed
+ * one level up, re-opened one level down.
+ *
+ * Three answers, and the middle one is what keeps every campaign alive today behaving identically:
+ *
+ *   - `grain: "none"` — there is no leg question to ask here, so the caller falls through to the
+ *     offer figure, i.e. today's behaviour byte for byte. That covers a billing deploy that does
+ *     not serve `legs` yet, a campaign that states NO leg (the pre-leg population — a leg is never
+ *     fabricated for it), a brand whose stored ceilings name no leg AT ALL, and a funnel billing
+ *     states no row for.
+ *   - `cents` — this row is funded at that amount.
+ *   - `cents: null` — this brand's money IS scoped to legs and none of it is this leg's, so the
+ *     campaign is unfunded. Never a fallback to the offer, pair or funnel total: that is the whole
+ *     point of the grain.
+ *
+ * The offer half of the match is billing's own rule, mirrored from `offerCeilingCents` rather than
+ * re-invented: a row that NAMES the offer always counts, and an UNSCOPED one counts only when this
+ * offer is the brand's sole named one. The channel half is the same rule one grain up: a funnel
+ * worked through exactly ONE channel binds whatever feature the campaign states.
+ */
+export function legCeilingCents(
+  read: Extract<FunnelBudgetsRead, { ok: true }>,
+  funnelKey: SalesFunnelKey,
+  featureSlug: string | null | undefined,
+  offerId: string | null | undefined,
+  legKey: string | null | undefined,
+): { grain: "none" } | { grain: "leg"; cents: number | null } {
+  const stored = read.legs ?? [];
+  if (stored.length === 0) return { grain: "none" };
+  // The pre-leg population. Never fabricate a leg for it: it resolves exactly as it always has,
+  // on the offer figure.
+  if (!legKey) return { grain: "none" };
+
+  // A brand whose ceilings name no leg at all has not entered the leg world, so neither does this
+  // read — every such brand keeps pacing on its offer figure.
+  const namedLegs = stored.filter((l) => l.legKey !== null);
+  if (namedLegs.length === 0) return { grain: "none" };
+
+  const rowsForFunnel = stored.filter((l) => l.funnelKey === funnelKey);
+  if (rowsForFunnel.length === 0) return { grain: "none" };
+
+  // billing's offer rule, verbatim (see `offerCeilingCents`).
+  const namedOffers = new Set(
+    stored.map((l) => l.offerId).filter((id): id is string => id !== null),
+  );
+  // A brand whose money IS scoped to offers, asked about a campaign that states none: there is no
+  // honest owner for an unscoped remainder, so this read has nothing to say and the campaign falls
+  // through exactly as it does one grain up.
+  if (namedOffers.size > 0 && !offerId) return { grain: "none" };
+  const soleNamed = namedOffers.size === 1 && !!offerId && namedOffers.has(offerId);
+  const owned = rowsForFunnel.filter((l) =>
+    namedOffers.size === 0
+      ? true
+      : l.offerId === offerId || (soleNamed && l.offerId === null),
+  );
+  if (owned.length === 0) return { grain: "leg", cents: null };
+
+  const forLeg = owned.filter((l) => l.legKey === legKey);
+  if (forLeg.length === 0) return { grain: "leg", cents: null };
+
+  const match = featureSlug ? forLeg.find((l) => l.featureSlug === featureSlug) : undefined;
+  if (match) return { grain: "leg", cents: match.dailyBudgetCents };
+
+  // No row for the channel this campaign states. A funnel worked through exactly ONE channel has
+  // nothing to confuse this ceiling with, so it binds whatever feature the campaign states —
+  // billing's rule for a write naming no channel. A funnel SPLIT across channels is different: a
+  // channel the split does not fund is unfunded, never the neighbour's money.
+  const channelsOfFunnel = new Set(rowsForFunnel.map((l) => l.featureSlug));
+  if (channelsOfFunnel.size === 1) return { grain: "leg", cents: forLeg[0]!.dailyBudgetCents };
+  return { grain: "leg", cents: null };
+}
+
+/**
+ * The (funnel, acquisition channel, offer, LEG) rows this org actually FUNDS for the brand — the
+ * finest grain billing stores, and the unit ONE campaign is provisioned per.
+ *
+ * A ceiling of zero is a deliberate "do not work this", exactly as at every grain above.
+ */
+export function fundedLegRows(
+  read: Extract<FunnelBudgetsRead, { ok: true }>,
+): FunnelLegBudget[] {
+  return (read.legs ?? []).filter((l) => l.dailyBudgetCents > 0);
 }

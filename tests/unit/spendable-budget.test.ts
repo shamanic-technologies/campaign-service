@@ -12,6 +12,7 @@ function budgets(partial: Partial<Extract<FunnelBudgetsRead, { ok: true }>>): Ex
     funnels: [],
     channels: [],
     offers: [],
+    legs: [],
     ...partial,
   };
 }
@@ -22,6 +23,7 @@ function campaign(over: Partial<SpendableCampaign> & { id: string }): SpendableC
     funnelKey: "sales_meetings_from_conversation",
     featureSlug: "sales-cold-email-outreach",
     offerId: null,
+    legKey: null,
     createdAt: new Date("2026-01-01T00:00:00Z"),
     ...over,
   };
@@ -153,6 +155,7 @@ describe("computeSpendableBudget", () => {
         funnelKey: "sales_meetings_from_conversation",
         featureSlug: "sales-cold-email-outreach",
         offerId: null,
+        legKey: null,
         configuredDailyBudgetCents: 0,
         runningDailyBudgetCents: 0,
       },
@@ -210,5 +213,38 @@ describe("computeSpendableBudget", () => {
       result.offers.reduce((s, o) => s + o.runningDailyBudgetCents, 0),
     );
     expect(result.runningDailyBudgetCents).toBe(4000);
+  });
+
+  it("counts at the LEG grain, giving each leg's money to the campaign bought for THAT leg", () => {
+    const BOOKING_LEG = "conversation_to_meeting_booked";
+    const ATTENDED_LEG = "meeting_booked_to_meeting_attended";
+    const result = computeSpendableBudget(
+      ORG,
+      BRAND,
+      budgets({
+        brandDailyBudgetCents: 3000,
+        funnels: [{ funnelKey: "sales_meetings_from_conversation", dailyBudgetCents: 3000 }],
+        // The offer figure is the SUM of the two legs. Counting there would find ONE campaign for
+        // a row that funds two, and report the other as running on nothing.
+        offers: [{ funnelKey: "sales_meetings_from_conversation", featureSlug: "sales-cold-email-outreach", offerId: null, dailyBudgetCents: 3000 }],
+        legs: [
+          { funnelKey: "sales_meetings_from_conversation", featureSlug: "sales-cold-email-outreach", offerId: null, legKey: BOOKING_LEG, dailyBudgetCents: 2000 },
+          { funnelKey: "sales_meetings_from_conversation", featureSlug: "sales-cold-email-outreach", offerId: null, legKey: ATTENDED_LEG, dailyBudgetCents: 1000 },
+        ],
+      }),
+      [
+        campaign({ id: "booking", legKey: BOOKING_LEG }),
+        campaign({ id: "attended", legKey: ATTENDED_LEG, status: "stopped" }),
+      ],
+    );
+
+    expect(result.grain).toBe("leg");
+    expect(result.configuredDailyBudgetCents).toBe(3000);
+    // Only the leg whose campaign is ongoing is running money — and it is ITS leg's figure, not
+    // the offer SUM that also holds the stopped sibling's.
+    expect(result.runningDailyBudgetCents).toBe(2000);
+    const lines = Object.fromEntries(result.campaigns.map((c) => [c.campaignId, c]));
+    expect(lines.booking).toMatchObject({ legKey: BOOKING_LEG, configuredDailyBudgetCents: 2000, runningDailyBudgetCents: 2000 });
+    expect(lines.attended).toMatchObject({ legKey: ATTENDED_LEG, configuredDailyBudgetCents: 1000, runningDailyBudgetCents: 0 });
   });
 });

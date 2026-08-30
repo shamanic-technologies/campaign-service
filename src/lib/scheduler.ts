@@ -116,6 +116,9 @@ export async function reRunDueCampaigns(): Promise<number> {
       // The offer this campaign sells. The turn planner asks brand-service for the funnels of THAT
       // offer — the only grain with one answer on a brand selling several.
       offerId: campaigns.offerId,
+      // The single funnel LEG this campaign was bought for. The ceiling that binds it is its own
+      // leg's whenever the customer funds at that grain — the coarser figures are SUMS.
+      legKey: campaigns.legKey,
     });
 
   if (dueCampaigns.length === 0) return 0;

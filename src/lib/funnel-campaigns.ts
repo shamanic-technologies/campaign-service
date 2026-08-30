@@ -6,12 +6,13 @@ import {
   fetchFunnelBudgets,
   fundedChannelPairs,
   fundedFunnels,
+  fundedLegRows,
   type FunnelBudgetsRead,
 } from "./funnel-budget-client.js";
 import { fetchFeatureSalesFunnels, type FeatureSalesFunnelsRead } from "./feature-sales-funnels-client.js";
 import { fetchActiveWorkflowSlugForFeature, type ActiveWorkflowRead } from "./feature-workflow-client.js";
 import {
-  fetchChannelOperators,
+  fetchChannelCatalogue,
   type ChannelCatalogueRead,
   type ChannelOperator,
 } from "./channel-operator-client.js";
@@ -85,6 +86,12 @@ export interface ClaimedFunnelCampaign {
    * offers. NULL is the pre-offer population and keeps the brand-keyed read it has always had.
    */
   offerId?: string | null;
+  /**
+   * The single funnel LEG this campaign was bought for — features-service's identifier, carried
+   * and never derived. NULL is the pre-leg population and paces on the offer figure exactly as it
+   * always did.
+   */
+  legKey?: string | null;
 }
 
 /** One funnel campaign in the running to take the brand's next turn. */
@@ -360,29 +367,59 @@ interface FundedPair {
   funnelKey: SalesFunnelKey;
   /** The acquisition channel, as a features-service feature slug. A channel IS a feature slug. */
   featureSlug: string;
+  /**
+   * The single funnel LEG this money is behind — features-service's identifier, carried verbatim
+   * and never derived, parsed or minted. NULL is a ceiling written before a campaign could state
+   * a leg: that pair provisions a leg-less campaign, exactly as it always did.
+   */
+  legKey: string | null;
 }
 
 /**
  * What the customer funds, at the grain a campaign is provisioned per.
  *
- * billing states the pair grain ADDITIVELY, so both shapes are live at once and the fallback is
- * what keeps every brand funding one channel per funnel untouched:
+ * billing states every grain ADDITIVELY, so all three shapes are live at once and each fallback is
+ * what keeps the population below it untouched:
  *
- *   - pairs stated → one campaign per funded pair, each on its own channel.
- *   - no pairs (an older billing deploy, or a brand that funds nothing per funnel) → one campaign
- *     per funded FUNNEL on the seed's channel, i.e. exactly what this did before.
+ *   - LEG rows stated → one campaign per funded (funnel, channel, leg). A row whose leg is null is
+ *     a ceiling written before legs existed and provisions a leg-less campaign, byte-identically
+ *     to what the pair grain provisioned for it.
+ *   - no legs (an older billing deploy) → one campaign per funded pair, each on its own channel.
+ *   - no pairs either → one campaign per funded FUNNEL on the seed's channel, i.e. exactly what
+ *     this did before.
  */
 function fundedPairs(
   budgets: Extract<FunnelBudgetsRead, { ok: true }>,
   seedFeatureSlug: string,
 ): FundedPair[] {
+  // The LEG grain is the finest billing stores and the one a campaign is bought at, so it is asked
+  // first. Every coarser grain is a SUM of these rows, which is why nothing is added up here: a
+  // (funnel, channel) worked for two legs is TWO campaigns, and reading it at the pair grain would
+  // give them one identity and let each spend what the other was funded for.
+  const legRows = fundedLegRows(budgets);
+  if (legRows.length > 0) {
+    // Deduplicated on the identity a campaign holds. Two stored rows differing only by OFFER are
+    // one provisioning question here — which offer a new campaign is filed under is the DECLARING
+    // offer's answer, resolved further down, never billing's row.
+    const seen = new Set<string>();
+    const pairs: FundedPair[] = [];
+    for (const row of legRows) {
+      const key = `${row.funnelKey}\u0000${row.featureSlug}\u0000${row.legKey ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push({ funnelKey: row.funnelKey, featureSlug: row.featureSlug, legKey: row.legKey });
+    }
+    return pairs;
+  }
+
   const pairs = fundedChannelPairs(budgets);
   if (pairs.length > 0) {
-    return pairs.map((p) => ({ funnelKey: p.funnelKey, featureSlug: p.featureSlug }));
+    return pairs.map((p) => ({ funnelKey: p.funnelKey, featureSlug: p.featureSlug, legKey: null }));
   }
   return fundedFunnels(budgets).map((f) => ({
     funnelKey: f.funnelKey,
     featureSlug: seedFeatureSlug,
+    legKey: null,
   }));
 }
 
@@ -544,17 +581,21 @@ async function ensureFundedFunnelCampaigns({
   // workflow-less campaign on a guess. The customer-operated pair waits for the next sweep, and
   // the failure says so rather than passing in silence.
   let catalogue: ChannelCatalogueRead | null = null;
-  const operatorFor = async (slug: string): Promise<ChannelOperator> => {
+  const readCatalogue = async (): Promise<ChannelCatalogueRead> => {
     if (catalogue === null) {
-      catalogue = await fetchChannelOperators();
+      catalogue = await fetchChannelCatalogue();
       if (!catalogue.ok) {
         console.warn(
           `[campaign-service] Could not read features-service's channel catalogue (brand ${brandId}, org ${seed.orgId}) — ${catalogue.detail}. Every channel is treated as platform-operated this sweep, which is the behaviour that predates customer-operated channels.`,
         );
       }
     }
-    if (!catalogue.ok) return "platform";
-    return catalogue.operatorBySlug.get(slug) ?? "platform";
+    return catalogue;
+  };
+  const operatorFor = async (slug: string): Promise<ChannelOperator> => {
+    const read = await readCatalogue();
+    if (!read.ok) return "platform";
+    return read.operatorBySlug.get(slug) ?? "platform";
   };
 
   // The (org, brand, acquisition channel) triples a funnel campaign is provisioned for on this
@@ -578,28 +619,64 @@ async function ensureFundedFunnelCampaigns({
     if (offerId === undefined) continue; // funded, but nobody declares selling through it
     const featureSlug = f.featureSlug;
 
-    if (!sellableByFeature.has(featureSlug)) {
-      sellableByFeature.set(featureSlug, await fetchFeatureSalesFunnels(featureSlug, identity));
-    }
-    const sellable = sellableByFeature.get(featureSlug)!;
-    // Unreadable → provision nothing for this channel, exactly as an unreadable brand declaration
-    // provisions nothing for the brand. A pair is not guessed at — but it is not passed over in
-    // silence either: the customer's money is on this pair and we failed to evaluate it, which is
-    // a different thing from evaluating it and saying no.
-    if (!sellable.ok) {
-      console.warn(
-        `[campaign-service] Not provisioning ${featureSlug} for funnel ${f.funnelKey} (brand ${brandId}, org ${seed.orgId}) — could not READ features-service's statement of which funnels this channel sells: ${sellable.detail}`,
-      );
-      continue;
-    }
-    if (!sellable.funnels.has(f.funnelKey)) {
-      // A pair nobody can run: the customer funds it, but this channel has no way to sell that
-      // funnel. Logged once per sweep rather than silently dropped — the money is real and the
-      // customer is owed an answer about it eventually.
-      console.log(
-        `[campaign-service] Not provisioning ${featureSlug} for funnel ${f.funnelKey} (brand ${brandId}) — features-service does not state that pair`,
-      );
-      continue;
+    // WHAT THE CHANNEL CAN DO, asked in the vocabulary of what the customer BOUGHT.
+    //
+    // A pair that states a LEG asks the leg question — "does this channel perform this leg?" — and
+    // names no funnel at all, which is the point: one leg belongs to several funnels, so a funnel
+    // cannot say which of them was bought. features-service publishes every channel's legs on the
+    // same public catalogue this pass already reads for who operates them, so the identifier is
+    // carried verbatim and joined; it is never parsed and no matrix is held here.
+    //
+    // A pair that states NO leg keeps asking the funnel question, unchanged: that IS the question
+    // for a ceiling written before a campaign could state a leg.
+    if (f.legKey) {
+      const read = await readCatalogue();
+      if (!read.ok) {
+        console.warn(
+          `[campaign-service] Not provisioning ${featureSlug} for leg ${f.legKey} (brand ${brandId}, org ${seed.orgId}) — could not READ features-service's channel catalogue: ${read.detail}`,
+        );
+        continue;
+      }
+      const performed = read.legsBySlug.get(featureSlug);
+      if (!performed) {
+        console.log(
+          `[campaign-service] Not provisioning ${featureSlug} for leg ${f.legKey} (brand ${brandId}) — features-service's catalogue publishes no such channel`,
+        );
+        continue;
+      }
+      if (!performed.has(f.legKey)) {
+        // A pair nobody can run: the customer funds it, but this channel does not perform that
+        // leg. Logged once per sweep rather than silently dropped — the money is real.
+        console.log(
+          `[campaign-service] Not provisioning ${featureSlug} for leg ${f.legKey} (brand ${brandId}) — features-service does not state that this channel performs it`,
+        );
+        continue;
+      }
+    } else {
+
+      if (!sellableByFeature.has(featureSlug)) {
+        sellableByFeature.set(featureSlug, await fetchFeatureSalesFunnels(featureSlug, identity));
+      }
+      const sellable = sellableByFeature.get(featureSlug)!;
+      // Unreadable → provision nothing for this channel, exactly as an unreadable brand declaration
+      // provisions nothing for the brand. A pair is not guessed at — but it is not passed over in
+      // silence either: the customer's money is on this pair and we failed to evaluate it, which is
+      // a different thing from evaluating it and saying no.
+      if (!sellable.ok) {
+        console.warn(
+          `[campaign-service] Not provisioning ${featureSlug} for funnel ${f.funnelKey} (brand ${brandId}, org ${seed.orgId}) — could not READ features-service's statement of which funnels this channel sells: ${sellable.detail}`,
+        );
+        continue;
+      }
+      if (!sellable.funnels.has(f.funnelKey)) {
+        // A pair nobody can run: the customer funds it, but this channel has no way to sell that
+        // funnel. Logged once per sweep rather than silently dropped — the money is real and the
+        // customer is owed an answer about it eventually.
+        console.log(
+          `[campaign-service] Not provisioning ${featureSlug} for funnel ${f.funnelKey} (brand ${brandId}) — features-service does not state that pair`,
+        );
+        continue;
+      }
     }
 
     // This pair gets a campaign on this channel — whether one already exists or one is inserted
@@ -621,10 +698,68 @@ async function ensureFundedFunnelCampaigns({
         eq(campaigns.orgId, seed.orgId),
         eq(campaigns.featureSlug, featureSlug),
         eq(campaigns.funnelKey, f.funnelKey),
+        // The campaign bought for one LEG is not the campaign bought for another, so a pair is
+        // only ever matched against the campaign of ITS leg. Without this, a brand working one
+        // channel for two legs finds the first campaign for the second pair and never provisions
+        // it — the exact pair the leg exists to tell apart, collapsed back into one.
+        f.legKey ? eq(campaigns.legKey, f.legKey) : isNull(campaigns.legKey),
         arrayContains(campaigns.brandIds, [brandId]),
       ),
       orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
     });
+
+    // A campaign that already exists for this (funnel, channel) but states NO leg, on a pair the
+    // customer now funds AT the leg grain, is that pair's campaign — it is doing exactly this
+    // work and has been since before a campaign could say which leg it was bought for. It is
+    // ADOPTED (the leg is stamped on it) rather than left alone, because leaving it alone inserts
+    // a TWIN beside it: two live campaigns doing one job, splitting one identity's history and
+    // spending on two ceilings. That is the same recurrence the funnel-less ancestors had, one
+    // word along. Nothing else about the row moves — id, status, schedule, money and history are
+    // untouched, and the money is the same money restated at the grain it was funded at (the
+    // coarser figures are SUMS of these rows).
+    const adoptable = existing
+      ? null
+      : f.legKey
+        ? await db.query.campaigns.findFirst({
+            where: and(
+              eq(campaigns.orgId, seed.orgId),
+              eq(campaigns.featureSlug, featureSlug),
+              eq(campaigns.funnelKey, f.funnelKey),
+              isNull(campaigns.legKey),
+              arrayContains(campaigns.brandIds, [brandId]),
+            ),
+            orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
+          })
+        : null;
+
+    if (adoptable) {
+      try {
+        await db
+          .update(campaigns)
+          .set({ legKey: f.legKey, updatedAt: now })
+          .where(and(
+            eq(campaigns.id, adoptable.id),
+            eq(campaigns.orgId, seed.orgId),
+            // Restated in the UPDATE so a re-run writes nothing and a race with a live create
+            // that just stated a leg cannot overwrite it.
+            isNull(campaigns.legKey),
+          ));
+        console.log(
+          `[campaign-service] Campaign ${adoptable.id} states the leg it is bought for (${f.legKey}) — the funded pair it was already working (brand ${brandId}, channel ${featureSlug})`,
+        );
+      } catch (err) {
+        // Another live campaign already holds the identity this adoption would move it onto. The
+        // row stays exactly as it is; provisioning is not the place to arbitrate that.
+        const message = err instanceof Error ? err.message : String(err);
+        if (!message.includes("uniq_campaigns_org_brand_funnel_channel")) throw err;
+        console.warn(
+          `[campaign-service] Not stating leg ${f.legKey} on campaign ${adoptable.id} — another live campaign already holds that identity`,
+        );
+      }
+      const adoptChannel = acquisitionChannelForFeature(featureSlug);
+      if (adoptChannel) adoptFor.add(adoptChannel);
+      continue;
+    }
 
     if (existing) {
       // A funnel the customer re-funded after switching it off resumes rather than duplicating —
@@ -695,7 +830,7 @@ async function ensureFundedFunnelCampaigns({
     // here (brand_ids is a text[], so no unique index can span it), which makes a duplicate
     // provision a constraint violation rather than a second campaign for the same pair. The name
     // already carries the channel, so two channels of one funnel never collide on it.
-    const name = funnelCampaignName(featureSlug, brandId, f.funnelKey);
+    const name = funnelCampaignName(featureSlug, brandId, f.funnelKey, f.legKey);
 
     try {
       await db.insert(campaigns).values({
@@ -710,6 +845,10 @@ async function ensureFundedFunnelCampaigns({
         // NOT written any more: it could not tell the two meeting funnels apart, and a consumer
         // reading it reads a poorer statement of the same thing.
         funnelKey: f.funnelKey,
+        // The single leg this campaign is bought for. features-service's identifier, carried
+        // verbatim from the ceiling the customer set: never derived from the funnel (several legs
+        // sell one funnel and one leg belongs to several funnels), the channel or the workflow.
+        legKey: f.legKey,
         // The offer whose declaration is what put this funnel in scope. Carried, never derived:
         // NULL when the funnel came from the brand-keyed read, which is the pre-offer world.
         offerId: offerId ?? null,
@@ -737,8 +876,18 @@ async function ensureFundedFunnelCampaigns({
   }
 }
 
-export function funnelCampaignName(featureSlug: string, brandId: string, funnelKey: string): string {
-  return `${featureSlug} - ${brandId} - ${funnelKey}`;
+export function funnelCampaignName(
+  featureSlug: string,
+  brandId: string,
+  funnelKey: string,
+  legKey?: string | null,
+): string {
+  // The name is the only uniqueness Postgres can enforce on an INSERT here (brand_ids is a
+  // text[]), so it has to separate everything a campaign is. The LEG is appended only when the
+  // campaign states one: a leg-less campaign keeps the name it has always had, byte for byte, so
+  // nothing alive today is renamed or re-provisioned.
+  const base = `${featureSlug} - ${brandId} - ${funnelKey}`;
+  return legKey ? `${base} - ${legKey}` : base;
 }
 
 /**
@@ -877,6 +1026,7 @@ export async function provisionFundedPairsForQuietBrands(now: Date = new Date())
         funnelKey: null,
         dailyBudgetCents: null,
         offerId: row.offer_id,
+        legKey: null,
       };
 
       const identity: IdentityHeaders = {
