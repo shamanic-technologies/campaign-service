@@ -70,6 +70,15 @@ export const CampaignSchema = z.object({
   // offer, which is every campaign created before it could be stated and every caller that has
   // not migrated yet; nothing reads it for pacing, funding, selection or identity.
   offerId: z.string().nullable(),
+  // The single funnel LEG this campaign is bought for — features-service's canonical leg
+  // identifier, published on its `GET /public/channels` catalogue as `legs[].legKey`. A leg is the
+  // step-to-step move a customer actually buys, and it identifies itself: two campaigns on one
+  // channel buying two different legs are told apart by this value alone, with no funnel involved.
+  // OPAQUE — never split into the steps it connects (the catalogue serves those beside it), and
+  // never derived from the funnel, the channel or the workflow. Null = the campaign states no leg,
+  // which is every campaign created before it could state one and every caller that has not
+  // migrated yet; nothing reads it for pacing, funding, provisioning, scheduling or identity.
+  legKey: z.string().nullable(),
   maxLeads: z.number().int().nullable(),
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),
@@ -116,6 +125,20 @@ export const CreateCampaignBody = z.object({
   // one funnel), not from the goal, not from the workflow. Absent means the campaign states no
   // offer, and that is stored as NULL.
   offerId: z.string().uuid("offerId must be a valid UUID").nullable().optional(),
+  // The single funnel LEG this campaign is bought for — features-service's canonical leg
+  // identifier, taken verbatim from its published catalogue (`GET /public/channels` →
+  // `legs[].legKey`). A leg that STARTS a funnel is spelled exactly like every other one, so a
+  // caller never branches on it.
+  //
+  // OPTIONAL, on purpose and for now: making it required is a breaking request-contract change,
+  // so callers state it as they migrate and a create without one behaves exactly as it did before
+  // the field existed. The sales funnel stays required for the sales family and the identity is
+  // unchanged; a later ship makes this the identity and drops the funnel.
+  //
+  // Not validated against a local list, because there is no local list: this service does not own
+  // the leg vocabulary and must not mint a second one. The value is carried verbatim, exactly as
+  // the goal and the offer id are.
+  legKey: z.string().min(1).nullable().optional(),
   // Per-campaign OWN config (Campaign v2). Omit / null = inherit the brand. audienceIds is the
   // targeted SUBSET (one or more) of the brand's audiences; an empty array is rejected — use
   // null to clear back to inherit.
@@ -166,6 +189,11 @@ export const UpdateCampaignBody = z.object({
   // untouched; null clears it back to "states no offer". This is how a caller that created a
   // campaign before it could state an offer says which one it runs, without a second campaign.
   offerId: z.string().uuid("offerId must be a valid UUID").nullable().optional(),
+  // State (or clear) the single funnel LEG this campaign is bought for — features-service's
+  // canonical leg identifier, verbatim. Omit and it is untouched; null clears it back to "states
+  // no leg". This is how a campaign created before it could state a leg says which one it buys,
+  // without a second campaign.
+  legKey: z.string().min(1).nullable().optional(),
   // Set / clear this campaign's OWN config (Campaign v2). null clears a field → inherit the
   // brand. Updating these never touches the brand or any sibling campaign. audienceIds must be
   // non-empty when present; use null to clear back to inherit. `goal` is deliberately absent: it

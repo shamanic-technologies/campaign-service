@@ -524,4 +524,38 @@ describe('No Legacy Patterns - CRITICAL', () => {
       `Which feature sells through which funnel is features-service's statement — ask it:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`,
     ).toHaveLength(0);
   });
+
+  it('should NOT hold a leg vocabulary, and should never PARSE a leg identifier', () => {
+    // features-service MINTS the canonical leg identifier and publishes it; this service carries
+    // the value and nothing else. Two ways a second, drifting vocabulary starts, and both are
+    // refused here:
+    //
+    //  1. A leg key LITERAL in src — a list of legs written down is a copy of a product fact that
+    //     drifts the day a funnel gains or loses a rung, and an entry leg (`start_to_...`) written
+    //     as its own case is exactly the branch the identifier exists to remove.
+    //  2. SPLITTING the identifier back into the two steps it connects. The steps ride BESIDE it on
+    //     features-service's catalogue, so a consumer that wants them READS them. A well-formed
+    //     `a_to_b` that no catalogue names is still not a leg, so parsing can only ever invent one.
+    const files = getAllTsFiles(srcDir);
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const file of files) {
+      const relative = path.relative(srcDir, file);
+      const content = fs.readFileSync(file, 'utf-8');
+      content.split('\n').forEach((line, index) => {
+        const code = line.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
+        const literal = /["'][a-z][a-z_]*_to_[a-z][a-z_]*["']/.test(code);
+        const parsed = /\blegKey\b[^\n]*\.(split|slice|substring|match|replace|indexOf|startsWith|endsWith)\s*\(/.test(code)
+          || /\.(split|slice|substring|match|replace|indexOf|startsWith|endsWith)\s*\([^)]*\)[^\n]*\blegKey\b/.test(code);
+        if (literal || parsed) {
+          violations.push({ file: relative, line: index + 1, code: line.trim().substring(0, 100) });
+        }
+      });
+    }
+
+    expect(
+      violations,
+      `A leg is named by features-service's identifier, carried verbatim and never parsed:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`,
+    ).toHaveLength(0);
+  });
 });
