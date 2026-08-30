@@ -152,6 +152,38 @@ export const campaigns = pgTable(
     // then, because requiring it now would break every live caller.
     offerId: text("offer_id"),
 
+    // The single funnel LEG this campaign is bought for — features-service's canonical leg id.
+    //
+    // A sales funnel is a chain of steps and the thing a customer BUYS is one of its LEGS: the leg
+    // that takes a lead sitting at one step and moves it to the next. Until now a campaign stated a
+    // FUNNEL and the leg it performs was derived downstream, by intersecting that funnel with the
+    // legs its acquisition channel can produce. That derivation cannot survive the funnel leaving a
+    // campaign's identity: two DIFFERENT legs can land on the SAME step (a booked meeting is
+    // reached from a positive reply and from a website visit), so the step a leg lands on does not
+    // identify the leg. This column is what identifies it, on its own, with no funnel to
+    // disambiguate it.
+    //
+    // features-service OWNS the vocabulary and MINTS the identifier (its `lib/funnel-legs.ts`,
+    // published on `GET /public/channels` as `legs[].legKey`). This column carries that value and
+    // nothing else. No leg vocabulary, enum or list exists here and none is to be introduced — the
+    // same posture this service holds for the goal, the offer and the acquisition channel.
+    //
+    // OPAQUE, and never PARSED. The two steps a leg connects ride BESIDE the identifier on the
+    // catalogue (`fromStep` / `toStep`), so a consumer that wants them reads them there. Splitting
+    // the string is how a second, drifting vocabulary starts. An ENTRY leg — one that starts a
+    // funnel, where the lead was on no funnel before — carries a plain identifier like every other
+    // one, so there is no special case to write here either.
+    //
+    // NEVER derived. Not from the funnel (several legs sell one funnel and one leg belongs to
+    // several funnels, which is the whole reason this word exists), not from the channel, not from
+    // the workflow. It is stated by the creator or it is NULL.
+    //
+    // NULL = the campaign states no leg and behaves exactly as it did before this column existed:
+    // nothing reads it for pacing, funding, provisioning, scheduling, serialization or identity.
+    // Stating one is optional while callers migrate; the funnel is NOT removed and the uniqueness
+    // index is NOT widened by the ship that added this — a later one does both, together.
+    legKey: text("leg_key"),
+
     // Volume limit (optional, total leads across all runs)
     maxLeads: integer("max_leads"),
 
@@ -195,17 +227,34 @@ export const campaigns = pgTable(
     index("idx_campaigns_org_offer")
       .on(table.orgId, table.offerId)
       .where(sql`${table.offerId} is not null`),
+    // Serves "what did this leg buy" — the per-leg attribution read the column exists for.
+    // Partial: a campaign that states no leg is not part of any leg's answer.
+    index("idx_campaigns_org_leg")
+      .on(table.orgId, table.legKey)
+      .where(sql`${table.legKey} is not null`),
     // Serves the resume sweep's only read — the stopped campaigns that ran out of people to
     // contact. Partial so it covers that narrow population and not the whole stopped history.
     index("idx_campaigns_resumable")
       .on(table.stopReason, table.updatedAt)
       .where(sql`${table.status} = 'stopped' and ${table.stopReason} is not null`),
-    // A campaign is unique on (org, brand, sales funnel, acquisition channel) — see migration 0044.
-    // Scoped to `ongoing`: a stopped row is history, not a competitor for the brand's turn.
-    // `coalesce(funnel_key, '')` is load-bearing — Postgres treats NULLs as distinct, so without it
-    // a brand could grow unlimited funnel-less campaigns on one channel.
+    // A campaign is unique on (org, brand, sales funnel, LEG, acquisition channel) — migration
+    // 0044, widened by 0055. Scoped to `ongoing`: a stopped row is history, not a competitor for
+    // the brand's turn. The leg is part of it because a campaign bought for one leg is not the
+    // campaign bought for another: without it a brand working ONE channel for TWO legs cannot hold
+    // two live campaigns at all, since the second create reads as a restatement of the first.
+    // `coalesce(..., '')` is load-bearing on BOTH — Postgres treats NULLs as distinct, so without
+    // it a brand could grow unlimited funnel-less (or leg-less) campaigns on one channel. It also
+    // makes the widening a pure loosening: every row that states no leg keys byte-identically to
+    // the way it did before the column existed. The NAME still says funnel_channel on purpose —
+    // the funnel is still part of this identity, and the ship that removes it renames the index.
     uniqueIndex("uniq_campaigns_org_brand_funnel_channel")
-      .on(table.orgId, table.brandId, sql`coalesce(${table.funnelKey}, '')`, table.acquisitionChannel)
+      .on(
+        table.orgId,
+        table.brandId,
+        sql`coalesce(${table.funnelKey}, '')`,
+        sql`coalesce(${table.legKey}, '')`,
+        table.acquisitionChannel,
+      )
       .where(
         sql`${table.status} = 'ongoing' and ${table.brandId} is not null and ${table.acquisitionChannel} is not null`,
       ),
