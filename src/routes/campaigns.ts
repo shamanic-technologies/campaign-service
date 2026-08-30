@@ -124,6 +124,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       audienceId,
       funnelKey: bodyFunnelKey,
       offerId,
+      legKey,
       audienceIds,
       servicesOffered,
       clickDestinationUrl,
@@ -217,6 +218,12 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
             // The identity includes the funnel: an incumbent is the campaign alive on THIS funnel
             // (or the funnel-less one, for a feature that sells through no sales funnel).
             funnelKey ? eq(campaigns.funnelKey, funnelKey) : isNull(campaigns.funnelKey),
+            // ...and the LEG it is bought for. A campaign bought for one leg is not the campaign
+            // bought for another, so a create stating a different leg is a NEW campaign rather
+            // than a restatement of the live one — which is the only way a brand can work one
+            // channel for two legs at once. A create that states NO leg matches the leg-less row
+            // exactly as it did before the field existed.
+            legKey ? eq(campaigns.legKey, legKey) : isNull(campaigns.legKey),
           ),
           orderBy: [campaigns.createdAt],
         })
@@ -237,6 +244,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           // Only when the caller actually sent it: a create that says nothing about the offer
           // must not blank the one already on the row.
           ...(offerId !== undefined ? { offerId } : {}),
+          // Same rule for the leg it is bought for: an incumbent learns it from a caller that now
+          // states one, and a create saying nothing about the leg must not blank the row's.
+          ...(legKey !== undefined ? { legKey } : {}),
           ...(audienceIds !== undefined ? { audienceIds } : {}),
           ...(servicesOffered !== undefined ? { servicesOffered } : {}),
           ...(clickDestinationUrl !== undefined ? { clickDestinationUrl } : {}),
@@ -306,6 +316,10 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         // The offer this campaign sells, as STATED by its creator. Absent → NULL; nothing is
         // inferred from the funnel, the goal or the workflow.
         offerId: offerId ?? null,
+        // The single funnel LEG this campaign is bought for, as STATED by its creator — verbatim,
+        // in features-service's vocabulary. Absent → NULL; nothing is inferred from the funnel,
+        // the channel or the workflow.
+        legKey: legKey ?? null,
         audienceIds: audienceIds ?? null,
         servicesOffered: servicesOffered ?? null,
         clickDestinationUrl: clickDestinationUrl ?? null,
@@ -370,6 +384,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           eq(campaigns.status, "ongoing"),
           eq(campaigns.brandId, (req.body.brandIds as string[])[0]),
           racedFunnelKey ? eq(campaigns.funnelKey, racedFunnelKey) : isNull(campaigns.funnelKey),
+          // The leg is part of the identity that collided, so it is part of finding the winner —
+          // otherwise the loser is handed back a campaign bought for a different leg.
+          req.body.legKey ? eq(campaigns.legKey, req.body.legKey) : isNull(campaigns.legKey),
         ),
         orderBy: [campaigns.createdAt],
       });
@@ -481,8 +498,16 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     res.json({ campaign: updated });
   } catch (error: any) {
-    if (error?.code === "23505" && (error?.constraint === "uniq_campaigns_org_name" || error?.constraint_name === "uniq_campaigns_org_name")) {
+    const updateConstraint = error?.constraint ?? error?.constraint_name;
+    if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_name") {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
+    }
+    // Restating the leg can move a campaign onto an identity another live campaign already holds.
+    // That is a real conflict and it says so, rather than surfacing as an internal error.
+    if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_brand_funnel_channel") {
+      return res.status(409).json({
+        error: "Another live campaign already runs this (brand, sales funnel, leg, acquisition channel)",
+      });
     }
     console.error("[campaign-service] Update campaign error:", error);
     res.status(500).json({ error: "Internal server error" });

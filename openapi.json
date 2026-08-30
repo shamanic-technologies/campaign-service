@@ -125,6 +125,10 @@
             "type": "string",
             "nullable": true
           },
+          "legKey": {
+            "type": "string",
+            "nullable": true
+          },
           "maxLeads": {
             "type": "integer",
             "nullable": true
@@ -191,6 +195,7 @@
           "dailyBudgetCents",
           "funnelKey",
           "offerId",
+          "legKey",
           "maxLeads",
           "startDate",
           "endDate",
@@ -283,6 +288,11 @@
             "type": "string",
             "nullable": true,
             "format": "uuid"
+          },
+          "legKey": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
           },
           "audienceIds": {
             "type": "array",
@@ -391,6 +401,11 @@
             "type": "string",
             "nullable": true,
             "format": "uuid"
+          },
+          "legKey": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
           },
           "audienceIds": {
             "type": "array",

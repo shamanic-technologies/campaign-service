@@ -589,6 +589,56 @@ describe("Gate Check", () => {
       expect(result.allowed).toBe(true);
     });
 
+    it("should report an ALLOWED run as authorized by billing, not merely allowed", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ affordable: true, balanceCents: "5000" }),
+      });
+
+      const result = await runGateChecks(makeCampaign());
+      expect(result.allowed).toBe(true);
+      expect(result.creditCheck).toBe("affordable");
+      expect(result.creditCheckDetail).toBeUndefined();
+    });
+
+    it("should report a BLOCKED run as unaffordable", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ affordable: false, balanceCents: "0" }),
+      });
+
+      const result = await runGateChecks(makeCampaign());
+      expect(result.creditCheck).toBe("unaffordable");
+    });
+
+    it("should report the fail-open path as UNREADABLE, never as an authorization", async () => {
+      // The whole point: an incident must be able to tell "billing said yes" from "billing
+      // could not be asked". Both allow the run; only one of them is an authorization.
+      mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
+      let result = await runGateChecks(makeCampaign());
+      expect(result.allowed).toBe(true);
+      expect(result.creditCheck).toBe("unreadable");
+      expect(result.creditCheckDetail).toBe("ECONNRESET");
+
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 502 });
+      result = await runGateChecks(makeCampaign());
+      expect(result.allowed).toBe(true);
+      expect(result.creditCheck).toBe("unreadable");
+      expect(result.creditCheckDetail).toBe("billing responded 502");
+
+      // A 200 that does not state `affordable` is not an answer either.
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ balanceCents: "5000" }) });
+      result = await runGateChecks(makeCampaign());
+      expect(result.allowed).toBe(true);
+      expect(result.creditCheck).toBe("unreadable");
+
+      delete process.env.BILLING_SERVICE_URL;
+      result = await runGateChecks(makeCampaign());
+      expect(result.allowed).toBe(true);
+      expect(result.creditCheck).toBe("unreadable");
+      expect(result.creditCheckDetail).toBe("billing not configured");
+    });
+
     it("should call the locked affordability contract with x-api-key + identity headers", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

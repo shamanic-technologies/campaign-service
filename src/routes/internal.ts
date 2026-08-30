@@ -121,12 +121,24 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
                           result.reason === "Funnel daily budget reached" ||
                           result.reason === "Funnel not funded" ||
                           result.reason === "Brand paused";
+      // A run allowed because billing could NOT be asked is a fail-OPEN anomaly, not an
+      // authorization — exactly the class this service warns on. It rides the event that is
+      // already emitted once per gate check, so it adds no log volume at all, and it is the
+      // only way an incident can tell "the gate authorized" apart from "the gate defaulted".
+      const creditUnreadable = result.creditCheck === "unreadable";
       traceEvent(req.runId, {
         service: "campaign-service",
         event: "gate-check-result",
-        detail: `Gate check ${result.allowed ? "PASSED" : "BLOCKED"} for campaign ${campaignId}${result.reason ? ` — reason: ${result.reason}` : ""}${result.autoStopped ? " (auto-stopped)" : ""}`,
-        level: result.allowed || benignBlock ? "info" : "warn",
-        data: { campaignId, allowed: result.allowed, reason: result.reason, autoStopped: result.autoStopped },
+        detail: `Gate check ${result.allowed ? "PASSED" : "BLOCKED"} for campaign ${campaignId}${result.reason ? ` — reason: ${result.reason}` : ""}${result.autoStopped ? " (auto-stopped)" : ""}${creditUnreadable ? ` — credit affordability NOT read (${result.creditCheckDetail}), allowed by fail-open` : ""}`,
+        level: creditUnreadable ? "warn" : (result.allowed || benignBlock ? "info" : "warn"),
+        data: {
+          campaignId,
+          allowed: result.allowed,
+          reason: result.reason,
+          autoStopped: result.autoStopped,
+          creditCheck: result.creditCheck,
+          creditCheckDetail: result.creditCheckDetail,
+        },
       }, req.headers).catch(() => {});
     }
 
