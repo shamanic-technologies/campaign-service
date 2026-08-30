@@ -167,6 +167,7 @@ async function loadSalesCampaigns(orgId: string, brandId: string): Promise<Spend
       funnelKey: campaigns.funnelKey,
       featureSlug: campaigns.featureSlug,
       offerId: campaigns.offerId,
+      legKey: campaigns.legKey,
       createdAt: campaigns.createdAt,
     })
     .from(campaigns)

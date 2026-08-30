@@ -93,6 +93,12 @@ const GOOGLE_ADS = "google-ads";
 // themselves. features-service publishes who operates each channel; nothing here holds a list.
 const IN_HOUSE_BOOKING = "in-house-meeting-booking";
 const ANCESTOR_RUN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+// features-service MINTS these; the tests carry them verbatim exactly as the service does. They
+// are deliberately three DIFFERENT legs of the SAME funnel: what a customer buys is one leg, and
+// two legs of one funnel through one channel are two campaigns.
+const ENTRY_LEG = "start_to_conversation";
+const BOOKING_LEG = "conversation_to_meeting_booked";
+const ATTENDED_LEG = "meeting_booked_to_meeting_attended";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // The brand's alive campaigns, as the sales-scoped liveness check reads them.
@@ -109,6 +115,7 @@ function claimed(overrides: Partial<ClaimedFunnelCampaign> = {}): ClaimedFunnelC
     featureSlug: SALES,
     funnelKey: null,
     dailyBudgetCents: null,
+    legKey: null,
     ...overrides,
   };
 }
@@ -125,6 +132,16 @@ function mockFunnelBudgets(
   // billing deploy that does not serve it, which every test below relies on to prove the
   // per-funnel behaviour is untouched.
   channels?: Array<{ funnelKey: string; featureSlug: string; dailyBudgetCents: string }>,
+  // The FINEST grain billing stores: one row per (funnel, channel, offer, LEG) — the unit a
+  // campaign is bought at. Omitted = a billing deploy that does not serve it, which is what every
+  // test above relies on to prove the pair/funnel behaviour is untouched.
+  legs?: Array<{
+    funnelKey: string;
+    featureSlug: string;
+    offerId?: string | null;
+    legKey: string | null;
+    dailyBudgetCents: string;
+  }>,
 ) {
   mockFetch.mockResolvedValueOnce({
     ok: true,
@@ -136,6 +153,9 @@ function mockFunnelBudgets(
           : brandDailyBudgetCents,
       funnels: funnels.map(f => ({ ...f, updatedAt: null })),
       ...(channels ? { channels: channels.map(c => ({ ...c, updatedAt: null })) } : {}),
+      ...(legs
+        ? { legs: legs.map(l => ({ offerId: null, ...l, updatedAt: null })) }
+        : {}),
     }),
   });
 }
@@ -171,11 +191,17 @@ function catalogueResponse() {
     ok: true,
     json: async () => ({
       channels: [
-        { slug: SALES, operatedBy: "platform" },
-        { slug: FEEDBACK, operatedBy: "platform" },
-        { slug: GOOGLE_ADS, operatedBy: "platform" },
-        { slug: IN_HOUSE_BOOKING, operatedBy: "customer" },
+        { slug: SALES, operatedBy: "platform", stepTransitions: [{ legKey: ENTRY_LEG }] },
+        { slug: FEEDBACK, operatedBy: "platform", stepTransitions: [{ legKey: ENTRY_LEG }] },
+        { slug: GOOGLE_ADS, operatedBy: "platform", stepTransitions: [{ legKey: ENTRY_LEG }] },
+        {
+          slug: IN_HOUSE_BOOKING,
+          operatedBy: "customer",
+          // The customer's own team performs the two INTERNAL legs; it starts nothing.
+          stepTransitions: [{ legKey: BOOKING_LEG }, { legKey: ATTENDED_LEG }],
+        },
       ],
+      legs: [],
       steps: [],
     }),
   };
@@ -395,6 +421,144 @@ describe("planFunnelTurns", () => {
     // belongs to another offer and which workflow-service would refuse for this feature.
     const feedback = inserted.find(v => v.featureSlug === FEEDBACK)!;
     expect(feedback.workflowSlug).toBe(`${FEEDBACK}-seed`);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────
+  // The LEG is what a customer BUYS, so it is what a campaign is provisioned, found and
+  // deduplicated on. A leg belongs to SEVERAL funnels at once, which is why the funnel never
+  // identified the purchase — and why these tests never name a funnel where a leg is the subject.
+  // ─────────────────────────────────────────────────────────────────────────────────────────
+
+  it("provisions ONE campaign per funded LEG, each stating the leg it was bought for", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "3000" }],
+      "3000",
+      [{ funnelKey: "reply_meeting", featureSlug: IN_HOUSE_BOOKING, dailyBudgetCents: "3000" }],
+      [
+        { funnelKey: "reply_meeting", featureSlug: IN_HOUSE_BOOKING, legKey: BOOKING_LEG, dailyBudgetCents: "2000" },
+        { funnelKey: "reply_meeting", featureSlug: IN_HOUSE_BOOKING, legKey: ATTENDED_LEG, dailyBudgetCents: "1000" },
+      ],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    const inserted = mockInsertValues.mock.calls.map(c => c[0]);
+    // TWO campaigns on ONE channel of ONE funnel — which is impossible to express without the leg,
+    // and is exactly the pair the leg exists to tell apart.
+    expect(inserted).toHaveLength(2);
+    expect(inserted.map(v => v.legKey).sort()).toEqual([BOOKING_LEG, ATTENDED_LEG].sort());
+    for (const values of inserted) {
+      expect(values.featureSlug).toBe(IN_HOUSE_BOOKING);
+      expect(values.name).toBe(
+        funnelCampaignName(values.featureSlug, "brand-1", values.funnelKey, values.legKey),
+      );
+    }
+    // Two names, or the unique-name index would silently swallow the second insert as a race.
+    expect(new Set(inserted.map(v => v.name)).size).toBe(2);
+  });
+
+  it("asks the channel about the LEG, naming no funnel", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: IN_HOUSE_BOOKING, dailyBudgetCents: "1000" }],
+      [{ funnelKey: "reply_meeting", featureSlug: IN_HOUSE_BOOKING, legKey: BOOKING_LEG, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
+    // The per-feature "which FUNNELS does this channel sell?" read is not made at all: the
+    // question is about a leg, and the public catalogue answers it.
+    const funnelQuestions = mockFetch.mock.calls.filter((c) => String(c[0]).includes("/features/"));
+    expect(funnelQuestions).toHaveLength(0);
+    expect(
+      mockFetch.mock.calls.some((c) => String(c[0]).includes("/public/channels")),
+    ).toBe(true);
+  });
+
+  it("never provisions a leg the channel does not perform", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "1000" }],
+      // The cold-email channel starts a conversation; it does not sit in a meeting.
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, legKey: ATTENDED_LEG, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it("provisions nothing for a leg when the catalogue cannot be READ — and says so", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "1000" }],
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, legKey: ENTRY_LEG, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+    const base = mockFetch.getMockImplementation()!;
+    mockFetch.mockImplementation(async (input: URL | string) => {
+      if (String(input).includes("/public/channels")) {
+        return { ok: false, status: 503, text: async () => "down" };
+      }
+      return base(input);
+    });
+
+    const said = await captureWarnings(() =>
+      planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]),
+    );
+
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(said).toContain("could not READ features-service's channel catalogue");
+  });
+
+  it("ADOPTS the campaign already doing the work instead of growing a twin beside it", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "1000" }],
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, legKey: ENTRY_LEG, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    // Nothing states this leg; the live campaign of the same (funnel, channel) states none at all.
+    mockFindFirst
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue({ id: "incumbent", status: "ongoing", legKey: null });
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ legKey: ENTRY_LEG }));
+  });
+
+  it("leaves a campaign that states no leg exactly as it is when billing states none either", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "1000" }],
+      // The pre-leg population: billing serves the grain, and every row states no leg.
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, legKey: null, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    const inserted = mockInsertValues.mock.calls.map(c => c[0]);
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0].legKey).toBeNull();
+    // The name it has always had, byte for byte, so nothing alive is renamed or re-provisioned.
+    expect(inserted[0].name).toBe(funnelCampaignName(SALES, "brand-1", "sales_meetings_from_conversation"));
   });
 
   it("never provisions a pair the channel may not be sold through", async () => {

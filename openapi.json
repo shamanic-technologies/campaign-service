@@ -583,6 +583,7 @@
           "grain": {
             "type": "string",
             "enum": [
+              "leg",
               "offer",
               "channel",
               "funnel",
@@ -677,6 +678,10 @@
             "type": "string",
             "nullable": true
           },
+          "legKey": {
+            "type": "string",
+            "nullable": true
+          },
           "configuredDailyBudgetCents": {
             "type": "integer"
           },
@@ -691,6 +696,7 @@
           "funnelKey",
           "featureSlug",
           "offerId",
+          "legKey",
           "configuredDailyBudgetCents",
           "runningDailyBudgetCents"
         ]
@@ -707,6 +713,10 @@
             "nullable": true
           },
           "offerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "legKey": {
             "type": "string",
             "nullable": true
           },
@@ -733,6 +743,7 @@
           "funnelKey",
           "featureSlug",
           "offerId",
+          "legKey",
           "resolvedOfferId",
           "dailyBudgetCents",
           "running",
