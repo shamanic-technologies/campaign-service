@@ -444,3 +444,48 @@ export const BatchSpendableBudgetResponse = z.object({
     reason: z.string(),
   })),
 }).openapi("BatchSpendableBudgetResponse");
+
+/**
+ * A LEAD JUST REACHED A STEP — run the campaign bought for the leg OUT of it, now.
+ *
+ * The scope is the (brand, offer, funnel) the lead is on plus the step they reached. Nothing is
+ * inferred from anything else: the leg is features-service's statement about that step and that
+ * funnel, and the campaign is the one already stating that leg. The org rides on `x-org-id`, like
+ * every other per-(org, brand) read in this service.
+ */
+export const TriggerForStepBody = z.object({
+  brandId: z.string().uuid("brandId must be a valid UUID"),
+  // The OFFER the lead is on — brand-service's id. Matched exactly against the campaign's own; a
+  // campaign that states no offer is not the campaign of the offer named here.
+  offerId: z.string().uuid("offerId must be a valid UUID"),
+  // The sales funnel the lead is on. Accepts the canonical four and the pre-rename spellings, the
+  // same vocabulary every other funnel-shaped request here accepts. A leg belongs to several
+  // funnels, so this is asked rather than derived.
+  funnelKey: z.string().min(1, "funnelKey is required"),
+  // The step the lead just REACHED — features-service's step key, carried verbatim and never
+  // parsed. A step it does not publish is a 400, never an empty answer.
+  step: z.string().min(1, "step is required"),
+}).openapi("TriggerForStepBody");
+
+export const TriggerForStepResponse = z.object({
+  funnelKey: z.string(),
+  step: z.string(),
+  /** The legs OUT of that step on that funnel, as features-service names them. */
+  legKeys: z.array(z.string()),
+  triggered: z.array(z.object({
+    campaignId: z.string(),
+    legKey: z.string().nullable(),
+    workflowSlug: z.string(),
+  })),
+  /**
+   * The campaigns that perform the leg and were NOT run, each saying why. A named skip is what
+   * makes "nobody bought this leg" / "it is out of budget" readable as an ordinary answer rather
+   * than as a failure.
+   */
+  skipped: z.array(z.object({
+    campaignId: z.string(),
+    legKey: z.string().nullable(),
+    reason: z.string(),
+    detail: z.string(),
+  })),
+}).openapi("TriggerForStepResponse");

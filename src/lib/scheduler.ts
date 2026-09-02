@@ -35,7 +35,7 @@ export const IDLE_MAX_MS = 60 * 60_000; // 1 hour
 // (= 600s) value left a legit long fill sitting right at the orphan boundary, where
 // claimStuckCampaigns could misclassify it as stuck and re-fire mid-fill (→ lead-service
 // 409 "Concurrent buffer/next" storms). 15min gives margin above the observed max.
-const STUCK_RUN_FRESHNESS_THRESHOLD_MS = 15 * 60_000; // 15 minutes
+export const STUCK_RUN_FRESHNESS_THRESHOLD_MS = 15 * 60_000; // 15 minutes
 
 /**
  * Is a flow genuinely alive for this campaign right now?
@@ -57,7 +57,7 @@ const STUCK_RUN_FRESHNESS_THRESHOLD_MS = 15 * 60_000; // 15 minutes
  * threshold (workflow died without /end-run) no longer counts as alive, so the campaign
  * is re-claimed/re-fired.
  */
-async function hasLiveRunForCampaign(
+export async function hasLiveRunForCampaign(
   orgId: string,
   campaignId: string,
   freshnessCutoff: Date,

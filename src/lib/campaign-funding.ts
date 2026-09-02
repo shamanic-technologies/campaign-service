@@ -176,6 +176,8 @@ export async function campaignFunding(
     funnelKey?: string | null;
     featureSlug?: string | null;
     offerId?: string | null;
+    /** The LEG it was bought for — the finest grain billing stores, so the first one asked. */
+    legKey?: string | null;
   },
   brandId: string,
   identity: IdentityHeaders,

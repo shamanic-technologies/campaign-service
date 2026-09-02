@@ -716,6 +716,57 @@ campaign doing two jobs on money funded for two.
 
 (Set 2026-08-31.)
 
+## A lead reaching a STEP runs the campaign bought for the leg OUT of it, NOW — an event entry point beside the clock
+
+Everything this service schedules is on a clock: the tick claims what is due, `/end-run` reschedules
+what just finished. Nothing could say "this just happened, run the campaign responsible for it", so
+a prospect who states a sales interest waited for that campaign's next daily tick before anyone
+answered them — which is the whole problem the leg they bought exists to solve.
+
+`POST /internal/campaigns/trigger-for-step` (`src/lib/step-trigger.ts`) is that entry point. The
+caller names the scope its lead is on — brand, offer, funnel — plus the STEP just reached, and the
+campaign bought for the leg OUT of that step runs immediately.
+
+- **It is a LOOKUP over state already held, not a new model.** A campaign states its (org, brand,
+  offer, funnel, channel) and the single LEG it was bought for; features-service publishes which leg
+  leaves which step. Joining the two is the whole resolution — no column, table, vocabulary,
+  accumulator or second scheduler.
+- **THE LEG IS ASKED, NEVER DERIVED, AND NEVER PARSED.** The legs out of a step come from the public
+  catalogue this service already reads (`GET /public/channels` -> `legs[]`, each carrying `legKey`,
+  `fromStep` and the funnels it is a leg of), joined VERBATIM against `campaigns.leg_key`. The steps
+  ride beside the identifier precisely so nobody splits it, and a well-formed `a_to_b` no catalogue
+  names is still not a leg. `channel-operator-client.ts` stays the ONE reader of that catalogue.
+- **The FUNNEL is part of the question because a leg belongs to several.** `sales_interest ->
+  meeting_booked` is a leg of more than one chain, and only the customer's funding says which one
+  they bought — so it is named by the caller rather than derived from the leg.
+- **THE GATE IS UNTOUCHED.** The dispatch is the SCHEDULER'S OWN — same anchor run
+  (`ensureCampaignRunId`), same greedy workflow pick, same `/execute` — so the run starts at
+  `gate-check`, the first node of every DAG, and is refused there exactly as a scheduled run is.
+  Before dispatching it applies the same two CORRECTNESS guards the scheduler applies (never two
+  runs of one campaign, never two of one brand COHORT — the outbound channels share a lead
+  population and a set of sending accounts) and the one shared funding definition
+  (`campaignFunding`, fail-CLOSED). A reply must never make a defunded, held or stopped campaign
+  spend.
+- **THE SCOPE FAILS LOUD; THE ANSWER IS OFTEN A NAMED NOTHING.** A step no catalogue publishes, a
+  funnel naming none of the four, and a catalogue that cannot be READ are a 400/400/502 — answering
+  them with "nothing to do" would make an unreachable feature indistinguishable from a brand that
+  simply has no campaign for this leg. Everything else is a 200: no campaign performs the leg
+  (the common case, empty), or one does and was skipped for a NAMED reason (`no_workflow` — the
+  customer operates that channel, so there is no DAG; `unfunded`; `run_in_flight`;
+  `cohort_run_in_flight`; `incomplete_campaign`; `dispatch_refused`). A caller can tell those from
+  an outage, which is the whole point.
+- **The OFFER is matched exactly and never inferred.** A campaign stating none is not the campaign
+  of the offer the caller named — the same posture the column has had since it was added.
+- **The time-based path is byte-identical.** No claim, cadence, defer, turn or reschedule changed;
+  this only adds a second way in.
+- **The downstream needed NO new payload.** A run names its campaign (`x-campaign-id`), and
+  `GET /campaigns/:id` already serves that row's `offerId`, `funnelKey` and `legKey` — so a node
+  that must read the funnel's own configuration from brand-service resolves it from the campaign.
+  Nothing was added to the `/start-run` response, which already re-serves several campaign fields
+  and at least one retired vocabulary; another copy would make that worse.
+
+(Set 2026-09-02.)
+
 ## The OFFER a campaign sells is brand-service's UUID, carried and never derived
 
 A new level sits between the brand and the campaign: **Org > Brand > Offer > Campaign**. An offer is

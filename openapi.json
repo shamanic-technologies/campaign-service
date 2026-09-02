@@ -1112,6 +1112,107 @@
         "required": [
           "updatedTables"
         ]
+      },
+      "TriggerForStepResponse": {
+        "type": "object",
+        "properties": {
+          "funnelKey": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "legKeys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "triggered": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "campaignId": {
+                  "type": "string"
+                },
+                "legKey": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "workflowSlug": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "campaignId",
+                "legKey",
+                "workflowSlug"
+              ]
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "campaignId": {
+                  "type": "string"
+                },
+                "legKey": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "campaignId",
+                "legKey",
+                "reason",
+                "detail"
+              ]
+            }
+          }
+        },
+        "required": [
+          "funnelKey",
+          "step",
+          "legKeys",
+          "triggered",
+          "skipped"
+        ]
+      },
+      "TriggerForStepBody": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "funnelKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "step": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "brandId",
+          "offerId",
+          "funnelKey",
+          "step"
+        ]
       }
     },
     "parameters": {}
@@ -2546,6 +2647,93 @@
           },
           "500": {
             "description": "Teardown failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/campaigns/trigger-for-step": {
+      "post": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Run the campaign bought for the leg out of the step a lead just reached",
+        "description": "A lead reached a step on a (brand, offer, funnel); this runs the campaign bought for the leg OUT of that step immediately, instead of waiting for its next tick. The leg is features-service's statement (GET /public/channels -> legs[]) and the campaign is the one already stating that leg — nothing is inferred. The affordability/budget gate is untouched: the dispatch is the scheduler's own, so the run starts at gate-check like any other. A scope that cannot be resolved (unknown step, unknown funnel, unreadable catalogue) fails loudly; a scope with no such campaign, or one that is stopped, held for money, already running or operated by the customer's own team, is an ordinary 200 with a NAMED skip. The org rides on x-org-id.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service"
+            },
+            "required": true,
+            "description": "Internal org UUID from client-service",
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerForStepBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What ran and what did not",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerForStepResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No org, malformed body, unknown funnel or unknown step",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The acquisition-channel catalogue could not be read",
             "content": {
               "application/json": {
                 "schema": {

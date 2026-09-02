@@ -32,6 +32,18 @@
  */
 export type ChannelOperator = "platform" | "customer";
 
+/**
+ * ONE leg of the published vocabulary, narrowed to what this service reads: the identifier it
+ * carries verbatim, the step a lead is taken OUT of (`null` is "from nothing" — this leg starts a
+ * funnel), and every declared funnel the leg is a leg of. The steps ride BESIDE the identifier on
+ * the catalogue precisely so nobody splits it, so they are read here and never derived.
+ */
+export interface CatalogueLeg {
+  legKey: string;
+  fromStepKey: string | null;
+  funnelKeys: ReadonlySet<string>;
+}
+
 export type ChannelCatalogueRead =
   | {
       ok: true;
@@ -42,6 +54,18 @@ export type ChannelCatalogueRead =
        * channel that publishes an empty set, and the call site treats it as such.
        */
       legsBySlug: Map<string, ReadonlySet<string>>;
+      /**
+       * EVERY leg of every declared funnel, published beside the channels. Read so a caller naming
+       * the step a lead just reached can be answered with the leg OUT of it, without this service
+       * holding a leg vocabulary of its own.
+       */
+      legs: readonly CatalogueLeg[];
+      /**
+       * Every step key the catalogue publishes. A caller naming a step that is not one of these is
+       * naming nothing, and is told so rather than answered with an empty result — the two are
+       * different statements and only one of them is a caller's mistake.
+       */
+      stepKeys: ReadonlySet<string>;
     }
   | { ok: false; detail: string };
 
@@ -69,6 +93,12 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
         operatedBy?: unknown;
         stepTransitions?: Array<{ legKey?: unknown }>;
       }>;
+      legs?: Array<{
+        legKey?: unknown;
+        fromStep?: { key?: unknown } | null;
+        funnelKeys?: unknown;
+      }>;
+      steps?: Array<{ key?: unknown }>;
     };
     if (!Array.isArray(data.channels)) {
       return { ok: false, detail: "response states no channels array" };
@@ -96,7 +126,35 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       if (channel.operatedBy !== "platform" && channel.operatedBy !== "customer") continue;
       operatorBySlug.set(channel.slug, channel.operatedBy);
     }
-    return { ok: true, operatorBySlug, legsBySlug };
+    const legs: CatalogueLeg[] = [];
+    if (Array.isArray(data.legs)) {
+      for (const leg of data.legs) {
+        if (typeof leg?.legKey !== "string" || leg.legKey.length === 0) continue;
+        const funnelKeys = new Set<string>();
+        if (Array.isArray(leg.funnelKeys)) {
+          for (const key of leg.funnelKeys) {
+            if (typeof key === "string" && key.length > 0) funnelKeys.add(key);
+          }
+        }
+        const fromKey = leg.fromStep?.key;
+        legs.push({
+          legKey: leg.legKey,
+          // An ENTRY leg states no step before it, and that is an ordinary leg — the absence is
+          // data, not a special spelling to branch on.
+          fromStepKey: typeof fromKey === "string" && fromKey.length > 0 ? fromKey : null,
+          funnelKeys,
+        });
+      }
+    }
+
+    const stepKeys = new Set<string>();
+    if (Array.isArray(data.steps)) {
+      for (const step of data.steps) {
+        if (typeof step?.key === "string" && step.key.length > 0) stepKeys.add(step.key);
+      }
+    }
+
+    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
