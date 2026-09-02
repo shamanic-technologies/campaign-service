@@ -619,6 +619,28 @@ async function ensureFundedFunnelCampaigns({
     if (offerId === undefined) continue; // funded, but nobody declares selling through it
     const featureSlug = f.featureSlug;
 
+    // A channel the PLATFORM operates but this service does not pace.
+    //
+    // Membership of the funnel-funded family is what says "this campaign's ceiling is billing's,
+    // read live on every plan": gate-check, the turn planner, the funding hold and the spendable
+    // figure all key on it. A platform-operated channel outside it would get a campaign that RUNS
+    // a DAG while none of those bind — it would spend against a ceiling nothing enforces, which is
+    // strictly worse than not existing. So it is refused, and it is refused OUT LOUD, naming the
+    // pair: a channel that ships upstream is then visible here the first sweep after a customer
+    // funds it, instead of being passed over in a silence indistinguishable from a brand that
+    // funds nothing. Adding it is one line in SALES_FUNNEL_FEATURE_SLUGS plus its channel token.
+    //
+    // A CUSTOMER-operated channel outside the family is untouched by this and keeps its campaign:
+    // it has no DAG, is never claimed and never spends, so there is no ceiling for it to escape.
+    // The operator is only asked for a channel the family does not name, so the family's own
+    // channels cost no extra read.
+    if (!isSalesFunnelFeature(featureSlug) && (await operatorFor(featureSlug)) === "platform") {
+      console.warn(
+        `[campaign-service] Not provisioning ${featureSlug} for funnel ${f.funnelKey} (brand ${brandId}, org ${seed.orgId}) — the customer funds this pair, but campaign-service does not pace this platform-operated channel: it is absent from the funnel-funded family, so a campaign for it would run against a ceiling nothing enforces`,
+      );
+      continue;
+    }
+
     // WHAT THE CHANNEL CAN DO, asked in the vocabulary of what the customer BOUGHT.
     //
     // A pair that states a LEG asks the leg question — "does this channel perform this leg?" — and

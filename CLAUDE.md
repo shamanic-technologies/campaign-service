@@ -320,6 +320,50 @@ ceiling that binds IT, and refuses a `maxBudget*` of its own.
 
 (Set 2026-08-26.)
 
+## A channel that ANSWERS a reply joins the same family — `ai-meeting-booking` is one line, and the closed set is WIDENED rather than DERIVED
+
+`ai-meeting-booking` books the meeting out of a lead's stated sales interest instead of reaching a
+new person. features-service publishes it (platform-operated, performing the leg out of a sales
+interest), workflow-service holds its dynasty, sales-lead-service holds the follow-up queue the
+workflow drains, and instantly-service asks this service to run it the moment a reply is qualified.
+The missing link was here: a funded pair on it got a billing ceiling and no campaign.
+
+- **It is one line in `SALES_FUNNEL_FEATURE_SLUGS` plus its `CHANNEL_BY_FEATURE` token
+  (`ai_meeting_booking`), and nothing else.** No column, table, vocabulary, accumulator or branch.
+  Everything already true of a provisioned campaign is true of it: it states its (offer, funnel,
+  channel, leg) identity at birth, is provisioned one per funded pair, is HELD when the customer
+  funds nothing for it, takes its turn on its own fill ratio, is gated and paced on the ceiling
+  that binds IT, and refuses a `maxBudget*` of its own.
+- **It is NOT in `OUTBOUND_SALES_FEATURE_SLUGS`, and that is the whole point of the narrower set.**
+  It contacts nobody new, so it shares no lead population and no sending accounts (its own
+  serialization cohort, `ai_meeting_booking`), produces no send-tagged outcome evidence for the
+  greedy workflow rotation to price a DAG on, and must never receive the extend-audience email —
+  asking for more PEOPLE to contact is nonsense for a channel whose whole input is people who
+  already answered.
+- **The family set is WIDENED, not DERIVED from the catalogue, and the reason is what membership
+  MEANS.** It is a statement about whose ceiling paces this campaign — which features-service does
+  not publish: its catalogue says which channels exist, who operates them, which funnels they may
+  sell and which legs they perform, all of which this service already ASKS rather than holds. The
+  set is also read synchronously on gate-check's money path and inside SQL, so deriving it would
+  make an unreadable catalogue silently change whether a per-campaign budget column binds, in
+  either direction. And auto-adopting every published channel would stand up campaigns for the
+  dozen paid-reach slugs nothing can execute — campaigns that sit ongoing and produce nothing
+  forever.
+- **What replaces the silence is a REFUSAL that names the pair.** A funded pair on a
+  PLATFORM-operated channel the family does not name is not provisioned and warns, saying that
+  campaign-service does not pace it. Before this it was inserted anyway: outside the family,
+  gate-check reads it as a non-sales campaign and enforces the (null) `maxBudget*` windows instead
+  of billing's ceiling, the turn planner never ranks it and the funding hold never holds it — a
+  campaign running a DAG against a ceiling nothing enforces. Fail-CLOSED, because the money is
+  real; visible, because a channel that ships upstream should surface here the first sweep after a
+  customer funds it.
+- **A CUSTOMER-operated channel outside the family is untouched.** It has no DAG, is never claimed
+  and never spends, so there is no ceiling for it to escape — that path is unchanged. The operator
+  is only asked for a channel the family does not name, so the family's own channels cost no extra
+  read.
+
+(Set 2026-09-02.)
+
 ## A sales campaign row states the money that governs it — `maxBudget*` is REFUSED for the family
 
 `gate-check` runs the whole campaign-budget-windows block under `if (!isSalesFeature)`, so a

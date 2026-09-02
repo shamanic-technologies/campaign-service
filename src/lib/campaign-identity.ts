@@ -45,6 +45,13 @@ const CHANNEL_BY_FEATURE: Readonly<Record<string, string>> = Object.freeze({
   // an upstream RENAME of this slug would file the campaign under a channel nothing else uses,
   // silently, with no error and no failing test.
   "google-ads": "google_ads",
+  // Answers a lead who already replied — it books the meeting out of a stated sales interest
+  // rather than reaching a new person. Its own token, not shared with any cold-email channel: a
+  // brand works one funnel through both at once and those are two campaigns, so they must hold
+  // two identities. Stated explicitly rather than left to the fallback below, for the same reason
+  // as google-ads: the fallback is total by construction, so an upstream RENAME would file the
+  // campaign under a channel nothing else uses, silently and with no failing test.
+  "ai-meeting-booking": "ai_meeting_booking",
 
   // Everything else. A sales funnel is not something these run — their funnel stays NULL — but
   // they still carry a channel so the identity key is enforceable for them too.
