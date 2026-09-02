@@ -313,7 +313,7 @@ async function planOneBrand(
  * offer they carry. Every other channel is its own, keyed on the acquisition channel it already
  * states, so a paid-reach campaign is serial against itself and against nothing else.
  */
-function serializationCohort(featureSlug: string | null | undefined): string {
+export function serializationCohort(featureSlug: string | null | undefined): string {
   if (isOutboundSalesFeature(featureSlug)) return "outbound_cold_email";
   return acquisitionChannelForFeature(featureSlug) ?? "unknown_channel";
 }
@@ -1169,7 +1169,7 @@ const LIVE_RUN_FRESHNESS_MS = 15 * 60_000;
  * that is actually running is precisely the one NOT claimed (its nextRunAt is null while in
  * flight), so a group-scoped check would be blind to it.
  */
-async function hasLiveRunForBrandCohort(
+export async function hasLiveRunForBrandCohort(
   orgId: string,
   brandId: string,
   cohort: string,

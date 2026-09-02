@@ -27,6 +27,8 @@ import {
   SpendableBudgetResponse,
   BatchSpendableBudgetBody,
   BatchSpendableBudgetResponse,
+  TriggerForStepBody,
+  TriggerForStepResponse,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -391,6 +393,29 @@ registry.registerPath({
     200: { description: "Org campaign state disabled", content: { "application/json": { schema: DeleteCampaignsByOrgResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Teardown failed", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/campaigns/trigger-for-step",
+  tags: ["Internal"],
+  summary: "Run the campaign bought for the leg out of the step a lead just reached",
+  description:
+    "A lead reached a step on a (brand, offer, funnel); this runs the campaign bought for the leg OUT of that step immediately, instead of waiting for its next tick. The leg is features-service's statement (GET /public/channels -> legs[]) and the campaign is the one already stating that leg — nothing is inferred. The affordability/budget gate is untouched: the dispatch is the scheduler's own, so the run starts at gate-check like any other. A scope that cannot be resolved (unknown step, unknown funnel, unreadable catalogue) fails loudly; a scope with no such campaign, or one that is stopped, held for money, already running or operated by the customer's own team, is an ordinary 200 with a NAMED skip. The org rides on x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    headers: z.object({
+      "x-org-id": z.string().openapi({ description: "Internal org UUID from client-service" }),
+    }),
+    body: { content: { "application/json": { schema: TriggerForStepBody } } },
+  },
+  responses: {
+    200: { description: "What ran and what did not", content: { "application/json": { schema: TriggerForStepResponse } } },
+    400: { description: "No org, malformed body, unknown funnel or unknown step", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 

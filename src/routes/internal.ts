@@ -2,11 +2,11 @@ import { Router } from "express";
 import { eq, and, sql, or, ne, isNotNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { brandPauseTransitions, campaigns } from "../db/schema.js";
-import { requireApiKey, requirePipelineHeaders, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
+import { requireApiKey, requirePipelineHeaders, serviceAuth, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
-import { EndRunBody, TransferBrandBody } from "../schemas.js";
+import { EndRunBody, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
@@ -14,6 +14,7 @@ import { markAudienceExhausted, getFreshExhaustedAudienceIds, hasExhaustedAudien
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
+import { triggerCampaignsForStep, StepTriggerScopeError } from "../lib/step-trigger.js";
 import {
   fetchWorkflowProjectionRows,
   fetchGoalArbitration,
@@ -752,6 +753,47 @@ router.delete("/internal/campaigns/by-org/:orgId", requireApiKey, async (req, re
     });
   } catch (error) {
     console.error("[campaign-service] org teardown error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/campaigns/trigger-for-step
+ *
+ * A lead just reached a step. Run the campaign bought for the leg OUT of it, now — instead of
+ * waiting for that campaign's next tick. A prospect who says "yes, interested" and hears nothing
+ * for a day is the whole problem the leg they bought exists to solve.
+ *
+ * The caller names the scope (brand, offer, funnel) and the step reached; the leg is
+ * features-service's statement and the campaign is the one already stating that leg. See
+ * `lib/step-trigger.ts` for why the scope fails LOUD while the answer is very often an ordinary,
+ * named nothing — and for why the affordability gate is reached exactly as a scheduled run reaches
+ * it, because the dispatch is the scheduler's own.
+ *
+ * Returns:
+ *   200 — what was triggered and what was skipped, each skip naming its reason
+ *   400 — no org, a malformed body, a funnel naming none of the four, a step nobody publishes
+ *   401 — bad api key
+ *   502 — the acquisition-channel catalogue could not be read
+ *   500 — internal error
+ */
+router.post("/internal/campaigns/trigger-for-step", requireApiKey, serviceAuth, validateBody(TriggerForStepBody), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { brandId, offerId, funnelKey, step } = req.body;
+    const outcome = await triggerCampaignsForStep({
+      orgId: req.orgId!,
+      brandId,
+      offerId,
+      funnelKey,
+      step,
+    });
+    res.json(outcome);
+  } catch (error) {
+    if (error instanceof StepTriggerScopeError) {
+      console.warn(`[campaign-service] ${error.status} on /internal/campaigns/trigger-for-step — ${error.message}`);
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error("[campaign-service] trigger-for-step error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
