@@ -81,6 +81,7 @@ import {
   planFunnelTurns,
   selectLowestFillRatio,
   funnelCampaignName,
+  serializationCohort,
   FUNNEL_TURN_DEFER_MS,
   FUNDING_RECHECK_MS,
   type ClaimedFunnelCampaign,
@@ -89,6 +90,9 @@ import {
 const SALES = "sales-cold-email-outreach";
 const FEEDBACK = "feedback-request-cold-email-outreach";
 const GOOGLE_ADS = "google-ads";
+// Answers a lead who ALREADY replied: it books the meeting out of a stated sales interest rather
+// than reaching a new person. Platform-operated, funnel-funded, and deliberately not outbound.
+const AI_MEETING_BOOKING = "ai-meeting-booking";
 // A channel the CUSTOMER's own team operates: they work the replies and book the meeting
 // themselves. features-service publishes who operates each channel; nothing here holds a list.
 const IN_HOUSE_BOOKING = "in-house-meeting-booking";
@@ -194,6 +198,12 @@ function catalogueResponse() {
         { slug: SALES, operatedBy: "platform", stepTransitions: [{ legKey: ENTRY_LEG }] },
         { slug: FEEDBACK, operatedBy: "platform", stepTransitions: [{ legKey: ENTRY_LEG }] },
         { slug: GOOGLE_ADS, operatedBy: "platform", stepTransitions: [{ legKey: ENTRY_LEG }] },
+        {
+          slug: AI_MEETING_BOOKING,
+          operatedBy: "platform",
+          // It performs the INTERNAL leg out of a stated sales interest; it starts nothing.
+          stepTransitions: [{ legKey: BOOKING_LEG }],
+        },
         {
           slug: IN_HOUSE_BOOKING,
           operatedBy: "customer",
@@ -1314,6 +1324,88 @@ describe("planFunnelTurns", () => {
     expect(deferred.has("c-form")).toBe(false); // the emptiest relative to its own ceiling
     expect(deferred.get("c-purchases")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
   });
+  // ── ai-meeting-booking: answers a lead who ALREADY replied ────────────────────────────────────
+  // A channel is a feature slug, so this is the same path again with nothing special-cased. What
+  // it must NOT inherit is the three behaviours keyed on the OUTBOUND set: it contacts nobody new.
+
+  it("gives a funded (funnel, ai-meeting-booking) pair its own campaign, on that channel's own workflow", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: AI_MEETING_BOOKING, dailyBudgetCents: "1000" }],
+      [{
+        funnelKey: "reply_meeting",
+        featureSlug: AI_MEETING_BOOKING,
+        offerId: "offer-1",
+        legKey: BOOKING_LEG,
+        dailyBudgetCents: "1000",
+      }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined); // the pair has no campaign yet
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
+    const inserted = mockInsertValues.mock.calls[0][0];
+    expect(inserted.featureSlug).toBe(AI_MEETING_BOOKING);
+    expect(inserted.funnelKey).toBe("sales_meetings_from_conversation");
+    // The single leg the money was funded at, carried verbatim from billing's finest grain.
+    expect(inserted.legKey).toBe(BOOKING_LEG);
+    // Its own identity, so it never collides with the cold-email campaign of the same funnel.
+    expect(inserted.acquisitionChannel).toBe("ai_meeting_booking");
+    // A workflow belongs to a FEATURE: the seed's cold-email slug would run the wrong DAG.
+    expect(inserted.workflowSlug).toBe(`${AI_MEETING_BOOKING}-seed`);
+    expect(inserted.status).toBe("ongoing");
+    // No per-campaign ceiling is ever written for this family: the money is billing's, read live.
+    expect(inserted.dailyBudgetCents).toBeUndefined();
+  });
+
+  it("does not serialize ai-meeting-booking behind the brand's cold email — it contacts nobody new", () => {
+    // The outbound cohort exists because two of its runs would reach the same people from the same
+    // mailboxes. This channel answers people who already replied, so it shares neither.
+    expect(serializationCohort(AI_MEETING_BOOKING)).toBe("ai_meeting_booking");
+    expect(serializationCohort(SALES)).toBe("outbound_cold_email");
+    expect(serializationCohort(AI_MEETING_BOOKING)).not.toBe(serializationCohort(SALES));
+  });
+
+  it("REFUSES a funded pair on a PLATFORM channel it does not pace, and says which pair", async () => {
+    // A platform channel outside the funnel-funded family would run a DAG while no ceiling of ours
+    // binds it. Refusing is right; refusing in silence is what made the gap invisible.
+    const unknownChannel = "linkedin-ads";
+    mockFetch.mockImplementation(async (input: URL | string) => {
+      const url = String(input);
+      if (url.includes("/public/channels")) {
+        return {
+          ok: true,
+          json: async () => ({
+            channels: [
+              { slug: unknownChannel, operatedBy: "platform", stepTransitions: [{ legKey: ENTRY_LEG }] },
+            ],
+            legs: [],
+            steps: [],
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    });
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: unknownChannel, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    const said = await captureWarnings(() =>
+      planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]),
+    );
+
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(said).toContain(unknownChannel);
+    expect(said).toContain("does not pace this platform-operated channel");
+  });
+
   // ── Customer-operated channels: a funded pair with NO workflow, on purpose ────────────────────
   // Some legs of a funnel are performed by a human at the CUSTOMER's side — they work the replies,
   // run the meeting, close the deal. There is no DAG for that and there must not be one, so the

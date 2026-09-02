@@ -29,6 +29,22 @@ export const SALES_FEEDBACK_REQUEST_FEATURE_SLUG = "feedback-request-cold-email-
 export const GOOGLE_ADS_FEATURE_SLUG = "google-ads";
 
 /**
+ * The channel that answers a lead who ALREADY replied: it books the meeting out of a stated sales
+ * interest instead of reaching a new person.
+ *
+ * A channel is still a feature slug, so this is one line and no new mechanism — features-service
+ * publishes it and states which legs it performs, workflow-service holds its dynasty, and billing
+ * states its per-(funnel, channel, offer, leg) ceiling like any other. It is a member of the
+ * funnel-funded family for exactly that reason: its money is billing's, read live on every plan.
+ *
+ * It is deliberately NOT a member of the OUTBOUND set below. It contacts nobody new: it shares no
+ * lead population and no sending-account load with cold email, it produces no send-tagged outcome
+ * evidence for a workflow rotation to price a DAG on, and asking its customer for more PEOPLE to
+ * contact is nonsense for a channel whose whole input is people who already answered.
+ */
+export const AI_MEETING_BOOKING_FEATURE_SLUG = "ai-meeting-booking";
+
+/**
  * The OUTBOUND cold-email channels — the three that reach a named person one at a time.
  *
  * They share what a paid-reach channel shares with nothing: the same lead population, the same
@@ -63,11 +79,21 @@ export function isOutboundSalesFeature(slug?: string | null): boolean {
  * and no mailboxes with an outbound channel — the narrower OUTBOUND set above is what is asked.
  *
  * Adding a further channel is one line here (plus its CHANNEL_BY_FEATURE token), once something
- * can execute it.
+ * can execute it. The set is WIDENED rather than DERIVED from features-service's catalogue on
+ * purpose, and the reason is what membership means: it is a statement about whose ceiling paces
+ * this campaign, which the catalogue does not publish — it publishes which channels exist and who
+ * operates them, a different question. It is also read synchronously on gate-check's money path
+ * and inside SQL, so deriving it would make an unreadable catalogue silently change whether a
+ * per-campaign budget column binds. What IS derived is everything the catalogue actually owns:
+ * who operates a channel, which funnels it may sell, which legs it performs. A funded pair on a
+ * platform-operated channel this set does not name is refused OUT LOUD at provisioning rather
+ * than passed over, so a channel that ships upstream is visible here the first sweep after it is
+ * funded instead of quietly running unpaced.
  */
 export const SALES_FUNNEL_FEATURE_SLUGS: ReadonlySet<string> = new Set([
   ...OUTBOUND_SALES_FEATURE_SLUGS,
   GOOGLE_ADS_FEATURE_SLUG,
+  AI_MEETING_BOOKING_FEATURE_SLUG,
 ]);
 
 export function isSalesFunnelFeature(slug?: string | null): boolean {

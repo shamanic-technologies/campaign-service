@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  AI_MEETING_BOOKING_FEATURE_SLUG,
   GOOGLE_ADS_FEATURE_SLUG,
   isOutboundSalesFeature,
   isSalesFunnelFeature,
@@ -64,6 +65,14 @@ describe("isSalesFunnelFeature", () => {
     expect(isSalesFunnelFeature("google-ads")).toBe(true);
   });
 
+  it("includes ai-meeting-booking — its ceiling is billing's like every other funded pair", () => {
+    // It answers a lead who already replied instead of reaching a new person, but the MONEY
+    // question is identical: billing states its per-(funnel, channel, offer, leg) ceiling and the
+    // campaign paces on it, so it is a member of this family and not a mechanism of its own.
+    expect(isSalesFunnelFeature(AI_MEETING_BOOKING_FEATURE_SLUG)).toBe(true);
+    expect(isSalesFunnelFeature("ai-meeting-booking")).toBe(true);
+  });
+
   it("does NOT sweep in the rest of the published paid-reach catalogue", () => {
     // Published by features-service, executable by nothing — a campaign for one would sit ongoing
     // and produce nothing forever.
@@ -100,6 +109,14 @@ describe("isOutboundSalesFeature", () => {
     // serialization, the greedy workflow rotation, and the extend-audience lifecycle email.
     expect(isOutboundSalesFeature(GOOGLE_ADS_FEATURE_SLUG)).toBe(false);
     expect(isOutboundSalesFeature(null)).toBe(false);
+  });
+
+  it("EXCLUDES ai-meeting-booking — it answers people who already replied", () => {
+    // The same three behaviours must not reach it: it shares no lead population and no sending
+    // account with cold email, it produces no send-tagged evidence for a workflow rotation to
+    // price a DAG on, and asking its customer for more PEOPLE to contact is nonsense for a
+    // channel whose whole input is people who already answered.
+    expect(isOutboundSalesFeature(AI_MEETING_BOOKING_FEATURE_SLUG)).toBe(false);
   });
 });
 
