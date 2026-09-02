@@ -736,9 +736,10 @@ campaign bought for the leg OUT of that step runs immediately.
   `fromStep` and the funnels it is a leg of), joined VERBATIM against `campaigns.leg_key`. The steps
   ride beside the identifier precisely so nobody splits it, and a well-formed `a_to_b` no catalogue
   names is still not a leg. `channel-operator-client.ts` stays the ONE reader of that catalogue.
-- **The FUNNEL is part of the question because a leg belongs to several.** `sales_interest ->
+- **The FUNNEL is part of the question because a leg belongs to several.** `conversation ->
   meeting_booked` is a leg of more than one chain, and only the customer's funding says which one
-  they bought — so it is named by the caller rather than derived from the leg.
+  they bought — so it is named by the caller rather than derived from the leg. (`conversation` is
+  the step key every customer-facing surface labels "sales interest"; the label is not the token.)
 - **THE GATE IS UNTOUCHED.** The dispatch is the SCHEDULER'S OWN — same anchor run
   (`ensureCampaignRunId`), same greedy workflow pick, same `/execute` — so the run starts at
   `gate-check`, the first node of every DAG, and is refused there exactly as a scheduled run is.

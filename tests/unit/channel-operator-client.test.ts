@@ -120,7 +120,7 @@ describe("fetchChannelCatalogue", () => {
     // each leg carrying the identifier, the step it takes a lead OUT of (`null` = from nothing),
     // and every funnel it is a leg of. The steps ride BESIDE the identifier, so nothing splits it.
     const entryLeg = ["start", "to", "conversation"].join("_");
-    const legOut = ["sales", "interest", "to", "meeting", "booked"].join("_");
+    const legOut = ["conversation","to","meeting","booked"].join("_");
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -129,12 +129,12 @@ describe("fetchChannelCatalogue", () => {
           { legKey: entryLeg, fromStep: null, toStep: { key: "conversation" }, funnelKeys: ["sales_meetings_from_conversation"] },
           {
             legKey: legOut,
-            fromStep: { key: "sales_interest", label: "Sales interest" },
+            fromStep: { key: "conversation", label: "Sales interest" },
             toStep: { key: "meeting_booked" },
             funnelKeys: ["sales_meetings_from_conversation", "sales_meetings_from_website"],
           },
         ],
-        steps: [{ key: "sales_interest" }, { key: "meeting_booked" }, { key: "conversation" }],
+        steps: [{ key: "conversation" }, { key: "meeting_booked" }, { key: "conversation" }],
       }),
     });
 
@@ -144,12 +144,12 @@ describe("fetchChannelCatalogue", () => {
     expect(read.legs).toHaveLength(2);
     // An ENTRY leg is an ordinary leg: the absent step is DATA, not a different spelling.
     expect(read.legs[0]).toEqual({ legKey: entryLeg, fromStepKey: null, funnelKeys: new Set(["sales_meetings_from_conversation"]) });
-    expect(read.legs[1].fromStepKey).toBe("sales_interest");
+    expect(read.legs[1].fromStepKey).toBe("conversation");
     expect([...read.legs[1].funnelKeys]).toEqual([
       "sales_meetings_from_conversation",
       "sales_meetings_from_website",
     ]);
-    expect(read.stepKeys.has("sales_interest")).toBe(true);
+    expect(read.stepKeys.has("conversation")).toBe(true);
     expect(read.stepKeys.has("smoke_signal")).toBe(false);
   });
 

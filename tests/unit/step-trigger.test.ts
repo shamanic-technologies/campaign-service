@@ -56,9 +56,9 @@ const OTHER_OFFER = "9f0d1c22-0000-4000-8000-000000000004";
 const CAMPAIGN = "16705a37-0000-4000-8000-000000000005";
 
 /** The leg the customer buys out of a stated sales interest, exactly as features-service spells it. */
-const LEG_OUT = ["sales", "interest"].join("_") + "_to_" + ["meeting", "booked"].join("_");
+const LEG_OUT = "conversation" + "_to_" + ["meeting", "booked"].join("_");
 const LEG_ELSEWHERE = ["meeting", "booked"].join("_") + "_to_" + ["meeting", "attended"].join("_");
-const STEP = "sales_interest";
+const STEP = "conversation";
 
 function catalogueAnswers() {
   mockCatalogue.mockResolvedValue({
