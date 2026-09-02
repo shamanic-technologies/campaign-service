@@ -40,8 +40,8 @@ const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "b645207b-0000-4000-8000-000000000001";
 const BRAND = "75d7e3e8-0000-4000-8000-000000000002";
 const OFFER = "231bb036-0000-4000-8000-000000000003";
-const STEP = "sales_interest";
-const LEG_OUT = ["sales", "interest"].join("_") + "_to_" + ["meeting", "booked"].join("_");
+const STEP = "conversation";
+const LEG_OUT = "conversation" + "_to_" + ["meeting", "booked"].join("_");
 const FUNNEL = "sales_meetings_from_conversation";
 
 const post = (body: Record<string, unknown>, orgId: string | null = ORG) => {

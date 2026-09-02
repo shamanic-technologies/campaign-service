@@ -36,8 +36,9 @@ import { hasLiveRunForCampaign, STUCK_RUN_FRESHNESS_THRESHOLD_MS } from "./sched
  * catalogue names is still not a leg.
  *
  * A leg belongs to several funnels at once, which is why the funnel the caller names is part of the
- * question rather than derivable from it: `sales_interest -> meeting_booked` is a leg of more than
- * one chain, and only the customer's funding says which one they bought.
+ * question rather than derivable from it: `conversation -> meeting_booked` is a leg of more than one
+ * chain, and only the customer's funding says which one they bought. (`conversation` is the step
+ * key every customer-facing surface labels "sales interest" — the label is not the token.)
  *
  * ── FAIL LOUD ON THE SCOPE, NO-OP ON THE ANSWER ─────────────────────────────────────────────────
  *
