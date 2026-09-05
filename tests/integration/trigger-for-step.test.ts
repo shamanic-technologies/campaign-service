@@ -104,6 +104,32 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
     expect(mockExecute).toHaveBeenCalledTimes(1);
   });
 
+  it("runs a campaign PARKED on the idle cadence immediately — the event path never consults nextRunAt", async () => {
+    // A channel that answers one prospect per run parks on the ~10min idle cadence when nobody is
+    // owed an answer. The whole point is that a prospect stating an interest does not wait for it.
+    const campaign = await insertTestCampaign(ORG, {
+      brandIds: [BRAND],
+      brandId: BRAND,
+      status: "ongoing",
+      featureSlug: "ai-meeting-booking",
+      workflowSlug: "aurora-v3",
+      createdByUserId: "user-1",
+      parentRunId: "9f0d1c22-0000-4000-8000-000000000009",
+      funnelKey: FUNNEL,
+      offerId: OFFER,
+      legKey: LEG_OUT,
+      nextRunAt: new Date(Date.now() + 10 * 60_000),
+    });
+
+    const res = await post(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.triggered).toEqual([
+      { campaignId: campaign.id, legKey: LEG_OUT, workflowSlug: "aurora-v3" },
+    ]);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
   it("answers a scope with no such campaign as an ordinary, empty 200", async () => {
     const res = await post(body);
 

@@ -1028,6 +1028,9 @@
           },
           "stopCampaign": {
             "type": "boolean"
+          },
+          "noWorkAvailable": {
+            "type": "boolean"
           }
         },
         "required": [

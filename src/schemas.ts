@@ -336,6 +336,19 @@ export const StartRunResponse = z.object({
 export const EndRunBody = z.object({
   success: z.boolean(),
   stopCampaign: z.boolean(),
+  /**
+   * The run completed normally and found NOTHING TO DO — a channel that answers one interested
+   * prospect per run, asked for the next person owed an answer, and nobody was owed one.
+   *
+   * It changes ONE thing: the campaign is rescheduled on the idle cadence
+   * (`NO_WORK_RECHECK_MS`, 10 min) instead of the run cadence, because the answer cannot change
+   * in ten seconds. It never stops a campaign and never marks anything exhausted — that is
+   * `stopCampaign`'s (audience-scoped, cold-email) vocabulary and it stays separate.
+   *
+   * OPTIONAL and absent means "this run did work": every caller that does not send it behaves
+   * byte-identically to before the field existed.
+   */
+  noWorkAvailable: z.boolean().optional(),
 }).openapi("EndRunBody");
 
 export const EndRunResponse = z.object({
