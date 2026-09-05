@@ -812,6 +812,44 @@ campaign bought for the leg OUT of that step runs immediately.
 
 (Set 2026-09-02.)
 
+## A run that had NOTHING TO DO waits on the reason's timescale — the workflow SAYS so, and it is not exhaustion
+
+Everything on the `/end-run` path assumed a completed run had done work, so it rescheduled on the
+RUN cadence (`RERUN_GRACE_MS`, 10s). A channel that answers ONE interested prospect per run breaks
+that assumption: its DAG asks another service for the next person owed an answer, and when nobody
+is owed one the run legitimately does nothing, completes normally, and is re-fired eleven seconds
+later — forever. Measured in prod over 24h on ONE such campaign that had answered nobody: **14,841
+run rows attributed to it against 28,336 across the WHOLE fleet**, i.e. one idle campaign was 52%
+of the platform's entire run ledger (2.3 GB table), plus one affordability gate-check per turn for
+a run that would do nothing.
+
+- **The workflow SAYS it had nothing to do** — `noWorkAvailable` on the `/end-run` body
+  (`EndRunBody`, `src/schemas.ts`). OPTIONAL, and ABSENT means "this run did work": every caller
+  that does not send it behaves byte-identically to before the field existed, which is why cold
+  email is untouched without a single branch on a feature slug. This service cannot infer it —
+  only the DAG knows its branch was the empty one — and inferring it from an empty result would be
+  the same "empty remainder reads as a verdict" mistake the exhaustion gate already closed.
+- **It changes exactly ONE thing: the reschedule delay** (`NO_WORK_RECHECK_MS`, 10 min,
+  `src/lib/idle-run.ts`). It never stops a campaign, never marks anything exhausted, never touches
+  the stop reason, and no other decision reads it. The campaign is funded and correct; it simply
+  has nobody to answer this minute.
+- **DELIBERATELY NOT the audience-exhaustion recheck**, though both are ten minutes for the same
+  reason. `NO_SERVEABLE_AUDIENCE_RECHECK_MS` is reached through `stopCampaign=true`, whose whole
+  vocabulary is a cold-email AUDIENCE running out of PEOPLE, and it gates a STOP. Routing this
+  channel through it would conflate two different facts and put a campaign one evidence-check away
+  from `audience_exhausted`, which is sticky. Same figure, separate constant, separate reason.
+- **A FAILED run's claim is ignored** — the failure backoff (60s) still wins, because a run that
+  failed says nothing trustworthy about whether there was work to do.
+- **This is the idle BACKSTOP, not the reactivity.** When a prospect actually shows interest the
+  responsible campaign is run IMMEDIATELY through `POST /internal/campaigns/trigger-for-step`,
+  which dispatches without consulting `nextRunAt` at all — pinned by a test that parks a campaign
+  ten minutes out and asserts the event still fires it. The slow cadence is what happens when
+  nothing has happened, so ten minutes is the ceiling on IDLE latency, never on answering somebody.
+- **workflow-service half**: the DAG for that channel must send `noWorkAvailable: true` on its
+  nothing-to-do branch. Until it does, this field is never set and behaviour is exactly today's.
+
+(Set 2026-09-05.)
+
 ## The OFFER a campaign sells is brand-service's UUID, carried and never derived
 
 A new level sits between the brand and the campaign: **Org > Brand > Offer > Campaign**. An offer is
