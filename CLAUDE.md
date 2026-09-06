@@ -850,6 +850,14 @@ paces.
   create cannot overwrite a leg a caller just stated; the previous value is NULL by construction, so
   the undo is exactly the ids it prints (which it emits as a statement); and it DRY-RUNS by default,
   `--apply` being the only way to write.
+- **A row whose leg would COLLIDE with a live sibling's identity is left alone, per row.** A
+  campaign is unique on (org, brand, funnel, offer, leg, channel) among `ongoing` rows and a
+  leg-less row keys as the empty string, so stating a leg can land a row exactly on top of a live
+  campaign that already states it — Postgres saying the two are the same campaign. That is a real
+  answer about the data, reported like any other left-alone reason. Caught PER ROW, because
+  unhandled it aborts the whole run on the first collision and leaves every later campaign
+  unwritten (observed in the production run: two campaigns provisioned mid-run, one of them a twin).
+  Any OTHER write error still throws.
 - **`leg_key` is the only column that moves** (plus `updated_at`). No campaign is created or
   deleted, and no status, money, schedule, history or other word of the identity is touched.
 - **Not a migration, because SQL cannot make the read** — the same reason the offer backfill is a
