@@ -188,13 +188,34 @@ export async function backfillCampaignLegs(
     }
 
     if (!dryRun) {
-      // The `leg_key IS NULL` guard is restated here, not just in the SELECT: it is what makes a
-      // re-run a no-op and what stops this overwriting a leg a live create stated meanwhile.
-      await querySql`
-        UPDATE "campaigns"
-        SET "leg_key" = ${resolution.legKey}, "updated_at" = now()
-        WHERE "id" = ${row.id} AND "leg_key" IS NULL
-      `;
+      try {
+        // The `leg_key IS NULL` guard is restated here, not just in the SELECT: it is what makes a
+        // re-run a no-op and what stops this overwriting a leg a live create stated meanwhile.
+        await querySql`
+          UPDATE "campaigns"
+          SET "leg_key" = ${resolution.legKey}, "updated_at" = now()
+          WHERE "id" = ${row.id} AND "leg_key" IS NULL
+        `;
+      } catch (err) {
+        // STATING THE LEG CAN COLLIDE WITH THE IDENTITY ANOTHER LIVE CAMPAIGN ALREADY HOLDS.
+        // A campaign is unique on (org, brand, funnel, offer, leg, channel) among `ongoing` rows,
+        // and a leg-less row keys as the empty string — so writing its leg can land it exactly on
+        // top of a live sibling that already states that leg. That is Postgres telling us the two
+        // rows are the same campaign, which is a real answer about the data and not something to
+        // resolve here: the row is LEFT ALONE and reported, exactly like a pair that resolves to
+        // several legs. Caught PER ROW because the alternative is what it did the first time —
+        // abort the whole run on the first collision and leave every later campaign unwritten.
+        const code = (err as { code?: string } | null)?.code;
+        if (code !== "23505") throw err;
+        unresolved.push({
+          campaignId: row.id,
+          orgId: row.org_id,
+          funnelKey,
+          featureSlug: row.feature_slug,
+          reason: `another live campaign already holds this identity stating leg ${resolution.legKey}`,
+        });
+        continue;
+      }
     }
     console.log(`  ${dryRun ? "[dry-run] would set" : "set"} campaign ${row.id} leg → ${resolution.legKey}`);
     writtenCampaignIds.push(row.id);

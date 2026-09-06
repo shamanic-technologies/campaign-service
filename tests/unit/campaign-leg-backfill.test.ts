@@ -41,7 +41,10 @@ const CATALOGUE = catalogue(
  * Minimal tagged-template mock mimicking postgres `sql`: the first call is the SELECT and returns
  * `rows`; every later call is an UPDATE and is recorded.
  */
-function createMockSql(rows: Record<string, unknown>[]) {
+function createMockSql(
+  rows: Record<string, unknown>[],
+  onUpdate?: (campaignId: unknown) => void,
+) {
   let callCount = 0;
   const updates: Array<{ legKey: unknown; campaignId: unknown }> = [];
   const selects: string[] = [];
@@ -51,10 +54,16 @@ function createMockSql(rows: Record<string, unknown>[]) {
       selects.push(strings.join("?"));
       return rows;
     }
+    onUpdate?.(values[1]);
     updates.push({ legKey: values[0], campaignId: values[1] });
     return [];
   };
   return { sql: fn as unknown as Parameters<typeof backfillCampaignLegs>[0], updates, selects };
+}
+
+/** The error Postgres raises when the write lands on the identity a live sibling already holds. */
+function uniqueViolation() {
+  return Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" });
 }
 
 function row(
@@ -196,5 +205,34 @@ describe("backfillCampaignLegs", () => {
     expect(result.written).toBe(0);
     expect(updates).toEqual([]);
     expect(read).not.toHaveBeenCalled();
+  });
+  it("LEAVES ALONE a row whose leg would collide with a live sibling's identity, and keeps going", async () => {
+    const { sql, updates } = createMockSql(
+      [
+        row("c1", "sales_meetings_from_website", "google-ads"),
+        row("c2", "sales_meetings_from_website", "google-ads"),
+      ],
+      (campaignId) => {
+        if (campaignId === "c1") throw uniqueViolation();
+      },
+    );
+
+    const result = await backfillCampaignLegs(sql, reading(CATALOGUE), { dryRun: false });
+
+    expect(result.writtenCampaignIds).toEqual(["c2"]);
+    expect(updates).toEqual([{ legKey: "visit_leg", campaignId: "c2" }]);
+    expect(result.unresolved).toEqual([
+      expect.objectContaining({ campaignId: "c1", reason: expect.stringMatching(/already holds this identity/) }),
+    ]);
+  });
+
+  it("still THROWS on a write error that is not a collision", async () => {
+    const { sql } = createMockSql([row("c1", "sales_meetings_from_website", "google-ads")], () => {
+      throw Object.assign(new Error("connection terminated"), { code: "08006" });
+    });
+
+    await expect(backfillCampaignLegs(sql, reading(CATALOGUE), { dryRun: false })).rejects.toThrow(
+      /connection terminated/,
+    );
   });
 });
