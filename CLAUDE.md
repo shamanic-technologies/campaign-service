@@ -822,6 +822,43 @@ campaign doing two jobs on money funded for two.
 
 (Set 2026-08-31.)
 
+## A campaign that CAN state its leg states it — the backfill is a SCRIPT, and it derives nothing new
+
+The write path states the leg, so every campaign created since migration 0055 carries one. Every
+campaign that predates it does not: 234 rows carry a funnel and a channel and no leg. While the
+column is blank, every consumer resolving what such a campaign buys falls back to DERIVING the leg
+from its funnel and its channel — the derivation the column exists to replace — per-leg attribution
+answers about one campaign in 235, and a ceiling stated at the leg grain cannot find the campaign it
+paces.
+
+- **`scripts/backfill-campaign-leg.ts` writes down the answer the consumers already compute.**
+  features-service publishes, on the ONE public catalogue this service reads
+  (`channel-operator-client.ts`), which legs each CHANNEL performs and which funnels each LEG is a
+  leg of. The leg a campaign is bought for is the one in BOTH sets. Nothing new is decided, so a
+  backfilled campaign reads identically to the way it read before — this makes explicit what is
+  already inferred and changes no campaign's meaning.
+- **The identifier is features-service's, read from what it publishes.** Nothing is minted, nothing
+  is parsed, no list of legs exists here — the same posture this service holds for the goal, the
+  offer and the channel.
+- **A campaign that does not resolve to EXACTLY ONE leg is LEFT ALONE**: no leg, several legs (the
+  funnel genuinely does not say which was bought), a channel the catalogue does not publish, a
+  funnel token no catalogue names. Each is reported with its reason, grouped by the (funnel,
+  channel) pair. An unreadable catalogue writes NOTHING at all and throws — "the catalogue states no
+  leg" and "the catalogue could not be asked" are different answers.
+- **Idempotent, reversible, previewable.** It selects and writes only rows whose `leg_key` is still
+  NULL and restates that guard in the UPDATE, so a second run writes nothing and a run racing a live
+  create cannot overwrite a leg a caller just stated; the previous value is NULL by construction, so
+  the undo is exactly the ids it prints (which it emits as a statement); and it DRY-RUNS by default,
+  `--apply` being the only way to write.
+- **`leg_key` is the only column that moves** (plus `updated_at`). No campaign is created or
+  deleted, and no status, money, schedule, history or other word of the identity is touched.
+- **Not a migration, because SQL cannot make the read** — the same reason the offer backfill is a
+  script. It is RE-RUNNABLE rather than one-shot: a channel that gains a leg upstream, or a campaign
+  that becomes resolvable later, is picked up by running it again, never by widening what it is
+  willing to guess.
+
+(Set 2026-09-06.)
+
 ## A lead reaching a STEP runs the campaign bought for the leg OUT of it, NOW — an event entry point beside the clock
 
 Everything this service schedules is on a clock: the tick claims what is due, `/end-run` reschedules
