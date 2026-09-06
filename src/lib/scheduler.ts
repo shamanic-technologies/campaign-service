@@ -4,12 +4,7 @@ import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveWorkflowSlugForTrigger } from "./features-workflow-projection-client.js";
 import { listRuns } from "@distribute/runs-client";
-import {
-  planFunnelTurns,
-  provisionFundedPairsForQuietBrands,
-  FUNDING_SWEEP_INTERVAL_MS,
-} from "./funnel-campaigns.js";
-import { resumeServeableCampaigns } from "./campaign-resume.js";
+import { planFunnelTurns } from "./funnel-campaigns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
@@ -359,16 +354,10 @@ async function tick(): Promise<void> {
   isRunning = true;
   try {
     try {
-      // Bring back the campaigns that ran out of people to contact and now have people again,
-      // BEFORE the claim — a campaign resumed here is due immediately, so it takes its turn on
-      // this very tick instead of waiting for the next one. Throttled to its own cadence
-      // (RESUME_SWEEP_INTERVAL_MS), so a 60s tick does not turn into a 60s fan-out.
-      await resumeServeableCampaigns();
-      // A brand nothing will claim soon — every campaign stopped, or every campaign parked past the
-      // sweep horizon — is invisible to the claim path below, so nothing would notice that its owner
-      // funded a channel. Asked on its own cadence, before the claim, so a campaign stood up here
-      // takes its turn on this very tick.
-      await provisionFundedPairsForQuietBrands();
+      // NOTHING here brings a campaign back. A campaign's STATUS is the customer's statement of
+      // intent: money does not create one, money does not start one, and no system condition
+      // stops one — so there is nothing for a sweep to resume and no funded ceiling for a sweep
+      // to stand a campaign up from. What is left is the tick's own work.
       await claimStuckCampaigns();
       await reRunDueCampaigns();
     } catch (err) {
@@ -378,14 +367,6 @@ async function tick(): Promise<void> {
     let delayMs = ACTIVE_INTERVAL_MS;
     try {
       delayMs = computeNextDelayMs(await loadOngoingSnapshot());
-      // Both sweeps that bring a campaign BACK — the exhaustion resume and the funding
-      // provisioner — act on campaigns that are NOT ongoing, so they are invisible to the
-      // snapshot above: a brand with nothing running yields an empty snapshot, sleeps the full
-      // idle hour, and neither sweep gets to run more than hourly however willing it is. Never
-      // sleep past their shared cadence. The cost of being wrong is one snapshot query per ten
-      // minutes on a fully idle service; the cost of not doing it is that funding a funnel takes
-      // an hour to mean anything.
-      delayMs = Math.min(delayMs, FUNDING_SWEEP_INTERVAL_MS);
     } catch (err) {
       console.error("[campaign-service] Scheduler delay computation error:", err);
     }

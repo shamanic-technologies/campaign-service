@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from "vitest";
 import {
   fetchFunnelBudgets,
   legCeilingCents,
-  fundedLegRows,
   type FunnelBudgetsRead,
 } from "../../src/lib/funnel-budget-client.js";
 import { fundingFromBudgets } from "../../src/lib/campaign-funding.js";
@@ -185,7 +184,6 @@ describe("fetchFunnelBudgets — the leg grain on the wire", () => {
       { funnelKey: FUNNEL, featureSlug: SALES, offerId: null, legKey: null, dailyBudgetCents: 1000 },
     ]);
     // A ceiling of zero is a deliberate "do not work this", at every grain.
-    expect(fundedLegRows(read)).toHaveLength(2);
   });
 
   it("reads an ABSENT legs field as no finer grain, never as nothing funded", async () => {

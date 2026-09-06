@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   channelCeilingCents,
   fetchFunnelBudgets,
-  fundedChannelPairs,
   type FunnelBudgetsRead,
 } from "../../src/lib/funnel-budget-client.js";
 
@@ -84,7 +83,6 @@ describe("the ceiling that binds one (funnel, acquisition channel) pair", () => 
       grain: "pair",
       cents: 0,
     });
-    expect(fundedChannelPairs(budgets).map((p) => p.featureSlug)).toEqual([FEEDBACK]);
   });
 });
 

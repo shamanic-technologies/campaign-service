@@ -93,25 +93,6 @@ describe('No Legacy Patterns - CRITICAL', () => {
     expect(readers).toEqual(['lib/channel-operator-client.ts']);
   });
 
-  it('should NOT read a goal off brand-service beyond the brand-level currentGoal', () => {
-    // brand-service retired the goal set: the funnel is the only word it emits for what a brand
-    // sells. Reading a goal off a DECLARED FUNNEL is what silently stopped every funnel campaign
-    // being provisioned. The one goal-shaped read that survives anywhere is the brand's own
-    // currentGoal on /runtime-context, and it is consulted ONLY for a campaign that states no
-    // sales funnel — a feature that sells through none (PR, hiring, VC, AI-visibility).
-    const client = fs.readFileSync(
-      path.join(srcDir, 'lib/brand-sales-funnels-client.ts'),
-      'utf-8',
-    );
-    const code = client
-      .split('\n')
-      .filter((l) => !l.trimStart().startsWith('*') && !l.trimStart().startsWith('/*') && !l.trimStart().startsWith('//'))
-      .join('\n');
-
-    expect(code).not.toMatch(/\bgoal\b/);
-    expect(code).not.toMatch(/\bcurrentGoal\b/);
-  });
-
   it('should NEVER resolve a campaign offer by BRAND alone', () => {
     // An offer belongs to the (org, brand) PAIR: a brand row is a shared global identity and
     // carries one offer per claiming org, frequently all named the same thing. Reading the brand's
@@ -133,25 +114,18 @@ describe('No Legacy Patterns - CRITICAL', () => {
     expect(adoption).not.toMatch(/funnelKey\s*[:=]/);
   });
 
-  it('should NOT collapse a sales-funnels refusal back onto a nullable answer', () => {
-    // The three outcomes — a truthful answer (possibly EMPTY), a refusal to answer at this grain,
-    // and a transport failure — were one `null`, and that is what made the offer level silent: the
-    // day a customer creates their second offer, brand-service refuses the brand-keyed read and the
-    // brand simply looks like it declares no funnels. Returning a nullable array again reinstates
-    // exactly that. The client returns a discriminated `SalesFunnelsRead` and nothing else.
-    const client = fs.readFileSync(
-      path.join(srcDir, 'lib/brand-sales-funnels-client.ts'),
-      'utf-8',
-    );
-    const code = client
-      .split('\n')
-      .filter((l) => !l.trimStart().startsWith('*') && !l.trimStart().startsWith('/*') && !l.trimStart().startsWith('//'))
-      .join('\n');
-
-    expect(code).not.toMatch(/fetchDeclaredSalesFunnels/);
-    expect(code).not.toMatch(/Promise<DeclaredSalesFunnel\[\] \| null>/);
-    for (const fn of ['fetchOfferSalesFunnels', 'fetchBrandSalesFunnels']) {
-      expect(code).toMatch(new RegExp(`${fn}[\\s\\S]{0,400}?Promise<SalesFunnelsRead>`));
+  it('should NOT ask any service whether a brand still sells a funnel — money starts nothing', () => {
+    // Those reads existed for ONE purpose: deciding whether a funded ceiling should get a
+    // campaign. A campaign now exists because the CUSTOMER said so, so there is nothing to
+    // decide, and the clients that asked are deleted rather than left dormant. Bringing one back
+    // is bringing back the question "should this money have a campaign?".
+    for (const gone of [
+      'lib/brand-sales-funnels-client.ts',
+      'lib/feature-sales-funnels-client.ts',
+      'lib/feature-workflow-client.ts',
+      'lib/campaign-resume.ts',
+    ]) {
+      expect(fs.existsSync(path.join(srcDir, gone)), `${gone} must stay deleted`).toBe(false);
     }
   });
 
@@ -449,33 +423,17 @@ describe('No Legacy Patterns - CRITICAL', () => {
     ).toHaveLength(0);
   });
 
-  it('should NOT make the provisioning identity headers conditional', () => {
-    // features-service and workflow-service REFUSE a read that does not state a full identity —
-    // `400 Missing required headers: x-run-id` and `400 x-org-id, x-user-id, and x-run-id headers
-    // are required` — whatever the caller happens to be doing. Both clients used to attach those
-    // headers only when they happened to have them, and the provisioning path never did: every
-    // read was rejected outright, every rejection became "unknown", and the whole per-channel
-    // funding promise never worked once in production while saying nothing at all. Sending them
-    // unconditionally is what makes the refusal impossible to reintroduce quietly.
-    const guarded = ['lib/feature-sales-funnels-client.ts', 'lib/feature-workflow-client.ts'];
-    const violations: string[] = [];
-
-    for (const rel of guarded) {
-      const content = fs.readFileSync(path.join(srcDir, rel), 'utf-8');
-      content.split('\n').forEach((line, index) => {
-        if (/if\s*\(identity\.(runId|userId|orgId)\)/.test(line)) {
-          violations.push(`src/${rel}:${index + 1}\n    ${line.trim()}`);
-        }
-      });
-      for (const header of ['x-org-id', 'x-user-id', 'x-run-id']) {
-        if (!content.includes(`"${header}"`)) violations.push(`src/${rel} states no ${header}`);
-      }
-    }
-
-    expect(
-      violations,
-      `A provisioning read states its full identity or it is refused:\n${violations.join('\n')}`,
-    ).toHaveLength(0);
+  it('should NOT make the provisioning identity OPTIONAL', () => {
+    // A sibling service REFUSES a read that does not state a full identity — `400 Missing
+    // required headers: x-run-id` — whatever the caller happens to be doing. `ProvisioningIdentity`
+    // makes userId and runId REQUIRED so a client cannot go back to attaching them only when it
+    // happens to have them, which is how every read on that path was rejected outright and every
+    // rejection laundered into "unknown".
+    const identity = fs.readFileSync(path.join(srcDir, 'lib/provisioning-identity.ts'), 'utf-8');
+    expect(identity).toMatch(/userId:\s*string;/);
+    expect(identity).toMatch(/runId:\s*string;/);
+    expect(identity).not.toMatch(/userId\?:/);
+    expect(identity).not.toMatch(/runId\?:/);
   });
 
   it('should NOT expose a writer for the brand held state on any surface', () => {

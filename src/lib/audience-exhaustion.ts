@@ -51,34 +51,10 @@ export async function hasExhaustedAudience(campaignId: string): Promise<boolean>
 }
 
 /**
- * May this campaign be auto-stopped as `audience_exhausted`?
- *
- * The rule, stated in one place because it is the whole of the verdict:
- *
- *   nothing left to serve  AND  it actually ran out of somebody.
- *
- * The first half alone is an EMPTY REMAINDER, and an empty remainder is equally true of a
- * campaign that never had anything to do — 0 of 0 reads as 100%. So the terminal verdict is
- * gated on the second half, POSITIVE evidence that work happened: an exhaustion mark, written
- * only for a run that named a real audience. A campaign that has served nothing has exhausted
- * nothing and is never stopped for it.
- *
- * Pure on purpose — the two facts are read by the caller, the rule is stated here.
- */
-export function isExhaustionStopWarranted(evidence: {
-  /** Does features-service still offer a serveable, non-exhausted audience for this campaign? */
-  hasServeableAudience: boolean;
-  /** Has ANY audience of this campaign ever been marked exhausted? (`hasExhaustedAudience`) */
-  hasEverExhaustedAnAudience: boolean;
-}): boolean {
-  return !evidence.hasServeableAudience && evidence.hasEverExhaustedAnAudience;
-}
-
-/**
  * How long a campaign with NOBODY to contact waits before it is looked at again.
  *
- * A campaign that has served nothing is deliberately not stopped (see
- * `isExhaustionStopWarranted`) — it is rescheduled instead. Rescheduled on the RUN cadence
+ * A campaign with nobody to contact is never stopped — that is a system condition, and only the
+ * customer changes a status. It is rescheduled instead. Rescheduled on the RUN cadence
  * (`RERUN_GRACE_MS`, 10s) that meant a workflow fired every eleven seconds for a campaign whose
  * situation cannot change in eleven seconds: "nobody to contact" moves when a customer edits
  * their audiences, or when a channel that has never run finally accumulates evidence — hours or

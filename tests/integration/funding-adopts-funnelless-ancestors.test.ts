@@ -40,7 +40,6 @@ import { campaigns, campaignFunnelOwnerDecisions } from "../../src/db/schema.js"
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { reRunDueCampaigns } from "../../src/lib/scheduler.js";
 import { SALES_OUTREACH_FEATURE_SLUG } from "../../src/lib/sales-outreach-campaign.js";
-import { resetFundingSweepThrottle } from "../../src/lib/funnel-campaigns.js";
 import { ANCESTOR_ADOPTION_SOURCE } from "../../src/lib/funnel-ancestor-adoption.js";
 
 const orgId = "ancestor-adoption-org";
@@ -133,7 +132,6 @@ beforeEach(async () => {
   await db.delete(campaignFunnelOwnerDecisions);
   vi.clearAllMocks();
   mockExecute.mockResolvedValue(undefined);
-  resetFundingSweepThrottle();
   process.env.BILLING_SERVICE_URL = "https://billing.test.local";
   process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
   process.env.FEATURES_SERVICE_URL = "https://features.test.local";

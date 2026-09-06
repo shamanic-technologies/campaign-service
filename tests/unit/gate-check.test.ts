@@ -126,7 +126,7 @@ function makeBudgetResponse(
       // model an in-flight worst-case provisioned hold (total > actual). ALL budget caps now
       // pace on COMMITTED total — the per-brand daily cap AND every campaign window (daily,
       // weekly, monthly, total) — so a high total with low actual DOES block (and the total
-      // window DOES auto-stop) on committed spend.
+      // window too) on committed spend.
       const actual = w.actualCostInUsdCents ?? w.totalCostInUsdCents;
       const provisioned = (parseFloat(w.totalCostInUsdCents) - parseFloat(actual)).toString();
       return {
@@ -247,8 +247,7 @@ describe("Gate Check", () => {
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("daily budget exceeded");
       // Paced, not terminal: parks until the next day rollover (resets today's spend).
-      expect(result.autoStopped).toBeUndefined();
-      expect(result.nextRunAt!.getTime()).toBe(nextDayStart().getTime());
+            expect(result.nextRunAt!.getTime()).toBe(nextDayStart().getTime());
     });
 
     it("non-sales: allows when today's spend is below the campaign daily cap", async () => {
@@ -320,7 +319,7 @@ describe("Gate Check", () => {
       }
     });
 
-    it("non-sales: auto-stops the campaign when the total budget is exceeded", async () => {
+    it("non-sales: BLOCKS but never stops the campaign when the total budget is exceeded", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
           { label: "daily", totalCostInUsdCents: "500" },
@@ -334,10 +333,11 @@ describe("Gate Check", () => {
         maxBudgetTotalUsd: "50.00",
       }));
       expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Total budget exceeded");
-      expect(result.autoStopped).toBe(true);
+      expect(result.reason).toBe("total budget exceeded");
+      // A configured ceiling reached is a SYSTEM CONDITION and never changes a status: the
+      // campaign stays exactly as the customer left it and the caller backs the run off.
       expect(result.nextRunAt).toBeUndefined();
-      expect(mockDbUpdate).toHaveBeenCalled();
+      expect(mockDbUpdate).not.toHaveBeenCalled();
     });
 
     it("non-sales: calls getStatsBudget with all configured windows (daily incl., no appId)", async () => {
@@ -425,7 +425,7 @@ describe("Gate Check", () => {
   });
 
   describe("Volume check", () => {
-    it("should auto-stop when maxLeads is reached", async () => {
+    it("should BLOCK — never stop — when maxLeads is reached", async () => {
       mockRuns({
         completed: [
           makeRun({ id: "r1", status: "completed" }),
@@ -443,7 +443,8 @@ describe("Gate Check", () => {
       const result = await runGateChecks(makeCampaign({ maxLeads: 3 }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("Max leads reached");
-      expect(result.autoStopped).toBe(true);
+      // The lead cap blocks the RUN. Only the customer stops a campaign, so there is nothing to
+      // un-stop when they raise the cap.
     });
 
     it("should allow when maxLeads is not reached", async () => {
@@ -491,7 +492,8 @@ describe("Gate Check", () => {
       const result = await runGateChecks(makeCampaign({ maxLeads: 3 }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("Max leads reached");
-      expect(result.autoStopped).toBe(true);
+      // The lead cap blocks the RUN. Only the customer stops a campaign, so there is nothing to
+      // un-stop when they raise the cap.
     });
 
     it("still reaches maxLeads via the history when lead-service under-reports", async () => {
@@ -507,7 +509,8 @@ describe("Gate Check", () => {
       const result = await runGateChecks(makeCampaign({ maxLeads: 5 }));
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("Max leads reached");
-      expect(result.autoStopped).toBe(true);
+      // The lead cap blocks the RUN. Only the customer stops a campaign, so there is nothing to
+      // un-stop when they raise the cap.
     });
 
     it("should block on non-404 lead-service error (fail-closed)", async () => {
@@ -557,8 +560,7 @@ describe("Gate Check", () => {
       expect(result.nextRunAt!.getTime()).toBeGreaterThanOrEqual(before + 30 * 60 * 1000);
       expect(result.nextRunAt!.getTime()).toBeLessThanOrEqual(after + 30 * 60 * 1000 + 1000);
       // Must NOT auto-stop — that would need a manual restart instead of self-healing.
-      expect(result.autoStopped).toBeUndefined();
-      expect(mockDbUpdate).not.toHaveBeenCalled();
+            expect(mockDbUpdate).not.toHaveBeenCalled();
     });
 
     it("should proceed when org can afford the run (affordable=true)", async () => {
@@ -714,8 +716,7 @@ describe("Gate Check", () => {
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("Funnel daily budget reached");
       // Paced, not terminal — the ceiling re-opens at the day rollover.
-      expect(result.autoStopped).toBeUndefined();
-      expect(result.nextRunAt).toBeUndefined();
+            expect(result.nextRunAt).toBeUndefined();
     });
 
     it("allows while this funnel is under its own ceiling", async () => {
@@ -1037,8 +1038,7 @@ describe("Gate Check", () => {
       // D1: not parked till midnight, not terminal — internal.ts applies the 15min backoff,
       // so a raised ceiling re-enables on the next loop.
       expect(result.nextRunAt).toBeUndefined();
-      expect(result.autoStopped).toBeUndefined();
-    });
+          });
 
     it("allows when today's brand spend is below the ceiling", async () => {
       mockDailyBudget("1000");
@@ -1254,8 +1254,7 @@ describe("Gate Check", () => {
       expect(result.reason).toBe("Campaign daily budget reached");
       // Paced, not terminal — internal.ts applies the 15min backoff.
       expect(result.nextRunAt).toBeUndefined();
-      expect(result.autoStopped).toBeUndefined();
-    });
+          });
 
     it("allows when the campaign's OWN spend is below its OWN budget", async () => {
       mockGetStatsBudget.mockResolvedValue(
@@ -1358,12 +1357,10 @@ describe("Gate Check", () => {
       expect(result.reason).toBe("weekly budget exceeded");
     });
 
-    it("paces the TOTAL (terminal autoStop) window on COMMITTED — auto-stops when committed is over", async () => {
-      // Committed-pacing now applies to the total window too (product-owner decision for full
-      // dashboard coherence): actual 4000 (< $50 = 5000) but committed total 9000 (provisioned
-      // 5000) is over the cap → terminal autoStop fires on committed. (Accepted tradeoff: a
-      // temporary committed spike near the lifetime cap can stop a campaign before holds settle;
-      // recoverable by re-activating.)
+    it("paces the TOTAL window on COMMITTED — blocks when committed is over", async () => {
+      // Committed-pacing applies to the total window too (product-owner decision for full
+      // dashboard coherence). It is no longer terminal, so an inflated hold near the lifetime cap
+      // pauses the campaign until the holds settle rather than stopping it.
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "total", totalCostInUsdCents: "9000", actualCostInUsdCents: "4000" }])
       );
@@ -1374,7 +1371,7 @@ describe("Gate Check", () => {
         maxBudgetTotalUsd: "50.00",
       }));
       expect(result.allowed).toBe(false);
-      expect(result.autoStopped).toBe(true);
+      expect(result.reason).toBe("total budget exceeded");
       expect(result.nextRunAt).toBeUndefined();
     });
 
@@ -1412,7 +1409,7 @@ describe("Gate Check", () => {
       expect(result.nextRunAt!.getTime()).toBe(expected.getTime());
     });
 
-    it("should NOT return nextRunAt when total budget is exceeded (auto-stop instead)", async () => {
+    it("should NOT return nextRunAt when total budget is exceeded — it has no reset boundary", async () => {
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "total", totalCostInUsdCents: "5500" }])
       );
@@ -1423,7 +1420,8 @@ describe("Gate Check", () => {
         maxBudgetTotalUsd: "50.00",
       }));
       expect(result.allowed).toBe(false);
-      expect(result.autoStopped).toBe(true);
+      expect(result.reason).toBe("total budget exceeded");
+      // No reset boundary of its own: the caller applies its own backoff and re-checks.
       expect(result.nextRunAt).toBeUndefined();
     });
 
