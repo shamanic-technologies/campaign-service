@@ -10,7 +10,7 @@ import { EndRunBody, TransferBrandBody, TriggerForStepBody } from "../schemas.js
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
-import { markAudienceExhausted, getFreshExhaustedAudienceIds, hasExhaustedAudience, isExhaustionStopWarranted, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../lib/audience-exhaustion.js";
+import { markAudienceExhausted, getFreshExhaustedAudienceIds, hasExhaustedAudience, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../lib/audience-exhaustion.js";
 import { NO_WORK_RECHECK_MS } from "../lib/idle-run.js";
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
@@ -26,9 +26,11 @@ import type { DownstreamIdentity } from "../lib/downstream-headers.js";
 
 const router = Router();
 
-// Backoff applied to a BLOCKED gate result that carries no scheduler decision
-// (neither autoStopped nor a window nextRunAt). Guarantees the campaign is not
-// re-claimed + re-fired on the very next scheduler tick.
+// Backoff applied to a BLOCKED gate result that carries no window nextRunAt of
+// its own. Guarantees the campaign is not re-claimed + re-fired on the very next
+// scheduler tick. A blocked gate NEVER stops a campaign — the condition that
+// blocked it (out of credit, budget spent, lead cap) is a system condition, and
+// only the customer changes a status — so every block ends in a re-check.
 const GATE_BLOCK_BACKOFF_MS = 15 * 60_000; // 15 min
 
 // Grace delay before a COMPLETED run becomes due for re-trigger.
@@ -132,13 +134,12 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       traceEvent(req.runId, {
         service: "campaign-service",
         event: "gate-check-result",
-        detail: `Gate check ${result.allowed ? "PASSED" : "BLOCKED"} for campaign ${campaignId}${result.reason ? ` — reason: ${result.reason}` : ""}${result.autoStopped ? " (auto-stopped)" : ""}${creditUnreadable ? ` — credit affordability NOT read (${result.creditCheckDetail}), allowed by fail-open` : ""}`,
+        detail: `Gate check ${result.allowed ? "PASSED" : "BLOCKED"} for campaign ${campaignId}${result.reason ? ` — reason: ${result.reason}` : ""}${creditUnreadable ? ` — credit affordability NOT read (${result.creditCheckDetail}), allowed by fail-open` : ""}`,
         level: creditUnreadable ? "warn" : (result.allowed || benignBlock ? "info" : "warn"),
         data: {
           campaignId,
           allowed: result.allowed,
           reason: result.reason,
-          autoStopped: result.autoStopped,
           creditCheck: result.creditCheck,
           creditCheckDetail: result.creditCheckDetail,
         },
@@ -146,26 +147,21 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
     }
 
     if (!result.allowed) {
-      // Invariant: every BLOCKED result must persist a scheduler decision — either
-      // terminal (autoStopped) OR a future nextRunAt. A null here would let
-      // claimStuckCampaigns re-claim the (ongoing, nextRunAt=null) campaign every tick
-      // and re-fire the Windmill flow indefinitely. Window blocks carry their own
-      // nextRunAt (reset boundary); any other no-decision block backs off explicitly.
-      let nextRunAt = result.nextRunAt ?? null;
-      if (!nextRunAt && !result.autoStopped) {
-        nextRunAt = new Date(Date.now() + GATE_BLOCK_BACKOFF_MS);
-      }
-      if (nextRunAt) {
-        await db.update(campaigns)
-          .set({ nextRunAt, updatedAt: new Date() })
-          .where(eq(campaigns.id, campaignId));
-      }
+      // Invariant: every BLOCKED result persists a future nextRunAt. A null here would
+      // let claimStuckCampaigns re-claim the (ongoing, nextRunAt=null) campaign every
+      // tick and re-fire the Windmill flow indefinitely. Window blocks carry their own
+      // nextRunAt (reset boundary); any other block backs off explicitly. There is no
+      // terminal branch: a gate that cannot let a run through has said nothing about
+      // whether the customer still wants this campaign.
+      const nextRunAt = result.nextRunAt ?? new Date(Date.now() + GATE_BLOCK_BACKOFF_MS);
+      await db.update(campaigns)
+        .set({ nextRunAt, updatedAt: new Date() })
+        .where(eq(campaigns.id, campaignId));
     }
 
     res.json({
       allowed: result.allowed,
       ...(result.reason && { reason: result.reason }),
-      ...(result.autoStopped && { autoStopped: result.autoStopped }),
     });
   } catch (error) {
     console.error("[campaign-service] Unhandled error:", error);
@@ -497,15 +493,21 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
     res.json({ status });
 
     // The DAG sends stopCampaign=true when THIS run's single served audience returned no leads
-    // (fetch-lead.found == false). That is AUDIENCE-scoped exhaustion, NOT "the campaign is
-    // done": the bandit narrows each run to one audience, so one audience running dry says
-    // nothing about the campaign's other audiences. Reinterpret it — mark this audience
-    // exhausted (24h TTL; the bandit then skips it) and auto-stop the campaign ONLY when it has
-    // no serveable, non-exhausted audience left. Otherwise fall through to the normal reschedule
-    // so the next tick re-draws from the remaining audiences.
-    // Set when the campaign has nobody to contact and has served nothing: it is rescheduled
-    // rather than stopped, but on the RECHECK cadence below instead of the run cadence — the
-    // reason it cannot run does not move in eleven seconds.
+    // (fetch-lead.found == false). That is AUDIENCE-scoped: the bandit narrows each run to one
+    // audience, so one audience running dry says nothing about the campaign's others. It is
+    // reinterpreted — mark THIS audience exhausted (24h TTL; the bandit then skips it) — and it
+    // never changes the campaign's status.
+    //
+    // "Everybody has been contacted" is a SYSTEM CONDITION, and a system condition never stops a
+    // campaign: the customer said this campaign should run, and running out of people to contact
+    // this hour is not them changing their mind. So the campaign stays exactly as they left it,
+    // does not run this tick, and runs again on a later tick once the brand has somebody — which
+    // is also why nothing has to bring it back: there is no stop to undo, and the resume sweep
+    // that used to exist is gone. The customer is still EMAILED asking them to extend an audience
+    // (a notification is not a status change).
+    //
+    // Set whenever the campaign has nobody to contact: it is rescheduled on the RECHECK cadence
+    // rather than the run cadence — the reason it cannot run does not move in eleven seconds.
     let waitingForAudience = false;
 
     if (stopCampaign === true) {
@@ -514,82 +516,49 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         if (exhaustedAudienceId) {
           await markAudienceExhausted(campaignId, exhaustedAudienceId);
         } else {
-          // No audience id means no audience RAN, so there is nothing to mark and no evidence
-          // this campaign ever contacted anybody. Says what it decided rather than proceeding:
-          // the stop below is gated on that evidence, so this run cannot end in a verdict about
-          // work that never happened.
-          // Expected business state, not a fault: log at info. It is paired with the waiting
-          // line below and both now fire on the recheck cadence, not once per run.
-          console.log(`[campaign-service] stopCampaign=true for campaign ${campaignId} with no x-audience-id — no audience ran, so nothing is marked exhausted and this run cannot conclude the campaign is exhausted`);
+          // No audience id means no audience RAN, so there is nothing to mark. Expected business
+          // state, not a fault: log at info.
+          console.log(`[campaign-service] stopCampaign=true for campaign ${campaignId} with no x-audience-id — no audience ran, so nothing is marked exhausted`);
         }
 
         const campaign = await db.query.campaigns.findFirst({
           where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
         });
         // Only decide on a still-ongoing campaign with brands to serve. A serveable audience
-        // remaining → keep going (fall through to reschedule); none → the real all-exhausted stop.
+        // remaining → keep going on the run cadence; none → wait on the audience cadence.
         const serveable =
           !!campaign && campaign.status === "ongoing" && !!campaign.brandIds?.length
             ? await hasServeableAudience(campaign, req)
             : false;
 
-        // "Nothing left to serve" is ALSO true for a campaign that never had anything to serve,
-        // so an empty remainder is not evidence of exhaustion — 0 of 0 reads as 100%. The
-        // verdict rests on POSITIVE evidence that outreach actually ran out of people through
-        // THIS campaign: an exhaustion mark, which is only ever written for a run that named a
-        // real audience. Same definition the extend-audience email is gated on.
-        //
-        // Without that evidence the campaign is NOT stopped: it has a funded ceiling and nothing
-        // to show for it, so it stays `ongoing` and falls through to the normal reschedule below
-        // — the next tick looks at it again. Parking it on `audience_exhausted` would be sticky
-        // (funding deliberately never resumes that reason), so a campaign that never worked
-        // would sit on a funded channel forever, which is exactly what happened to the first
-        // campaign the per-channel provisioner ever created (4769db14, 2026-08-20: stopped ten
-        // seconds after birth having served nothing).
-        const stopWarranted =
-          !serveable &&
-          isExhaustionStopWarranted({
-            hasServeableAudience: serveable,
-            hasEverExhaustedAnAudience: await hasExhaustedAudience(campaignId),
-          });
-
-        if (!serveable && !stopWarranted) {
-          // Not stopped — and not re-fired in ten seconds either. "Nobody to contact" changes
-          // when the customer's audiences change or when a never-run channel finally has
-          // evidence, so the campaign WAITS on that timescale (the money cadence, not the turn
-          // cadence). Rescheduling on the run cadence is what fired a workflow every eleven
-          // seconds for campaigns 4769db14 and cb965e9d, each run unable to do anything.
-          waitingForAudience = true;
-          console.log(`[campaign-service] Campaign ${campaignId} has no serveable audience and has never exhausted one — it has served nothing, so it is NOT auto-stopped as ${STOP_REASONS.AUDIENCE_EXHAUSTED}; waiting ${NO_SERVEABLE_AUDIENCE_RECHECK_MS}ms for it to have somebody to contact`);
-          // Falls through to the reschedule below, which uses the recheck cadence.
-        } else if (!serveable) {
-          // Fully contacted: every targeted audience is exhausted and the campaign is
-          // being auto-stopped. Nudge the user to extend an audience so outreach can
-          // resume. Fire-and-forget — never blocks or fails run finalization, and the
-          // 1x/month-per-brand cap is enforced by transactional-email-service dedup.
-          if (campaign) {
+        if (!serveable) {
+          // Nobody to contact. Two shapes, one outcome — the campaign is NOT stopped either way:
+          //
+          //   - it has exhausted an audience before, i.e. outreach genuinely ran out of people:
+          //     nudge the customer to extend an audience so it can resume. Fire-and-forget, never
+          //     blocks run finalization, and the 1x/month-per-brand cap is transactional-email's.
+          //   - it has never exhausted one, i.e. it has served nothing at all: "nothing left to
+          //     serve" is equally true of a campaign that never had anything, so there is no
+          //     claim to make and nobody to email. 0 of 0 is not 100%.
+          //
+          // Both wait on the same cadence, because both change when the customer's audiences
+          // change — hours or days apart, not eleven seconds.
+          const everExhausted = await hasExhaustedAudience(campaignId);
+          if (everExhausted && campaign) {
             void maybeSendExtendAudienceEmail(campaign, { runId: req.runId! });
           }
-          await db.update(campaigns)
-            // States WHY it stopped, and it is the ONE reason a campaign comes back by itself:
-            // the customer was just asked to extend an audience, so their doing it has to be
-            // enough to restart the campaign. Without the reason on the row, "resume the ones
-            // that ran out of people" could not be told from "resume the ones a person stopped".
-            .set({
-              status: "stopped",
-              stopReason: STOP_REASONS.AUDIENCE_EXHAUSTED,
-              nextRunAt: null,
-              updatedAt: new Date(),
-            })
-            .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)));
-          console.log(`[campaign-service] All targeted audiences exhausted — auto-stopped campaign ${campaignId} (stopReason=${STOP_REASONS.AUDIENCE_EXHAUSTED}; resumes on its own once the brand has a serveable audience again)`);
-          return;
+          waitingForAudience = true;
+          console.log(
+            everExhausted
+              ? `[campaign-service] Campaign ${campaignId} has contacted every targeted audience — it stays ongoing (only the customer stops a campaign) and re-checks in ${NO_SERVEABLE_AUDIENCE_RECHECK_MS}ms; the owner was asked to extend an audience`
+              : `[campaign-service] Campaign ${campaignId} has no serveable audience and has never exhausted one — it has served nothing, so there is nothing to conclude; it stays ongoing and re-checks in ${NO_SERVEABLE_AUDIENCE_RECHECK_MS}ms`,
+          );
         }
-        // Serveable audiences remain → do NOT stop; fall through to the reschedule below.
+        // Falls through to the reschedule below, on the recheck cadence when nobody is serveable.
       } catch (err) {
-        // Fail SAFE: a false stop is exactly the bug being fixed, so on ANY error in the
-        // exhaustion handling do NOT stop the campaign — fall through to reschedule and retry.
-        console.error(`[campaign-service] audience-exhaustion handling failed for campaign ${campaignId}, not stopping:`, err);
+        // Nothing here can change a status any more, so the only thing an error costs is the
+        // exhaustion mark and the nudge email. Fall through to the reschedule and retry.
+        console.error(`[campaign-service] audience-exhaustion handling failed for campaign ${campaignId}:`, err);
       }
     }
 

@@ -397,40 +397,8 @@ export function offerCeilingCents(
   return { grain: "offer", cents: null };
 }
 
-/**
- * The funnels this org has actually FUNDED for the brand: a ceiling of zero is a deliberate
- * "do not work this funnel", not a missing value, so it is filtered out here once rather than
- * re-tested at every call site.
- */
-export function fundedFunnels(read: Extract<FunnelBudgetsRead, { ok: true }>): FunnelBudget[] {
-  return read.funnels.filter((f) => f.dailyBudgetCents > 0);
-}
 
-/**
- * The (funnel, acquisition-channel feature) pairs this org actually FUNDS for the brand — the unit
- * one campaign is provisioned per. A ceiling of zero is a deliberate "do not work this pair".
- */
-export function fundedChannelPairs(
-  read: Extract<FunnelBudgetsRead, { ok: true }>,
-): FunnelChannelBudget[] {
-  return (read.channels ?? []).filter((c) => c.dailyBudgetCents > 0);
-}
 
-/**
- * The (funnel, acquisition channel, OFFER) rows this org actually FUNDS for the brand.
- *
- * The grain between `channels` and `legs`, and the one a campaign is provisioned per when billing
- * serves no leg rows: a customer funds their money per offer, so a (funnel, channel) worked for
- * TWO offers is two ceilings and two campaigns. `channels` is the SUM of these rows, so reading it
- * there gives both offers one identity and lets each spend what the other was funded for.
- *
- * A ceiling of zero is a deliberate "do not work this", exactly as at every grain above.
- */
-export function fundedOfferRows(
-  read: Extract<FunnelBudgetsRead, { ok: true }>,
-): FunnelOfferBudget[] {
-  return (read.offers ?? []).filter((o) => o.dailyBudgetCents > 0);
-}
 
 /**
  * The ceiling that binds ONE (funnel, acquisition channel, offer, LEG) row — the grain BELOW the
@@ -510,14 +478,85 @@ export function legCeilingCents(
   return { grain: "leg", cents: null };
 }
 
+
 /**
- * The (funnel, acquisition channel, offer, LEG) rows this org actually FUNDS for the brand — the
- * finest grain billing stores, and the unit ONE campaign is provisioned per.
+ * One funded ceiling that states NO leg — a disagreement between billing and this service about
+ * what ONE campaign is.
  *
- * A ceiling of zero is a deliberate "do not work this", exactly as at every grain above.
+ * A customer buys a LEG of a sales funnel, and a campaign states the single leg it was bought
+ * for. billing stores its ceilings at that grain and states the leg on every ceiling that has a
+ * campaign. A funded ceiling arriving here without one therefore cannot be matched to a campaign
+ * at the grain the money was set at: it is not a coarser statement of the same fact, it is the two
+ * sides disagreeing, and that disagreement is what let one identity grow two campaigns.
  */
-export function fundedLegRows(
+export interface LegKeylessCeiling {
+  funnelKey: SalesFunnelKey;
+  /** The acquisition channel, when the grain the row came from states one. */
+  featureSlug: string | null;
+  /** The offer, when the grain the row came from states one. */
+  offerId: string | null;
+  /** Which grain of billing's answer this row came from — `legs`, `offers`, `channels`, `funnels`. */
+  grain: "legs" | "offers" | "channels" | "funnels";
+  dailyBudgetCents: number;
+}
+
+/**
+ * Every funded ceiling in this read that names no leg.
+ *
+ * Read at the FINEST grain billing serves, because the coarser ones are SUMS of it: when `legs`
+ * is served, only its own leg-less rows are a disagreement (an `offers` row without a leg is just
+ * the sum of leg rows that do have one). When `legs` is not served at all, the finest grain that
+ * IS served is entirely leg-less, and every funded row of it is the same disagreement.
+ *
+ * Never used to DEFAULT, skip or work around anything — the caller states the error and names the
+ * ceiling. Nothing about pacing reads this.
+ */
+export function legKeylessFundedCeilings(
   read: Extract<FunnelBudgetsRead, { ok: true }>,
-): FunnelLegBudget[] {
-  return (read.legs ?? []).filter((l) => l.dailyBudgetCents > 0);
+): LegKeylessCeiling[] {
+  const legs = read.legs ?? [];
+  if (legs.length > 0) {
+    return legs
+      .filter((l) => l.dailyBudgetCents > 0 && l.legKey === null)
+      .map((l) => ({
+        funnelKey: l.funnelKey,
+        featureSlug: l.featureSlug,
+        offerId: l.offerId,
+        grain: "legs" as const,
+        dailyBudgetCents: l.dailyBudgetCents,
+      }));
+  }
+  const offers = read.offers ?? [];
+  if (offers.length > 0) {
+    return offers
+      .filter((o) => o.dailyBudgetCents > 0)
+      .map((o) => ({
+        funnelKey: o.funnelKey,
+        featureSlug: o.featureSlug,
+        offerId: o.offerId,
+        grain: "offers" as const,
+        dailyBudgetCents: o.dailyBudgetCents,
+      }));
+  }
+  const channels = read.channels ?? [];
+  if (channels.length > 0) {
+    return channels
+      .filter((c) => c.dailyBudgetCents > 0)
+      .map((c) => ({
+        funnelKey: c.funnelKey,
+        featureSlug: c.featureSlug,
+        offerId: null,
+        grain: "channels" as const,
+        dailyBudgetCents: c.dailyBudgetCents,
+      }));
+  }
+  return read.funnels
+    .filter((f) => f.dailyBudgetCents > 0)
+    .map((f) => ({
+      funnelKey: f.funnelKey,
+      featureSlug: null,
+      offerId: null,
+      grain: "funnels" as const,
+      dailyBudgetCents: f.dailyBudgetCents,
+    }));
 }

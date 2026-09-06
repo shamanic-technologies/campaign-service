@@ -225,24 +225,6 @@ describe("Pipeline routes", () => {
       expect(res.body.reason).toBe("Brand daily budget reached");
     });
 
-    it("should return autoStopped flag when campaign is auto-stopped", async () => {
-      const campaign = await insertTestCampaign(orgId, { brandIds });
-
-      mockGateChecks.mockResolvedValue({
-        allowed: false,
-        reason: "Total budget exceeded",
-        autoStopped: true,
-      });
-
-      const res = await request(app)
-        .post("/gate-check")
-        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
-        .expect(200);
-
-      expect(res.body.allowed).toBe(false);
-      expect(res.body.autoStopped).toBe(true);
-    });
-
     it("should save nextRunAt to DB when gate-check returns it", async () => {
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
@@ -268,15 +250,17 @@ describe("Pipeline routes", () => {
       expect(new Date(updated!.nextRunAt!).getTime()).toBe(nextWeek.getTime());
     });
 
-    it("should NOT save nextRunAt when gate-check does not return it", async () => {
+    it("BACKS OFF, never stops, when a blocked result carries no reset boundary of its own", async () => {
+      // The total-budget window is one such block. A system condition never changes a status, so
+      // there is no terminal branch: the campaign stays ongoing and is re-checked.
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       mockGateChecks.mockResolvedValue({
         allowed: false,
-        reason: "Total budget exceeded",
-        autoStopped: true,
+        reason: "total budget exceeded",
       });
 
+      const before = Date.now();
       await request(app)
         .post("/gate-check")
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
@@ -285,13 +269,15 @@ describe("Pipeline routes", () => {
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
-      expect(updated!.nextRunAt).toBeNull();
+      expect(updated!.status).toBe("ongoing");
+      expect(updated!.nextRunAt).not.toBeNull();
+      expect(new Date(updated!.nextRunAt!).getTime()).toBeGreaterThan(before);
     });
 
-    it("should persist a future nextRunAt when a blocked result has neither autoStopped nor nextRunAt", async () => {
+    it("should persist a future nextRunAt when a blocked result carries no nextRunAt", async () => {
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
-      // A no-decision block (e.g. "A run is already in progress" / "Lead stats unavailable")
+      // A no-boundary block (e.g. "A run is already in progress" / "Lead stats unavailable")
       // must NOT leave nextRunAt null — otherwise claimStuckCampaigns re-claims the
       // (ongoing, nextRunAt=null) campaign every tick and re-fires the Windmill flow.
       mockGateChecks.mockResolvedValue({
@@ -1307,7 +1293,7 @@ describe("Pipeline routes", () => {
       );
     });
 
-    it("stopCampaign=true auto-stops the campaign ONLY when no serveable audience remains (all exhausted)", async () => {
+    it("stopCampaign=true NEVER stops the campaign, even when every audience is exhausted", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         status: "ongoing",
@@ -1335,17 +1321,17 @@ describe("Pipeline routes", () => {
 
       await new Promise((r) => setTimeout(r, 150));
 
-      // NOT re-triggered, and stopped with nextRunAt cleared.
+      // NOT re-triggered now — but the campaign is exactly as the customer left it, waiting on
+      // the audience cadence. "Everybody has been contacted" is a system condition; only the
+      // customer changes a status, so there is nothing to un-stop when they extend an audience.
       expect(mockExecute).not.toHaveBeenCalled();
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
       });
-      expect(updated!.status).toBe("stopped");
-      expect(updated!.nextRunAt).toBeNull();
-      // And it says WHY. This is the one reason a campaign comes back on its own — the customer
-      // is emailed asking them to extend an audience, so their doing it has to restart it. A stop
-      // that does not record this reason is a campaign that stays stopped forever.
-      expect(updated!.stopReason).toBe("audience_exhausted");
+      expect(updated!.status).toBe("ongoing");
+      expect(updated!.stopReason).toBeNull();
+      expect(updated!.nextRunAt).not.toBeNull();
+      expect(new Date(updated!.nextRunAt!).getTime()).toBeGreaterThan(Date.now() + 5 * 60_000);
     });
 
     it("stopCampaign=true does NOT stop a campaign that has served nothing — no audience ran, so nothing was exhausted", async () => {

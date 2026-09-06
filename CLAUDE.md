@@ -4,6 +4,70 @@ When the user shares logs, errors, or bug reports: **ONLY diagnose and explain**
 
 **Before making ANY structural or architectural change** (new endpoints, new DAG nodes, new services, schema changes, workflow changes): stop and ask the user for approval first. Never assume the fix belongs in this repo — the root cause may be in another service.
 
+## THE OWNER RULE, AND IT OVERRIDES EVERY SECTION BELOW IT: a campaign's STATUS is the CUSTOMER's statement of intent, and nothing else may change it
+
+FUNDING is one act. RUNNING is a different act. This service conflated them for months, and on
+2026-09-06 that cost four customers ~$37: five brands ended up with two identical live campaigns
+each, and two brands had a campaign they had DELIBERATELY STOPPED brought back to life and
+spending. Both causes were the same mistake in two shapes — this service decided, on its own, that
+a campaign should EXIST and should RUN, by reading how much money was sitting against a pair.
+
+Four rules, and every older section is read subject to them:
+
+1. **MONEY NEVER STARTS ANYTHING.** A funded ceiling, on its own, provisions nothing — not a second
+   campaign and not a first one. `ensureFundedFunnelCampaigns`, `fundedPairs`,
+   `provisionFundedPairsForQuietBrands`, `funnelCampaignName` and the "resume a stopped row whose
+   ceiling is funded" branch are all DELETED, and with them every read that only ever answered
+   *"should this money have a campaign?"* — `brand-sales-funnels-client.ts`,
+   `feature-sales-funnels-client.ts`, `feature-workflow-client.ts`, and the funded-enumeration
+   helpers on the budget client (`fundedFunnels`/`fundedChannelPairs`/`fundedOfferRows`/
+   `fundedLegRows`). What billing states is now read for exactly two things: whether a campaign
+   that ALREADY EXISTS is funded (the hold), and which ceiling PACES it. A brand that funds a
+   channel and has no campaign for it simply has no campaign for it, and the honest answer to
+   "why isn't it running" is "nobody launched it".
+2. **A CAMPAIGN THAT ALREADY EXISTS IS NEVER CREATED AGAIN.** `POST /campaigns` matches the
+   incumbent of the identity WHATEVER ITS STATUS (live first, then the most recent stopped one)
+   and hands that row back — started, because this route is only ever a person's explicit act.
+   The index cannot police this and never will: `uniq_campaigns_org_brand_funnel_channel` is
+   partial on `ongoing`, and production carries **663 stopped rows sharing 33 identities** from
+   before this was one campaign. History is never rewritten, so a full unique index is
+   uncreatable and the guard lives in the LOOKUP; the index stays the backstop for the live case.
+3. **A SYSTEM CONDITION NEVER CHANGES A STATUS.** Out of credit, audience exhausted, today's
+   budget spent, the lifetime `maxBudgetTotalUsd`, the `maxLeads` cap: each of those blocks the
+   RUN and nothing else. The campaign stays exactly as the customer left it, does not run this
+   tick, and runs again on a later tick once the condition has passed. `autoStopCampaign` is gone
+   from gate-check, the `autoStopped` flag is gone from the gate result and its response, and the
+   `/end-run` exhaustion branch marks the audience and reschedules on
+   `NO_SERVEABLE_AUDIENCE_RECHECK_MS` instead of stopping. **Consequently nothing RESUMES
+   anything**: `campaign-resume.ts` and `isResumableStopReason` are deleted, because a campaign a
+   condition never stopped has nothing to be resumed from. `STOP_REASONS` therefore holds only the
+   two values a PERSON writes — `manual` and `org_teardown`. `audience_exhausted` and
+   `max_leads_reached` are RETIRED; no row in production has ever carried either (2026-09-06: 17
+   `manual`, 680 NULL).
+4. **A FUNDED CEILING THAT NAMES NO LEG IS AN ERROR, LOUD AND NAMED.** A customer buys one LEG,
+   and billing states the leg on every ceiling that has a campaign (21 of 24 in production). Money
+   arriving here without one cannot be matched to a campaign at the grain it was set at: the two
+   sides disagree about what one campaign is, which is exactly what produced the duplicates. It is
+   never defaulted to a coarser figure and never skipped in silence —
+   `legKeylessFundedCeilings` + `reportLegKeylessCeilings` state it on `console.error`, naming org,
+   brand, funnel, channel, offer, cents and the billing grain it was read at. It does NOT hold the
+   brand: the disagreement is about a ceiling with no campaign, and holding would stop live
+   campaigns for a fault that is not theirs. Deduped per identity on the 10-minute cadence, for
+   the same reason as `FUNDING_RECHECK_MS`.
+
+What is UNCHANGED: the funding HOLD (a campaign the customer funds nothing for does not run, and
+waits on `FUNDING_RECHECK_MS`), the whole ceiling precedence (own `dailyBudgetCents` → leg → offer
+→ pair → funnel → brand pot), the turn planner and its cohorts, the gate's fail-CLOSED stance on an
+unreadable ceiling, the onboarding launch (the customer paid and pressed launch: that IS the
+explicit act, and it creates the campaign AND starts it), `PATCH /campaigns/:id` with
+`status=activate|stop`, and both attribution adoptions (offer, funnel-less ancestor) — neither of
+which creates a campaign, starts one, or changes a status.
+
+**Sections below that describe provisioning a campaign from a funded pair, a funding sweep, an
+auto-stop, or a resume are HISTORY.** They are kept because they explain why each grain of the
+money exists and how it PACES a campaign, which is all still true. (Set 2026-09-06.)
+
+
 # Project: campaign-service
 
 Campaign CRUD and orchestration service for MCP Factory. Manages campaign lifecycle, budget tracking, and run coordination.
@@ -1219,138 +1283,47 @@ the cap so the response can carry `hasMore` — a truncated list that cannot say
 the same silent lie as the dropped filter. A caller that needs to WALK the stopped set will need a
 cursor; nothing has asked. (Set 2026-08-16.)
 
-## `/end-run` `stopCampaign=true` is AUDIENCE-scoped, NOT campaign-scoped — never blindly set `status='stopped'` on it
+## `/end-run` `stopCampaign=true` is AUDIENCE-scoped, and it stops NOTHING
 
-The workflow DAG sends `stopCampaign=true` whenever a run's SINGLE bandit-picked audience returns no leads (`fetch-lead.found == false`) — it's a **hardcoded literal on the `end-run-no-lead` DAG node** (`stopCampaign == !found`), evaluated on the ONE audience `/start-run` chose for that run. It does NOT mean "the whole campaign is done": the bandit narrows each run to one audience, so one audience running dry says nothing about the campaign's OTHER audiences. Obeying it literally (the old `status='stopped'` on any `stopCampaign=true`) wrongly halted multi-audience campaigns the instant their one exhausted audience got picked, while other audiences still had tens of thousands of reachable leads (prod incident brand `75d7e3e8`, 2026-07-21: stopped at 14:01 on audience `729e06f0` while 7 others were `exhausted=false`).
+The workflow DAG sends `stopCampaign=true` whenever a run's SINGLE bandit-picked audience returns
+no leads (`fetch-lead.found == false`) — a hardcoded literal on the `end-run-no-lead` DAG node,
+evaluated on the ONE audience `/start-run` chose. The name is the DAG's, not a request this service
+obeys: the bandit narrows each run to one audience, so one audience running dry says nothing about
+the campaign's others, and "everybody has been contacted" is a SYSTEM CONDITION, which never
+changes a status (owner rule 3).
 
-So `/end-run` REINTERPRETS `stopCampaign=true` as audience-scoped: it marks `req.audienceId` exhausted in **`campaign_audience_exhaustion`** (migration 0040) and auto-stops the campaign ONLY when `hasServeableAudience()` finds no serveable, non-exhausted audience left (all targeted audiences exhausted = the sole legitimate campaign-wide stop). Otherwise it falls through to the normal reschedule so the next tick re-draws from the remaining audiences. The bandit (`selectAudienceForRun`) takes `excludedAudienceIds` and `/start-run` passes the fresh exhausted set so it never re-picks a known-dry audience. **Fail-SAFE**: any error in the exhaustion check does NOT stop the campaign (a false stop is the exact bug this fixes). The exhaustion mark expires after a **24h TTL** (`getFreshExhaustedAudienceIds`) — audiences are re-probed daily because Apollo can add new matching leads over time, so exhaustion is never permanent. The `done`/exhaustion signals from apollo/human/lead-service are all HONEST and per-audience; the campaign-wide escalation was purely the DAG's literal + campaign-service obeying it. Do NOT move the stop decision back into a blanket `stopCampaign=true → stopped`. (Set 2026-07-21, PR #281.)
+So `/end-run` does exactly three things with it:
 
-At that all-audiences-exhausted auto-stop point (and ONLY there) `/end-run` also fires a **fire-and-forget extend-audience lifecycle email** (`maybeSendExtendAudienceEmail`, `src/lib/transactional-email.ts`) nudging the user to extend an audience so outreach can resume. It sends via **transactional-email-service** (`POST /send`, eventType `audience_fully_contacted`; template registered at boot via `PUT /platform-templates`) ONLY when ALL hold: sales-cold-email-outreach feature, `campaign.createdByUserId` present (recipient), a daily budget `> 0` (which IS "the brand is funded", and since 2026-08-16 is also the only statement that it is running at all) (campaign `dailyBudgetCents` else the brand's billing daily budget), and org `has_auto_topup` (billing `GET /internal/accounts/by-org/{orgId}/balance`, user-less). The **1×/month-per-brand cap is owned by transactional-email dedup** (its `audience_fully_contacted` monthly-per-brand cadence), NOT a local table. Every guard read is **fail-SAFE** (any error/absent field → treat as OFF → no email) and the whole call is fire-and-forget after the response, so it NEVER blocks or fails run finalization. When refactoring `/end-run`, keep this call at the exhausted-stop branch — do not drop it. (Set 2026-07-22, PR #292.)
+- **Marks `req.audienceId` exhausted** in `campaign_audience_exhaustion` (migration 0040), with a
+  **24h TTL** (`getFreshExhaustedAudienceIds`) — Apollo can add matching leads over time, so
+  exhaustion is never permanent. `/start-run` passes the fresh exhausted set to the bandit
+  (`excludedAudienceIds`) so it never re-picks a known-dry audience. No audience id means no
+  audience RAN: nothing is marked, logged at `info`.
+- **Reschedules on `NO_SERVEABLE_AUDIENCE_RECHECK_MS`** (10 min) whenever `hasServeableAudience`
+  finds nobody, instead of the run cadence (`RERUN_GRACE_MS`, 10s) — the reason it cannot run does
+  not move in eleven seconds, and firing a workflow every eleven seconds for a campaign that can
+  reach nobody is what flooded every service in the chain (prod 2026-08-20, campaigns `4769db14`
+  and `cb965e9d`). That interval IS the latency: the campaign runs within ten minutes of having
+  somebody, with no manual step and — crucially — no stop to undo.
+- **Sends the extend-audience lifecycle email**, and ONLY when the campaign has actually exhausted
+  an audience before (`hasExhaustedAudience`, TTL ignored — the question is whether outreach ever
+  ran out of people, not whether one is dry right now). A campaign that has served NOTHING has
+  exhausted nothing: "nothing left to serve" is equally true of a campaign that never had anything,
+   and 0 of 0 is not 100%, so there is no claim to make and nobody to email. Verified in prod
+  2026-08-16: of the three campaigns that ever received this email, one (Lux Projects Bali,
+  `cb965e9d`) had 0 contacts and 0 audiences ever — its claim was false.
 
-**"Everyone has been contacted" is a claim about people we actually contacted, so it needs a real
-audience to have run out** — `hasExhaustedAudience(campaign.id)`, ANY row in
-`campaign_audience_exhaustion` for the campaign, TTL ignored (this asks whether outreach ever ran
-out of people, not whether an audience is dry right now). Every other guard asked whether the brand
-is set up to keep spending; none asked whether anybody was ever contacted, so a brand with NO
-audience and NO contacts reached the same auto-stop branch and was told its outreach had finished:
-zero out of zero read as everyone. That brand writes no exhaustion row precisely because its stop
-carries no audience id — the case `/end-run` already logs as "no audience ran" — so the mark IS
-the evidence, and no new state was needed to tell the two apart. **Since 2026-08-20 that same
-evidence gates the STOP itself, not only the claim** (next section): withholding the email while
-still stopping was half the fix. Verified in prod 2026-08-16: the three campaigns
-that ever received this email hold 11, 3 and **0** exhaustion rows — the zero is Lux Projects Bali
-(`cb965e9d`, brand `ccc29ba2`, emailed twice, 0 contacts and 0 audiences ever); the other two are
-unaffected.
-
-**The email NAMES the brand and links to that brand's own audiences page.** It used to carry no
-identity at all and point at the dashboard root, so a customer with several brands could not tell
-which one paused. `{{audiencesUrl}}` is
-`https://dashboard.distribute.you/orgs/<orgId>/brands/<brandId>/audiences` (the campaign's primary
-brand) and `{{brandFooterHtml}}` / `{{brandFooter}}` carry the name as a quiet grey line at the
-foot, HTML and text respectively — transactional-email interpolates a variable RAW into the HTML
-body, so the name is escaped here. The name comes from brand-service `/runtime-context`, the read
-this service already makes; if it cannot be resolved the footer is EMPTY and the email reads exactly
-as it did before. Never substitute a placeholder or an id for a name a customer will read.
-(Set 2026-08-16.)
-
-## A campaign that served NOTHING has exhausted nothing — the terminal verdict rests on POSITIVE evidence, never on an empty remainder
-
-The auto-stop asked ONE question: is there a serveable audience left? "None left" is equally true
-of a campaign that never had one, so a campaign that had contacted nobody took the same branch as
-one that had genuinely worked its audiences to the end — 0 of 0 read as 100%. The verdict is now
-gated on evidence that work HAPPENED through that campaign: `isExhaustionStopWarranted`
-(`src/lib/audience-exhaustion.ts`) is `!serveable && hasExhaustedAudience(campaignId)`, the SAME
-mark the extend-audience email is gated on, and it is only ever written for a run that named a
-real audience.
-
-- **Without that evidence the campaign is NOT stopped at all.** It stays `ongoing` and falls
-  through to the normal reschedule, so the next tick looks at it again. Nothing new decides
-  whether it may spend: the turn planner holds it if its pair is unfunded and the gate refuses a
-  run it cannot price. The alternative — stopping it — is STICKY: funding deliberately resumes a
-  campaign that was HELD but never one that stopped for a reason of its own, so
-  `audience_exhausted` parks a funded channel indefinitely with no manual path back, and the
-  funding sweep says exactly that on every pass.
-- **The degenerate branch states its decision.** `stopCampaign=true` with no `x-audience-id` used
-  to log that it could not mark an audience and then proceed to the stop anyway; it now says no
-  audience ran, and the gate says it is therefore not concluding exhaustion.
-- **The exhaustion stop itself is untouched.** A campaign that HAS served and then genuinely
-  exhausts still stops, still emails, still resumes through the sweep. Money is not an answer to
-  exhaustion; only the zero-evidence case was wrong.
-- **Migration 0052** applies the same rule to the rows already carrying the verdict — stopped for
-  `audience_exhausted` with zero exhaustion marks, and no live twin holding their identity — and
-  returns them to `ongoing` / no reason / due now, auditing each in
-  `campaign_stop_reason_decisions`. It selected the whole stopped-for-exhaustion population in
-  prod, two rows: `4769db14` (the first campaign the per-channel provisioner ever created, dead
-  ten seconds after birth on a channel funded at $10/day) and `cb965e9d` (Lux Projects Bali, the
-  0-audience brand above). Pinned by `tests/integration/unpark-never-served-migration.test.ts`,
-  which applies the file itself twice.
-- **It WAITS on the reason's cadence, it does not retry on the run's.** Rescheduling that campaign
-  on `RERUN_GRACE_MS` (10s) fired a workflow every eleven seconds, forever, for a campaign whose
-  situation cannot change in eleven seconds — 33 runs in the first minutes on `4769db14` and the
-  same on `cb965e9d`, each unable to reach anything, flooding every service in the chain. "Nobody
-  to contact" is the MONEY kind of wait, not the TURN kind: it moves when a customer edits their
-  audiences or when a never-run channel finally accumulates evidence, hours or days apart. So it
-  reschedules at `NO_SERVEABLE_AUDIENCE_RECHECK_MS` (10 min, the same figure and the same argument
-  as `FUNDING_RECHECK_MS`), which IS the latency — the campaign runs within ten minutes of having
-  somebody, with no manual step. The wait is a RESCHEDULE, never a stop: it stays `ongoing`, so
-  nothing has to be undone when the audience appears. One line says it is waiting and why, on that
-  cadence; the generic reschedule line is suppressed under it and the no-audience-ran line is
-  `info`, not `warn` — an expected business state.
-- WHY that campaign's first serve came back empty on a brand whose sibling served 109 leads the
-  same day is a separate lead-service investigation. This service's job was to stop reading an
-  empty answer as a finished one. (Set 2026-08-20.)
-
-## A campaign that ran out of people to contact comes BACK on its own — the customer's action is the trigger, and they were told so
-
-The auto-stop above emails the customer asking them to extend or add an audience. Nothing closed
-that loop: they did exactly what the email asked and the campaign stayed stopped forever, because
-no path anywhere turned a stopped campaign back on. The dashboard made it worse — it lists only
-live campaigns, so the brand saw an empty table and no reason. Prod, brand
-`a179bbd9-8eed-4dba-9338-78125922b0c6`: auto-stopped 2026-08-05 for exhaustion, owner activated
-three fresh audiences 2026-08-10, five days of a funded brand produced nothing.
-
-- **WHY a campaign stopped is a stored fact** — `campaigns.stop_reason` (migration 0046), written
-  at every one of the four places this service stops a campaign: `audience_exhausted` (/end-run,
-  all audiences exhausted), `max_leads_reached` (gate-check), `manual` (PATCH status=stop),
-  `org_teardown`. The vocabulary lives in ONE place, `src/lib/stop-reason.ts`. Without it the
-  campaign that ran out of people and the campaign a person switched off are the same row.
-- **ONLY `audience_exhausted` resumes. NULL never does.** Every row stopped before the column
-  existed keeps NULL and is invisible to the sweep — deliberately, and it is why there is no
-  backfill: a stop nobody wrote a reason for is not evidence of exhaustion, and a
-  timestamp-correlation guess would resurrect campaigns a person stopped on purpose. The loop
-  closes forward. The reason is CLEARED whenever a campaign becomes ongoing again (resume,
-  activate, funding provisioning), so the column always describes the CURRENT stop.
-- **The candidate population is the narrow one, never "every stopped campaign".** 682 stopped
-  rows against 17 ongoing — a stopped campaign is a large and mostly permanent population, so
-  `resumeServeableCampaigns` (`src/lib/campaign-resume.ts`) reads only `status='stopped' AND
-  stop_reason='audience_exhausted'`, served by a partial index. Nothing else is looked at.
-- **The signal is the audience owner's answer, not our guess.** features-service's projection
-  enumerates every ACTIVE audience of the brand, so a newly-activated audience appears the moment
-  the customer activates it. `serveableAudienceIdsForCampaign` (`src/lib/serveable-audience.ts`)
-  is the ONE definition of "has somebody to contact", shared by the leg that STOPS (/end-run) and
-  the leg that RESUMES. Two legs on two definitions is how a campaign gets stopped by one and
-  never picked up by the other.
-- **Own cadence, not the tick's.** `RESUME_SWEEP_INTERVAL_MS` = 10 min. A tick fires as often as
-  every 60s; asking features-service about every exhausted campaign at that rate would be a
-  per-minute fan-out for a state that changes when a customer edits their audiences. The
-  scheduler never sleeps past that interval — otherwise a brand whose ONLY campaign is stopped
-  has an empty ongoing snapshot, sleeps the full idle hour, and the sweep runs hourly however
-  willing it is. (Unconditional since 2026-08-16: the funding sweep needs the same floor, and one
-  snapshot query per ten minutes on an idle service is cheaper than the precondition read it
-  replaced.)
-- **Fail-CLOSED, unlike the scheduler's other reads.** Funding is checked on gate-check's exact
-  precedence (own `dailyBudgetCents` → funnel ceiling → brand daily budget) and an unreadable
-  budget, an unreadable audience set or a zero/absent ceiling all leave the campaign stopped. Turn-taking is fail-SOFT because it only reorders work already allowed; this decides
-  whether to START spending again, which is the gate's stance. **Every refusal is logged with its
-  reason** — a resume that cannot be decided safely is not a resume, and it says so.
-- **AT MOST one ongoing campaign per identity still holds.** The sweep checks for an incumbent on
-  (org, brand, funnel, channel) AND the write is conditional on the row still being
-  stopped-for-exhaustion; a `23505` from the partial unique index leaves it stopped. Belt and
-  braces on purpose: the index is the guarantee, the read is the reason we can explain.
-- The resumed campaign is `ongoing` with `nextRunAt=now`, i.e. exactly the state a live campaign
-  is in — the very next tick claims it like any other. Nothing about the auto-stop itself
-  changed: stopping when there is nobody left to contact is correct; never coming back was the bug.
-(Set 2026-08-10.)
+The email itself is unchanged: `maybeSendExtendAudienceEmail` (`src/lib/transactional-email.ts`)
+sends via transactional-email-service (`POST /send`, eventType `audience_fully_contacted`; template
+registered at boot via `PUT /platform-templates`) ONLY when ALL hold — sales-cold-email-outreach
+feature, `campaign.createdByUserId` present, a daily budget `> 0`, and org `has_auto_topup`. Every
+guard read is fail-SAFE (any error/absent field → OFF → no email) and the whole call is
+fire-and-forget after the response, so it NEVER blocks or fails run finalization. The
+1×/month-per-brand cap is transactional-email's dedup, not a local table. It NAMES the brand and
+links to that brand's own audiences page (`{{audiencesUrl}}` =
+`https://dashboard.distribute.you/orgs/<orgId>/brands/<brandId>/audiences`, `{{brandFooterHtml}}` /
+`{{brandFooter}}` carrying the escaped name from `/runtime-context`; unresolvable → EMPTY footer,
+never a placeholder or an id).
 
 ## EVERY `listRuns` states a status AND a bound — an unfiltered read costs more with every run the campaign has ever done
 
