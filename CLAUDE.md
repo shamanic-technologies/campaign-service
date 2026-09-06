@@ -655,6 +655,68 @@ read as one campaign.
   — their history lives in runs-service, keyed on `campaign_id`, and repointing it is runs-service's
   own ledger to move. Deleting them would orphan the history, which is the one thing never allowed.
 
+## The OFFER is part of what ONE campaign IS — a brand funding two offers on one (funnel, channel, leg) gets two campaigns
+
+A customer funds their money PER OFFER: billing-service has keyed a daily ceiling on
+(org, brand, funnel, channel, OFFER, leg) since its migration 0037, and the dashboard lets each
+offer's ceiling be set separately on Offer Settings. This service carried `offer_id` (migration
+0050) but the offer was in NONE of the three places that decide whether a funded thing already has
+a campaign: not in the uniqueness Postgres polices, not in the existing-campaign lookup, and not in
+the grain the funded pairs are derived at — which deduplicated two stored ceilings differing only
+by offer into ONE provisioning question, on purpose. So a brand selling two offers through one
+(funnel, channel, leg) had two ceilings and ONE campaign: the second offer was funded and never
+provisioned, with no error, no log and no failing test. Verified in prod the day this shipped: 194
+offers across 144 brands, 22 brands holding two or more, and no brand yet funding two offers on one
+identity — armed, never fired.
+
+- **`fundedPairs` reads billing's OFFER grain**, between `channels` and `legs`: `legs` first (it
+  carries both the offer and the leg), then `offers`, then `channels`, then `funnels`. Each
+  fallback keeps the population below it byte-identical, and a row whose `offerId` is null is an
+  UNSCOPED ceiling — money written before a ceiling could name an offer — which provisions exactly
+  as it always did.
+- **Migration 0056 widens `uniq_campaigns_org_brand_funnel_channel` with `coalesce(offer_id, '')`.**
+  A pure LOOSENING, the same shape as 0055's leg: every row that states no offer keys byte-identically
+  to before, so no currently-valid state becomes invalid and no existing pair can start colliding.
+  The index NAME still says funnel_channel, for the same reason it did after the leg: the funnel is
+  still part of this identity and the ship that removes it renames the index.
+- **THE LOOKUP GIVES THE SAME ANSWER BILLING GIVES ABOUT WHICH MONEY IT IS.** A pair whose ceiling
+  NAMES an offer matches the campaign OF THAT OFFER. When that finds nothing there are two cases and
+  only one is a second campaign to have: a SINGLE offer funded on the identity (every brand alive
+  today) means the campaign already doing that work IS this pair's campaign whatever offer it
+  states, so it is matched exactly as it always was; SEVERAL offers funded on it means there are
+  genuinely two campaigns to have and this pair gets its own. `sharedIdentity` on the pair is that
+  count, and it is what makes the widening a loosening at runtime rather than only in the index.
+- **NOTHING IS EVER STAMPED ON A CAMPAIGN THAT STATES NO OFFER.** Only brand-service knows which
+  offer a live campaign belongs to (`adoptOfferForPairSafely` writes one, and only where the (org,
+  brand) pair holds exactly one), and guessing from a ceiling would move real money onto the wrong
+  proposition. That is why the single-funded-offer case LEAVES the campaign alone instead of
+  adopting it the way the leg did — the leg identifier came from the same customer statement the
+  campaign was already working; the offer does not.
+- **WHICH funnels a funded offer may be sold through is asked OF THAT OFFER.** A brand that funds a
+  NEW offer has no campaign stating it, so its declaration was never read by
+  `resolveDeclaredFunnels` — `funnelsByOffer` returns what that pass already read and the funded
+  offer is asked directly otherwise. An unreadable declaration provisions nothing and warns; an
+  offer that does not declare the funnel provisions nothing and says so. The `contested` refusal
+  (several offers declare one funnel, none outranks another) is now only reached by a pair whose
+  ceiling names NO offer — when the money names one, there is nothing ambiguous left to wait on.
+- **The deterministic NAME appends the offer when the pair states one**, before the leg. Two offers
+  of one (funnel, channel, leg) would otherwise collide on `uniq_campaigns_org_name` and the second
+  insert would be swallowed as a race — the funded-and-never-provisioned failure one layer down. An
+  offer-less campaign keeps the name it has always had, byte for byte.
+- **The create route matches the same way, in two steps**: the campaign of THIS offer wins, and only
+  when there is none does an offer-LESS incumbent match — which is what happened before the field
+  was part of the key, and is how such a campaign learns the offer it sells from a caller that now
+  states one. A create stating a DIFFERENT offer is a new campaign, and a `23505` hands back the
+  winner of the same offer rather than a campaign selling another one. A `PATCH` that moves a
+  campaign onto an identity another live campaign holds is a 409.
+- **Nothing about pacing, scheduling or serialization changed.** `offerCeilingCents` already paced
+  on the offer and `spendable-budget` already reported at that grain; what was missing was only that
+  a second campaign could not EXIST to be paced. No column, table, vocabulary or accumulator was
+  added, and no live campaign changed id, status, money or history.
+
+(Set 2026-09-06.)
+
+
 ## A campaign states the single funnel LEG it is bought for — features-service's identifier, carried and never parsed
 
 A sales funnel is a chain of steps, and the thing a customer actually BUYS is one of its **LEGS**:
@@ -872,9 +934,13 @@ attribution and on the customer's screen.
   change, so a create that states no offer behaves EXACTLY as it did before the column existed and
   callers state it as they migrate. It becomes required in a later wave, and only then. `PATCH` sets
   or clears it, which is how a campaign created before it could state one says which offer it runs.
-- **It is NOT part of the identity key.** `uniq_campaigns_org_brand_funnel_channel` is untouched:
-  widening it while the field is optional would let one brand grow unlimited offer-less campaigns on
-  one (funnel, channel). Widening it is the same later wave that makes the field required.
+- **It IS part of the identity key since 2026-09-06** (migration 0056 — see the section above).
+  `uniq_campaigns_org_brand_funnel_channel` spans `coalesce(offer_id, '')`, which is what lets a
+  brand funding two offers on one (funnel, channel, leg) hold two live campaigns. The `coalesce` is
+  load-bearing exactly as it is for the funnel and the leg: without it a brand could grow unlimited
+  offer-less campaigns on one (funnel, channel), and with it every row that states no offer keys
+  byte-identically to the way it did before. The field stays OPTIONAL; making it required is a later
+  wave and this widening did not need it.
 - **It decides no MONEY question** — no pacing, funding, gate or ranking decision reads it, and
   `idx_campaigns_org_offer` serves the per-offer attribution read it exists for. Since 2026-08-19 it
   decides exactly ONE thing: WHICH QUESTION this service asks brand-service about the funnels sold

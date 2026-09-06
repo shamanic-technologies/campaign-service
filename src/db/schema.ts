@@ -237,21 +237,26 @@ export const campaigns = pgTable(
     index("idx_campaigns_resumable")
       .on(table.stopReason, table.updatedAt)
       .where(sql`${table.status} = 'stopped' and ${table.stopReason} is not null`),
-    // A campaign is unique on (org, brand, sales funnel, LEG, acquisition channel) — migration
-    // 0044, widened by 0055. Scoped to `ongoing`: a stopped row is history, not a competitor for
-    // the brand's turn. The leg is part of it because a campaign bought for one leg is not the
-    // campaign bought for another: without it a brand working ONE channel for TWO legs cannot hold
-    // two live campaigns at all, since the second create reads as a restatement of the first.
-    // `coalesce(..., '')` is load-bearing on BOTH — Postgres treats NULLs as distinct, so without
-    // it a brand could grow unlimited funnel-less (or leg-less) campaigns on one channel. It also
-    // makes the widening a pure loosening: every row that states no leg keys byte-identically to
-    // the way it did before the column existed. The NAME still says funnel_channel on purpose —
-    // the funnel is still part of this identity, and the ship that removes it renames the index.
+    // A campaign is unique on (org, brand, sales funnel, OFFER, LEG, acquisition channel) —
+    // migration 0044, widened by 0055 (leg) and 0056 (offer). Scoped to `ongoing`: a stopped row is
+    // history, not a competitor for the brand's turn. The leg is part of it because a campaign
+    // bought for one leg is not the campaign bought for another; the OFFER is part of it for the
+    // same reason one level up — a customer funds their money per offer (billing keys its daily
+    // ceiling on the offer), so two offers worked through the same (funnel, channel, leg) are two
+    // ceilings and must be able to be two campaigns. Without it the second offer is funded and
+    // never provisioned, silently.
+    // `coalesce(..., '')` is load-bearing on ALL THREE — Postgres treats NULLs as distinct, so
+    // without it a brand could grow unlimited funnel-less (or leg-less, or offer-less) campaigns on
+    // one channel. It also makes each widening a pure loosening: every row that states no offer or
+    // no leg keys byte-identically to the way it did before the column existed. The NAME still says
+    // funnel_channel on purpose — the funnel is still part of this identity, and the ship that
+    // removes it renames the index.
     uniqueIndex("uniq_campaigns_org_brand_funnel_channel")
       .on(
         table.orgId,
         table.brandId,
         sql`coalesce(${table.funnelKey}, '')`,
+        sql`coalesce(${table.offerId}, '')`,
         sql`coalesce(${table.legKey}, '')`,
         table.acquisitionChannel,
       )

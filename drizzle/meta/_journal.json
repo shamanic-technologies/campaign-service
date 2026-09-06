@@ -393,6 +393,13 @@
       "when": 1778000000000,
       "tag": "0055_campaign_leg_key",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1778100000000,
+      "tag": "0056_campaign_offer_identity",
+      "breakpoints": true
     }
   ]
 }

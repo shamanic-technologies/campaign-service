@@ -417,6 +417,22 @@ export function fundedChannelPairs(
 }
 
 /**
+ * The (funnel, acquisition channel, OFFER) rows this org actually FUNDS for the brand.
+ *
+ * The grain between `channels` and `legs`, and the one a campaign is provisioned per when billing
+ * serves no leg rows: a customer funds their money per offer, so a (funnel, channel) worked for
+ * TWO offers is two ceilings and two campaigns. `channels` is the SUM of these rows, so reading it
+ * there gives both offers one identity and lets each spend what the other was funded for.
+ *
+ * A ceiling of zero is a deliberate "do not work this", exactly as at every grain above.
+ */
+export function fundedOfferRows(
+  read: Extract<FunnelBudgetsRead, { ok: true }>,
+): FunnelOfferBudget[] {
+  return (read.offers ?? []).filter((o) => o.dailyBudgetCents > 0);
+}
+
+/**
  * The ceiling that binds ONE (funnel, acquisition channel, offer, LEG) row — the grain BELOW the
  * offer, and the finest billing stores.
  *
