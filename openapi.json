@@ -901,9 +901,6 @@
           },
           "reason": {
             "type": "string"
-          },
-          "autoStopped": {
-            "type": "boolean"
           }
         },
         "required": [

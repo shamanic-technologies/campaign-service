@@ -301,7 +301,6 @@ export const GateCheckBody = z.object({}).openapi("GateCheckBody");
 export const GateCheckResponse = z.object({
   allowed: z.boolean(),
   reason: z.string().optional(),
-  autoStopped: z.boolean().optional(),
 }).openapi("GateCheckResponse");
 
 export const StartRunBody = z.object({}).openapi("StartRunBody");

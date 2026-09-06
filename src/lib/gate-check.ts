@@ -5,7 +5,6 @@ import { eq } from "drizzle-orm";
 import { isSalesFunnelFeature } from "./sales-outreach-campaign.js";
 import { channelCeilingCents, fetchFunnelBudgets, legCeilingCents, offerCeilingCents } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
-import { STOP_REASONS } from "./stop-reason.js";
 
 const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
 
@@ -74,7 +73,6 @@ export type CreditCheckOutcome = "affordable" | "unaffordable" | "unreadable";
 export interface GateCheckResult {
   allowed: boolean;
   reason?: string;
-  autoStopped?: boolean;
   nextRunAt?: Date;
   creditCheck?: CreditCheckOutcome;
   // Why billing could not be read. Only set alongside `unreadable`.
@@ -140,24 +138,24 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   const isSalesFeature = isSalesFunnelFeature(campaign.featureSlug);
 
   if (!isSalesFeature) {
-    const budgetLimits: Array<{ limit: string; label: string; autoStop: boolean; nextRunAt?: Date }> = [];
+    const budgetLimits: Array<{ limit: string; label: string; nextRunAt?: Date }> = [];
     const windows: BudgetWindow[] = [];
 
     if (campaign.maxBudgetDailyUsd) {
       windows.push({ label: "daily", since: startOfToday().toISOString() });
-      budgetLimits.push({ limit: campaign.maxBudgetDailyUsd, label: "daily", autoStop: false, nextRunAt: nextDayStart() });
+      budgetLimits.push({ limit: campaign.maxBudgetDailyUsd, label: "daily", nextRunAt: nextDayStart() });
     }
     if (campaign.maxBudgetWeeklyUsd) {
       windows.push({ label: "weekly", since: daysAgo(7).toISOString() });
-      budgetLimits.push({ limit: campaign.maxBudgetWeeklyUsd, label: "weekly", autoStop: false, nextRunAt: nextWeekStart() });
+      budgetLimits.push({ limit: campaign.maxBudgetWeeklyUsd, label: "weekly", nextRunAt: nextWeekStart() });
     }
     if (campaign.maxBudgetMonthlyUsd) {
       windows.push({ label: "monthly", since: startOfMonth().toISOString() });
-      budgetLimits.push({ limit: campaign.maxBudgetMonthlyUsd, label: "monthly", autoStop: false, nextRunAt: nextMonthStart() });
+      budgetLimits.push({ limit: campaign.maxBudgetMonthlyUsd, label: "monthly", nextRunAt: nextMonthStart() });
     }
     if (campaign.maxBudgetTotalUsd) {
       windows.push({ label: "total" });
-      budgetLimits.push({ limit: campaign.maxBudgetTotalUsd, label: "total", autoStop: true });
+      budgetLimits.push({ limit: campaign.maxBudgetTotalUsd, label: "total" });
     }
 
     if (windows.length > 0) {
@@ -177,14 +175,9 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         // ceiling matches the dashboard's committed "Budget spent today" and a campaign stops
         // committing new work above its configured cap.
         //
-        // The TOTAL window (autoStop:true) now also uses committed, by product-owner decision.
-        // TRADEOFF (accepted): for the non-terminal windows the worst-case-LLM-hold over-block
-        // (a ~26¢ reservation reconciles to ~0.7¢ then cancels) only causes a ~15min pause that
-        // self-heals; for the TOTAL window the same inflated holds can trigger the TERMINAL
-        // autoStop, so a temporary committed spike near the lifetime cap can stop a campaign for
-        // good before the holds settle. That stop is recoverable (re-activating the campaign
-        // resumes it), and the owner has chosen committed-pacing for the total cap for full
-        // coherence with the dashboard over avoiding that edge.
+        // The TOTAL window uses committed too, by product-owner decision — and it is no longer
+        // terminal, so the tradeoff that used to make that risky is gone: an inflated hold near
+        // the lifetime cap now pauses the campaign until the holds settle instead of stopping it.
         // Pace on NET committed spend (post-usage-discount) — what the org actually
         // PAYS, not list price. A discounted org must be allowed to run until its NET
         // spend hits the budget; pacing on gross stops it at (1−discount)×budget of real
@@ -197,10 +190,11 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
           : 0;
 
         if (spentCents >= limitCents) {
-          if (budgetLimit.autoStop) {
-            await autoStopCampaign(campaign.campaignId);
-            return { allowed: false, reason: "Total budget exceeded", autoStopped: true };
-          }
+          // A configured ceiling reached is a SYSTEM CONDITION, and a system condition never
+          // changes a campaign's status. The total window used to be terminal (`autoStop`); it
+          // now blocks exactly like the daily, weekly and monthly ones — the campaign stays as the
+          // customer left it, does not run this tick, and runs again on a later tick if the
+          // condition has passed (a raised cap, a cancelled hold that settles below it).
           return { allowed: false, reason: `${budgetLimit.label} budget exceeded`, nextRunAt: budgetLimit.nextRunAt };
         }
       }
@@ -435,22 +429,14 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     }
 
     if (totalServed >= campaign.maxLeads) {
-      await autoStopCampaign(campaign.campaignId);
-      return { allowed: false, reason: "Max leads reached", autoStopped: true, creditCheck, creditCheckDetail };
+      // The lead cap is a system condition like any other: it blocks the RUN, never the campaign.
+      // The customer raises the cap and the campaign runs again on a later tick, with nothing to
+      // un-stop and no sweep to bring it back.
+      return { allowed: false, reason: "Max leads reached", creditCheck, creditCheckDetail };
     }
   }
 
   return { allowed: true, creditCheck, creditCheckDetail };
-}
-
-async function autoStopCampaign(campaignId: string): Promise<void> {
-  await db.update(campaigns)
-    // States WHY, so the resume sweep can tell this apart from a campaign that ran out of people
-    // to contact. A lead cap is a limit the campaign reached, not one it can grow out of: it
-    // never comes back on its own.
-    .set({ status: "stopped", stopReason: STOP_REASONS.MAX_LEADS_REACHED, updatedAt: new Date() })
-    .where(eq(campaigns.id, campaignId));
-  console.log(`[campaign-service] Auto-stopped campaign ${campaignId} (max leads reached)`);
 }
 
 async function fetchLeadStats(

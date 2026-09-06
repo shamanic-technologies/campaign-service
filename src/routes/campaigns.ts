@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, desc, inArray, isNull } from "drizzle-orm";
+import { eq, and, desc, inArray, isNull, sql } from "drizzle-orm";
 import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
@@ -215,11 +215,22 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     // THIS offer wins, and only when there is none does an offer-LESS incumbent match, which is
     // exactly what happened before this field was part of the key (and which is how such a campaign
     // learns the offer it sells from a caller that now states one).
+    //
+    // AND the row is matched WHATEVER ITS STATUS. A campaign the customer stopped is still their
+    // campaign for this identity: creating a second one beside it is how a brand ended up with two
+    // identical live campaigns, and how a deliberately-stopped campaign was left invisible while a
+    // twin spent its money. `uniq_campaigns_org_brand_funnel_channel` is partial on `ongoing`, so
+    // Postgres cannot police that on its own and never will — production carries 663 stopped rows
+    // sharing 33 identities from before this was one campaign, and history is never rewritten. So
+    // the guard is HERE, and the index stays the backstop for the live case.
+    //
+    // A create matching a STOPPED row is the customer launching it: this route is only ever a
+    // person's explicit act (onboarding launch, the dashboard), so it hands the campaign back
+    // ongoing and due. That is the one thing allowed to move a status.
     const findIncumbent = (matchOffer: boolean) =>
       db.query.campaigns.findFirst({
         where: and(
           eq(campaigns.orgId, req.orgId!),
-          eq(campaigns.status, "ongoing"),
           eq(campaigns.brandId, identity.brandId!),
           eq(campaigns.acquisitionChannel, identity.acquisitionChannel!),
           // The identity includes the funnel: an incumbent is the campaign alive on THIS funnel
@@ -234,7 +245,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           matchOffer && offerId ? eq(campaigns.offerId, offerId) : undefined,
           matchOffer ? undefined : isNull(campaigns.offerId),
         ),
-        orderBy: [campaigns.createdAt],
+        // The LIVE campaign of the identity wins over a stopped one whatever their dates; among
+        // stopped rows the most recent is the one the customer last worked with.
+        orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
       });
     let incumbent =
       identity.brandId && identity.acquisitionChannel ? (await findIncumbent(true)) ?? null : null;
@@ -249,6 +262,12 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         .update(campaigns)
         .set({
           workflowSlug,
+          // This create IS the customer starting the campaign — the onboarding launch and the
+          // dashboard are the only callers, and both are a person pressing a button. A campaign
+          // they had stopped comes back here and NOWHERE else: no sweep, no ceiling, no condition.
+          status: "ongoing",
+          stopReason: null,
+          nextRunAt: new Date(),
           ...(featureInputs !== undefined ? { featureInputs } : {}),
           ...(activeGoalId !== undefined ? { activeGoalId } : {}),
           ...(brandProfileId !== undefined ? { brandProfileId } : {}),

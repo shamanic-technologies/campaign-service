@@ -492,7 +492,7 @@ describe("Campaign CRUD", () => {
       expect(other.body.campaign.funnelKey).toBe("website_purchases");
     });
 
-    it("uniqueness binds ONGOING rows only — a stopped campaign is history, not a competitor", async () => {
+    it("a STOPPED campaign of the identity is never duplicated — the create hands it back, started", async () => {
       const brandIds = freshBrand();
       const first = await createCampaign(
         { ...validBody, name: "Stopped Then New", brandIds, funnelKey: "form_magnet" },
@@ -507,17 +507,19 @@ describe("Campaign CRUD", () => {
         .send({ status: "stop" })
         .expect(200);
 
+      // A row already exists for this identity, so nothing new is created — whatever its status.
+      // Creating a second one beside a stopped campaign is how a brand ended up with two identical
+      // live rows, and how a deliberately-stopped one was left invisible while a twin spent its
+      // money. This create IS the customer launching it, so it comes back ongoing.
       const second = await createCampaign(
         { ...validBody, name: "Stopped Then New — the live one", brandIds, funnelKey: "form_magnet" },
         "org_test_crud",
         SALES,
-      ).expect(201);
-      expect(second.body.campaign.id).not.toBe(first.body.campaign.id);
+      ).expect(200);
+      expect(second.body.campaign.id).toBe(first.body.campaign.id);
       expect(second.body.campaign.status).toBe("ongoing");
-
-      const stopped = await get(first.body.campaign.id).expect(200);
-      expect(stopped.body.campaign.status).toBe("stopped");
-      expect(stopped.body.campaign.funnelKey).toBe("form_magnet");
+      expect(second.body.campaign.stopReason).toBeNull();
+      expect(second.body.campaign.funnelKey).toBe("form_magnet");
     });
   });
   // A sales campaign's money is billing's, per (funnel, channel, offer). gate-check runs the

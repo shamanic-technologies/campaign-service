@@ -41,7 +41,7 @@ import { campaigns, brandPauseTransitions } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { reRunDueCampaigns, claimStuckCampaigns } from "../../src/lib/scheduler.js";
 import { SALES_OUTREACH_FEATURE_SLUG } from "../../src/lib/sales-outreach-campaign.js";
-import { FUNDING_RECHECK_MS, resetFundingSweepThrottle } from "../../src/lib/funnel-campaigns.js";
+import { FUNDING_RECHECK_MS } from "../../src/lib/funnel-campaigns.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const orgId = "funding-eligibility-org";
@@ -156,7 +156,6 @@ beforeEach(async () => {
   await cleanTestData();
   vi.clearAllMocks();
   mockExecute.mockResolvedValue(undefined);
-  resetFundingSweepThrottle();
   process.env.BILLING_SERVICE_URL = "https://billing.test.local";
   process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
   process.env.FEATURES_SERVICE_URL = "https://features.test.local";
@@ -260,12 +259,11 @@ describe("the scheduler holds what the customer funds nothing for", () => {
   });
 });
 
-describe("funding brings back a brand nothing else will look at soon", () => {
-  it("provisions a newly funded channel for a brand PARKED AT ITS CEILING, without waiting for the day rollover", async () => {
-    // The brand is not idle: it has an ongoing campaign. It is simply at its ceiling, so the turn
-    // planner parked it on the day rollover and the claim path will not look at it again until
-    // midnight. Its owner funds a SECOND acquisition channel now — issue #386, and nineteen hours
-    // of silence for brand 75d7e3e8 in production.
+describe("money never starts anything", () => {
+  it("stands NO campaign up for a funded pair that has none — whatever else it funds", async () => {
+    // The 2026-09-06 incident. A brand parked at its ceiling funds a SECOND acquisition channel;
+    // before this, a sweep created a campaign for it. A campaign exists because the customer said
+    // so, so the second channel simply has no campaign until they launch one.
     billingAnswers(
       [{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }],
       "5000",
@@ -275,115 +273,30 @@ describe("funding brings back a brand nothing else will look at soon", () => {
       ],
     );
     const brandId = crypto.randomUUID();
-    const parked = new Date(Date.now() + 20 * 60 * 60_000); // next day rollover
-    await insertSalesCampaign(brandId, { nextRunAt: parked });
+    await insertSalesCampaign(brandId);
 
-    const { provisionFundedPairsForQuietBrands } = await import("../../src/lib/funnel-campaigns.js");
-    expect(await provisionFundedPairsForQuietBrands()).toBe(1);
+    await reRunDueCampaigns();
 
-    const ongoing = await db.query.campaigns.findMany({ where: eq(campaigns.status, "ongoing") });
-    expect(ongoing).toHaveLength(2);
-    const provisioned = ongoing.find((c) => c.featureSlug === "feedback-request-cold-email-outreach")!;
-    expect(provisioned.funnelKey).toBe("sales_meetings_from_conversation");
-    expect(provisioned.acquisitionChannel).toBe("feedback_request_email");
-    // Due now: the very next tick claims it like any other campaign.
-    expect(provisioned.nextRunAt!.getTime()).toBeLessThanOrEqual(Date.now() + 1_000);
-    // The parked incumbent is left exactly where the turn planner put it.
-    const incumbent = ongoing.find((c) => c.featureSlug === SALES_OUTREACH_FEATURE_SLUG)!;
-    expect(incumbent.nextRunAt!.getTime()).toBe(parked.getTime());
+    const all = await db.query.campaigns.findMany();
+    expect(all).toHaveLength(1);
+    expect(all[0].featureSlug).toBe(SALES_OUTREACH_FEATURE_SLUG);
   });
 
-  it("does not examine a brand whose campaign is due soon — the claim path reaches it first, so no billing read at all", async () => {
+  it("leaves a brand whose campaigns are ALL STOPPED exactly as it is, however well funded", async () => {
     billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
     const brandId = crypto.randomUUID();
-    await insertSalesCampaign(brandId); // due now
+    const stopped = await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null });
 
-    const { provisionFundedPairsForQuietBrands } = await import("../../src/lib/funnel-campaigns.js");
-    expect(await provisionFundedPairsForQuietBrands()).toBe(0);
-    // The whole read-volume argument: an actively-working brand costs this sweep nothing.
-    expect(mockFetch).not.toHaveBeenCalled();
+    await reRunDueCampaigns();
+    await claimStuckCampaigns();
+
+    const all = await db.query.campaigns.findMany();
+    expect(all).toHaveLength(1);
+    expect(all[0].id).toBe(stopped.id);
+    expect(all[0].status).toBe("stopped");
   });
 
-  it("does not examine a brand whose campaign is IN FLIGHT (nextRunAt cleared at claim time)", async () => {
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
-    const brandId = crypto.randomUUID();
-    await insertSalesCampaign(brandId, { nextRunAt: null });
-
-    const { provisionFundedPairsForQuietBrands } = await import("../../src/lib/funnel-campaigns.js");
-    expect(await provisionFundedPairsForQuietBrands()).toBe(0);
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("provisions a campaign per funded, declared funnel for a brand whose campaigns are all stopped", async () => {
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
-    const brandId = crypto.randomUUID();
-    await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null, funnelKey: null });
-
-    const { provisionFundedPairsForQuietBrands } = await import("../../src/lib/funnel-campaigns.js");
-    expect(await provisionFundedPairsForQuietBrands()).toBe(1);
-
-    const ongoing = await db.query.campaigns.findMany({
-      where: eq(campaigns.status, "ongoing"),
-    });
-    expect(ongoing).toHaveLength(1);
-    expect(ongoing[0].funnelKey).toBe("sales_meetings_from_conversation");
-  });
-
-  it("gives a funnel funded through TWO channels one campaign per channel", async () => {
-    billingAnswers(
-      [{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }],
-      "5000",
-      [
-        { funnelKey: "reply_meeting", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" },
-        { funnelKey: "reply_meeting", featureSlug: "feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
-      ],
-    );
-    const brandId = crypto.randomUUID();
-    await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null, funnelKey: null });
-
-    const { provisionFundedPairsForQuietBrands } = await import("../../src/lib/funnel-campaigns.js");
-    expect(await provisionFundedPairsForQuietBrands()).toBe(2);
-
-    const ongoing = await db.query.campaigns.findMany({ where: eq(campaigns.status, "ongoing") });
-    expect(ongoing).toHaveLength(2);
-    // Same funnel, one campaign per acquisition channel — and each holds its own identity, which
-    // is what the partial unique index on (org, brand, funnel, channel) polices.
-    for (const c of ongoing) expect(c.funnelKey).toBe("sales_meetings_from_conversation");
-    expect(ongoing.map((c) => c.featureSlug).sort()).toEqual([
-      "feedback-request-cold-email-outreach",
-      "sales-cold-email-outreach",
-    ]);
-    expect(ongoing.map((c) => c.acquisitionChannel).sort()).toEqual(["cold_email", "feedback_request_email"]);
-    // The second channel runs its OWN feature's workflow.
-    const feedback = ongoing.find((c) => c.featureSlug === "feedback-request-cold-email-outreach")!;
-    expect(feedback.workflowSlug).toBe("feedback-request-cold-email-outreach-seed");
-  });
-
-  it("never provisions a funded pair the channel may not be sold through", async () => {
-    billingAnswers(
-      [{ funnelKey: "visit_signup", dailyBudgetCents: "5000" }],
-      "5000",
-      [
-        { funnelKey: "visit_signup", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" },
-        { funnelKey: "visit_signup", featureSlug: "feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
-      ],
-      // The feedback request buys a CONVERSATION; the website-purchase funnel starts with a click it
-      // has no way to sell.
-      { "feedback-request-cold-email-outreach": ["sales_meetings_from_conversation"] },
-    );
-    const brandId = crypto.randomUUID();
-    await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null, funnelKey: null });
-
-    const { provisionFundedPairsForQuietBrands } = await import("../../src/lib/funnel-campaigns.js");
-    expect(await provisionFundedPairsForQuietBrands()).toBe(1);
-
-    const ongoing = await db.query.campaigns.findMany({ where: eq(campaigns.status, "ongoing") });
-    expect(ongoing).toHaveLength(1);
-    expect(ongoing[0].featureSlug).toBe("sales-cold-email-outreach");
-    expect(ongoing[0].funnelKey).toBe("website_purchases");
-  });
-
-  it("does NOT resume a campaign that stopped for a reason of its own — money answers none of them", async () => {
+  it("never resumes a campaign the customer stopped, however well funded its ceiling", async () => {
     billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
     const brandId = crypto.randomUUID();
     const stopped = await insertSalesCampaign(brandId, {
@@ -392,23 +305,12 @@ describe("funding brings back a brand nothing else will look at soon", () => {
       stopReason: "manual",
     });
 
-    const { provisionFundedPairsForQuietBrands } = await import("../../src/lib/funnel-campaigns.js");
-    await provisionFundedPairsForQuietBrands();
+    await reRunDueCampaigns();
+    await claimStuckCampaigns();
 
     const after = await db.query.campaigns.findFirst({ where: eq(campaigns.id, stopped.id) });
     expect(after!.status).toBe("stopped");
-  });
-
-  it("leaves a brand that funds nothing exactly as it is", async () => {
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
-    const brandId = crypto.randomUUID();
-    const stopped = await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null });
-
-    const { provisionFundedPairsForQuietBrands } = await import("../../src/lib/funnel-campaigns.js");
-    expect(await provisionFundedPairsForQuietBrands()).toBe(0);
-
-    const after = await db.query.campaigns.findFirst({ where: eq(campaigns.id, stopped.id) });
-    expect(after!.status).toBe("stopped");
+    expect(after!.stopReason).toBe("manual");
   });
 });
 
