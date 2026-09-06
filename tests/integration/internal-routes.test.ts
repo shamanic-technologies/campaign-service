@@ -1140,6 +1140,98 @@ describe("Pipeline routes", () => {
       expect(mockExecute).not.toHaveBeenCalled();
     });
 
+    it("noWorkAvailable=true reschedules on the idle cadence (~10min), does NOT stop the campaign and marks nothing exhausted", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        status: "ongoing",
+        workflowSlug: "ai-meeting-booking-v1",
+        featureSlug: "ai-meeting-booking",
+        createdByUserId: "user_test",
+      });
+
+      const before = Date.now();
+
+      const res = await request(app)
+        .post("/end-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: false, noWorkAvailable: true })
+        .expect(200);
+
+      expect(res.body.status).toBe("completed");
+      await new Promise((r) => setTimeout(r, 100));
+
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      // The reason it had nothing to do cannot change in ten seconds, so it waits on the idle
+      // cadence instead of the run cadence.
+      const nextRunTime = new Date(updated!.nextRunAt!).getTime();
+      expect(nextRunTime).toBeGreaterThanOrEqual(before + 9 * 60_000);
+      expect(nextRunTime).toBeLessThan(before + 11 * 60_000);
+      // Nothing here stops a campaign or marks anything exhausted.
+      expect(updated!.status).toBe("ongoing");
+      expect(updated!.stopReason).toBeNull();
+      const marks = await db.select().from(campaignAudienceExhaustion)
+        .where(eq(campaignAudienceExhaustion.campaignId, campaign.id));
+      expect(marks).toHaveLength(0);
+      expect(mockExecute).not.toHaveBeenCalled();
+    });
+
+    it("noWorkAvailable=false is the run cadence — a run that DID work is unchanged", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        status: "ongoing",
+        workflowSlug: "ai-meeting-booking-v1",
+        featureSlug: "ai-meeting-booking",
+        createdByUserId: "user_test",
+      });
+
+      const before = Date.now();
+
+      await request(app)
+        .post("/end-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: true, stopCampaign: false, noWorkAvailable: false })
+        .expect(200);
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      const nextRunTime = new Date(updated!.nextRunAt!).getTime();
+      expect(nextRunTime).toBeGreaterThanOrEqual(before + 9_000);
+      expect(nextRunTime).toBeLessThan(before + 15_000);
+    });
+
+    it("a FAILED run claiming noWorkAvailable still takes the failure backoff", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        status: "ongoing",
+        workflowSlug: "ai-meeting-booking-v1",
+        featureSlug: "ai-meeting-booking",
+        createdByUserId: "user_test",
+      });
+
+      const before = Date.now();
+
+      await request(app)
+        .post("/end-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .send({ success: false, stopCampaign: false, noWorkAvailable: true })
+        .expect(200);
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const updated = await db.query.campaigns.findFirst({
+        where: eq(campaigns.id, campaign.id),
+      });
+      const nextRunTime = new Date(updated!.nextRunAt!).getTime();
+      // A failed run says nothing trustworthy about whether there was work to do.
+      expect(nextRunTime).toBeGreaterThanOrEqual(before + 55_000);
+      expect(nextRunTime).toBeLessThan(before + 65_000);
+    });
+
     it("should NOT set nextRunAt if campaign is stopped", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,

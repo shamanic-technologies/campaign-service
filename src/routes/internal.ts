@@ -11,6 +11,7 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
 import { markAudienceExhausted, getFreshExhaustedAudienceIds, hasExhaustedAudience, isExhaustionStopWarranted, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../lib/audience-exhaustion.js";
+import { NO_WORK_RECHECK_MS } from "../lib/idle-run.js";
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
@@ -443,7 +444,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
   try {
     const campaignId = req.campaignId!;
     const orgId = req.orgId!;
-    const { success, stopCampaign } = req.body;
+    const { success, stopCampaign, noWorkAvailable } = req.body;
 
     const status = success === true ? "completed" : "failed";
     const identity: IdentityHeaders = {
@@ -460,8 +461,8 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       traceEvent(req.runId, {
         service: "campaign-service",
         event: "end-run",
-        detail: `Ending run for campaign ${campaignId} — success=${success}, stopCampaign=${stopCampaign}, status=${status}`,
-        data: { campaignId, success, stopCampaign, status },
+        detail: `Ending run for campaign ${campaignId} — success=${success}, stopCampaign=${stopCampaign}, noWorkAvailable=${noWorkAvailable === true}, status=${status}`,
+        data: { campaignId, success, stopCampaign, noWorkAvailable: noWorkAvailable === true, status },
       }, req.headers).catch(() => {});
     }
 
@@ -607,11 +608,18 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       // re-run tick — otherwise the in-flight guard sees it alive and forces +60s.
       // A campaign waiting for somebody to contact waits on that reason's cadence — it is not
       // waiting its turn, and firing it sooner cannot change the answer.
+      // Same argument, different reason: a run that reported it had NOTHING TO DO (nobody owed an
+      // answer this minute) waits on the idle cadence rather than re-firing in ten seconds. A
+      // FAILED run is not that case — it says nothing trustworthy about whether there was work —
+      // so the failure backoff still wins.
+      const idle = noWorkAvailable === true && status !== "failed";
       const delayMs = waitingForAudience
         ? NO_SERVEABLE_AUDIENCE_RECHECK_MS
         : status === "failed"
           ? 60_000
-          : RERUN_GRACE_MS;
+          : idle
+            ? NO_WORK_RECHECK_MS
+            : RERUN_GRACE_MS;
       const nextRunAt = new Date(Date.now() + delayMs);
 
       if (req.runId) {
@@ -637,6 +645,10 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         // the logs.
       } else if (status === "failed") {
         console.warn(`[campaign-service] Run failed — rescheduled campaign ${campaignId} in ${delayMs}ms (nextRunAt=${nextRunAt.toISOString()})`);
+      } else if (idle) {
+        // Expected business state, not a fault, and it fires on the idle cadence rather than once
+        // per run — which is the whole point of this branch.
+        console.log(`[campaign-service] Run had nothing to do for campaign ${campaignId} — waiting ${delayMs}ms instead of the run cadence (nextRunAt=${nextRunAt.toISOString()}); an interested prospect still triggers it immediately`);
       } else {
         console.log(`[campaign-service] Set nextRunAt=${nextRunAt.toISOString()} for campaign ${campaignId} (status=${status})`);
       }
