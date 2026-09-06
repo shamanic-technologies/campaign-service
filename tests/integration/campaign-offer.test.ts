@@ -123,15 +123,52 @@ describe("Campaign offer", () => {
     expect(again.body.campaign.offerId).toBe(offerId);
   });
 
-  it("a re-create that states a DIFFERENT offer moves the incumbent to it", async () => {
+  it("a create stating a DIFFERENT offer is a NEW campaign, not a restatement of the live one", async () => {
     const first = crypto.randomUUID();
     const second = crypto.randomUUID();
-    const body = baseBody("Moving Offer");
+    const body = baseBody("Two Offers, One Channel");
 
+    // A customer funds their money PER OFFER, so two offers worked through one (funnel, channel,
+    // leg) are two ceilings the customer set separately. Reading the second create as a
+    // restatement of the first is what left that second offer funded and never provisioned.
     const created = await createCampaign({ ...body, offerId: first }).expect(201);
-    const again = await createCampaign({ ...body, offerId: second }).expect(200);
+    const other = await createCampaign(
+      { ...body, name: "Two Offers, One Channel (second)", offerId: second },
+    ).expect(201);
+
+    expect(other.body.campaign.id).not.toBe(created.body.campaign.id);
+    expect(created.body.campaign.offerId).toBe(first);
+    expect(other.body.campaign.offerId).toBe(second);
+    // Both alive at once: the identity that could not be expressed now can be.
+    expect(created.body.campaign.status).toBe("ongoing");
+    expect(other.body.campaign.status).toBe("ongoing");
+  });
+
+  it("restating the SAME offer updates that offer's campaign rather than growing a second", async () => {
+    const offerId = crypto.randomUUID();
+    const body = baseBody("Restated Offer");
+
+    const created = await createCampaign({ ...body, offerId }).expect(201);
+    const again = await createCampaign(
+      { ...body, name: "Restated Offer (again)", offerId, workflowSlug: "sales-email-cold-outreach-v2" },
+    ).expect(200);
 
     expect(again.body.campaign.id).toBe(created.body.campaign.id);
-    expect(again.body.campaign.offerId).toBe(second);
+    expect(again.body.campaign.offerId).toBe(offerId);
+    expect(again.body.campaign.workflowSlug).toBe("sales-email-cold-outreach-v2");
+  });
+
+  it("a create that states an offer ADOPTS the offer-less campaign already holding the identity", async () => {
+    const offerId = crypto.randomUUID();
+    const body = baseBody("Pre-offer Campaign");
+
+    // The pre-offer population: one campaign on the identity, stating no offer. A create that now
+    // names one is that campaign saying which offer it sells — never a twin beside it.
+    const created = await createCampaign(body).expect(201);
+    expect(created.body.campaign.offerId).toBeNull();
+
+    const stated = await createCampaign({ ...body, offerId }).expect(200);
+    expect(stated.body.campaign.id).toBe(created.body.campaign.id);
+    expect(stated.body.campaign.offerId).toBe(offerId);
   });
 });

@@ -208,26 +208,39 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     // could read as one campaign. So a create that names an identity already alive UPDATES that
     // campaign to the requested workflow and configuration and hands it back.
     const identity = campaignIdentityColumns({ brandIds, featureSlug: resolvedFeatureSlug });
-    const incumbent = identity.brandId && identity.acquisitionChannel
-      ? await db.query.campaigns.findFirst({
-          where: and(
-            eq(campaigns.orgId, req.orgId!),
-            eq(campaigns.status, "ongoing"),
-            eq(campaigns.brandId, identity.brandId),
-            eq(campaigns.acquisitionChannel, identity.acquisitionChannel),
-            // The identity includes the funnel: an incumbent is the campaign alive on THIS funnel
-            // (or the funnel-less one, for a feature that sells through no sales funnel).
-            funnelKey ? eq(campaigns.funnelKey, funnelKey) : isNull(campaigns.funnelKey),
-            // ...and the LEG it is bought for. A campaign bought for one leg is not the campaign
-            // bought for another, so a create stating a different leg is a NEW campaign rather
-            // than a restatement of the live one — which is the only way a brand can work one
-            // channel for two legs at once. A create that states NO leg matches the leg-less row
-            // exactly as it did before the field existed.
-            legKey ? eq(campaigns.legKey, legKey) : isNull(campaigns.legKey),
-          ),
-          orderBy: [campaigns.createdAt],
-        })
-      : null;
+    // The OFFER is part of the identity too: a customer funds their money per offer, so two offers
+    // worked through one (funnel, channel, leg) are two ceilings and must be able to be two
+    // campaigns — a create stating a different offer is a NEW campaign, not a restatement of the
+    // live one. It is matched in two steps so that widening can only ever LOOSEN: the campaign of
+    // THIS offer wins, and only when there is none does an offer-LESS incumbent match, which is
+    // exactly what happened before this field was part of the key (and which is how such a campaign
+    // learns the offer it sells from a caller that now states one).
+    const findIncumbent = (matchOffer: boolean) =>
+      db.query.campaigns.findFirst({
+        where: and(
+          eq(campaigns.orgId, req.orgId!),
+          eq(campaigns.status, "ongoing"),
+          eq(campaigns.brandId, identity.brandId!),
+          eq(campaigns.acquisitionChannel, identity.acquisitionChannel!),
+          // The identity includes the funnel: an incumbent is the campaign alive on THIS funnel
+          // (or the funnel-less one, for a feature that sells through no sales funnel).
+          funnelKey ? eq(campaigns.funnelKey, funnelKey) : isNull(campaigns.funnelKey),
+          // ...and the LEG it is bought for. A campaign bought for one leg is not the campaign
+          // bought for another, so a create stating a different leg is a NEW campaign rather
+          // than a restatement of the live one — which is the only way a brand can work one
+          // channel for two legs at once. A create that states NO leg matches the leg-less row
+          // exactly as it did before the field existed.
+          legKey ? eq(campaigns.legKey, legKey) : isNull(campaigns.legKey),
+          matchOffer && offerId ? eq(campaigns.offerId, offerId) : undefined,
+          matchOffer ? undefined : isNull(campaigns.offerId),
+        ),
+        orderBy: [campaigns.createdAt],
+      });
+    let incumbent =
+      identity.brandId && identity.acquisitionChannel ? (await findIncumbent(true)) ?? null : null;
+    if (!incumbent && offerId && identity.brandId && identity.acquisitionChannel) {
+      incumbent = (await findIncumbent(false)) ?? null;
+    }
 
     if (incumbent) {
       // Only what the caller actually sent moves. The NAME is deliberately left alone: it is the
@@ -387,6 +400,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           // The leg is part of the identity that collided, so it is part of finding the winner —
           // otherwise the loser is handed back a campaign bought for a different leg.
           req.body.legKey ? eq(campaigns.legKey, req.body.legKey) : isNull(campaigns.legKey),
+          // The offer is part of the identity that collided too, for the same reason: otherwise the
+          // loser is handed back a campaign selling a different offer, on different money.
+          req.body.offerId ? eq(campaigns.offerId, req.body.offerId) : isNull(campaigns.offerId),
         ),
         orderBy: [campaigns.createdAt],
       });
@@ -502,11 +518,12 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_name") {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
     }
-    // Restating the leg can move a campaign onto an identity another live campaign already holds.
+    // Restating the leg or the offer can move a campaign onto an identity another live campaign
+    // already holds.
     // That is a real conflict and it says so, rather than surfacing as an internal error.
     if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_brand_funnel_channel") {
       return res.status(409).json({
-        error: "Another live campaign already runs this (brand, sales funnel, leg, acquisition channel)",
+        error: "Another live campaign already runs this (brand, sales funnel, offer, leg, acquisition channel)",
       });
     }
     console.error("[campaign-service] Update campaign error:", error);

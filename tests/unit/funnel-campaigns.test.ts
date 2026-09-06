@@ -146,6 +146,14 @@ function mockFunnelBudgets(
     legKey: string | null;
     dailyBudgetCents: string;
   }>,
+  // The OFFER grain, between `channels` and `legs`: one row per (funnel, channel, offer). Omitted
+  // = a billing deploy that does not serve it.
+  offers?: Array<{
+    funnelKey: string;
+    featureSlug: string;
+    offerId?: string | null;
+    dailyBudgetCents: string;
+  }>,
 ) {
   mockFetch.mockResolvedValueOnce({
     ok: true,
@@ -157,6 +165,9 @@ function mockFunnelBudgets(
           : brandDailyBudgetCents,
       funnels: funnels.map(f => ({ ...f, updatedAt: null })),
       ...(channels ? { channels: channels.map(c => ({ ...c, updatedAt: null })) } : {}),
+      ...(offers
+        ? { offers: offers.map(o => ({ offerId: null, ...o, updatedAt: null })) }
+        : {}),
       ...(legs
         ? { legs: legs.map(l => ({ offerId: null, ...l, updatedAt: null })) }
         : {}),
@@ -182,6 +193,63 @@ function mockDeclaredFunnels(funnels: Array<{ funnelKey: string; active?: boolea
         updatedAt: "2026-08-02T00:00:00.000Z",
       })),
     }),
+  });
+}
+
+/**
+ * The URL-answered reads every test shares: which funnels a channel may be sold through
+ * (features-service), which workflow can run it (workflow-service), and the public channel
+ * catalogue. Held as a named function rather than read back off the mock, because
+ * `getMockImplementation()` hands back the next QUEUED `mockResolvedValueOnce` when one is
+ * pending — so a helper that captured it after queueing would serve billing's payload to whatever
+ * called next.
+ */
+async function baseFetch(input: URL | string): Promise<any> {
+  const url = String(input);
+  if (url.includes("/features/")) {
+    return { ok: true, json: async () => ({ feature: { slug: new URL(url).pathname.split("/features/")[1], salesFunnels: [...SALES_FUNNEL_KEYS] } }) };
+  }
+  if (url.includes("/workflows")) {
+    return {
+      ok: true,
+      json: async () => ({
+        workflows: [{ workflowSlug: `${new URL(url).searchParams.get("featureSlug")}-seed`, createdAt: "2026-08-18T00:00:00.000Z" }],
+      }),
+    };
+  }
+  if (url.includes("/public/channels")) return catalogueResponse();
+  throw new Error(`unexpected fetch in test: ${url}`);
+}
+
+/**
+ * brand-service's PER-OFFER declaration, matched on the URL rather than queued: a funded ceiling
+ * that names its offer asks that offer directly, and that read interleaves with the catalogue read
+ * in an order no queue should have to encode.
+ */
+function mockOfferDeclarations(byOffer: Record<string, string[]>) {
+  mockFetch.mockImplementation(async (input: URL | string) => {
+    const url = String(input);
+    const match = url.match(/\/offers\/([^/]+)\/sales-funnels/);
+    if (match) {
+      const funnels = byOffer[match[1]] ?? [];
+      return {
+        ok: true,
+        json: async () => ({
+          funnels: funnels.map(funnelKey => ({
+            funnelKey,
+            active: true,
+            name: funnelKey,
+            steps: [],
+            rates: {},
+            lifetimeRevenueUsd: null,
+            destinationUrl: null,
+            bookingUrl: null,
+            updatedAt: "2026-08-02T00:00:00.000Z",
+          })),
+        }),
+      };
+    }
+    return baseFetch(input);
   });
 }
 
@@ -306,22 +374,7 @@ describe("planFunnelTurns", () => {
     // sold through (features-service) and which workflow can run it (workflow-service). Answered by
     // URL rather than by queue position, so every ordered `mockResolvedValueOnce` below — which
     // takes precedence — keeps describing the billing/brand sequence it always did.
-    mockFetch.mockImplementation(async (input: URL | string) => {
-      const url = String(input);
-      if (url.includes("/features/")) {
-        return { ok: true, json: async () => ({ feature: { slug: new URL(url).pathname.split("/features/")[1], salesFunnels: [...SALES_FUNNEL_KEYS] } }) };
-      }
-      if (url.includes("/workflows")) {
-        return {
-          ok: true,
-          json: async () => ({
-            workflows: [{ workflowSlug: `${new URL(url).searchParams.get("featureSlug")}-seed`, createdAt: "2026-08-18T00:00:00.000Z" }],
-          }),
-        };
-      }
-      if (url.includes("/public/channels")) return catalogueResponse();
-      throw new Error(`unexpected fetch in test: ${url}`);
-    });
+    mockFetch.mockImplementation(baseFetch);
     mockListRuns.mockResolvedValue({ runs: [] });
     mockFindFirst.mockResolvedValue({ id: "existing", name: "custom name", status: "ongoing" });
     // The only findMany left is the sales-scoped liveness check ({ id, featureSlug }). Default the
@@ -569,6 +622,113 @@ describe("planFunnelTurns", () => {
     expect(inserted[0].legKey).toBeNull();
     // The name it has always had, byte for byte, so nothing alive is renamed or re-provisioned.
     expect(inserted[0].name).toBe(funnelCampaignName(SALES, "brand-1", "sales_meetings_from_conversation"));
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────
+  // The OFFER is what the money is funded PER, so it is part of what one campaign is. Two offers
+  // worked through one (funnel, channel, leg) are two ceilings the customer set separately — and
+  // were one campaign, which left the second offer funded and producing nothing.
+  // ─────────────────────────────────────────────────────────────────────────────────────────
+
+  it("provisions ONE campaign per funded OFFER on the same (funnel, channel, leg)", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "3000" }],
+      "3000",
+      // billing serves the PAIR figure as the SUM of the two offers — pacing both campaigns on it
+      // is exactly what lets each offer spend what the other was funded for.
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "3000" }],
+      [
+        { funnelKey: "reply_meeting", featureSlug: SALES, offerId: "offer-a", legKey: ENTRY_LEG, dailyBudgetCents: "2000" },
+        { funnelKey: "reply_meeting", featureSlug: SALES, offerId: "offer-b", legKey: ENTRY_LEG, dailyBudgetCents: "1000" },
+      ],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]); // the brand-keyed read
+    mockOfferDeclarations({
+      "offer-a": ["sales_meetings_from_conversation"],
+      "offer-b": ["sales_meetings_from_conversation"],
+    });
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    const inserted = mockInsertValues.mock.calls.map(c => c[0]);
+    expect(inserted).toHaveLength(2);
+    expect(inserted.map(v => v.offerId).sort()).toEqual(["offer-a", "offer-b"]);
+    for (const values of inserted) {
+      expect(values.funnelKey).toBe("sales_meetings_from_conversation");
+      expect(values.legKey).toBe(ENTRY_LEG);
+      expect(values.name).toBe(
+        funnelCampaignName(values.featureSlug, "brand-1", values.funnelKey, values.legKey, values.offerId),
+      );
+    }
+    // Two names, or the unique-name index swallows the second insert as a race and the second
+    // offer is funded and never provisioned all over again.
+    expect(new Set(inserted.map(v => v.name)).size).toBe(2);
+  });
+
+  it("never provisions a funnel the funded OFFER does not declare selling through", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "1000" }],
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, offerId: "offer-a", legKey: ENTRY_LEG, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]); // the brand-keyed read
+    mockOfferDeclarations({ "offer-a": ["website_purchases"] }); // ...but not THIS offer
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it("leaves the ONE campaign of a single funded offer exactly as it is — no twin, no stamp", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }],
+      "1000",
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "1000" }],
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, offerId: "offer-a", legKey: ENTRY_LEG, dailyBudgetCents: "1000" }],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    mockOfferDeclarations({ "offer-a": ["sales_meetings_from_conversation"] });
+    // No campaign STATES this offer; the live campaign of the identity states none at all. With a
+    // single funded offer there is exactly one honest owner, so that campaign IS this pair's.
+    mockFindFirst
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue({ id: "incumbent", status: "ongoing", stopReason: null, legKey: ENTRY_LEG, offerId: null });
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    // Never stamped: only brand-service knows which offer a live campaign belongs to.
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ offerId: "offer-a" }));
+  });
+
+  it("provisions per offer off billing's OFFER grain when it serves no leg rows", async () => {
+    mockFunnelBudgets(
+      [{ funnelKey: "reply_meeting", dailyBudgetCents: "3000" }],
+      "3000",
+      [{ funnelKey: "reply_meeting", featureSlug: SALES, dailyBudgetCents: "3000" }],
+      undefined,
+      [
+        { funnelKey: "reply_meeting", featureSlug: SALES, offerId: "offer-a", dailyBudgetCents: "2000" },
+        { funnelKey: "reply_meeting", featureSlug: SALES, offerId: "offer-b", dailyBudgetCents: "1000" },
+      ],
+    );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]); // the brand-keyed read
+    mockOfferDeclarations({
+      "offer-a": ["sales_meetings_from_conversation"],
+      "offer-b": ["sales_meetings_from_conversation"],
+    });
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+
+    const inserted = mockInsertValues.mock.calls.map(c => c[0]);
+    expect(inserted).toHaveLength(2);
+    expect(inserted.map(v => v.offerId).sort()).toEqual(["offer-a", "offer-b"]);
+    // No leg was funded, so none is fabricated: these are leg-less campaigns.
+    expect(inserted.every(v => v.legKey === null)).toBe(true);
   });
 
   it("never provisions a pair the channel may not be sold through", async () => {
@@ -1341,6 +1501,9 @@ describe("planFunnelTurns", () => {
         dailyBudgetCents: "1000",
       }],
     );
+    mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
+    // The ceiling NAMES its offer, so THAT offer is asked whether it sells through this funnel:
+    // the brand's own campaigns state no offer, so its declaration was not read above.
     mockDeclaredFunnels([{ funnelKey: "sales_meetings_from_conversation" }]);
     mockFindFirst.mockResolvedValue(undefined); // the pair has no campaign yet
 
