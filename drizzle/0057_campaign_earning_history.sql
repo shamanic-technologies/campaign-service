@@ -61,10 +61,10 @@ CREATE INDEX IF NOT EXISTS "idx_cst_org_occurred_at"
 -- invent. So the record begins now, every earlier day reads "not recorded", and every later day is
 -- answered from what actually happened.
 INSERT INTO "campaign_status_transitions" ("id", "campaign_id", "org_id", "from_status", "to_status", "reason", "source", "occurred_at")
-SELECT gen_random_uuid()::text, c."id", c."org_id", NULL, c."status", c."stop_reason", 'record_opened', now()
+SELECT gen_random_uuid()::text, c."id"::text, c."org_id", NULL, c."status", c."stop_reason", 'record_opened', now()
 FROM "campaigns" c
 WHERE NOT EXISTS (
-  SELECT 1 FROM "campaign_status_transitions" t WHERE t."campaign_id" = c."id"
+  SELECT 1 FROM "campaign_status_transitions" t WHERE t."campaign_id" = c."id"::text
 );
 
 -- 2 ── Exhaustion becomes a PERIOD -------------------------------------------------------------
