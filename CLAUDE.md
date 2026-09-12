@@ -1211,6 +1211,74 @@ total. (Set 2026-08-26.)
 
 The per-campaign audience SUBSET (`campaigns.audience_ids`, Campaign v2) is a HARD filter on the audience bandit (`requiredAudienceIds` in `selectAudienceFromProjection`): a campaign never contacts an audience outside its targeted subset (no fallback). NULL/empty → inherit the brand's full active audience set. (The old workflow-conditioning `eligibleAudienceIds` soft-filter was REMOVED in v0.44.1 — see the single-endpoint note below.) Distinct from the singular `audienceId` column (per-campaign attribution; the per-RUN chosen audience is re-selected fresh at /start-run).
 
+## WAS THIS CAMPAIGN EARNING ON A PAST DAY? — history is RECORDED, never reconstructed, and "not recorded" is an answer
+
+This service knew a campaign's status and whether an audience had run dry, and kept only the
+CURRENT answer. Nobody could replay a past day, so a monthly run-rate had to count money sitting
+behind campaigns that were PAUSED — and one month's self-serve figure came out NEGATIVE and had to
+be published as "we could not measure this". The owner's rule: **paused is not MRR**, and a
+campaign holding budget with no audience left to work is not MRR either.
+
+Two axes, both answered from what was WRITTEN DOWN AT THE TIME (migration 0057):
+
+1. **Every status change leaves a trace, and it cannot land without one.**
+   `campaign_status_transitions` is append-only — one row per change, holding what it came from,
+   what it went to, the stop reason, and WHICH path wrote it. `src/lib/campaign-status-history.ts`
+   is the ONLY place a status is written: `setCampaignStatus` performs the update and the
+   transition in ONE transaction, so either both land or neither does and no call site can do half
+   of it. That is structural rather than a convention because the failure is invisible — nothing
+   errors, no test goes red, the campaign behaves perfectly, and the hole surfaces months later as
+   a run-rate nobody can reproduce. `tests/unit/no-legacy.test.ts` fails on any `.update(campaigns)`
+   / `.insert(campaigns)` that sets `status` or `stopReason` outside that file and the create route
+   (which writes the BIRTH in its own transaction).
+2. **Whether it could reach anybody, as effective-dated periods.**
+   `campaign_audience_availability` stores BOTH states, one row per EPISODE. `/end-run` already
+   computed this verdict (`hasServeableAudience`) on every run whose served audience came back
+   empty and threw it away — the writer held the answer and dropped it — so persisting it costs one
+   indexed lookup per run and a write only when the state actually FLIPS. It is the only honest
+   campaign-grain answer: the per-audience marks cannot be summed into one, because which audiences
+   a campaign targeted on a past day is recorded NOWHERE, and a campaign with three audiences and
+   one dry one was working perfectly well. Storing the "yes it had people" state too is what makes
+   a day before the record legible: a log of droughts alone cannot tell "had people all month" from
+   "nobody was recording yet", because the absence of a row means both.
+
+**Audience exhaustion has an END.** `campaign_audience_exhaustion` was one row per
+(campaign, audience) whose timestamp was overwritten on every observation — a beginning, restated,
+with no end — because the bandit only ever asked "is this audience dry right now". It is a PERIOD
+now: `exhausted_at` (start, written once), `last_observed_at` (the value the live TTL read compares
+against, so the bandit behaves byte-identically), `ended_at` + `end_reason`. `served` is an OBSERVED
+end (a run picked that audience again and came back with somebody); `lapsed` closes an episode
+nobody re-confirmed inside the TTL, at `last_observed_at + TTL` — that is not a guess, it is the
+live rule read backwards, since that instant is exactly when the bandit stopped excluding the
+audience. The old PK was what made a second episode impossible; a PARTIAL unique index holds the
+invariant that matters instead (at most ONE open period per pair).
+
+**NOTHING IS BACKFILLED, and `not_recorded` is never collapsed to `stopped`.** The one row migration
+0057 writes per existing campaign states the PRESENT at the migration's own timestamp, tagged
+`record_opened` — an observation made that day, never a claim about an earlier one. `created_at` /
+`updated_at` were deliberately NOT used: a campaign created in June and stopped in August has an
+`updated_at` that says nothing about which state it held in July, and reading either as a transition
+time would invent exactly the history this refuses to invent. So `earning` is `null` — with
+`unknownReason` naming the axis — whenever either side is unknown, and the response carries
+`statusRecordedSince` / `audienceRecordedSince` so a consumer reads WHY rather than inferring it.
+A month published as a guess is how this started.
+
+**The reads** (`requireApiKey`, sibling services): `GET /internal/campaigns/:campaignId/earning-history?from&to`
+and `POST /internal/campaigns/earning-history` with `{campaignIds, from, to}` — the batch form is
+the one a consumer replaying a month needs, since a per-campaign fan-out is hundreds of round trips
+for two bounded reads and an in-memory walk. A day is a UTC calendar day evaluated at its END (or at
+now, for a day in progress): the state a campaign finished the day in is the one a daily run-rate
+counts, and that is the single judgement call in the whole replay. A requested campaign nothing is
+recorded for is still RETURNED with every day `not_recorded` — an absent row would be
+indistinguishable from a campaign that was not earning, the exact conflation this exists to end.
+
+**NO MONEY FIGURE IS COMPUTED OR EXPOSED HERE.** Budget amounts are billing-service's; this answers
+was-it-earning and nothing else. And the grain is the CAMPAIGN, never the brand: a brand routinely
+has several campaigns in different states, which is why the retired brand-level pause table is not
+revived for this and must not be.
+
+(Set 2026-09-12.)
+
 ## Commands
 
 - `pnpm test` — run all tests (Vitest)

@@ -28,6 +28,9 @@ import {
   BatchSpendableBudgetBody,
   BatchSpendableBudgetResponse,
   TriggerForStepBody,
+  EarningHistoryQuery,
+  EarningHistoryBody,
+  EarningHistoryResponse,
   TriggerForStepResponse,
 } from "../src/schemas.js";
 
@@ -415,6 +418,45 @@ registry.registerPath({
     400: { description: "No org, malformed body, unknown funnel or unknown step", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/campaigns/{campaignId}/earning-history",
+  tags: ["Internal"],
+  summary: "Was this campaign earning on each day of a past UTC range",
+  description:
+    "Answers, per UTC day, whether the customer was running this campaign and whether it had anybody to contact — from RECORDED HISTORY, not from current state. A day is evaluated at its END (or at now, for a day still in progress): the state a campaign finished the day in is the one a daily run-rate counts. `not_recorded` is a first-class answer and is never collapsed to `stopped` — nothing is backfilled, so a day before this campaign's record begins says so, and `statusRecordedSince`/`audienceRecordedSince` say when each axis started being answerable. `earning` is true only when the campaign was running AND could reach somebody; it is null, never false, when either axis is unknown. No money figure is exposed or computed here: budget amounts are billing-service's.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ campaignId: z.string() }),
+    query: EarningHistoryQuery,
+  },
+  responses: {
+    200: { description: "One row per day", content: { "application/json": { schema: EarningHistoryResponse } } },
+    400: { description: "Malformed or oversized range", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/campaigns/earning-history",
+  tags: ["Internal"],
+  summary: "Was each of these campaigns earning, day by day",
+  description:
+    "The batch form of the read above — the shape a consumer reconstructing a past month actually needs, since a per-campaign fan-out over a fleet is hundreds of round trips for a question that is two bounded reads. A campaign id nothing is recorded for is still RETURNED, with every day `not_recorded`: an absent row would be indistinguishable from a campaign that was not earning, which is the exact conflation this endpoint exists to end. Entries come back in the order asked.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    body: { content: { "application/json": { schema: EarningHistoryBody } } },
+  },
+  responses: {
+    200: { description: "One entry per requested campaign", content: { "application/json": { schema: EarningHistoryResponse } } },
+    400: { description: "Malformed or oversized range or id list", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });

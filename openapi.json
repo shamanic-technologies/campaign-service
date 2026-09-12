@@ -1213,6 +1213,117 @@
           "funnelKey",
           "step"
         ]
+      },
+      "EarningHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CampaignEarningHistory"
+            }
+          }
+        },
+        "required": [
+          "campaigns"
+        ]
+      },
+      "CampaignEarningHistory": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string"
+          },
+          "statusRecordedSince": {
+            "type": "string",
+            "nullable": true
+          },
+          "audienceRecordedSince": {
+            "type": "string",
+            "nullable": true
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EarningDay"
+            }
+          }
+        },
+        "required": [
+          "campaignId",
+          "statusRecordedSince",
+          "audienceRecordedSince",
+          "days"
+        ]
+      },
+      "EarningDay": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ongoing",
+              "stopped",
+              "not_recorded"
+            ]
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "available",
+              "exhausted",
+              "not_recorded"
+            ]
+          },
+          "earning": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "unknownReason": {
+            "type": "string",
+            "enum": [
+              "status_not_recorded",
+              "audience_not_recorded",
+              "both_not_recorded"
+            ]
+          }
+        },
+        "required": [
+          "day",
+          "status",
+          "audience",
+          "earning"
+        ]
+      },
+      "EarningHistoryBody": {
+        "type": "object",
+        "properties": {
+          "campaignIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "maxItems": 500
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          }
+        },
+        "required": [
+          "campaignIds",
+          "from",
+          "to"
+        ]
       }
     },
     "parameters": {}
@@ -2734,6 +2845,155 @@
           },
           "502": {
             "description": "The acquisition-channel catalogue could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/campaigns/{campaignId}/earning-history": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Was this campaign earning on each day of a past UTC range",
+        "description": "Answers, per UTC day, whether the customer was running this campaign and whether it had anybody to contact — from RECORDED HISTORY, not from current state. A day is evaluated at its END (or at now, for a day still in progress): the state a campaign finished the day in is the one a daily run-rate counts. `not_recorded` is a first-class answer and is never collapsed to `stopped` — nothing is backfilled, so a day before this campaign's record begins says so, and `statusRecordedSince`/`audienceRecordedSince` say when each axis started being answerable. `earning` is true only when the campaign was running AND could reach somebody; it is null, never false, when either axis is unknown. No money figure is exposed or computed here: budget amounts are billing-service's.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "campaignId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One row per day",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EarningHistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed or oversized range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/campaigns/earning-history": {
+      "post": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Was each of these campaigns earning, day by day",
+        "description": "The batch form of the read above — the shape a consumer reconstructing a past month actually needs, since a per-campaign fan-out over a fleet is hundreds of round trips for a question that is two bounded reads. A campaign id nothing is recorded for is still RETURNED, with every day `not_recorded`: an absent row would be indistinguishable from a campaign that was not earning, which is the exact conflation this endpoint exists to end. Entries come back in the order asked.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EarningHistoryBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One entry per requested campaign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EarningHistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed or oversized range or id list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
             "content": {
               "application/json": {
                 "schema": {

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, and, desc, inArray, isNull, sql } from "drizzle-orm";
 import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
-import { campaigns } from "../db/schema.js";
+import { campaigns, campaignStatusTransitions } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { CreateCampaignBody, UpdateCampaignBody, CampaignsFilterQuery } from "../schemas.js";
@@ -11,6 +11,11 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { campaignIdentityColumns } from "../lib/campaign-identity.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
+import {
+  TRANSITION_SOURCES,
+  campaignBirthTransition,
+  setCampaignStatus,
+} from "../lib/campaign-status-history.js";
 import { isSalesFunnelFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
 import { acceptedFunnelKeys, toFunnelKey } from "../lib/sales-funnel-vocabulary.js";
 
@@ -258,15 +263,20 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     if (incumbent) {
       // Only what the caller actually sent moves. The NAME is deliberately left alone: it is the
       // campaign's own label (and unique per org), not a restatement of which workflow is running.
-      const [updated] = await db
-        .update(campaigns)
-        .set({
+      // This create IS the customer starting the campaign — the onboarding launch and the
+      // dashboard are the only callers, and both are a person pressing a button. A campaign they
+      // had stopped comes back here and NOWHERE else: no sweep, no ceiling, no condition. It goes
+      // through setCampaignStatus because every status change leaves a trace, in the same
+      // transaction as the change itself.
+      const updated = (await setCampaignStatus({
+        campaignId: incumbent.id,
+        orgId: req.orgId!,
+        fromStatus: incumbent.status,
+        toStatus: "ongoing",
+        reason: null,
+        source: TRANSITION_SOURCES.CREATE_RESTART,
+        fields: {
           workflowSlug,
-          // This create IS the customer starting the campaign — the onboarding launch and the
-          // dashboard are the only callers, and both are a person pressing a button. A campaign
-          // they had stopped comes back here and NOWHERE else: no sweep, no ceiling, no condition.
-          status: "ongoing",
-          stopReason: null,
           nextRunAt: new Date(),
           ...(featureInputs !== undefined ? { featureInputs } : {}),
           ...(activeGoalId !== undefined ? { activeGoalId } : {}),
@@ -293,10 +303,8 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           ...(notifyFrequency !== undefined ? { notifyFrequency } : {}),
           ...(notifyChannel !== undefined ? { notifyChannel } : {}),
           ...(notifyDestination !== undefined ? { notifyDestination } : {}),
-          updatedAt: new Date(),
-        })
-        .where(and(eq(campaigns.id, incumbent.id), eq(campaigns.orgId, req.orgId!)))
-        .returning();
+        },
+      }))!;
 
       if (req.runId) {
         traceEvent(req.runId, {
@@ -329,7 +337,11 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       return res.status(200).json({ campaign: updated });
     }
 
-    const [campaign] = await db
+    // The campaign and its BIRTH are written together. A status that lands without a trace is a
+    // day nobody can ever replay, and it is invisible — nothing errors, no test goes red — so the
+    // two are one transaction rather than a convention.
+    const campaign = await db.transaction(async (tx) => {
+      const [inserted] = await tx
       .insert(campaigns)
       .values({
         ...identity,
@@ -369,6 +381,13 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         status: "ongoing",
       })
       .returning();
+
+      await tx
+        .insert(campaignStatusTransitions)
+        .values(campaignBirthTransition(inserted.id, req.orgId!, inserted.status));
+
+      return inserted;
+    });
 
     if (req.runId) {
       traceEvent(req.runId, {
@@ -493,20 +512,31 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     }
 
     const statusMap: Record<string, string> = { activate: "ongoing", stop: "stopped" };
-    const updates = { ...req.body, updatedAt: new Date() };
-    if (updates.status) {
-      updates.status = statusMap[updates.status] ?? updates.status;
-      // A person stopping a campaign is a decision, and it says so on the row: `manual` is not
-      // resumable, so nothing brings this campaign back on its own. Activating clears the reason
-      // — the stop it described is over.
-      updates.stopReason = req.body.status === "stop" ? STOP_REASONS.MANUAL : null;
-    }
+    const { status: requestedStatus, ...bodyFields } = req.body as Record<string, unknown> & {
+      status?: string;
+    };
 
-    const [updated] = await db
-      .update(campaigns)
-      .set(updates)
-      .where(eq(campaigns.id, id))
-      .returning();
+    let updated;
+    if (requestedStatus) {
+      // A person stopping a campaign is a decision, and it says so on the row: `manual` is the
+      // customer's own statement. Activating clears the reason — the stop it described is over.
+      // The change and its trace are written in ONE transaction, in the one place that can.
+      updated = (await setCampaignStatus({
+        campaignId: id,
+        orgId: req.orgId!,
+        fromStatus: existing.status,
+        toStatus: statusMap[requestedStatus] ?? requestedStatus,
+        reason: requestedStatus === "stop" ? STOP_REASONS.MANUAL : null,
+        source: TRANSITION_SOURCES.PATCH,
+        fields: bodyFields,
+      }))!;
+    } else {
+      [updated] = await db
+        .update(campaigns)
+        .set({ ...bodyFields, updatedAt: new Date() })
+        .where(eq(campaigns.id, id))
+        .returning();
+    }
 
     // Trigger workflow on activation
     if (req.body.status === "activate") {
