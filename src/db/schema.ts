@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb, boolean, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb, boolean } from "drizzle-orm/pg-core";
 
 // Campaigns table
 export const campaigns = pgTable(
@@ -304,19 +304,120 @@ export type NewBrandPauseTransition = typeof brandPauseTransitions.$inferInsert;
 export const campaignAudienceExhaustion = pgTable(
   "campaign_audience_exhaustion",
   {
+    // Surrogate key (migration 0057). The old primary key was (campaign_id, audience_id), which is
+    // exactly what stopped a pair that went dry twice from holding two periods — so the table could
+    // only ever say "this audience is dry", never "it was dry from here to here, and then it was
+    // not". The invariant that matters is held by a partial unique index instead: at most ONE OPEN
+    // period per pair.
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     campaignId: text("campaign_id").notNull(),
     audienceId: text("audience_id").notNull(),
+    // When this episode of dryness STARTED. Written once and never touched again.
     exhaustedAt: timestamp("exhausted_at", { withTimezone: true }).notNull().defaultNow(),
+    // When it was last CONFIRMED dry. This is the value the live TTL read compares against — it
+    // plays exactly the role the repeatedly-overwritten `exhausted_at` used to play, so the bandit
+    // behaves byte-identically while the start instant survives.
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull().defaultNow(),
+    // When it ENDED, observed rather than assumed: a run served leads from this audience again.
+    // NULL = still open, which does NOT mean "forever" — an open period ends at
+    // `last_observed_at + AUDIENCE_EXHAUSTION_TTL_MS`, because that is the moment the live rule
+    // stops excluding the audience. Read backwards, the bandit's own TTL is the end.
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    endReason: text("end_reason"),
   },
   (table) => [
-    primaryKey({ columns: [table.campaignId, table.audienceId] }),
+    // At most one OPEN period per pair. Partial, so the closed history beside it is unconstrained.
+    uniqueIndex("uniq_cae_open_period")
+      .on(table.campaignId, table.audienceId)
+      .where(sql`${table.endedAt} is null`),
     // Serves the per-campaign fresh-within-TTL read directly.
     index("idx_cae_campaign_exhausted_at").on(table.campaignId, table.exhaustedAt),
+    index("idx_cae_campaign_last_observed_at").on(table.campaignId, table.lastObservedAt),
   ]
 );
 
 export type CampaignAudienceExhaustion = typeof campaignAudienceExhaustion.$inferSelect;
 export type NewCampaignAudienceExhaustion = typeof campaignAudienceExhaustion.$inferInsert;
+
+// Every status change a campaign ever made, append-only.
+//
+// `campaigns.status` holds the CURRENT answer and nothing else, so "was this campaign running on
+// the 14th" had no answer at all — which is why a month's run-rate had to count money sitting
+// behind campaigns that were paused. This holds how the current answer was reached.
+//
+// A row is never updated and never deleted: it is what happened. `from_status` NULL means the
+// campaign was born, or its record was opened by migration 0057 (`source = 'record_opened'`, an
+// observation of the PRESENT made at that migration's timestamp — never a claim about any earlier
+// day). A day before a campaign's oldest row is answered "not recorded", never guessed.
+export const campaignStatusTransitions = pgTable(
+  "campaign_status_transitions",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    campaignId: text("campaign_id").notNull(),
+    orgId: text("org_id").notNull(),
+    fromStatus: text("from_status"),
+    toStatus: text("to_status").notNull(),
+    // The stop reason that accompanied this transition, when there was one — the same vocabulary
+    // as `campaigns.stop_reason` (STOP_REASONS), carried so the history says WHY as well as WHEN.
+    reason: text("reason"),
+    // WHICH path wrote it: `create` | `create_restart` | `patch` | `org_teardown` |
+    // `record_opened`. Every path that changes a status writes one, and there is exactly one place
+    // in the code that can (setCampaignStatus / recordCampaignBirth, src/lib/campaign-status-history.ts).
+    source: text("source").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Serves the whole read: the status at the end of a day is the newest row at or before that
+    // instant, and the start of the record is the oldest row.
+    index("idx_cst_campaign_occurred_at").on(table.campaignId, table.occurredAt),
+    index("idx_cst_org_occurred_at").on(table.orgId, table.occurredAt),
+  ]
+);
+
+export type CampaignStatusTransition = typeof campaignStatusTransitions.$inferSelect;
+export type NewCampaignStatusTransition = typeof campaignStatusTransitions.$inferInsert;
+
+// Whether a campaign could reach ANYBODY, as effective-dated periods.
+//
+// /end-run already computes this verdict (hasServeableAudience) whenever a run reports its served
+// audience came back empty, and threw it away — the writer held the answer and dropped it, so a
+// consumer replaying a past month had nothing to read. It is the only honest campaign-grain
+// answer: the per-audience exhaustion marks cannot be summed into one, because which audiences a
+// campaign targeted on a past day is recorded nowhere, and a campaign with three audiences and one
+// dry one was working perfectly well.
+//
+// BOTH states are stored, not only the droughts. A table of droughts alone cannot tell "this
+// campaign had people all month" from "we were not recording yet" — the absence of a row means
+// both — and a day before the record begins must be legible as `not_recorded`. Storing the state
+// makes that free.
+//
+// One row per EPISODE, not per observation: a run restating the current state only moves
+// `lastObservedAt`; a run that flips it closes the open period and opens the opposite one, so a
+// campaign that went dry and was later given an audience reads as earning again from that day.
+// `endedAt` NULL = this is the state as of the last thing this service observed.
+export const campaignAudienceAvailability = pgTable(
+  "campaign_audience_availability",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    campaignId: text("campaign_id").notNull(),
+    orgId: text("org_id").notNull(),
+    hasAudience: boolean("has_audience").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+  },
+  (table) => [
+    // At most one CURRENT period per campaign.
+    uniqueIndex("uniq_caa_current_period")
+      .on(table.campaignId)
+      .where(sql`${table.endedAt} is null`),
+    index("idx_caa_campaign_started_at").on(table.campaignId, table.startedAt),
+  ]
+);
+
+export type CampaignAudienceAvailability = typeof campaignAudienceAvailability.$inferSelect;
+export type NewCampaignAudienceAvailability = typeof campaignAudienceAvailability.$inferInsert;
+
 
 // The funnel a campaign runs is a stored fact, derived from what the campaign itself said. When
 // what it said names no single funnel — a brand selling through several under one `combinedSales`

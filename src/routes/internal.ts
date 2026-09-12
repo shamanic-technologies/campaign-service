@@ -3,19 +3,22 @@ import { eq, and, sql, or, ne, isNotNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { brandPauseTransitions, campaigns } from "../db/schema.js";
 import { requireApiKey, requirePipelineHeaders, serviceAuth, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
-import { validateBody } from "../middleware/validate.js";
+import { validateBody, validateQuery } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
-import { EndRunBody, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
+import { EarningHistoryBody, EarningHistoryQuery, EndRunBody, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
-import { markAudienceExhausted, getFreshExhaustedAudienceIds, hasExhaustedAudience, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../lib/audience-exhaustion.js";
+import { markAudienceExhausted, resolveAudienceExhaustion, getFreshExhaustedAudienceIds, hasExhaustedAudience, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../lib/audience-exhaustion.js";
+import { recordAudienceAvailability } from "../lib/campaign-audience-availability.js";
+import { stopOrgCampaignsWithHistory } from "../lib/campaign-status-history.js";
 import { NO_WORK_RECHECK_MS } from "../lib/idle-run.js";
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
 import { triggerCampaignsForStep, StepTriggerScopeError } from "../lib/step-trigger.js";
+import { earningHistory, utcDaysBetween } from "../lib/earning-history.js";
 import {
   fetchWorkflowProjectionRows,
   fetchGoalArbitration,
@@ -531,6 +534,14 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
             ? await hasServeableAudience(campaign, req)
             : false;
 
+        // The verdict this run just computed, recorded rather than thrown away: it is the only
+        // honest campaign-grain answer to "did it have an audience to work", and a consumer
+        // replaying a past month cannot derive it from anything else. Fail-SOFT (the catch below
+        // owns it) — history must never take down a run.
+        if (campaign) {
+          await recordAudienceAvailability(campaignId, orgId, serveable);
+        }
+
         if (!serveable) {
           // Nobody to contact. Two shapes, one outcome — the campaign is NOT stopped either way:
           //
@@ -559,6 +570,24 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         // Nothing here can change a status any more, so the only thing an error costs is the
         // exhaustion mark and the nudge email. Fall through to the reschedule and retry.
         console.error(`[campaign-service] audience-exhaustion handling failed for campaign ${campaignId}:`, err);
+      }
+    }
+
+    // A run that did NOT report an empty audience served somebody, and that is the END the
+    // exhaustion record was missing: an OBSERVED end, not an assumed one. It also settles the
+    // campaign-grain verdict without a second question — a campaign that just contacted a person
+    // had somebody to contact.
+    //
+    // Only for a run that actually did work: one that reported it had NOTHING TO DO saw nobody
+    // owed an answer, which is a different fact, and a FAILED run says nothing trustworthy at all.
+    if (stopCampaign !== true && status !== "failed" && noWorkAvailable !== true) {
+      try {
+        if (req.audienceId) {
+          await resolveAudienceExhaustion(campaignId, req.audienceId);
+        }
+        await recordAudienceAvailability(campaignId, orgId, true);
+      } catch (err) {
+        console.error(`[campaign-service] audience-availability history failed for campaign ${campaignId}:`, err);
       }
     }
 
@@ -702,18 +731,21 @@ router.delete("/internal/campaigns/by-org/:orgId", requireApiKey, async (req, re
   try {
     const { orgId } = req.params;
     const result = await db.transaction(async (tx) => {
-      const disabledCampaigns = await tx
-        .update(campaigns)
-        // The org is gone. Stating it keeps these rows out of the resume sweep for good.
-        .set({ status: "stopped", stopReason: STOP_REASONS.ORG_TEARDOWN, nextRunAt: null, updatedAt: new Date() })
-        .where(and(
+      // The org is gone. Stating it keeps these rows out of the resume sweep for good — and, like
+      // every other status change in this service, it leaves a trace: a month's run-rate must be
+      // able to see the day an org's campaigns stopped earning.
+      const disabledCampaigns = await stopOrgCampaignsWithHistory(
+        tx,
+        orgId,
+        STOP_REASONS.ORG_TEARDOWN,
+        and(
           eq(campaigns.orgId, orgId),
           or(
             ne(campaigns.status, "stopped"),
             isNotNull(campaigns.nextRunAt),
           ),
-        ))
-        .returning({ id: campaigns.id });
+        ),
+      );
 
       const deletedBrandPauseTransitions = await tx
         .delete(brandPauseTransitions)
@@ -778,5 +810,104 @@ router.post("/internal/campaigns/trigger-for-step", requireApiKey, serviceAuth, 
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+/**
+ * The most days one call may ask for. A year is a generous ceiling for "replay last month" and it
+ * bounds the response: 500 campaigns x 400 days is already a large payload, and an unbounded range
+ * is an unbounded one.
+ */
+const EARNING_HISTORY_MAX_DAYS = 400;
+
+function earningRangeRefusal(from: string, to: string): string | null {
+  const days = utcDaysBetween(from, to);
+  if (days.length === 0) return `\`from\` (${from}) is after \`to\` (${to})`;
+  if (days.length > EARNING_HISTORY_MAX_DAYS) {
+    return `range spans ${days.length} days; at most ${EARNING_HISTORY_MAX_DAYS} may be asked for at once`;
+  }
+  return null;
+}
+
+/**
+ * GET /internal/campaigns/:campaignId/earning-history?from=YYYY-MM-DD&to=YYYY-MM-DD
+ *
+ * Was this campaign EARNING on each day of the range — was the customer running it, and did it
+ * have anybody to work — answered from RECORDED HISTORY rather than from current state.
+ *
+ * A day is a UTC calendar day, evaluated at its END (or at now, for a day still in progress): the
+ * state a campaign finished the day in is the one a daily run-rate counts.
+ *
+ * `not_recorded` is a first-class answer and is never collapsed to "stopped". Nothing is
+ * backfilled, so a day before this campaign's record begins says so — and `statusRecordedSince` /
+ * `audienceRecordedSince` say when each axis started being answerable. The whole reason this
+ * exists is that a month published as a guess came out negative; it is not this service's place to
+ * invent a value it can then be quoted on.
+ *
+ * Returns:
+ *   200 — one row per day
+ *   400 — a malformed or oversized range
+ *   401 — bad api key
+ *   500 — internal error
+ */
+router.get(
+  "/internal/campaigns/:campaignId/earning-history",
+  requireApiKey,
+  validateQuery(EarningHistoryQuery),
+  async (req, res) => {
+    try {
+      const { campaignId } = req.params;
+      const from = String(req.query.from);
+      const to = String(req.query.to);
+      const refusal = earningRangeRefusal(from, to);
+      if (refusal) return res.status(400).json({ error: refusal });
+
+      const [history] = await earningHistory([campaignId], from, to);
+      res.json({ campaigns: history ? [history] : [] });
+    } catch (error) {
+      console.error("[campaign-service] earning-history error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+/**
+ * POST /internal/campaigns/earning-history
+ *
+ * The same answer for many campaigns at once — the shape a consumer reconstructing a past month
+ * actually needs. A per-campaign fan-out over a fleet is hundreds of round trips for a question
+ * that is two bounded reads and an in-memory walk.
+ *
+ * Body: { campaignIds: string[], from: "YYYY-MM-DD", to: "YYYY-MM-DD" }
+ *
+ * A campaign id nothing is recorded for is still RETURNED, with every day `not_recorded` — an
+ * absent row would be indistinguishable from a campaign that was not earning, which is the exact
+ * conflation this endpoint exists to end.
+ *
+ * Returns:
+ *   200 — one entry per requested campaign, in the order asked
+ *   400 — a malformed or oversized range, or an empty / oversized id list
+ *   401 — bad api key
+ *   500 — internal error
+ */
+router.post(
+  "/internal/campaigns/earning-history",
+  requireApiKey,
+  validateBody(EarningHistoryBody),
+  async (req, res) => {
+    try {
+      const { campaignIds, from, to } = req.body as {
+        campaignIds: string[];
+        from: string;
+        to: string;
+      };
+      const refusal = earningRangeRefusal(from, to);
+      if (refusal) return res.status(400).json({ error: refusal });
+
+      res.json({ campaigns: await earningHistory(campaignIds, from, to) });
+    } catch (error) {
+      console.error("[campaign-service] earning-history batch error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
 
 export default router;

@@ -516,4 +516,44 @@ describe('No Legacy Patterns - CRITICAL', () => {
       `A leg is named by features-service's identifier, carried verbatim and never parsed:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`,
     ).toHaveLength(0);
   });
+
+  it('should write a campaign STATUS only through the one place that records the transition', () => {
+    // Somebody reading the company's run-rate for a past month needs to know, for any past day,
+    // whether each campaign was actually earning — and paused is not MRR. A status change that
+    // lands WITHOUT a transition row is a day that can never be replayed, and it is invisible:
+    // nothing errors, no test goes red, the campaign behaves perfectly, and the hole surfaces
+    // months later as a run-rate nobody can reproduce.
+    //
+    // So `src/lib/campaign-status-history.ts` is the only file allowed to write a status to
+    // `campaigns` — it writes the change and its trace in ONE transaction, which is what makes the
+    // pairing structural rather than a convention a new write site can forget. The campaign INSERT
+    // leg is the one other site, and it is allowed only because it writes the birth transition in
+    // its own transaction; it is named here so a THIRD site cannot appear beside it unnoticed.
+    const allowed = new Set(['lib/campaign-status-history.ts', 'routes/campaigns.ts']);
+    const files = getAllTsFiles(srcDir);
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const file of files) {
+      const relative = path.relative(srcDir, file).split(path.sep).join('/');
+      if (allowed.has(relative)) continue;
+      const content = fs.readFileSync(file, 'utf-8');
+      // Every write to the campaigns table, and what it sets within the statement that follows.
+      const writeRe = /\.(update|insert)\(campaigns\)/g;
+      let match: RegExpExecArray | null;
+      while ((match = writeRe.exec(content)) !== null) {
+        const statement = content.slice(match.index, match.index + 2000);
+        if (!/(^|[\s{,])(status|stopReason):/m.test(statement)) continue;
+        violations.push({
+          file: relative,
+          line: content.slice(0, match.index).split('\n').length,
+          code: statement.split('\n').slice(0, 2).join(' ').trim().substring(0, 100),
+        });
+      }
+    }
+
+    expect(
+      violations,
+      `A status change cannot land without a transition — write it through setCampaignStatus / stopOrgCampaignsWithHistory:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`,
+    ).toHaveLength(0);
+  });
 });

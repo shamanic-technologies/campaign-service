@@ -501,3 +501,50 @@ export const TriggerForStepResponse = z.object({
     detail: z.string(),
   })),
 }).openapi("TriggerForStepResponse");
+
+/**
+ * WAS THIS CAMPAIGN EARNING, day by day — the request and the answer.
+ *
+ * A day is a UTC calendar day and is evaluated at its END (or at now, for a day still running):
+ * the state a campaign finished the day in is the one a daily run-rate counts.
+ */
+const UtcDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected a UTC day as YYYY-MM-DD");
+
+export const EarningHistoryQuery = z.object({
+  from: UtcDay,
+  to: UtcDay,
+}).openapi("EarningHistoryQuery");
+
+export const EarningHistoryBody = z.object({
+  /**
+   * Bounded deliberately: a consumer reconstructing a month reads many campaigns at once, and an
+   * unbounded id list is an unbounded response. 500 is a month of a large org in one call.
+   */
+  campaignIds: z.array(z.string().min(1)).min(1).max(500),
+  from: UtcDay,
+  to: UtcDay,
+}).openapi("EarningHistoryBody");
+
+export const EarningDaySchema = z.object({
+  day: z.string(),
+  /** `not_recorded` is a real answer: the record had not begun. Never collapse it to stopped. */
+  status: z.enum(["ongoing", "stopped", "not_recorded"]),
+  audience: z.enum(["available", "exhausted", "not_recorded"]),
+  /** Running AND able to reach somebody. `null` = unknown, never a zero. */
+  earning: z.boolean().nullable(),
+  unknownReason: z
+    .enum(["status_not_recorded", "audience_not_recorded", "both_not_recorded"])
+    .optional(),
+}).openapi("EarningDay");
+
+export const CampaignEarningHistorySchema = z.object({
+  campaignId: z.string(),
+  /** When each axis started being answerable. Null = nothing recorded for it yet. */
+  statusRecordedSince: z.string().nullable(),
+  audienceRecordedSince: z.string().nullable(),
+  days: z.array(EarningDaySchema),
+}).openapi("CampaignEarningHistory");
+
+export const EarningHistoryResponse = z.object({
+  campaigns: z.array(CampaignEarningHistorySchema),
+}).openapi("EarningHistoryResponse");
