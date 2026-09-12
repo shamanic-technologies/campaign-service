@@ -1,4 +1,4 @@
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaignAudienceExhaustion } from "../db/schema.js";
 
@@ -13,16 +13,89 @@ import { campaignAudienceExhaustion } from "../db/schema.js";
 // as its re-contact window rolls), so an exhaustion is never permanent. 1 day.
 export const AUDIENCE_EXHAUSTION_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** Record (or refresh) an audience's exhaustion mark for a campaign. */
-export async function markAudienceExhausted(campaignId: string, audienceId: string): Promise<void> {
-  const now = new Date();
+/**
+ * WHY an exhaustion period ended. Two answers, and they are genuinely different facts:
+ *
+ *   served — a run picked this audience again and came back with somebody. Observed.
+ *   lapsed — nobody re-confirmed the dryness within the TTL, so the bandit stopped excluding this
+ *            audience at that instant. Derived from the live rule, which is what "exhausted" has
+ *            meant here since the TTL existed — not a guess about what happened.
+ */
+export const EXHAUSTION_END_REASONS = {
+  SERVED: "served",
+  LAPSED: "lapsed",
+} as const;
+
+/**
+ * Record (or re-confirm) an audience's exhaustion for a campaign.
+ *
+ * Exhaustion is a PERIOD, not a mark. It used to be one row per pair whose timestamp was
+ * overwritten on every observation — a beginning, restated, with no end — so a replay could see a
+ * campaign go dry and never see it come back. Three cases:
+ *
+ *   - no open period → open one. The dryness starts now.
+ *   - an open period still inside the TTL → re-confirm it. Same episode, still dry.
+ *   - an open period whose last confirmation has LAPSED past the TTL → that episode ENDED when the
+ *     TTL ran out (the instant the bandit stopped excluding this audience, which is the live rule
+ *     read backwards, not a guess), so close it there and open a new one. Stretching the old
+ *     period over the gap would claim the audience was dry during hours it was being served.
+ */
+export async function markAudienceExhausted(
+  campaignId: string,
+  audienceId: string,
+  now: Date = new Date(),
+): Promise<void> {
+  const open = await db.query.campaignAudienceExhaustion.findFirst({
+    where: and(
+      eq(campaignAudienceExhaustion.campaignId, campaignId),
+      eq(campaignAudienceExhaustion.audienceId, audienceId),
+      isNull(campaignAudienceExhaustion.endedAt),
+    ),
+  });
+
+  if (open) {
+    const lapsedAt = new Date(open.lastObservedAt.getTime() + AUDIENCE_EXHAUSTION_TTL_MS);
+    if (lapsedAt > now) {
+      await db
+        .update(campaignAudienceExhaustion)
+        .set({ lastObservedAt: now })
+        .where(eq(campaignAudienceExhaustion.id, open.id));
+      return;
+    }
+    await db
+      .update(campaignAudienceExhaustion)
+      .set({ endedAt: lapsedAt, endReason: EXHAUSTION_END_REASONS.LAPSED })
+      .where(eq(campaignAudienceExhaustion.id, open.id));
+  }
+
   await db
     .insert(campaignAudienceExhaustion)
-    .values({ campaignId, audienceId, exhaustedAt: now })
-    .onConflictDoUpdate({
-      target: [campaignAudienceExhaustion.campaignId, campaignAudienceExhaustion.audienceId],
-      set: { exhaustedAt: now },
-    });
+    .values({ campaignId, audienceId, exhaustedAt: now, lastObservedAt: now });
+}
+
+/**
+ * The audience served somebody again — close its open exhaustion period, now.
+ *
+ * This is the END the record was missing, and it is OBSERVED rather than assumed: a run picked
+ * this audience and came back with a lead, which is the only evidence that says the dryness is
+ * over. Nothing happens when there is no open period (the common case — most runs serve leads from
+ * an audience that was never dry), so this is one cheap indexed write on a narrow population.
+ */
+export async function resolveAudienceExhaustion(
+  campaignId: string,
+  audienceId: string,
+  now: Date = new Date(),
+): Promise<void> {
+  await db
+    .update(campaignAudienceExhaustion)
+    .set({ endedAt: now, endReason: EXHAUSTION_END_REASONS.SERVED })
+    .where(
+      and(
+        eq(campaignAudienceExhaustion.campaignId, campaignId),
+        eq(campaignAudienceExhaustion.audienceId, audienceId),
+        isNull(campaignAudienceExhaustion.endedAt),
+      ),
+    );
 }
 
 /**
@@ -83,7 +156,12 @@ export async function getFreshExhaustedAudienceIds(
     .where(
       and(
         eq(campaignAudienceExhaustion.campaignId, campaignId),
-        gt(campaignAudienceExhaustion.exhaustedAt, cutoff),
+        // Only an OPEN period excludes an audience: one a run has since served from is over,
+        // whatever its timestamps say. `lastObservedAt` is the value the old `exhaustedAt`
+        // overwrite used to carry, so the window is byte-identical to what the bandit had before
+        // exhaustion became a period.
+        isNull(campaignAudienceExhaustion.endedAt),
+        gt(campaignAudienceExhaustion.lastObservedAt, cutoff),
       ),
     );
   return rows.map((r) => r.audienceId);
