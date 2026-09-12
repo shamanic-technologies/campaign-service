@@ -1306,6 +1306,28 @@ Unit tests (`pnpm test:unit`) need neither — they fully mock db/runs-client.
 
 **`db:generate` is DEAD in this repo — migrations are HAND-AUTHORED idempotent SQL, do NOT try drizzle-kit generate.** The `drizzle/meta/` snapshots froze at `0023_snapshot.json`; every migration `0024+` was hand-written without updating the snapshot. So `drizzle-kit generate` diffs `schema.ts` against the stale `0023` snapshot and prompts interactively for ~12 migrations' worth of phantom rename/create decisions (e.g. "is `parent_run_id` a rename of `workflow_name`?") — it can never emit a clean single-change migration. When a brief says "generate with drizzle-kit," ignore it for this repo. **To author a new migration: (1) hand-write `drizzle/NNNN_<desc>.sql` mirroring the latest one's boot-safe idempotent style** — `ALTER TABLE … DROP COLUMN IF EXISTS` (see `0036`) or a `DO $$ … information_schema … IF EXISTS` guard for renames (see `0035`); **(2) append a journal entry** to `drizzle/meta/_journal.json` with the next sequential `idx`, the matching `tag`, and a synthetic `when` (prior cadence: +100000000 ms per migration). `src/lib/migrations-validator.ts` enforces journal↔sql parity + gap-free sequential `idx` + no dup idx/tag, so both files must be added together. Boot runs `migrate(db, { migrationsFolder: "./drizzle" })`; idempotent guards make every migration re-runnable. (Set 2026-06-20, customer_persona_id DROP / migration 0036.)
 
+## A raw-SQL migration that touches `campaigns.id` / `org_id` MUST cast `::text` — the lineage says `uuid`, the ORM says text, and the mismatch fails at BOOT
+
+`drizzle/0000` created `campaigns.id` and `campaigns.org_id` as **`uuid`** and no later migration ever
+converted them; `schema.ts` has mapped both as `text` ever since. So the same statement meets `uuid`
+columns on a from-scratch replay and `text` columns on a database that has been pushed — and a raw
+`INSERT ... SELECT` or a join that compares either against a `text` column (every new table here
+declares its `campaign_id` / `org_id` as text) dies on
+`operator does not exist: text = uuid`. That is a BOOT failure: `runMigrations` runs before
+`app.listen()`, so the service never binds, fails the health check and rolls back.
+
+It is invisible locally, because `db:push` builds the schema from `schema.ts` and therefore gives you
+`text` columns — the shape the statement happens to work against. **CI is the only place that
+replays from zero** (`pnpm run db:migrate` against an empty Postgres), so the first sign is a red
+`Run migrations against test DB` step quoting a character offset. Reproduce it in ten seconds
+instead: create a scratch database with `campaigns(id uuid, org_id uuid, ...)`, run the migration
+file against it with `psql -v ON_ERROR_STOP=1`, and run a full `drizzle-kit migrate` from an empty
+database before pushing.
+
+Cast BOTH sides (`c."id"::text`, `c."org_id"::text`) — it reads identically in both worlds, and unit
+tests can never catch it because they mock `db.execute` and never run migration SQL at all.
+(Set 2026-09-12, migration 0057.)
+
 ## Raw-`sql` list params need `sql.join`, NOT a bare JS array — and workflow dynasties live in the DB, not src
 
 **Interpolating a JS array into a drizzle raw `sql` template does NOT expand it into a param list.** `sql\`... IN (${arr})\`` binds the whole array as ONE composite → `operator does not exist: text = record`; `= ANY(${arr})` → `op ANY/ALL (array) requires array on right side`. Neither works. To expand a small in-code list (e.g. the sales-outreach feature family in `funnel-campaigns.ts`'s idle-brand sweep), use `sql.join([...set].map((v) => sql\`${v}\`), sql\`, \`)` inside `IN (...)`. Caught only by the integration tests (unit tests mock the DB), so run `pnpm test:integration` after any raw-`sql` change. **Same template, second trap: a JS `Date` parameter is REFUSED outright** — postgres.js binds raw-`sql` params itself and throws `The "string" argument must be of type string ... Received an instance of Date`. Pass `d.toISOString()` and cast (`::timestamptz`). (2026-08-23, the quiet-brand sweep's due-soon bound.) (Set 2026-07-24, sales-crm feature-family pause clause; the clause itself is gone, the trap is not.)
