@@ -5,7 +5,8 @@ import { fetchChannelCatalogue } from "./channel-operator-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { campaignFunding } from "./campaign-funding.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
-import { resolveWorkflowSlugForTrigger } from "./features-workflow-projection-client.js";
+import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
+import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
 import { executeCampaignWorkflow } from "./workflows.js";
 import {
   hasLiveRunForBrandCohort,
@@ -244,7 +245,12 @@ export async function triggerCampaignsForStep(
     try {
       const brandIdCsv = brandIds.join(",");
       const runId = await ensureCampaignRunId(campaign);
-      const workflowSlug = await resolveWorkflowSlugForTrigger({
+      // Same cell pick as the scheduled path — the audience first, then the cheapest workflow in
+      // its column — so an event-triggered run lands on the same grid cell a due one would.
+      const excludedAudienceIds = isWorkflowRotationEnabled(campaign.featureSlug)
+        ? await getFreshExhaustedAudienceIds(campaign.id)
+        : [];
+      const selection = await resolveSelectionForTrigger({
         featureSlug: campaign.featureSlug,
         primaryBrandId: brandIds[0],
         identity: {
@@ -258,7 +264,10 @@ export async function triggerCampaignsForStep(
         },
         fallbackSlug: campaign.workflowSlug,
         funnelKey: campaign.funnelKey,
+        requiredAudienceIds: campaign.audienceIds,
+        excludedAudienceIds,
       });
+      const workflowSlug = selection.workflowSlug;
       await executeCampaignWorkflow(workflowSlug, {
         campaignId: campaign.id,
         orgId: req.orgId,
@@ -268,7 +277,7 @@ export async function triggerCampaignsForStep(
         featureSlug: campaign.featureSlug,
         activeGoalId: campaign.activeGoalId,
         brandProfileId: campaign.brandProfileId,
-        audienceId: campaign.audienceId,
+        audienceId: selection.audienceId ?? campaign.audienceId,
       });
       firedCohorts.add(cohort);
       outcome.triggered.push({

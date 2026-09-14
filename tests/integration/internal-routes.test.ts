@@ -106,6 +106,9 @@ function pipelineHeaders(overrides: Record<string, string> = {}) {
     "x-run-id": overrides["x-run-id"] ?? crypto.randomUUID(),
     "x-workflow-slug": overrides["x-workflow-slug"] ?? "sales-email-cold-outreach",
     "x-feature-slug": overrides["x-feature-slug"] ?? "sales-cold-email-v1",
+    // Anything else the caller states rides along verbatim — x-audience-id in particular, which
+    // is how workflow-service carries the trigger's chosen audience into this callback.
+    ...overrides,
   };
 }
 
@@ -464,6 +467,77 @@ describe("Pipeline routes", () => {
           identity: expect.objectContaining({ runId: "parent-run-1" }),
         }),
       );
+      expect(res.body.audienceId).toBe(DEFAULT_AUDIENCE_ID);
+    });
+
+    // === The audience the TRIGGER chose is consumed here, never re-drawn ===
+
+    it("consumes the audience supplied on the execute call and makes NO projection call", async () => {
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        funnelKey: "sales_meetings_from_website",
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(
+          pipelineHeaders({
+            "x-org-id": orgId,
+            "x-campaign-id": campaign.id,
+            "x-audience-id": "aud-chosen-at-trigger",
+          }),
+        )
+        .expect(200);
+
+      // The workflow now running was picked WITHIN this audience's column, so re-drawing here
+      // would run it against a different audience — the exact mismatch the cell pick ends.
+      expect(res.body.audienceId).toBe("aud-chosen-at-trigger");
+      expect(mockFetchCandidates).not.toHaveBeenCalled();
+      expect(mockFetchArbitration).not.toHaveBeenCalled();
+      // The run is attributed to the consumed audience, so every downstream cost is too.
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ audienceId: "aud-chosen-at-trigger" }),
+      );
+    });
+
+    it("consumes it even when the campaign's own exhausted/targeting state would exclude it", async () => {
+      // The trigger applied those constraints when it chose. Re-applying them here is a second
+      // draw by another name, and the workflow running was chosen for the audience it picked.
+      const campaign = await insertTestCampaign(orgId, {
+        brandIds,
+        audienceIds: ["some-other-audience"],
+      });
+      await db.insert(campaignAudienceExhaustion).values({
+        campaignId: campaign.id,
+        audienceId: "aud-chosen-at-trigger",
+        exhaustedAt: new Date(),
+        lastObservedAt: new Date(),
+      });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(
+          pipelineHeaders({
+            "x-org-id": orgId,
+            "x-campaign-id": campaign.id,
+            "x-audience-id": "aud-chosen-at-trigger",
+          }),
+        )
+        .expect(200);
+
+      expect(res.body.audienceId).toBe("aud-chosen-at-trigger");
+      expect(mockFetchCandidates).not.toHaveBeenCalled();
+    });
+
+    it("picks the audience here exactly as before when the execute call supplied none", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
+        .expect(200);
+
+      expect(mockFetchCandidates).toHaveBeenCalled();
       expect(res.body.audienceId).toBe(DEFAULT_AUDIENCE_ID);
     });
 

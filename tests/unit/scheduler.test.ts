@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 const {
   mockExecuteCampaignWorkflow,
   mockResolveWorkflowSlug,
+  mockExhaustedAudienceIds,
   mockDbReturning,
   mockDbFindMany,
   mockListRuns,
@@ -12,6 +13,7 @@ const {
   return {
     mockExecuteCampaignWorkflow: vi.fn(),
     mockResolveWorkflowSlug: vi.fn(),
+    mockExhaustedAudienceIds: vi.fn(),
     mockDbReturning: vi.fn(),
     mockDbFindMany: vi.fn(),
     mockListRuns: vi.fn(),
@@ -27,7 +29,12 @@ vi.mock("../../src/lib/workflows.js", () => ({
 // The workflow bandit resolves to the campaign's configured slug here (the
 // fallback), so the existing executeCampaignWorkflow assertions on slug still hold.
 vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
-  resolveWorkflowSlugForTrigger: mockResolveWorkflowSlug,
+  resolveSelectionForTrigger: mockResolveWorkflowSlug,
+  isWorkflowRotationEnabled: () => true,
+}));
+
+vi.mock("../../src/lib/audience-exhaustion.js", () => ({
+  getFreshExhaustedAudienceIds: mockExhaustedAudienceIds,
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -114,7 +121,8 @@ describe("Scheduler - reRunDueCampaigns", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
-    mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => a.fallbackSlug);
+    mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => ({ workflowSlug: a.fallbackSlug, audienceId: null }));
+    mockExhaustedAudienceIds.mockResolvedValue([]);
     mockDbReturning.mockResolvedValue([]);
     mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
     mockCreateRun.mockResolvedValue({ id: "anchor-run-1" });
@@ -160,6 +168,82 @@ describe("Scheduler - reRunDueCampaigns", () => {
       expect.objectContaining({
         identity: expect.objectContaining({ orgId: "org-ext-1" }),
       }),
+    );
+  });
+
+  // === The run serves the CELL the trigger chose ===
+
+  it("supplies the audience the trigger chose on the execute call", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "configured-slug",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+        audienceId: null,
+      },
+    ]);
+    mockResolveWorkflowSlug.mockResolvedValue({ workflowSlug: "wf-cheapest-here", audienceId: "aud-chosen" });
+
+    await reRunDueCampaigns();
+
+    // The workflow was picked WITHIN this audience's column, so the two must travel together.
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
+      "wf-cheapest-here",
+      expect.objectContaining({ audienceId: "aud-chosen" }),
+    );
+  });
+
+  it("constrains the trigger's audience pick with the campaign's targeting subset and its exhausted set", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "configured-slug",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+        audienceIds: ["aud-1", "aud-2"],
+      },
+    ]);
+    mockExhaustedAudienceIds.mockResolvedValue(["aud-2"]);
+
+    await reRunDueCampaigns();
+
+    expect(mockExhaustedAudienceIds).toHaveBeenCalledWith("campaign-1");
+    expect(mockResolveWorkflowSlug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requiredAudienceIds: ["aud-1", "aud-2"],
+        excludedAudienceIds: ["aud-2"],
+      }),
+    );
+  });
+
+  it("dispatches with the configured slug and no chosen audience when selection could not answer", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-1",
+        orgId: "org-ext-1",
+        workflowSlug: "configured-slug",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: null,
+        featureSlug: "sales-cold-email-v1",
+        audienceId: null,
+      },
+    ]);
+    // What resolveSelectionForTrigger answers when features-service is unreachable.
+    mockResolveWorkflowSlug.mockResolvedValue({ workflowSlug: "configured-slug", audienceId: null });
+
+    await reRunDueCampaigns();
+
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
+      "configured-slug",
+      expect.objectContaining({ audienceId: null }),
     );
   });
 
@@ -652,7 +736,8 @@ describe("Scheduler - logging hygiene", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
-    mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => a.fallbackSlug);
+    mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => ({ workflowSlug: a.fallbackSlug, audienceId: null }));
+    mockExhaustedAudienceIds.mockResolvedValue([]);
     mockDbReturning.mockResolvedValue([]);
     mockDbFindMany.mockResolvedValue([]);
     mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
@@ -770,7 +855,8 @@ describe("Scheduler - lifecycle (timers)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
-    mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => a.fallbackSlug);
+    mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => ({ workflowSlug: a.fallbackSlug, audienceId: null }));
+    mockExhaustedAudienceIds.mockResolvedValue([]);
     mockDbReturning.mockResolvedValue([]);
     mockDbFindMany.mockResolvedValue([]);
     mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });

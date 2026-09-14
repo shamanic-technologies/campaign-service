@@ -265,48 +265,65 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     // campaign's OTHER audiences instead of re-picking a dry one.
     // Fail-soft: any features-service error → no audience chosen for this run (the run still
     // proceeds and reschedules); a selection optimization must never hard-fail a run.
-    const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaignId);
-    let audienceId: string | null = null;
-    try {
-      // The GOAL is arbitrated by features-service, on the same evidence the trigger used and
-      // by the same deterministic rule, so both legs land on the same goal without threading
-      // anything through the DAG. Only for a campaign that states NO funnel — a stated funnel is
-      // the customer's funding decision and is never arbitrated away.
-      let projectionRows: ProjectionRow[] | null = null;
-      if (!funnelKey) {
-        const arbitration = await fetchGoalArbitration({
+    // THE AUDIENCE SUPPLIED ON THE EXECUTE CALL IS CONSUMED, NEVER RE-DRAWN.
+    //
+    // The trigger picks the (audience, workflow) CELL of features-service's grid: the audience
+    // first, then the cheapest workflow WITHIN that audience's column. So the workflow now
+    // running was chosen FOR this audience, and drawing a second one here would run it against a
+    // different audience — which is the exact mismatch the cell pick exists to end (a workflow
+    // cheapest on one audience running on the eleven it is worst on). workflow-service carries
+    // the audience from the execute call through to this callback; when it carries one, this
+    // route makes NO projection call at all.
+    //
+    // Nothing supplied → everything below is exactly what it was: the audience is picked here,
+    // over this workflow's rows, with the same constraints.
+    const suppliedAudienceId = req.audienceId ?? null;
+    const excludedAudienceIds = suppliedAudienceId
+      ? []
+      : await getFreshExhaustedAudienceIds(campaignId);
+    let audienceId: string | null = suppliedAudienceId;
+    if (!suppliedAudienceId) {
+      try {
+        // The GOAL is arbitrated by features-service, on the same evidence the trigger used and
+        // by the same deterministic rule, so both legs land on the same goal without threading
+        // anything through the DAG. Only for a campaign that states NO funnel — a stated funnel is
+        // the customer's funding decision and is never arbitrated away.
+        let projectionRows: ProjectionRow[] | null = null;
+        if (!funnelKey) {
+          const arbitration = await fetchGoalArbitration({
+            featureSlug: featureSlug!,
+            brandId: primaryBrandId,
+            identity: preRunIdentity,
+          });
+          if (arbitration) {
+            runtimeGoal = arbitration.goal;
+            // Normally the elected workflow IS the one now running (the trigger elected it from
+            // the same shared snapshot). If that snapshot rolled in between, the rows we were
+            // handed describe a workflow that is NOT executing — re-read the rows for the one
+            // that is, on the elected goal, rather than picking an audience for the wrong DAG.
+            if (arbitration.workflowSlug === workflowSlug) projectionRows = arbitration.rows;
+          }
+        }
+        projectionRows ??= await fetchWorkflowProjectionRows({
           featureSlug: featureSlug!,
           brandId: primaryBrandId,
+          funnelKey,
+          goal: runtimeGoal,
           identity: preRunIdentity,
         });
-        if (arbitration) {
-          runtimeGoal = arbitration.goal;
-          // Normally the elected workflow IS the one now running (the trigger elected it from
-          // the same shared snapshot). If that snapshot rolled in between, the rows we were
-          // handed describe a workflow that is NOT executing — re-read the rows for the one
-          // that is, on the elected goal, rather than picking an audience for the wrong DAG.
-          if (arbitration.workflowSlug === workflowSlug) projectionRows = arbitration.rows;
-        }
+        audienceId = selectAudienceFromProjection(projectionRows, workflowSlug, {
+          // Campaign v2: HARD targeting subset. When the campaign targets a subset of the
+          // brand's audiences, the bandit may ONLY pick from it — the campaign never contacts
+          // an audience it doesn't target. NULL/empty → target the brand's full active set.
+          requiredAudienceIds: campaign.audienceIds ?? undefined,
+          excludedAudienceIds,
+        });
+      } catch (err) {
+        console.warn(
+          `[campaign-service] audience selection failed for brand ${primaryBrandId}, proceeding without a chosen audience:`,
+          err,
+        );
       }
-      projectionRows ??= await fetchWorkflowProjectionRows({
-        featureSlug: featureSlug!,
-        brandId: primaryBrandId,
-        funnelKey,
-        goal: runtimeGoal,
-        identity: preRunIdentity,
-      });
-      audienceId = selectAudienceFromProjection(projectionRows, workflowSlug, {
-        // Campaign v2: HARD targeting subset. When the campaign targets a subset of the
-        // brand's audiences, the bandit may ONLY pick from it — the campaign never contacts
-        // an audience it doesn't target. NULL/empty → target the brand's full active set.
-        requiredAudienceIds: campaign.audienceIds ?? undefined,
-        excludedAudienceIds,
-      });
-    } catch (err) {
-      console.warn(
-        `[campaign-service] audience selection failed for brand ${primaryBrandId}, proceeding without a chosen audience:`,
-        err,
-      );
     }
 
     // Create run in runs-service (x-run-id from caller becomes parentRunId), stamping the
