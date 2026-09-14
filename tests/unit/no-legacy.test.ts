@@ -26,6 +26,42 @@ describe('No Legacy Patterns - CRITICAL', () => {
     return files;
   }
 
+  it('must NOT re-derive the model-tier rule — only features-service owns which tier suits a leg', () => {
+    // We measured fleet-wide that the capability TIER of the model writing a workflow's emails
+    // decides the outcome, and that which tier suits a leg depends on what the leg sells.
+    // features-service OWNS that rule and STATES the verdict per row; this service reads
+    // `modelEligibility.eligible` and nothing else. A tier vocabulary here — a literal tier, a
+    // step→tier table, a comparison against a tier — is a second copy of one product fact, and it
+    // drifts the day the study is re-run. The alias string is not a shortcut either: `flash-pro`
+    // is CHEAP despite containing "pro", so any substring rule is wrong on a live alias.
+    const files = getAllTsFiles(srcDir);
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const file of files) {
+      const content = fs.readFileSync(file, 'utf-8');
+      content.split('\n').forEach((line, index) => {
+        const code = line.split('//')[0];
+        // A capability-tier literal, or any comparison/branch on a tier or an alias.
+        if (/["'`](cheap|strong|frontier)["'`]/.test(code) || /\bmodelTier\s*(===|!==|==)/.test(code) || /\bmodelAlias\s*(===|!==|==)/.test(code) || /\bcapabilityTier\b/.test(code) || /eligibleTiersFor/.test(code)) {
+          violations.push({ file: path.relative(srcDir, file), line: index + 1, code: line.trim() });
+        }
+      });
+    }
+
+    expect(violations, `Model-tier rule re-derived in campaign-service:\n${JSON.stringify(violations, null, 2)}`).toEqual([]);
+  });
+
+  it('must have exactly ONE reader of features-service\'s modelEligibility verdict', () => {
+    // Two readers is two places that can disagree about whether a workflow may run — the same
+    // reason the leg catalogue has one reader. The verdict is read in
+    // features-workflow-projection-client.ts and acted on there, once, before either argmin.
+    const files = getAllTsFiles(srcDir);
+    const readers = files.filter((f) => /\bmodelEligibility\b/.test(fs.readFileSync(f, 'utf-8')))
+      .map((f) => path.relative(srcDir, f));
+
+    expect(readers).toEqual(['lib/features-workflow-projection-client.ts']);
+  });
+
   it('should NOT carry a superseded-campaign concept anywhere in src', () => {
     // A campaign is never parked, deferred on a slow re-check loop, or held out of the running
     // because another campaign covers its funnel. Every alive campaign is re-ranked from scratch

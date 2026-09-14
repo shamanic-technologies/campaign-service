@@ -1563,6 +1563,78 @@ running workflow is not the best one for the audience it is being run on.
 
 (Set 2026-09-14.)
 
+
+## A workflow the LEG's model rule excludes is never selected — the verdict is READ, and it binds BOTH argmins
+
+features-service measured, fleet-wide, that the CAPABILITY TIER of the model a workflow writes its
+emails with decides how that workflow performs, and that the direction depends on what the LEG
+sells: the cheap tier badly underperforms on a leg selling a conversation, and the strong and
+frontier tiers are money burnt on one selling a website visit. It STATES that verdict on every row
+it serves for a leg (`modelEligibility`) and deliberately acts on none of it — two consumers need
+the difference, and a customer surface must be able to tell "this workflow is excluded" apart from
+"this workflow does not exist". ACTING on it is this service's job and nobody else's.
+
+Until now nothing here read it, so the selector kept consuming cells from the wrong tier. It bites
+hardest during the EXPLORE ALLOWANCE, which is where the large majority of cells sit: an unproven
+workflow is priced at the channel's outreach floor whatever model it names, so the cheapest-cell
+argmin spends real money exploring a tier we already know cannot work for that leg.
+
+- **THE RULE IS NEVER RE-DERIVED HERE.** No tier, no alias, no step and no table of any of them
+  exists in `src` and none is to be introduced: `readLegModelEligibility`
+  (`features-workflow-projection-client.ts`) reads `modelEligibility.eligible` and nothing else —
+  the same posture this service holds for the goal, the offer, the channel and the leg. The alias
+  STRING is not a shortcut either: `flash-pro` is CHEAP despite containing "pro", so any substring
+  rule is wrong on a live alias. `tests/unit/no-legacy.test.ts` fails on a tier literal, on a
+  comparison against a tier or an alias, and on a SECOND reader of `modelEligibility`.
+- **IT IS A SECOND CALL, AND THAT IS THE POINT.** The verdict rides ONLY on a LEG-keyed body, and
+  features-service refuses `?leg=` and `?funnel=` on one request (400 `leg_and_funnel`) because the
+  two price differently: a leg is priced through the brand's best-RETURNING declared funnel and
+  denominated in the leg's own step, while a campaign is priced on the funnel it STATES. Asking the
+  verdict on the pricing call would therefore have moved every number the selection ranks on. So
+  the pricing read is byte-unchanged — same parameter, same figures, same two argmins in the same
+  order — and the leg-keyed body is consumed for the VERDICT ALONE: not one of its numbers is read.
+  Both are fired in the same round trip, so the extra read costs no wall-clock.
+- **THE RESTRICTION BINDS BOTH LEGS OF THE PICK, because it is applied to the ROWS before either
+  argmin.** Since v0.72.0 the pick is two argmins — the audience first over its POOLED column, then
+  the cheapest cell within it. Filtering only the cell argmin would leave the audience judged on
+  evidence produced by workflows that will never be served: an audience looks good because a
+  cheap-tier workflow did well on it, and then receives the strong-tier workflow that is cheapest
+  among the ones left. `restrictToEligibleWorkflows` runs once, on `rows`, so the pooled column and
+  the cells agree by construction.
+- **IT REMOVES NO AUDIENCE.** features-service enumerates EVERY active audience of the brand under
+  EVERY dynasty, so an audience survives as long as one eligible workflow does. Verified in prod
+  2026-09-14 (brand `75d7e3e8`, campaign `f7b1b610`, leg `start_to_conversation`): 351 rows, 27
+  active dynasties, 12 audiences under each; **9** dynasties are cheap-tier and excluded
+  (`rampart`, `cerulean`, `lyonesse`, `allegro`, `pelican`, `dawn`, `rudder`, `osprey`,
+  `maelstrom`), and all 12 audiences still stand under the other 18. That is why this cannot become
+  the workflow-scoped audience narrowing v0.44.1 deleted — the one whose collapse the unscoped
+  `/end-run` stop-guard could not see. The stop-guard stays UNFILTERED on purpose: an audience
+  serveable under ANY workflow keeps the campaign alive, and a guard seeing a SUPERSET is the safe
+  direction for a fail-safe stop.
+- **WE NEVER EXCLUDE ON A GAP IN ANYBODY'S READING.** features-service serves a workflow whose tier
+  it cannot resolve as ELIGIBLE with its own stated reason, so an unknowable tier never reaches the
+  exclusion set at all. A verdict WE could not read (non-2xx, bad payload, unreachable) is `null`,
+  which is a different answer from "this leg excludes nobody": the selection then runs over the
+  UNFILTERED grid — exactly the pre-filter behaviour — and WARNS, because silence would make an
+  outage of this read indistinguishable from a leg whose rule excludes no one.
+- **A LEG THAT EXCLUDES EVERY WORKFLOW IS NEVER WIDENED BACK.** The grid goes EMPTY and says so on
+  `console.error`, naming the leg and the excluded dynasties; an empty grid resolves through the
+  same configured-workflow fallback the trigger already takes when nothing is rankable. Serving the
+  full set again would be serving precisely the workflows we just established cannot work for what
+  this campaign sells. Note the fallback slug itself is NOT vetted — it is the customer's configured
+  workflow and the trigger's last resort, and for the campaign above it happens to be a `rudder`
+  version, i.e. an excluded dynasty. That is deliberate: a campaign must still run.
+- **A campaign that states NO leg reads no verdict, makes no extra call, and selects exactly as it
+  did** — the pre-0055 population, byte-unchanged.
+- **The GOAL-ARBITRATED leg is untouched.** It answers only for a campaign that states no funnel,
+  and features-service elects both the goal and its workflow there: that is its answer, not a cell
+  of a grid we may re-argmin.
+- **Expected effect in production**: 9 of the campaign's 27 dynasties stop being served, including
+  the one it is currently configured on. Nothing about pacing, funding, scheduling, serialization
+  or what is priced moved.
+
+(Set 2026-09-14.)
+
 ## Per-run selection: GREEDY workflow + Thompson audience — both from `/workflow-projection` alone. Two levers, two decision points.
 
 **Feature scope (2026-07-07): workflow rotation is ENABLED ONLY for `sales-cold-email-outreach`.** `resolveWorkflowSlugForTrigger` gates on `isWorkflowRotationEnabled(featureSlug)` (allowlist `WORKFLOW_ROTATION_FEATURE_SLUGS` in `features-workflow-projection-client.ts`); any other feature (pr-expert-quote-outreach, pr-expert-quote-opportunities, hiring/vc/pr cold-email, etc.) returns `campaign.workflowSlug` immediately — no features-service call, no greedy pick, same workflow every run. The GREEDY-vs-Thompson description below applies to the sales-cold-email-outreach path; for every other feature the workflow leg is a no-op passthrough. (Kevin: "restreint la rotation à la feature sales cold email outreach".)
