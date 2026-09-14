@@ -156,6 +156,170 @@ function normalizeProjectionRows(rows: RawProjectionRow[]): ProjectionRow[] {
   });
 }
 
+
+// ── WHICH WORKFLOWS THE LEG'S MODEL RULE EXCLUDES ───────────────────────────────────────────
+//
+// features-service measured, fleet-wide, that the CAPABILITY TIER of the model a workflow writes
+// its emails with decides how that workflow performs, and that the direction depends on what the
+// LEG sells: the cheap tier badly underperforms on a leg selling a conversation, and the strong
+// and frontier tiers are money burnt on one selling a website visit. It STATES that verdict on
+// every row it serves for a leg (`modelEligibility`) and deliberately acts on none of it, because
+// two consumers need the difference — a customer surface must be able to tell "this workflow is
+// excluded" apart from "this workflow does not exist". ACTING on it is this service's job and
+// nobody else's, and this is where it happens.
+//
+// THE RULE IS NEVER RE-DERIVED HERE. No tier, no alias, no step, and no table of any of them
+// exists in this repo and none is to be introduced: we read `modelEligibility.eligible` and
+// nothing else — the same posture this service holds for the goal, the offer, the channel and the
+// leg. A second copy of the rule is a second thing to drift.
+//
+// IT IS A SECOND CALL, AND THAT IS THE POINT. The verdict rides ONLY on a LEG-keyed body, and
+// features-service refuses `?leg=` and `?funnel=` on one request (400 `leg_and_funnel`) because
+// the two price differently: a leg is priced through the brand's best-RETURNING declared funnel
+// and denominated in the leg's own step, while a campaign is priced on the funnel it STATES.
+// Asking the verdict on the pricing call would therefore have moved every number the selection
+// ranks on. So the pricing read is byte-unchanged — same parameter, same figures, same two
+// argmins in the same order — and the leg-keyed body is consumed for the VERDICT ALONE: not one
+// of its numbers is read. Both are fired in the same round trip, so the extra read costs no
+// wall-clock.
+//
+// THE FILTER IS APPLIED ONCE, TO THE ROWS, BEFORE EITHER ARGMIN. Both legs of the pick must see
+// the same restricted grid or the first one is judged on evidence the second can never serve: an
+// audience pooled over its WHOLE column looks good because a cheap-tier workflow did well on it,
+// and then receives the strong-tier workflow that is cheapest among the ones left. Filtering the
+// rows up front is what makes the pooled column and the cell argmin agree by construction.
+//
+// IT REMOVES NO AUDIENCE. features-service enumerates EVERY active audience of the brand under
+// EVERY dynasty, so an audience survives as long as one eligible workflow does — verified in prod
+// 2026-09-14 (brand 75d7e3e8, leg start_to_conversation): 351 rows, 27 dynasties, 12 audiences
+// under each. Dropping 9 dynasties leaves all 12 audiences standing under the other 18. That is
+// why this cannot become the workflow-scoped audience narrowing v0.44.1 deleted — the one whose
+// collapse the unscoped `/end-run` stop-guard could not see. The stop-guard stays unfiltered on
+// purpose: an audience serveable under ANY workflow keeps the campaign alive, and a guard seeing
+// a SUPERSET is the safe direction for a fail-safe stop.
+
+/** The raw leg-keyed row — we read the dynasty slug and the verdict, and nothing else on it. */
+interface RawEligibilityRow {
+  workflow?: { workflowDynastySlug?: string };
+  modelEligibility?: {
+    eligible?: boolean;
+    modelAlias?: string | null;
+    modelTier?: string | null;
+    ineligibleReason?: string | null;
+  };
+}
+
+/** What one leg's model rule EXCLUDES. Only exclusions — an eligible workflow is simply absent. */
+export interface LegModelEligibility {
+  legKey: string;
+  /** Dynasty slug → the sentence features-service stated for excluding it. */
+  ineligible: Map<string, string>;
+}
+
+/**
+ * Read features-service's verdict on which workflows the model rule excludes for THIS leg.
+ *
+ * Returns null when the verdict could not be READ — a different answer from "this leg excludes
+ * nothing", and the caller treats it as such: it selects over the UNFILTERED grid, i.e. exactly
+ * what it did before this existed. We never exclude a workflow on a gap in our own reading, and
+ * never silently: the failure warns. (features-service applies the same doctrine one level down —
+ * a workflow whose tier IT cannot resolve is served ELIGIBLE with its own stated reason, so an
+ * unknowable tier never reaches this map at all.)
+ */
+export async function readLegModelEligibility({
+  featureSlug,
+  brandId,
+  legKey,
+  identity,
+}: {
+  featureSlug: string;
+  brandId: string;
+  legKey: string;
+  identity: DownstreamIdentity;
+}): Promise<LegModelEligibility | null> {
+  const baseUrl = process.env.FEATURES_SERVICE_URL;
+  const apiKey = process.env.FEATURES_SERVICE_API_KEY;
+  if (!baseUrl || !apiKey) {
+    throw new Error("[campaign-service] FEATURES_SERVICE_URL or FEATURES_SERVICE_API_KEY not configured");
+  }
+
+  const url = new URL(`${baseUrl.replace(/\/$/, "")}/features/${encodeURIComponent(featureSlug)}/workflow-projection`);
+  url.searchParams.set("brandId", brandId);
+  // A leg-keyed read names NO funnel: features-service refuses both at once, and the funnel the
+  // leg is priced through is its own answer from the brand's declared set. The leg identifier is
+  // forwarded VERBATIM — it is features-service's word and is never parsed into its two steps.
+  url.searchParams.set("leg", legKey);
+
+  try {
+    const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
+    if (!res.ok) throw new Error(`workflow-projection (leg) failed (${res.status}): ${await res.text()}`);
+
+    const body = await res.json() as { rows?: RawEligibilityRow[] };
+    if (!Array.isArray(body.rows)) throw new Error("workflow-projection (leg) returned an invalid rows payload");
+
+    const ineligible = new Map<string, string>();
+    for (const row of body.rows) {
+      const slug = row.workflow?.workflowDynastySlug;
+      const verdict = row.modelEligibility;
+      // ONLY an explicit `false` excludes. A row with no verdict block at all (a body served
+      // without the block, a shape older than the verdict) excludes nothing — the absence of a
+      // statement is not a statement.
+      if (!slug || !verdict || verdict.eligible !== false) continue;
+      ineligible.set(
+        slug,
+        verdict.ineligibleReason ??
+          `features-service excluded it for leg "${legKey}" (model ${verdict.modelAlias ?? "unstated"}, tier ${verdict.modelTier ?? "unstated"})`,
+      );
+    }
+    return { legKey, ineligible };
+  } catch (err) {
+    // FAIL OPEN, LOUDLY. Falling back to the unfiltered grid is the pre-filter behaviour; falling
+    // back to NOTHING would stop a funded campaign over a read that decides only which cells are
+    // worth trying. Silence would make an outage of this read indistinguishable from a leg whose
+    // rule excludes nobody.
+    console.warn(
+      `[campaign-service] model-eligibility read failed for brand ${brandId} leg ${legKey} — ` +
+        "selecting over the UNFILTERED grid (pre-filter behaviour):",
+      err,
+    );
+    return null;
+  }
+}
+
+/**
+ * Restrict the grid to the workflows the leg's model rule allows — the ONE place the verdict is
+ * acted on, applied before EITHER argmin so the pooled audience column and the cell pick are
+ * computed over the same set.
+ *
+ * Three answers, and the third is the one worth stating:
+ *   - no verdict could be read (null), or the leg excludes nobody → the grid, untouched;
+ *   - some workflows excluded → the grid without them, silently (this is the routine path and
+ *     fires on every dispatch of every campaign of every client — per the log discipline in
+ *     CLAUDE.md that is exactly the event that must not be logged at all);
+ *   - EVERY workflow excluded → the EMPTY grid, loudly. It is never widened back: serving the
+ *     full set again would be serving precisely the workflows we just established cannot work for
+ *     what this campaign sells. An empty grid resolves through the caller's existing
+ *     configured-workflow fallback, which is what it already does when nothing is rankable.
+ */
+export function restrictToEligibleWorkflows(
+  rows: ProjectionRow[],
+  eligibility: LegModelEligibility | null,
+  context: { brandId: string; featureSlug: string },
+): ProjectionRow[] {
+  if (!eligibility || eligibility.ineligible.size === 0) return rows;
+
+  const kept = rows.filter((r) => !eligibility.ineligible.has(r.workflow.workflowDynastySlug));
+  if (rows.length > 0 && kept.length === 0) {
+    const excluded = [...eligibility.ineligible.keys()].sort().join(", ");
+    console.error(
+      `[campaign-service] EVERY workflow of ${context.featureSlug} is ineligible for leg ` +
+        `${eligibility.legKey} on brand ${context.brandId} — nothing to select, falling back to the ` +
+        `campaign's configured workflow. Excluded: ${excluded}`,
+    );
+  }
+  return kept;
+}
+
 // ── Goal arbitration (features-service GET /features/:slug/goal-arbitration) ────────────────
 //
 // The GOAL is the third selection lever, and it is arbitrated by features-service, not here.
@@ -292,11 +456,16 @@ export function selectWorkflowGreedy(rows: ProjectionRow[]): string | null {
 //   2. the WORKFLOW, greedily, WITHIN that audience's column, on the same
 //      `resolved.costPerOutcomeUsd` the previous pick already ranked on.
 //
-// Nothing about how features-service prices anything changes, and no parameter sent to it
-// changes: the cells and their ordering are identical, only which argmin is taken and in what
-// order. Ties on the workflow leg stay DETERMINISTIC on purpose — consuming a workflow raises its
-// own floor, which rotates it out by itself, and the catalogue sweeps. That convergence is the
-// mechanism, not a gap to patch with a shuffle.
+// Nothing about how features-service prices anything changes: the cells and their ordering are
+// identical, only which argmin is taken and in what order. Ties on the workflow leg stay
+// DETERMINISTIC on purpose — consuming a workflow raises its own floor, which rotates it out by
+// itself, and the catalogue sweeps. That convergence is the mechanism, not a gap to patch with a
+// shuffle.
+//
+// Since 2026-09-14 the rows these two argmins are taken over are RESTRICTED first, to the
+// workflows features-service says the leg's model rule allows — see restrictToEligibleWorkflows.
+// The restriction happens on the ROWS, once, before either argmin, and it moves no number: both
+// argmins are the same argmins over a smaller set.
 
 // Pool one audience's WHOLE column into a single Thompson arm — every workflow's evidence for
 // that audience summed, so the audience is judged on how it performs for the brand rather than on
@@ -559,6 +728,14 @@ export interface TriggerSelection {
  * Rotation is feature-scoped: any other feature keeps its configured workflow and chooses no
  * audience, with no features-service call at all.
  *
+ * A campaign that STATES A LEG has its grid restricted first, to the workflows features-service
+ * says that leg's model rule allows — read in the same round trip, applied before either argmin,
+ * and never re-derived here. A verdict that could not be read excludes nothing, loudly; a leg
+ * that excludes EVERY workflow leaves nothing to select and resolves through the same
+ * configured-workflow fallback as any other unrankable grid. The GOAL-ARBITRATED leg above is
+ * untouched on purpose: features-service elects both the goal and its workflow there, which is
+ * its answer and not a cell of a grid we may re-argmin.
+ *
  * Falls back to the campaign's configured slug and NO chosen audience when there is no evidence
  * yet OR features-service is unavailable — a selection optimization must never block a run.
  */
@@ -572,6 +749,13 @@ export async function resolveSelectionForTrigger(args: {
   // decides which funnel runs. Null → a feature that sells through no sales funnel, which is
   // arbitrated exactly as before and otherwise paces on the brand goal.
   funnelKey?: string | null;
+  /**
+   * The single funnel LEG the campaign is bought for — features-service's identifier, carried and
+   * NEVER parsed. Set → the leg's model rule is read and the grid is restricted to the workflows
+   * it allows, before either argmin. Null (every campaign older than the leg column) → no verdict
+   * exists to read, no extra call is made, and the selection is exactly what it was.
+   */
+  legKey?: string | null;
   /** The campaign's HARD targeting subset — the audience pick may only ever land inside it. */
   requiredAudienceIds?: string[] | null;
   /** The campaign's freshly-exhausted audiences — never chosen. */
@@ -583,6 +767,7 @@ export async function resolveSelectionForTrigger(args: {
     identity,
     fallbackSlug,
     funnelKey,
+    legKey,
     requiredAudienceIds,
     excludedAudienceIds,
   } = args;
@@ -605,14 +790,30 @@ export async function resolveSelectionForTrigger(args: {
     const goal: RuntimeGoal | null = funnelKey
       ? null
       : (await fetchBrandRuntimeContext(primaryBrandId, identity)).currentGoal;
-    const rows = await fetchWorkflowProjectionRows({
-      featureSlug,
+    // The PRICING read and the VERDICT read, in one round trip. They are two calls because
+    // features-service prices a leg and a funnel differently and refuses to be asked both at once
+    // — see readLegModelEligibility. The leg-keyed body's FIGURES are never read: this ship
+    // restricts which cells may be served and moves no number.
+    const [rows, eligibility] = await Promise.all([
+      fetchWorkflowProjectionRows({
+        featureSlug,
+        brandId: primaryBrandId,
+        funnelKey,
+        goal,
+        identity,
+      }),
+      legKey
+        ? readLegModelEligibility({ featureSlug, brandId: primaryBrandId, legKey, identity })
+        : Promise.resolve(null),
+    ]);
+    // Applied to the ROWS, so the pooled audience column and the cell argmin are computed over the
+    // SAME set — an audience must never be judged on evidence produced by a workflow that can
+    // never be served to it.
+    const candidates = restrictToEligibleWorkflows(rows, eligibility, {
       brandId: primaryBrandId,
-      funnelKey,
-      goal,
-      identity,
+      featureSlug,
     });
-    const cell = selectCellFromProjection(rows, {
+    const cell = selectCellFromProjection(candidates, {
       requiredAudienceIds: requiredAudienceIds ?? undefined,
       excludedAudienceIds: excludedAudienceIds ?? undefined,
     });
