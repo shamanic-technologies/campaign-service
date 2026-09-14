@@ -11,7 +11,8 @@ vi.mock("@distribute/runs-client", () => ({
 // Workflow bandit resolves to the campaign's configured slug (fallback) so the
 // scheduler trigger does not make real network calls during integration tests.
 vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
-  resolveWorkflowSlugForTrigger: vi.fn(async (a) => a.fallbackSlug),
+  resolveSelectionForTrigger: vi.fn(async (a) => ({ workflowSlug: a.fallbackSlug, audienceId: null })),
+  isWorkflowRotationEnabled: () => false,
 }));
 
 vi.mock("../../src/lib/workflows.js", async (importOriginal) => {

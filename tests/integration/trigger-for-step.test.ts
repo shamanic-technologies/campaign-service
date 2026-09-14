@@ -30,7 +30,7 @@ vi.mock("../../src/lib/campaign-funding.js", async (importOriginal) => {
 
 vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/features-workflow-projection-client.js")>();
-  return { ...original, resolveWorkflowSlugForTrigger: mockResolveSlug };
+  return { ...original, resolveSelectionForTrigger: mockResolveSlug };
 });
 
 import app from "../../src/index.js";
@@ -72,7 +72,7 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
     });
     mockFunding.mockResolvedValue({ funded: true, ceilingCents: 5000 });
     mockListRuns.mockResolvedValue({ runs: [] });
-    mockResolveSlug.mockResolvedValue("aurora-v3");
+    mockResolveSlug.mockResolvedValue({ workflowSlug: "aurora-v3", audienceId: null });
     mockExecute.mockResolvedValue(undefined);
   });
 

@@ -8,7 +8,7 @@ vi.mock("../../src/lib/brand-runtime-client.js", () => ({
 
 import {
   fetchGoalArbitration,
-  resolveWorkflowSlugForTrigger,
+  resolveSelectionForTrigger,
 } from "../../src/lib/features-workflow-projection-client.js";
 import type { DownstreamIdentity } from "../../src/lib/downstream-headers.js";
 
@@ -162,7 +162,7 @@ describe("fetchGoalArbitration", () => {
   });
 });
 
-describe("resolveWorkflowSlugForTrigger — goal arbitration", () => {
+describe("resolveSelectionForTrigger — goal arbitration", () => {
   const baseArgs = {
     featureSlug: ROTATING_FEATURE,
     primaryBrandId: BRAND_ID,
@@ -182,7 +182,8 @@ describe("resolveWorkflowSlugForTrigger — goal arbitration", () => {
       }),
     );
 
-    await expect(resolveWorkflowSlugForTrigger(baseArgs)).resolves.toBe("wf-elected");
+    await expect(resolveSelectionForTrigger(baseArgs)
+    ).resolves.toMatchObject({ workflowSlug: "wf-elected" });
     // The elected goal already ranked its own workflows — no second projection call.
     expect(mockFetchBrandRuntimeContext).not.toHaveBeenCalled();
   });
@@ -196,7 +197,8 @@ describe("resolveWorkflowSlugForTrigger — goal arbitration", () => {
       }),
     );
 
-    await expect(resolveWorkflowSlugForTrigger(baseArgs)).resolves.toBe("wf-greedy");
+    await expect(resolveSelectionForTrigger(baseArgs)
+    ).resolves.toMatchObject({ workflowSlug: "wf-greedy" });
     expect(mockFetchBrandRuntimeContext).toHaveBeenCalled();
   });
 
@@ -209,14 +211,16 @@ describe("resolveWorkflowSlugForTrigger — goal arbitration", () => {
       }),
     );
 
-    await resolveWorkflowSlugForTrigger(baseArgs);
+    await resolveSelectionForTrigger(baseArgs);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("DOES warn when arbitration fails for any other reason", async () => {
     vi.stubGlobal("fetch", routeFetch({ arbitration: errorResponse(500, { error: "boom" }) }));
 
-    await expect(resolveWorkflowSlugForTrigger(baseArgs)).resolves.toBe("wf-configured");
+    await expect(resolveSelectionForTrigger(baseArgs)).resolves.toMatchObject({
+      workflowSlug: "wf-configured",
+    });
     expect(warnSpy).toHaveBeenCalled();
   });
 
@@ -225,8 +229,8 @@ describe("resolveWorkflowSlugForTrigger — goal arbitration", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      resolveWorkflowSlugForTrigger({ ...baseArgs, funnelKey: "sales_meetings_from_website" }),
-    ).resolves.toBe("wf-funnel");
+      resolveSelectionForTrigger({ ...baseArgs, funnelKey: "sales_meetings_from_website" }),
+    ).resolves.toMatchObject({ workflowSlug: "wf-funnel" });
     // routeFetch throws on an unexpected goal-arbitration call, so reaching here proves none was made.
     // The projection is priced on the FUNNEL — the only word that separates the two meeting funnels —
     // and no goal is sent, nor is the brand's goal even read.
@@ -236,13 +240,48 @@ describe("resolveWorkflowSlugForTrigger — goal arbitration", () => {
     expect(mockFetchBrandRuntimeContext).not.toHaveBeenCalled();
   });
 
+  it("returns the CELL — the audience it chose and the cheapest workflow in that audience's column", async () => {
+    // wf-D is the globally cheapest cell ($20 on aud-A) and terrible on aud-B; wf-E is $21 on
+    // both. Constrained to aud-B, the answer must be wf-E.
+    vi.stubGlobal(
+      "fetch",
+      routeFetch({
+        projection: jsonResponse({
+          rows: [
+            rawRow("aud-A", "wf-D", 20),
+            rawRow("aud-B", "wf-D", 185),
+            rawRow("aud-A", "wf-E", 21),
+            rawRow("aud-B", "wf-E", 21),
+          ],
+        }),
+      }),
+    );
+
+    await expect(
+      resolveSelectionForTrigger({
+        ...baseArgs,
+        funnelKey: "sales_meetings_from_website",
+        requiredAudienceIds: ["aud-B"],
+      }),
+    ).resolves.toEqual({ workflowSlug: "wf-E", audienceId: "aud-B" });
+  });
+
+  it("chooses no audience and keeps the configured slug when features-service is unreachable", async () => {
+    vi.stubGlobal("fetch", routeFetch({ projection: errorResponse(503, { error: "down" }) }));
+
+    await expect(
+      resolveSelectionForTrigger({ ...baseArgs, funnelKey: "sales_meetings_from_website" }),
+    ).resolves.toEqual({ workflowSlug: "wf-configured", audienceId: null });
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
   it("does not call features-service at all for a non-rotating feature", async () => {
     const fetchMock = routeFetch({});
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      resolveWorkflowSlugForTrigger({ ...baseArgs, featureSlug: "pr-expert-quote-outreach" }),
-    ).resolves.toBe("wf-configured");
+      resolveSelectionForTrigger({ ...baseArgs, featureSlug: "pr-expert-quote-outreach" }),
+    ).resolves.toMatchObject({ workflowSlug: "wf-configured", audienceId: null });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

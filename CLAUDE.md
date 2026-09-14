@@ -1508,6 +1508,61 @@ The marker and `lead-serve` are **siblings** — both chain to the `execute-work
 
 **Audience attribution is FORWARD-PROPAGATED, not root-stamped.** The priority audience (`audience.id` — a human-service saved-filter-set UUID; == the persona/profile id returned by features-service `persona-stats`) is **re-decided every run** inside `/start-run` (`fetchBestCustomerPersona`), which runs AFTER the root is created. So `/start-run`: (1) selects the audience BEFORE `createRun`, stamps `x-audience-id` on its own marker run; (2) returns top-level `audienceId` on its response. workflow-service reads that `audienceId` and threads `x-audience-id` into every downstream node call (`lead-serve`, email, …); runs-service stores `audience_id` per run + cost and exposes `groupBy=audienceId`. Header is byte-equal `x-audience-id` across campaign/workflow/runs services. `customerProfileId`/`x-customer-profile-id` is the deprecated alias for the SAME id — do not use for new work. (Set 2026-06-20, campaign-service#204 + workflow-service#307 + runs-service#154.)
 
+## A run serves the best CELL of the grid, not the best ROW — the AUDIENCE is chosen first, at the trigger, and /start-run CONSUMES it
+
+features-service prices a GRID: one row per (audience × workflow dynasty). This service used to
+pick the WORKFLOW first, at the trigger, by taking the cheapest cell over the WHOLE grid — and only
+then pick the AUDIENCE, inside the DAG, restricted to the workflow already running. So the cells a
+run could ever land on were ONE ROW of the grid, and a workflow whose single cheap cell won the
+global argmin then ran on every audience, including the ones it is worst on.
+
+Measured in prod 2026-09-14 (brand `75d7e3e8`, campaign `f7b1b610`, 24 workflows × 12 audiences =
+288 cells): `lithium` is **$20** per outcome on ONE audience and **$185–$572** on the other eleven,
+and it took **2,554 of the campaign's 2,759 leads**. `alioth` is **$21** on ten of the twelve
+columns and has never served a single lead. The starvation is self-reinforcing — a workflow that
+never runs never earns evidence, so it never wins — and the customer reads a table where the
+running workflow is not the best one for the audience it is being run on.
+
+- **The order is INVERTED, and nothing about the pricing moves.** `selectCellFromProjection`
+  (`features-workflow-projection-client.ts`): (1) the AUDIENCE, by the Thompson engine this
+  service already used for it, over evidence POOLED across that audience's WHOLE column; (2) the
+  WORKFLOW, greedily, WITHIN that audience's column, on the same `resolved.costPerOutcomeUsd` the
+  previous pick ranked on. Same endpoint, same parameters, same cells in the same order — only
+  which argmin is taken, and in what order.
+- **POOLED means not conditioned on any one workflow.** `poolArmsByAudience` sums the whole
+  column's contacted / goal-resolved outcomes / spend into ONE arm, and divides spend by contacted
+  at the END — averaging per-cell costs would weight a cell that contacted three leads like one
+  that contacted three thousand. Conditioning the audience choice on a workflow is exactly what
+  made the choice a row. An audience with no evidence anywhere pools to a COLD arm and is still
+  explored.
+- **The campaign's two constraints move WITH the pick.** The HARD targeting subset
+  (`campaigns.audience_ids`) and the freshly-exhausted set both applied to the later,
+  workflow-scoped choice and now apply to this one — they are the CAMPAIGN's constraints, not a
+  workflow's. The exhaustion read is made only for a rotating feature, so no other campaign pays
+  a query for it.
+- **The chosen audience is CONSUMED at `/start-run`, never re-drawn.** It rides on the execute call
+  (workflow-service carries it through to the callback) and, when one is supplied, `/start-run`
+  makes NO projection call at all — not the arbitration, not the rows. A second draw would run a
+  workflow that was picked FOR one audience against a different one, which is the mismatch this
+  whole change exists to end. Nothing supplied → every line of that path is what it was, including
+  the constraints, so a non-rotating feature and any caller that states no audience are
+  byte-unchanged.
+- **TIES ON THE WORKFLOW LEG STAY DETERMINISTIC.** Many cells sit at the same exploration floor,
+  and consuming a workflow raises its own floor, which rotates it out by itself while the catalogue
+  sweeps. That convergence IS the mechanism — never patch it with a shuffle or a rotation.
+- **The goal-arbitration leg is untouched.** It answers only for a campaign that states NO funnel,
+  and features-service elects both the goal and its workflow there: which goal a brand optimizes
+  for is its answer, not a cell of a grid we may re-argmin. That leg chooses no audience and
+  `/start-run` picks one over the elected pairing's rows exactly as before.
+- **Fail-soft is unchanged**: a features-service error → the configured slug, no chosen audience,
+  and the run still dispatches. A selection optimization never blocks a run.
+- **Expected effect in production**: the exploration floor (~$21/outcome) sits about eight times
+  below the measured leader (~$175), so unproven workflows beat `lithium` in eleven of twelve
+  columns and it stops running for roughly two days (~$500) while the catalogue sweeps. That is the
+  change working, not a regression.
+
+(Set 2026-09-14.)
+
 ## Per-run selection: GREEDY workflow + Thompson audience — both from `/workflow-projection` alone. Two levers, two decision points.
 
 **Feature scope (2026-07-07): workflow rotation is ENABLED ONLY for `sales-cold-email-outreach`.** `resolveWorkflowSlugForTrigger` gates on `isWorkflowRotationEnabled(featureSlug)` (allowlist `WORKFLOW_ROTATION_FEATURE_SLUGS` in `features-workflow-projection-client.ts`); any other feature (pr-expert-quote-outreach, pr-expert-quote-opportunities, hiring/vc/pr cold-email, etc.) returns `campaign.workflowSlug` immediately — no features-service call, no greedy pick, same workflow every run. The GREEDY-vs-Thompson description below applies to the sales-cold-email-outreach path; for every other feature the workflow leg is a no-op passthrough. (Kevin: "restreint la rotation à la feature sales cold email outreach".)
