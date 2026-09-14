@@ -210,6 +210,9 @@ export async function reRunDueCampaigns(): Promise<number> {
           // Price the pick on the funnel the campaign STATES — the only word that separates the
           // two meeting funnels. A campaign that states one is never goal-arbitrated.
           funnelKey: campaign.funnelKey,
+          // The LEG the campaign is bought for — what features-service's model rule is keyed on.
+          // A campaign that states none has no verdict to read and selects exactly as before.
+          legKey: campaign.legKey,
           requiredAudienceIds: campaign.audienceIds,
           excludedAudienceIds,
         });

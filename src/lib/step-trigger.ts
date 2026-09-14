@@ -264,6 +264,9 @@ export async function triggerCampaignsForStep(
         },
         fallbackSlug: campaign.workflowSlug,
         funnelKey: campaign.funnelKey,
+        // The LEG the campaign is bought for — what features-service's model rule is keyed on.
+        // A campaign that states none has no verdict to read and selects exactly as before.
+        legKey: campaign.legKey,
         requiredAudienceIds: campaign.audienceIds,
         excludedAudienceIds,
       });
