@@ -16,7 +16,7 @@ vi.mock("../../src/db/schema.js", () => ({
   campaigns: { orgId: "org_id", status: "status", brandIds: "brand_ids" },
 }));
 
-const { mockCatalogue, mockFunding, mockLiveCampaign, mockLiveCohort, mockAnchor, mockResolveSlug, mockExecute } =
+const { mockCatalogue, mockFunding, mockLiveCampaign, mockLiveCohort, mockAnchor, mockResolveSlug, mockExhausted, mockExecute } =
   vi.hoisted(() => ({
     mockCatalogue: vi.fn(),
     mockFunding: vi.fn(),
@@ -24,6 +24,7 @@ const { mockCatalogue, mockFunding, mockLiveCampaign, mockLiveCohort, mockAnchor
     mockLiveCohort: vi.fn(),
     mockAnchor: vi.fn(),
     mockResolveSlug: vi.fn(),
+    mockExhausted: vi.fn(),
     mockExecute: vi.fn(),
   }));
 
@@ -39,7 +40,11 @@ vi.mock("../../src/lib/funnel-campaigns.js", () => ({
 }));
 vi.mock("../../src/lib/trigger-run.js", () => ({ ensureCampaignRunId: mockAnchor }));
 vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
-  resolveWorkflowSlugForTrigger: mockResolveSlug,
+  resolveSelectionForTrigger: mockResolveSlug,
+  isWorkflowRotationEnabled: () => true,
+}));
+vi.mock("../../src/lib/audience-exhaustion.js", () => ({
+  getFreshExhaustedAudienceIds: mockExhausted,
 }));
 vi.mock("../../src/lib/workflows.js", () => ({ executeCampaignWorkflow: mockExecute }));
 
@@ -118,7 +123,8 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     mockLiveCampaign.mockResolvedValue(false);
     mockLiveCohort.mockResolvedValue(false);
     mockAnchor.mockResolvedValue("run-anchor");
-    mockResolveSlug.mockResolvedValue("aurora-v3");
+    mockResolveSlug.mockResolvedValue({ workflowSlug: "aurora-v3", audienceId: null });
+    mockExhausted.mockResolvedValue([]);
     mockExecute.mockResolvedValue(undefined);
   });
 

@@ -2,7 +2,8 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
-import { resolveWorkflowSlugForTrigger } from "./features-workflow-projection-client.js";
+import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
+import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { listRuns } from "@distribute/runs-client";
 import { planFunnelTurns } from "./funnel-campaigns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
@@ -106,6 +107,9 @@ export async function reRunDueCampaigns(): Promise<number> {
       activeGoalId: campaigns.activeGoalId,
       brandProfileId: campaigns.brandProfileId,
       audienceId: campaigns.audienceId,
+      // The HARD targeting subset. It constrained the audience pick when that pick happened
+      // inside the DAG; the pick moved to the trigger, so the constraint moves with it.
+      audienceIds: campaigns.audienceIds,
       funnelKey: campaigns.funnelKey,
       dailyBudgetCents: campaigns.dailyBudgetCents,
       // The offer this campaign sells. The turn planner asks brand-service for the funnels of THAT
@@ -179,11 +183,17 @@ export async function reRunDueCampaigns(): Promise<number> {
       // See ensureCampaignRunId — the anchor is created once and persisted, never per tick.
       const runId = await ensureCampaignRunId(campaign);
 
-      // Thompson-pick the workflow for THIS run (varies run-to-run) BEFORE execute.
-      // Falls back to the configured slug on any failure (see
-      // resolveWorkflowSlugForTrigger) — selection never blocks a run.
+      // Pick the CELL for THIS run BEFORE execute: the audience first (Thompson over its pooled
+      // column), then the cheapest workflow within that audience's column. Falls back to the
+      // configured slug and no chosen audience on any failure (see resolveSelectionForTrigger) —
+      // selection never blocks a run.
       try {
-        const workflowSlug = await resolveWorkflowSlugForTrigger({
+        // Only a rotating feature picks an audience here, so only a rotating feature pays for
+        // this read — every other campaign makes no extra query at all.
+        const excludedAudienceIds = isWorkflowRotationEnabled(featureSlug)
+          ? await getFreshExhaustedAudienceIds(campaign.id)
+          : [];
+        const selection = await resolveSelectionForTrigger({
           featureSlug,
           primaryBrandId: campaign.brandIds![0],
           identity: {
@@ -200,8 +210,10 @@ export async function reRunDueCampaigns(): Promise<number> {
           // Price the pick on the funnel the campaign STATES — the only word that separates the
           // two meeting funnels. A campaign that states one is never goal-arbitrated.
           funnelKey: campaign.funnelKey,
+          requiredAudienceIds: campaign.audienceIds,
+          excludedAudienceIds,
         });
-        await executeCampaignWorkflow(workflowSlug, {
+        await executeCampaignWorkflow(selection.workflowSlug, {
           campaignId: campaign.id,
           orgId: campaign.orgId,
           brandId: brandIdCsv,
@@ -210,7 +222,10 @@ export async function reRunDueCampaigns(): Promise<number> {
           featureSlug,
           activeGoalId: campaign.activeGoalId,
           brandProfileId: campaign.brandProfileId,
-          audienceId: campaign.audienceId,
+          // The audience chosen at the trigger is the one the run must serve — /start-run
+          // CONSUMES it rather than drawing again. Nothing chosen → whatever this call carried
+          // before the pick moved here, so a non-rotating feature is byte-unchanged.
+          audienceId: selection.audienceId ?? campaign.audienceId,
         });
       } catch (err) {
         console.error(`[campaign-service] Failed to re-trigger campaign ${campaign.id}:`, err);

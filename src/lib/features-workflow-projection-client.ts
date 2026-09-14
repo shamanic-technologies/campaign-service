@@ -255,7 +255,7 @@ export async function fetchGoalArbitration({
 // A workflow can appear in several rows (a brand-level row + one per audience grain);
 // the global argmin naturally picks its lowest-cost row. Rows with a null
 // costPerOutcomeUsd carry no rankable economics and are skipped. If NO row has a
-// costPerOutcomeUsd, return null → resolveWorkflowSlugForTrigger falls back to the
+// costPerOutcomeUsd, return null → resolveSelectionForTrigger falls back to the
 // campaign's configured slug (only fallback path).
 export function selectWorkflowGreedy(rows: ProjectionRow[]): string | null {
   let bestSlug: string | null = null;
@@ -269,6 +269,125 @@ export function selectWorkflowGreedy(rows: ProjectionRow[]): string | null {
     }
   }
   return bestSlug;
+}
+
+// ── The GRID, and which cell a run lands on ─────────────────────────────────────────────────
+//
+// features-service prices a GRID: one row per (audience × workflow dynasty). Doc Dinners's
+// campaign is 24 workflows over 12 audiences, 288 cells. This service used to pick the WORKFLOW
+// first — the global argmin over the whole grid — and only then pick the audience, restricted to
+// the workflow already running. So the cells a run could ever land on were ONE ROW of the grid,
+// and a workflow whose single cheapest cell won the global argmin then ran on EVERY audience,
+// including the eleven it is worst on. Measured in prod 2026-09-14 (brand 75d7e3e8, campaign
+// f7b1b610): `lithium` is $20/outcome on one audience and $185–$572 on the other eleven, and it
+// took 2,554 of the campaign's 2,759 leads, while `alioth` — $21 on ten of the twelve columns —
+// had never served a single lead. The starvation is self-reinforcing: a workflow that never runs
+// never earns evidence, so it never wins.
+//
+// So the order is inverted and the run serves the best CELL, not the best row:
+//
+//   1. the AUDIENCE, by the exploration mechanism this service already uses for it (Thompson),
+//      over evidence POOLED across the whole of that audience's column — i.e. not conditioned on
+//      any one workflow, because conditioning on a workflow is what made the choice a row;
+//   2. the WORKFLOW, greedily, WITHIN that audience's column, on the same
+//      `resolved.costPerOutcomeUsd` the previous pick already ranked on.
+//
+// Nothing about how features-service prices anything changes, and no parameter sent to it
+// changes: the cells and their ordering are identical, only which argmin is taken and in what
+// order. Ties on the workflow leg stay DETERMINISTIC on purpose — consuming a workflow raises its
+// own floor, which rotates it out by itself, and the catalogue sweeps. That convergence is the
+// mechanism, not a gap to patch with a shuffle.
+
+// Pool one audience's WHOLE column into a single Thompson arm — every workflow's evidence for
+// that audience summed, so the audience is judged on how it performs for the brand rather than on
+// how it performed under whichever workflow happens to be winning. The sums are the same
+// quantities `toArm` reads for one cell (contacted, goal-resolved outcomes, spend), which is what
+// makes the pooled arm commensurable with a single-cell one: score = spend / resolvedOutcomes =
+// cost-per-outcome either way.
+//
+// An audience the grid enumerates with NO evidence anywhere (never run under any workflow) pools
+// to a COLD arm (0 trials, null cost) and is still explored — exactly as a floored cell was.
+function poolArmsByAudience(rows: ProjectionRow[]): Map<string, Arm> {
+  const byId = new Map<string, Arm>();
+  for (const r of rows) {
+    if (r.audienceId == null) continue;
+    const arm = byId.get(r.audienceId) ?? { trials: 0, successes: 0, costPerTrial: null };
+    const ev = r.audienceEvidence;
+    if (ev) {
+      // costPerTrial is carried as the running SPEND while pooling and divided out at the end —
+      // averaging per-cell costs would weight a cell that contacted three leads like one that
+      // contacted three thousand.
+      arm.trials += ev.observedContacted;
+      arm.successes += ev.resolvedOutcomeCount ?? 0;
+      arm.costPerTrial = (arm.costPerTrial ?? 0) + ev.spentUsd;
+    }
+    byId.set(r.audienceId, arm);
+  }
+  for (const arm of byId.values()) {
+    arm.costPerTrial = arm.trials > 0 && arm.costPerTrial != null ? arm.costPerTrial / arm.trials : null;
+  }
+  return byId;
+}
+
+/**
+ * Per-run AUDIENCE selection at the TRIGGER: cost-aware Thompson sampling over every audience the
+ * grid enumerates, each scored on its POOLED column.
+ *
+ * The two constraints are the campaign's, not a workflow's, so they apply here exactly as they
+ * applied to the later, workflow-scoped pick this replaces:
+ *   requiredAudienceIds — the Campaign v2 HARD targeting subset (no fallback — empty → null).
+ *   excludedAudienceIds — the freshly-exhausted set (no fallback — empty → null).
+ *
+ * Returns the chosen audienceId, or null when the grid enumerates no audience the campaign may
+ * be served.
+ */
+export function selectAudiencePooled(
+  rows: ProjectionRow[],
+  opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[]; rng?: Rng } = {},
+): string | null {
+  let entries = [...poolArmsByAudience(rows).entries()];
+
+  if (opts.requiredAudienceIds && opts.requiredAudienceIds.length > 0) {
+    const required = new Set(opts.requiredAudienceIds);
+    entries = entries.filter(([id]) => required.has(id));
+  }
+  if (opts.excludedAudienceIds && opts.excludedAudienceIds.length > 0) {
+    const excluded = new Set(opts.excludedAudienceIds);
+    entries = entries.filter(([id]) => !excluded.has(id));
+  }
+  if (entries.length === 0) return null;
+
+  const idx = thompsonArgminCost(entries.map(([, arm]) => arm), opts.rng);
+  return idx === null ? null : entries[idx][0];
+}
+
+/** The (audience, workflow) cell a run is dispatched on. Either half may be null — see below. */
+export interface ProjectionCell {
+  audienceId: string | null;
+  workflowSlug: string | null;
+}
+
+/**
+ * The best CELL of the grid for this run: the audience first, then the cheapest workflow within
+ * that audience's column.
+ *
+ * Two fallbacks, both of which reduce to the behaviour that preceded this change rather than to
+ * nothing:
+ *   - no audience could be chosen (the grid enumerates none, or the campaign's constraints leave
+ *     none) → the workflow is the global argmin over the whole grid, as before, and no audience
+ *     is supplied on the dispatch, so /start-run picks one exactly as it always has;
+ *   - an audience was chosen but its column carries no rankable economics at all → the workflow
+ *     falls back to the global argmin. The audience still stands: it was chosen on its pooled
+ *     evidence, which is a different question from whether any cell of its column is priced.
+ */
+export function selectCellFromProjection(
+  rows: ProjectionRow[],
+  opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[]; rng?: Rng } = {},
+): ProjectionCell {
+  const audienceId = selectAudiencePooled(rows, opts);
+  const column = audienceId == null ? [] : rows.filter((r) => r.audienceId === audienceId);
+  const workflowSlug = selectWorkflowGreedy(column) ?? selectWorkflowGreedy(rows);
+  return { audienceId, workflowSlug };
 }
 
 // Maps a projection audience row to a Thompson arm, ranking on the GOAL-RESOLVED economics
@@ -411,45 +530,76 @@ export function isWorkflowRotationEnabled(featureSlug: string): boolean {
   return isOutboundSalesFeature(featureSlug);
 }
 
+/** What the trigger decided for THIS run: the cell it dispatches on. */
+export interface TriggerSelection {
+  /** The workflow to launch. Always a real slug — the configured one when nothing was pickable. */
+  workflowSlug: string;
+  /**
+   * The audience this run must serve, chosen BEFORE dispatch so the workflow could be picked
+   * within its column. Null when no audience was chosen (a non-rotating feature, an unreachable
+   * features-service, a grid that enumerates none, or a campaign whose constraints leave none) —
+   * the caller then supplies whatever it supplied before this existed, and /start-run picks the
+   * audience exactly as it always has.
+   */
+  audienceId: string | null;
+}
+
 /**
- * Resolve which workflow to launch for THIS run: price on what the campaign sells,
- * pull the workflow-projection rows from features-service, and greedily pick the best one
- * (cheapest expected cost-per-success) — so a campaign always runs its strongest
- * workflow instead of being frozen on its configured slug. The workflow MUST be
- * chosen here (at the trigger), because it is the DAG identity in the /execute URL
- * and cannot change once the DAG is running.
+ * Resolve the (audience, workflow) CELL this run is dispatched on: price on what the campaign
+ * sells, pull the grid from features-service, Thompson-pick the AUDIENCE over its pooled column,
+ * then greedily pick the cheapest workflow WITHIN that column — see selectCellFromProjection for
+ * why that order, and what it cost to have it the other way round.
  *
- * Rotation is scoped to the features in WORKFLOW_ROTATION_FEATURE_SLUGS; for any other
- * feature this returns the configured slug immediately (no rotation, no fetch).
+ * Both halves MUST be decided here, at the trigger. The workflow because it is the DAG identity
+ * in the /execute URL and cannot change once the DAG is running; the audience because the
+ * workflow is chosen within its column, so a second draw at /start-run would run the workflow
+ * that is cheapest for one audience against a different one — the exact mismatch this fixes.
+ * The chosen audience rides on the execute call and /start-run CONSUMES it.
  *
- * Falls back to the campaign's configured slug (no behavior change) when there is
- * no evidence yet OR features-service is unavailable — a selection optimization must
- * never block a campaign from running.
+ * Rotation is feature-scoped: any other feature keeps its configured workflow and chooses no
+ * audience, with no features-service call at all.
+ *
+ * Falls back to the campaign's configured slug and NO chosen audience when there is no evidence
+ * yet OR features-service is unavailable — a selection optimization must never block a run.
  */
-export async function resolveWorkflowSlugForTrigger(args: {
+export async function resolveSelectionForTrigger(args: {
   featureSlug: string;
   primaryBrandId: string;
   identity: DownstreamIdentity;
   fallbackSlug: string;
-  // The SALES FUNNEL the campaign states. Set → the greedy pick is priced on that funnel and the
+  // The SALES FUNNEL the campaign states. Set → the pick is priced on that funnel and the
   // campaign is NEVER goal-arbitrated: the customer funds the funnel, so the customer's funding
   // decides which funnel runs. Null → a feature that sells through no sales funnel, which is
   // arbitrated exactly as before and otherwise paces on the brand goal.
   funnelKey?: string | null;
-}): Promise<string> {
-  const { featureSlug, primaryBrandId, identity, fallbackSlug, funnelKey } = args;
+  /** The campaign's HARD targeting subset — the audience pick may only ever land inside it. */
+  requiredAudienceIds?: string[] | null;
+  /** The campaign's freshly-exhausted audiences — never chosen. */
+  excludedAudienceIds?: string[] | null;
+}): Promise<TriggerSelection> {
+  const {
+    featureSlug,
+    primaryBrandId,
+    identity,
+    fallbackSlug,
+    funnelKey,
+    requiredAudienceIds,
+    excludedAudienceIds,
+  } = args;
   // Rotation is feature-scoped: non-rotating features keep their configured workflow.
-  if (!isWorkflowRotationEnabled(featureSlug)) return fallbackSlug;
+  if (!isWorkflowRotationEnabled(featureSlug)) return { workflowSlug: fallbackSlug, audienceId: null };
   try {
     // A campaign that STATES A FUNNEL is never arbitrated: the customer funds each funnel
     // separately, and that funding — not a cost ranking — decides which funnel is worked.
     // Arbitration only answers for a campaign that sells through no sales funnel.
     if (!funnelKey) {
       const arbitration = await fetchGoalArbitration({ featureSlug, brandId: primaryBrandId, identity });
-      // The elected goal already determined this workflow (features-service ranks the goal's
-      // workflows on the same cost-per-outcome our greedy uses), so there is nothing left to
-      // pick here. Null → no arbitration for this brand yet, fall through to the brand goal.
-      if (arbitration) return arbitration.workflowSlug;
+      // The elected goal already determined this workflow — features-service ranked the goal's
+      // workflows itself, and which goal a brand optimizes for is its answer, not a cell of a
+      // grid we may re-argmin. So this leg is untouched: no audience is chosen here and
+      // /start-run picks one over the elected pairing's rows exactly as it always has.
+      // Null → no arbitration for this brand yet, fall through to the brand goal.
+      if (arbitration) return { workflowSlug: arbitration.workflowSlug, audienceId: null };
     }
     // Only a campaign with no funnel needs a goal at all, and only the brand can answer it.
     const goal: RuntimeGoal | null = funnelKey
@@ -462,12 +612,16 @@ export async function resolveWorkflowSlugForTrigger(args: {
       goal,
       identity,
     });
-    return selectWorkflowGreedy(rows) ?? fallbackSlug;
+    const cell = selectCellFromProjection(rows, {
+      requiredAudienceIds: requiredAudienceIds ?? undefined,
+      excludedAudienceIds: excludedAudienceIds ?? undefined,
+    });
+    return { workflowSlug: cell.workflowSlug ?? fallbackSlug, audienceId: cell.audienceId };
   } catch (err) {
     console.warn(
       `[campaign-service] workflow bandit failed for brand ${primaryBrandId}, using configured workflow ${fallbackSlug}:`,
       err,
     );
-    return fallbackSlug;
+    return { workflowSlug: fallbackSlug, audienceId: null };
   }
 }
