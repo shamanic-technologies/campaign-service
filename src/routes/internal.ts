@@ -391,6 +391,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       // The sales funnel this campaign works (null = not funnel-scoped). Exposed so the run's
       // downstream nodes and any reader can see which funnel's money this execution spends.
       funnelKey: campaign.funnelKey ?? null,
+      // The offer this campaign sells (null = pre-offer campaign). A brand holding several
+      // offers refuses brand-scoped reads (SEVERAL_OFFERS), so downstream nodes that read
+      // brand-service (e.g. extract-fields) scope their call on this — never guessing one.
+      offerId: campaign.offerId ?? null,
       audienceIds: campaign.audienceIds ?? null,
       servicesOffered: campaign.servicesOffered ?? null,
       clickDestinationUrl: campaign.clickDestinationUrl ?? null,
