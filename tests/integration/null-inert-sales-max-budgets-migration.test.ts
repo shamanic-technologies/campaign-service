@@ -67,7 +67,9 @@ describe(`migration ${TAG}`, () => {
       maxBudgetTotalUsd: "900.00",
     });
 
-    // Non-sales: the column is live for it and gate-check enforces it. Untouched.
+    // A channel that was NOT in the sales family when this migration ran. 0053 is frozen SQL
+    // naming the three slugs of its own day, so a channel that JOINS the family later is never
+    // retro-nulled by it — its history stays as it was configured. Untouched.
     const pr = await insertTestCampaign(org, {
       status: "ongoing",
       brandId: randomId(),

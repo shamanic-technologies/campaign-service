@@ -45,6 +45,30 @@ export const GOOGLE_ADS_FEATURE_SLUG = "google-ads";
 export const AI_MEETING_BOOKING_FEATURE_SLUG = "ai-meeting-booking";
 
 /**
+ * The first EARNED-media channel: it answers a journalist's quote request on Featured.com, and the
+ * article that publishes carries a link a buyer arrives on. Bought attention neither by an outbound
+ * message nor by an impression, but by being quoted.
+ *
+ * A channel is still a feature slug, so this is one line and no new mechanism. features-service
+ * publishes it (family `earned`, platform-operated, its one leg `start_to_website_visit`, and the
+ * three VISIT-led funnels it may be sold through — a published article buys a click, and there is
+ * no reply in it to sell a conversation with), workflow-service holds eight active dynasties for
+ * it, and billing states its per-(funnel, channel, offer, leg) ceiling like any other. It is a
+ * member of the funnel-funded family for exactly that reason: its money is billing's, read live
+ * on every plan.
+ *
+ * It is deliberately NOT a member of the OUTBOUND set below. It contacts nobody new: it shares no
+ * lead population and no sending-account load with cold email, it produces no send-tagged outcome
+ * evidence for a workflow rotation to price a DAG on, and asking its customer for more PEOPLE to
+ * contact is nonsense for a channel whose whole input is journalists asking questions.
+ *
+ * Only the CURRENT slug. `pr-expert-quote-opportunities` is the RETIRED spelling of the same
+ * channel — features-service states the rename on this one — and is never added here: two names
+ * for one channel is how a brand grows two identities for one offer.
+ */
+export const PR_EXPERT_QUOTE_FEATURE_SLUG = "pr-expert-quote-outreach";
+
+/**
  * The OUTBOUND cold-email channels — the three that reach a named person one at a time.
  *
  * They share what a paid-reach channel shares with nothing: the same lead population, the same
@@ -69,14 +93,20 @@ export function isOutboundSalesFeature(slug?: string | null): boolean {
  * THE FUNNEL-FUNDED FAMILY: every acquisition channel that SELLS A SALES FUNNEL.
  *
  * Membership means one thing and it is a MONEY statement, not a medium one: this campaign's
- * ceiling is billing's, stated per (sales funnel, acquisition channel, offer) and read live on
- * every plan — so the campaign states its funnel at birth, is provisioned one per funded pair,
- * is held when the customer funds nothing for it, takes its turn on its own fill ratio, and
- * carries no per-campaign budget column of its own.
+ * ceiling is billing's, stated per (sales funnel, acquisition channel, offer, leg) and read live
+ * on every plan — so the campaign states its funnel at birth (`POST /campaigns` refuses one that
+ * does not), is HELD when the customer funds nothing for it, takes its turn on its own
+ * spent-over-ceiling ratio, and carries no per-campaign budget column of its own.
+ *
+ * Membership says nothing about a campaign COMING INTO BEING. Money starts nothing: a campaign
+ * exists because a person created it, and a brand that funds a channel it has no campaign for
+ * simply has no campaign for it.
  *
  * A paid-reach channel answers all of that identically to a cold-email one, which is why Google
- * Ads is a member and not a family of its own. Where it genuinely differs — it shares no leads
- * and no mailboxes with an outbound channel — the narrower OUTBOUND set above is what is asked.
+ * Ads is a member and not a family of its own, and an EARNED-media one answers it identically
+ * again — being quoted in an article is a different way to buy a click, not a different way to be
+ * funded. Where they genuinely differ — they share no leads and no mailboxes with an outbound
+ * channel — the narrower OUTBOUND set above is what is asked.
  *
  * Adding a further channel is one line here (plus its CHANNEL_BY_FEATURE token), once something
  * can execute it. The set is WIDENED rather than DERIVED from features-service's catalogue on
@@ -85,15 +115,20 @@ export function isOutboundSalesFeature(slug?: string | null): boolean {
  * operates them, a different question. It is also read synchronously on gate-check's money path
  * and inside SQL, so deriving it would make an unreadable catalogue silently change whether a
  * per-campaign budget column binds. What IS derived is everything the catalogue actually owns:
- * who operates a channel, which funnels it may sell, which legs it performs. A funded pair on a
- * platform-operated channel this set does not name is refused OUT LOUD at provisioning rather
- * than passed over, so a channel that ships upstream is visible here the first sweep after it is
- * funded instead of quietly running unpaced.
+ * who operates a channel, which funnels it may sell, which legs it performs.
+ *
+ * The cost of a channel MISSING from this set is silent and it is the reason each addition is
+ * worth the line: outside the family gate-check reads the campaign as a non-sales one and
+ * enforces the (null) `maxBudget*` windows instead of billing's ceiling, the turn planner never
+ * ranks it, and the funding hold never holds it — a campaign running a DAG against a ceiling
+ * nothing enforces. Also auto-adopting every published channel would name the dozen paid-reach
+ * slugs nothing can execute, so a channel is added only once something can run it.
  */
 export const SALES_FUNNEL_FEATURE_SLUGS: ReadonlySet<string> = new Set([
   ...OUTBOUND_SALES_FEATURE_SLUGS,
   GOOGLE_ADS_FEATURE_SLUG,
   AI_MEETING_BOOKING_FEATURE_SLUG,
+  PR_EXPERT_QUOTE_FEATURE_SLUG,
 ]);
 
 export function isSalesFunnelFeature(slug?: string | null): boolean {

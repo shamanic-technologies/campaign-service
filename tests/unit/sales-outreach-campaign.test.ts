@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AI_MEETING_BOOKING_FEATURE_SLUG,
   GOOGLE_ADS_FEATURE_SLUG,
+  PR_EXPERT_QUOTE_FEATURE_SLUG,
   isOutboundSalesFeature,
   isSalesFunnelFeature,
   MAX_BUDGET_FIELDS,
@@ -73,6 +74,21 @@ describe("isSalesFunnelFeature", () => {
     expect(isSalesFunnelFeature("ai-meeting-booking")).toBe(true);
   });
 
+  it("includes pr-expert-quote-outreach — earned media is funded like every other channel", () => {
+    // features-service publishes it platform-operated with three VISIT-led funnels and
+    // workflow-service holds eight active dynasties for it, so it can run; billing states its
+    // per-(funnel, channel, offer, leg) ceiling, so it is paced here. That is the whole of
+    // membership: a MONEY statement, not a medium one.
+    expect(isSalesFunnelFeature(PR_EXPERT_QUOTE_FEATURE_SLUG)).toBe(true);
+    expect(isSalesFunnelFeature("pr-expert-quote-outreach")).toBe(true);
+  });
+
+  it("does NOT include the SUPERSEDED pr-expert-quote-opportunities spelling", () => {
+    // features-service carries `superseded_by_slug` onto the current slug. Only the current one
+    // is funded, and two names for one channel is how a brand grows two identities for one offer.
+    expect(isSalesFunnelFeature("pr-expert-quote-opportunities")).toBe(false);
+  });
+
   it("does NOT sweep in the rest of the published paid-reach catalogue", () => {
     // Published by features-service, executable by nothing — a campaign for one would sit ongoing
     // and produce nothing forever.
@@ -89,7 +105,7 @@ describe("isSalesFunnelFeature", () => {
   });
 
   it("excludes non-sales features and empty/nullish slugs", () => {
-    expect(isSalesFunnelFeature("pr-expert-quote-outreach")).toBe(false);
+    expect(isSalesFunnelFeature("pr-cold-email-outreach")).toBe(false);
     expect(isSalesFunnelFeature("hiring-cold-email-outreach")).toBe(false);
     expect(isSalesFunnelFeature("")).toBe(false);
     expect(isSalesFunnelFeature(null)).toBe(false);
@@ -111,6 +127,16 @@ describe("isOutboundSalesFeature", () => {
     expect(isOutboundSalesFeature(null)).toBe(false);
   });
 
+  it("EXCLUDES pr-expert-quote-outreach — earned media reaches nobody and sends nothing", () => {
+    // The same three behaviours must not reach it: it holds no lead population and burns no
+    // sending account (the work is answering a journalist's question), it produces no
+    // send-tagged evidence for the greedy workflow rotation to price a DAG on, and the
+    // extend-audience email would ask its customer for more PEOPLE to contact — nonsense for a
+    // channel whose whole input is quote requests.
+    expect(isOutboundSalesFeature(PR_EXPERT_QUOTE_FEATURE_SLUG)).toBe(false);
+    expect(isOutboundSalesFeature("pr-expert-quote-opportunities")).toBe(false);
+  });
+
   it("EXCLUDES ai-meeting-booking — it answers people who already replied", () => {
     // The same three behaviours must not reach it: it shares no lead population and no sending
     // account with cold email, it produces no send-tagged evidence for a workflow rotation to
@@ -122,10 +148,17 @@ describe("isOutboundSalesFeature", () => {
 
 describe("salesMaxBudgetRefusal", () => {
   const SALES = "sales-cold-email-outreach";
-  const NON_SALES = "pr-expert-quote-outreach";
+  const NON_SALES = "pr-cold-email-outreach";
 
   it("refuses each per-campaign budget window on a sales-family campaign, naming where the ceiling belongs", () => {
-    for (const slug of [SALES, "sales-crm-email-outreach", "feedback-request-cold-email-outreach", "google-ads"]) {
+    for (const slug of [
+      SALES,
+      "sales-crm-email-outreach",
+      "feedback-request-cold-email-outreach",
+      "google-ads",
+      "ai-meeting-booking",
+      "pr-expert-quote-outreach",
+    ]) {
       for (const field of MAX_BUDGET_FIELDS) {
         const message = salesMaxBudgetRefusal(slug, { [field]: "10.00" });
         expect(message).toContain(field);

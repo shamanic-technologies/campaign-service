@@ -52,13 +52,25 @@ const CHANNEL_BY_FEATURE: Readonly<Record<string, string>> = Object.freeze({
   // as google-ads: the fallback is total by construction, so an upstream RENAME would file the
   // campaign under a channel nothing else uses, silently and with no failing test.
   "ai-meeting-booking": "ai_meeting_booking",
+  // Earned media — a journalist quotes the brand and the published article carries the link a
+  // buyer arrives on. Its own token, shared with no other channel: a brand works one funnel
+  // through this AND through cold email at once and those are two campaigns, so they must hold
+  // two identities. The token is `expert_quote_outreach` and stays that way whatever family the
+  // feature belongs to — 37 stopped rows in production already carry it, and re-tokenising a
+  // channel is how one offer grows two identities. Stated explicitly rather than left to the
+  // fallback below for the same reason as the two above: the fallback is total by construction,
+  // so an upstream RENAME would file the campaign under a channel nothing else uses, silently.
+  "pr-expert-quote-outreach": "expert_quote_outreach",
 
   // Everything else. A sales funnel is not something these run — their funnel stays NULL — but
   // they still carry a channel so the identity key is enforceable for them too.
   "pr-cold-email-outreach": "pr_cold_email",
   "hiring-cold-email-outreach": "hiring_cold_email",
   "vc-cold-email-outreach": "vc_cold_email",
-  "pr-expert-quote-outreach": "expert_quote_outreach",
+  // The RETIRED spelling of `pr-expert-quote-outreach` — features-service states the rename on
+  // the current slug. It keeps its own token so the 39 stopped rows that carry it keep their
+  // identity, and it is deliberately NOT a member of the funnel-funded family: only the current
+  // slug is funded, and two names for one channel is what this service keeps deleting.
   "pr-expert-quote-opportunities": "expert_quote_opportunities",
   "ai-visibility-scoring": "ai_visibility",
   "press-kit-page-generation": "press_kit",
