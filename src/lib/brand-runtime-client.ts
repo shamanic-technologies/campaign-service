@@ -42,10 +42,18 @@ export interface BrandRuntimeContext {
  * WHOSE configuration we want. It is asserted below rather than left to
  * `buildServiceHeaders`, so dropping it can never silently degrade into brand-service
  * picking an org for us.
+ *
+ * `offerId` names WHICH offer's confirmed profile words this snapshot carries. A campaign
+ * sells exactly ONE offer and always knows it, so a caller holding one names it: brand-service
+ * answers a brand-scoped read only while the brand sells one thing, and refuses a brand selling
+ * several with 409 `SEVERAL_OFFERS` — which is how an offer-less campaign on a multi-offer
+ * brand fails loud instead of guessing an offer. Omitted (single-offer brands, and the
+ * pre-offer population) keeps today's brand-scoped answer byte-identically.
  */
 export async function fetchBrandRuntimeContext(
   brandId: string,
   identity: DownstreamIdentity,
+  offerId?: string | null,
 ): Promise<BrandRuntimeContext> {
   const baseUrl = process.env.BRAND_SERVICE_URL;
   const apiKey = process.env.BRAND_SERVICE_API_KEY;
@@ -62,7 +70,10 @@ export async function fetchBrandRuntimeContext(
     );
   }
 
-  const url = `${baseUrl.replace(/\/$/, "")}/internal/brands/${encodeURIComponent(brandId)}/runtime-context`;
+  const url = new URL(`${baseUrl.replace(/\/$/, "")}/internal/brands/${encodeURIComponent(brandId)}/runtime-context`);
+  if (offerId && offerId.trim() !== "") {
+    url.searchParams.set("offerId", offerId);
+  }
   const res = await fetch(url, {
     method: "GET",
     headers: buildServiceHeaders(apiKey, identity),

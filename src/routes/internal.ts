@@ -245,8 +245,15 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       featureSlug: featureSlug!,
     };
     // brand-service also answers the brand PROFILE, which the sending runtime needs downstream —
-    // so this read stays whatever the campaign sells.
-    const brandRuntimeContext = await fetchBrandRuntimeContext(primaryBrandId, preRunIdentity);
+    // so this read stays whatever the campaign sells. The campaign's OFFER names whose confirmed
+    // profile words the snapshot carries: a campaign sells exactly ONE offer, so naming it makes
+    // the read answerable for a brand selling several (brand-service refuses the brand-scoped
+    // read with 409 SEVERAL_OFFERS there — the offer-less population fails loud, never guessed).
+    const brandRuntimeContext = await fetchBrandRuntimeContext(
+      primaryBrandId,
+      preRunIdentity,
+      campaign.offerId,
+    );
     // What this run is PRICED on. A campaign that states its SALES FUNNEL is priced on that
     // funnel — the only word that separates a meeting bought with a positive reply from one
     // bought with a click onto the site. A campaign that states none sells through no sales

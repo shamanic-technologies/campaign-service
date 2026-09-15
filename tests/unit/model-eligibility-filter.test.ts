@@ -204,6 +204,26 @@ describe("readLegModelEligibility", () => {
     expect(url.searchParams.get("brandId")).toBe(BRAND_ID);
     expect(url.searchParams.has("funnel")).toBe(false);
     expect(url.searchParams.has("goal")).toBe(false);
+    expect(url.searchParams.has("campaignId")).toBe(false);
+  });
+
+  it("names the CAMPAIGN beside the leg when one is given — it names the offer the read is priced on", async () => {
+    // A campaign sells exactly ONE offer, so features-service resolves the offer transitively
+    // and brand-service answers instead of refusing a multi-offer brand with 409 several_offers.
+    const fetchMock = vi.fn(async () => jsonResponse({ rows: [] }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await readLegModelEligibility({
+      featureSlug: ROTATING_FEATURE,
+      brandId: BRAND_ID,
+      legKey: LEG,
+      campaignId: "647572d9-729e-4731-9456-28fa351be92c",
+      identity,
+    });
+
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.searchParams.get("leg")).toBe(LEG);
+    expect(url.searchParams.get("campaignId")).toBe("647572d9-729e-4731-9456-28fa351be92c");
   });
 
   it("collects ONLY eligible:false — an unknowable tier and a verdict-less row exclude nothing", async () => {
@@ -349,6 +369,21 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     expect(urls).toHaveLength(2);
     expect(urls.some((u) => u.searchParams.get("funnel") === "sales_meetings_from_conversation")).toBe(true);
     expect(urls.some((u) => u.searchParams.get("leg") === LEG)).toBe(true);
+  });
+
+  it("threads the campaign's campaignId and offerId so multi-offer brands answer instead of 409ing", async () => {
+    const withLeg = routeFetch({ legRows: [] });
+    global.fetch = withLeg as unknown as typeof fetch;
+    await resolveSelectionForTrigger({
+      ...baseArgs,
+      legKey: LEG,
+      campaignId: "647572d9-729e-4731-9456-28fa351be92c",
+      offerId: "832126f3-f3f1-4601-885d-bc8e101e5680",
+    });
+    const urls = withLeg.mock.calls.map((c) => new URL(String(c[0])));
+    // The verdict read names the campaign (→ its offer, transitively).
+    const legUrl = urls.find((u) => u.searchParams.has("leg"))!;
+    expect(legUrl.searchParams.get("campaignId")).toBe("647572d9-729e-4731-9456-28fa351be92c");
   });
 
   it("a leg excluding EVERY workflow falls back to the configured slug — never an ineligible one", async () => {
