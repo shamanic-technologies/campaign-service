@@ -51,7 +51,8 @@ describe("fetchBrandRuntimeContext org scoping", () => {
     await fetchBrandRuntimeContext(BRAND_ID, identity({ orgId: "org-abc" }));
 
     const [url, opts] = (globalThis.fetch as any).mock.calls[0];
-    expect(url).toBe(`https://brand.test.local/internal/brands/${BRAND_ID}/runtime-context`);
+    expect(String(url)).toBe(`https://brand.test.local/internal/brands/${BRAND_ID}/runtime-context`);
+    expect(url.searchParams.get("offerId")).toBeNull();
     expect(opts.headers["x-org-id"]).toBe("org-abc");
     expect(opts.headers["x-brand-id"]).toBe(BRAND_ID);
     expect(opts.headers["x-api-key"]).toBe("test-brand-key");
@@ -77,6 +78,25 @@ describe("fetchBrandRuntimeContext org scoping", () => {
       expect(globalThis.fetch).not.toHaveBeenCalled();
     },
   );
+
+  it("names the campaign's offer when it states one, so a multi-offer brand answers", async () => {
+    // brand-service refuses a brand-scoped runtime-context read with 409 SEVERAL_OFFERS once a
+    // brand sells several offers. A campaign sells exactly ONE, so it names its own — the
+    // param must be on the wire for the campaign to run at all.
+    await fetchBrandRuntimeContext(BRAND_ID, identity(), "832126f3-f3f1-4601-885d-bc8e101e5680");
+
+    const [url] = (globalThis.fetch as any).mock.calls[0];
+    expect(String(url)).toBe(
+      `https://brand.test.local/internal/brands/${BRAND_ID}/runtime-context?offerId=832126f3-f3f1-4601-885d-bc8e101e5680`,
+    );
+  });
+
+  it.each([[null], [undefined], [""], ["   "]])("keeps the brand-scoped read when no offer is stated (%s)", async (offerId) => {
+    await fetchBrandRuntimeContext(BRAND_ID, identity(), offerId);
+
+    const [url] = (globalThis.fetch as any).mock.calls[0];
+    expect(url.searchParams.get("offerId")).toBeNull();
+  });
 
   it("surfaces brand-service's ORG_REQUIRED refusal instead of swallowing it", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({

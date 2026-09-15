@@ -71,15 +71,19 @@ function escapeHtml(value: string): string {
  */
 async function readBrandName(campaign: Campaign, brandId: string, userId: string, runId: string): Promise<string | null> {
   try {
-    const ctx = await fetchBrandRuntimeContext(brandId, {
-      orgId: campaign.orgId,
-      userId,
-      runId,
-      campaignId: campaign.id,
+    const ctx = await fetchBrandRuntimeContext(
       brandId,
-      workflowSlug: campaign.workflowSlug,
-      featureSlug: campaign.featureSlug ?? "",
-    });
+      {
+        orgId: campaign.orgId,
+        userId,
+        runId,
+        campaignId: campaign.id,
+        brandId,
+        workflowSlug: campaign.workflowSlug,
+        featureSlug: campaign.featureSlug ?? "",
+      },
+      campaign.offerId,
+    );
     const name = typeof ctx.brand?.name === "string" ? ctx.brand.name.trim() : "";
     if (!name) {
       console.error(
