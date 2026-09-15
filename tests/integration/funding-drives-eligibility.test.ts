@@ -237,7 +237,7 @@ describe("the scheduler holds what the customer funds nothing for", () => {
       status: "ongoing",
       nextRunAt: past(),
       brandIds: [brandId],
-      featureSlug: "pr-expert-quote-outreach",
+      featureSlug: "pr-cold-email-outreach",
       createdByUserId: "user-x",
     });
 

@@ -428,6 +428,66 @@ The missing link was here: a funded pair on it got a billing ceiling and no camp
 
 (Set 2026-09-02.)
 
+## EARNED media joins the same family — `pr-expert-quote-outreach` is one line, and the family is a MONEY statement about a channel that can already RUN
+
+`pr-expert-quote-outreach` answers a journalist's quote request on Featured.com, and the article
+that publishes carries a link a buyer arrives on. It buys attention neither by an outbound message
+nor by an impression, but by being quoted — and it is funded exactly like every other channel, so
+it is one line in `SALES_FUNNEL_FEATURE_SLUGS` and nothing else. Until this shipped a customer
+could fund the (funnel, channel, offer, leg) ceiling and the campaign they then created was read
+as a NON-sales one: gate-check enforced its (null) `maxBudget*` windows instead of billing's
+ceiling, the turn planner never ranked it, and the funding hold never held it — a campaign running
+a DAG against a ceiling nothing enforces.
+
+- **The three checks the family's own note demands were verified in PRODUCTION before the line was
+  added, not reasoned about.** features-service publishes the channel (family `earned`,
+  platform-operated, `dailyOperatingCostCents: 800`, its one leg `start_to_website_visit`, and the
+  three VISIT-led funnels it may be sold through: `sales_meetings_from_website`,
+  `website_purchases`, `form_magnet` — a published article buys a click and there is no reply in it
+  to sell a conversation with). workflow-service holds **8 active dynasties** for it (vanguard,
+  bowsprit, aurora, cheetah, mizar, watchtower, acacia, quartz), which is the test `google-ads`
+  fails and `ai-meeting-booking` passes. billing already prices its ceilings generically off the
+  published per-channel daily minimum, so nothing there changed.
+- **It is NOT in `OUTBOUND_SALES_FEATURE_SLUGS`, and that is the whole point of the narrower set.**
+  It contacts nobody new, so it shares no lead population and no sending accounts (its own
+  serialization cohort, `expert_quote_outreach`), produces no send-tagged outcome evidence for the
+  greedy workflow rotation to price a DAG on, and must never receive the extend-audience email —
+  asking for more PEOPLE to contact is nonsense for a channel whose whole input is journalists
+  asking questions. Same distinction the file already draws for `google-ads` and
+  `ai-meeting-booking`, drawn once more.
+- **The channel TOKEN does not move.** `CHANNEL_BY_FEATURE` already mapped this slug to
+  `expert_quote_outreach` and 37 stopped rows in production carry it; re-tokenising a channel
+  because it changed family is how one offer grows two identities. Only its comment moved, out of
+  the "everything else" block.
+- **`pr-expert-quote-opportunities` is the RETIRED spelling of the same channel** (features-service
+  states the rename on the current slug) and is never added. Only the current slug is funded, and
+  two names for one channel is what this service keeps deleting. Its 39 stopped rows keep their own
+  token for the same reason the current one keeps its.
+- **Nothing is retro-nulled and no migration was written.** All 37 rows are STOPPED and all 37 carry
+  a `max_budget_*` value — real configuration from an era when that column WAS live for them, so
+  nulling it would rewrite history rather than remove a ceiling nothing reads (which is what
+  migration 0053 did for the three slugs that were in the family the day it ran). 0053 is frozen SQL
+  naming the slugs of its own day; a channel that JOINS the family later is never retro-nulled by
+  it. A `POST`/`PATCH` that STATES one on such a row is refused from now on, which is the guard that
+  matters.
+- **Blast radius measured before the line was added: zero `ongoing` rows.** The scheduler claims
+  `status='ongoing'` only and the turn planner ranks only those, so no live campaign changed how it
+  is gated, paced, serialized or scheduled. What changes for a NEW one is what membership means:
+  `POST /campaigns` now refuses a create for this channel that states no `funnelKey`, and refuses
+  any `maxBudget*` on it.
+- **`spendable-budget` counts it**, because `brands.ts` reads the family — correct, since it is now
+  paced on billing's ceiling and a surface reporting otherwise would contradict the gate.
+- **Nothing else was special-cased**: no column, table, vocabulary, accumulator or branch, and no
+  campaign changed id, status, money or history.
+
+Note what membership does NOT mean any more, and what the family's own docstring used to promise
+before the owner rule of 2026-09-06 deleted provisioning: **money starts nothing.** There is no
+sweep that stands a campaign up for a funded pair, so a brand that funds this channel and has no
+campaign for it simply has no campaign for it until a person creates one. The honest answer to
+"why isn't it running" stays "nobody launched it".
+
+(Set 2026-09-15.)
+
 ## A sales campaign row states the money that governs it — `maxBudget*` is REFUSED for the family
 
 `gate-check` runs the whole campaign-budget-windows block under `if (!isSalesFeature)`, so a

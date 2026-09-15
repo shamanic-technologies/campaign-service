@@ -60,10 +60,10 @@ describe("earning history", () => {
       .set("x-org-id", ORG)
       .set("x-user-id", randomId())
       .set("x-run-id", crypto.randomUUID())
-      .set("x-feature-slug", "pr-expert-quote-outreach")
+      .set("x-feature-slug", "pr-cold-email-outreach")
       .send({
         name: `earning-${randomId()}`,
-        workflowSlug: "pr-expert-quote-outreach-v1",
+        workflowSlug: "pr-cold-email-outreach-v1",
         orgId: ORG,
         brandIds: [randomId()],
       })
@@ -86,7 +86,7 @@ describe("earning history", () => {
         .set("x-org-id", ORG)
         .set("x-user-id", randomId())
         .set("x-run-id", crypto.randomUUID())
-        .set("x-feature-slug", "pr-expert-quote-outreach")
+        .set("x-feature-slug", "pr-cold-email-outreach")
         .send(body);
 
     await patch({ status: "stop" }).expect(200);
