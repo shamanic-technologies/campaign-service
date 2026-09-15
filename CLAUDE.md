@@ -1339,6 +1339,34 @@ revived for this and must not be.
 
 (Set 2026-09-12.)
 
+## A `POST /campaigns` PROBE against a real org is a WRITE — it matches the incumbent and RESTARTS it
+
+This route is documented to match the incumbent of an identity WHATEVER ITS STATUS and hand it back
+STARTED, updating it to the requested workflow and configuration. That is correct for a person's
+explicit act and it makes the route unusable as a read-only smoke test: a probe sent to verify a
+400 on ONE feature, using a sibling feature as the "this still works" control, silently restarted a
+STOPPED customer campaign, overwrote its `workflow_slug` with the plausible-looking slug the probe
+body invented, and stamped the probe's `maxBudget*` onto a row where that column is live. The
+response is a cheerful `200` with the incumbent's own name on it, which reads as "nothing was
+created" — the opposite of what happened.
+
+Nothing about it is loud. No transition looks wrong (`stopped -> ongoing`, source `create_restart`,
+exactly what the route records for a real create), and the campaign's own history is append-only,
+so the restart cannot be erased — only stopped again, leaving a 32-second ongoing window in the
+customer's record forever.
+
+So: never POST to this route as a diagnostic. Verify a REFUSAL (a 4xx) freely — a 400 writes
+nothing — but take the control from the DATABASE, or use an org and brand that exist nowhere. If a
+probe does mutate, the recovery reads the prior values out of evidence rather than memory: the
+campaign's NAME carries the workflow dynasty it was created on, and runs-service confirms it
+(`SELECT workflow_slug, count(*) FROM runs WHERE campaign_id=…`). Restore the row, then stop the
+campaign THROUGH the API so the reversal is recorded like any other act, and confirm zero runs and
+zero spend landed in the window (`SELECT count(*) FROM runs WHERE campaign_id=… AND started_at >
+now() - interval '30 minutes'`).
+
+(Set 2026-09-15, during the v0.72.2 ship: the control leg of a three-case probe restarted
+`7a33909d` on org `f0420eb5`. Reverted within 32 seconds, nothing ran, nothing was billed.)
+
 ## Commands
 
 - `pnpm test` — run all tests (Vitest)
