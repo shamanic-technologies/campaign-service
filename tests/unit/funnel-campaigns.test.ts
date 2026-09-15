@@ -252,6 +252,14 @@ describe("serializationCohort", () => {
     expect(serializationCohort(AI_MEETING_BOOKING)).toBe("ai_meeting_booking");
     expect(serializationCohort(AI_MEETING_BOOKING)).not.toBe(serializationCohort(SALES));
   });
+
+  it("gives earned media its own cohort — it holds no leads and burns no mailbox", () => {
+    // Answering a journalist's quote request shares nothing with an outbound run: no lead
+    // population, no sending accounts. Folding it into the cold-email cohort would defer a
+    // funded PR campaign behind every outbound run of the brand, every tick, silently.
+    expect(serializationCohort("pr-expert-quote-outreach")).toBe("expert_quote_outreach");
+    expect(serializationCohort("pr-expert-quote-outreach")).not.toBe(serializationCohort(SALES));
+  });
 });
 
 describe("planFunnelTurns", () => {

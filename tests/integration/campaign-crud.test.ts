@@ -527,7 +527,7 @@ describe("Campaign CRUD", () => {
   // decides nothing — and a row stating a ceiling nothing reads is what misled a live diagnosis.
   describe("per-campaign budget windows on the sales family", () => {
     const SALES = "sales-cold-email-outreach";
-    const NON_SALES = "pr-expert-quote-outreach";
+    const NON_SALES = "pr-cold-email-outreach";
 
     it("refuses a sales create that states one, naming where the ceiling belongs", async () => {
       const res = await createCampaign(
