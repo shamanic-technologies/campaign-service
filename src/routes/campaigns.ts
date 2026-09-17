@@ -1,15 +1,24 @@
 import { Router } from "express";
-import { eq, and, desc, inArray, isNull, sql } from "drizzle-orm";
+import { eq, and, desc, inArray, isNull, or, sql } from "drizzle-orm";
 import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
 import { campaigns, campaignStatusTransitions } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
-import { CreateCampaignBody, UpdateCampaignBody, CampaignsFilterQuery } from "../schemas.js";
+import {
+  CreateCampaignBody,
+  UpdateCampaignBody,
+  CampaignsFilterQuery,
+  StartFundedPairBody,
+} from "../schemas.js";
 import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
-import { campaignIdentityColumns } from "../lib/campaign-identity.js";
+import {
+  acquisitionChannelForFeature,
+  campaignIdentityColumns,
+  derivedCampaignName,
+} from "../lib/campaign-identity.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
 import {
   TRANSITION_SOURCES,
@@ -18,6 +27,7 @@ import {
 } from "../lib/campaign-status-history.js";
 import { isSalesFunnelFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
 import { acceptedFunnelKeys, toFunnelKey } from "../lib/sales-funnel-vocabulary.js";
+import { resolveStartablePair } from "../lib/startable-pair.js";
 
 const router = Router();
 
@@ -447,6 +457,223 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       if (winner) return res.status(200).json({ campaign: winner });
     }
     console.error("[campaign-service] Create campaign error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
+/**
+ * Fire this campaign's first run, the same way every other person-pressed-start does.
+ *
+ * Fire-and-forget: the customer's answer is the campaign, not the run. The guard on the slug is
+ * what keeps a workflow-less row — a channel the CUSTOMER operates, which has no DAG on purpose —
+ * from ever being handed to workflow-service.
+ */
+function dispatchFirstRun(
+  campaign: { id: string; workflowSlug: string | null; brandIds: string[] | null; featureSlug: string | null; activeGoalId: string | null; brandProfileId: string | null; audienceId: string | null },
+  req: AuthenticatedRequest,
+): void {
+  if (!campaign.workflowSlug) return;
+  executeCampaignWorkflow(campaign.workflowSlug, {
+    campaignId: campaign.id,
+    orgId: req.orgId!,
+    brandId: (campaign.brandIds ?? []).join(","),
+    userId: req.userId!,
+    runId: req.runId!,
+    featureSlug: campaign.featureSlug!,
+    activeGoalId: campaign.activeGoalId,
+    brandProfileId: campaign.brandProfileId,
+    audienceId: campaign.audienceId,
+  }).catch((err) => {
+    console.error(`[campaign-service] Failed to trigger first run for campaign ${campaign.id}:`, err);
+  });
+}
+
+/**
+ * POST /campaigns/start-funded-pair — the CUSTOMER starts the campaign for a pair they fund.
+ *
+ * Money starts nothing, and this does not change that: a funded ceiling still provisions no
+ * campaign on its own, there is still no sweep, and nothing here runs unless a person pressed a
+ * button. What this closes is the other half of that decision — until now the only two things that
+ * brought a campaign into being were onboarding's terminal launch and the staff console, so a
+ * customer who funded a channel AFTER signup got a ceiling, no campaign, and no way to ask for one.
+ *
+ * The caller states only what their own screen knows: which brand, which offer, which sales funnel,
+ * which acquisition channel. It cannot state the other three and must not be asked to:
+ *
+ *   - the WORKFLOW is this service's choice (re-picked every run by the greedy rotation), and a
+ *     slug resolved in a browser would go stale the moment the catalogue moves;
+ *   - the NAME is derivable from the identity;
+ *   - the MONEY is billing's, per (offer x funnel x channel x leg), and is already set. That is
+ *     what "funded" means, and a per-campaign ceiling here would be a second representation of it.
+ *     The body is `.strict()`, so a caller reaching for any of the three is told no.
+ *
+ * A pair that cannot be started is REFUSED in a sentence a person can read, because the dashboard
+ * renders it verbatim — "nothing can run that channel yet", "you haven't funded it", "this channel
+ * doesn't sell that funnel" are three different answers and a customer is owed the right one.
+ *
+ * A pair that ALREADY has a campaign never gets a second one: the incumbent of the identity is
+ * matched whatever its status, exactly as `POST /campaigns` matches it and for the same reason
+ * (`uniq_campaigns_org_brand_funnel_channel` is partial on `ongoing` and can never police the
+ * stopped rows). A live one is handed back untouched; a stopped one is started, because that IS
+ * what the person just asked for.
+ */
+router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validateBody(StartFundedPairBody), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { brandId, offerId: bodyOfferId, funnelKey: bodyFunnelKey, featureSlug, legKey: bodyLegKey } =
+      StartFundedPairBody.parse(req.body);
+    const offerId = bodyOfferId ?? null;
+
+    // workflow-service REFUSES a read that does not state a full identity, whatever the caller is
+    // doing, so the two headers it needs are required here rather than discovered downstream. The
+    // run id is the customer request's own — one runs-service can resolve — never a minted uuid.
+    if (!req.userId || !req.runId) {
+      const missing = [!req.userId ? "x-user-id" : null, !req.runId ? "x-run-id" : null].filter(Boolean);
+      return res.status(400).json({
+        error: `Cannot start a campaign — missing required headers: ${missing.join(", ")}`,
+      });
+    }
+    const identity = { orgId: req.orgId!, userId: req.userId, runId: req.runId, brandId };
+
+    const resolved = await resolveStartablePair(
+      { brandId, offerId, funnelKey: bodyFunnelKey, featureSlug, legKey: bodyLegKey ?? null },
+      identity,
+    );
+    if (!resolved.ok) {
+      const { status, code, message } = resolved.refusal;
+      console.warn(
+        `[campaign-service] Not starting funded pair — org=${req.orgId} brand=${brandId} ` +
+        `funnel=${bodyFunnelKey} channel=${featureSlug} offer=${offerId ?? "none"}: ${code}`,
+      );
+      return res.status(status).json({ error: message, reason: code });
+    }
+    const { funnelKey, legKey, ceilingCents, workflowSlug } = resolved.pair;
+
+    const identityColumns = campaignIdentityColumns({ brandIds: [brandId], featureSlug });
+    const acquisitionChannel = identityColumns.acquisitionChannel!;
+
+    // Every campaign this identity has ever had, live or stopped, whose offer and leg this start
+    // could be about: the ones that NAME them, and the ones that state none (a campaign that
+    // predates either field is still this pair's campaign, and learns the value here rather than
+    // being twinned by a second row doing the same job).
+    const siblings = await db.query.campaigns.findMany({
+      where: and(
+        eq(campaigns.orgId, req.orgId!),
+        eq(campaigns.brandId, brandId),
+        eq(campaigns.acquisitionChannel, acquisitionChannel),
+        eq(campaigns.funnelKey, funnelKey),
+        offerId ? or(eq(campaigns.offerId, offerId), isNull(campaigns.offerId)) : isNull(campaigns.offerId),
+        legKey ? or(eq(campaigns.legKey, legKey), isNull(campaigns.legKey)) : isNull(campaigns.legKey),
+      ),
+    });
+
+    // An exact statement outranks a silent one, a live campaign outranks a stopped one, and the
+    // most recent stopped row is the one the customer last worked with.
+    const rank = (c: typeof siblings[number]) =>
+      (c.offerId === offerId ? 8 : 0)
+      + (c.legKey === legKey ? 4 : 0)
+      + (c.status === "ongoing" ? 2 : 0);
+    const incumbent = siblings.sort((a, b) => {
+      const byRank = rank(b) - rank(a);
+      if (byRank !== 0) return byRank;
+      return (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
+    })[0] ?? null;
+
+    // What an incumbent LEARNS from a caller that now states it. Only ever filled in: a value
+    // already on the row is never overwritten, and nothing is stamped that the caller did not say.
+    const learned: Record<string, unknown> = {};
+    if (offerId && !incumbent?.offerId) learned.offerId = offerId;
+    if (legKey && !incumbent?.legKey) learned.legKey = legKey;
+
+    if (incumbent && incumbent.status === "ongoing") {
+      // Already running. There is nothing to start and there is certainly not a second campaign to
+      // create — the customer's screen simply had not caught up.
+      const campaign = Object.keys(learned).length > 0
+        ? (await db.update(campaigns)
+            .set({ ...learned, updatedAt: new Date() })
+            .where(eq(campaigns.id, incumbent.id))
+            .returning())[0]!
+        : incumbent;
+      return res.status(200).json({ campaign, started: false, alreadyRunning: true, ceilingCents });
+    }
+
+    if (incumbent) {
+      // A campaign the customer stopped, started again because they just asked for it. This is the
+      // one thing allowed to move a status, and it goes through setCampaignStatus so the change and
+      // its trace land in one transaction.
+      const campaign = (await setCampaignStatus({
+        campaignId: incumbent.id,
+        orgId: req.orgId!,
+        fromStatus: incumbent.status,
+        toStatus: "ongoing",
+        reason: null,
+        source: TRANSITION_SOURCES.START_FUNDED_PAIR,
+        fields: { ...learned, workflowSlug, nextRunAt: new Date() },
+      }))!;
+
+      dispatchFirstRun(campaign, req);
+      wakeScheduler();
+      return res.status(200).json({ campaign, started: true, alreadyRunning: false, ceilingCents });
+    }
+
+    const now = new Date();
+    const campaign = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(campaigns)
+        .values({
+          ...identityColumns,
+          orgId: req.orgId!,
+          createdByUserId: req.userId ?? null,
+          parentRunId: req.runId ?? null,
+          name: derivedCampaignName(featureSlug, brandId, funnelKey, offerId, legKey),
+          workflowSlug,
+          brandIds: [brandId],
+          featureSlug,
+          funnelKey,
+          offerId,
+          legKey,
+          featureInputs: null,
+          status: "ongoing",
+          // A campaign with no DAG is a channel the CUSTOMER operates: it is never claimed, never
+          // triggered and never spends, and `next_run_at IS NULL` is its permanent resting state.
+          nextRunAt: workflowSlug ? now : null,
+          updatedAt: now,
+        })
+        .returning();
+
+      await tx
+        .insert(campaignStatusTransitions)
+        .values(campaignBirthTransition(inserted.id, req.orgId!, inserted.status));
+
+      return inserted;
+    });
+
+    dispatchFirstRun(campaign, req);
+    wakeScheduler();
+    return res.status(201).json({ campaign, started: true, alreadyRunning: false, ceilingCents });
+  } catch (error: any) {
+    const constraint = error?.constraint ?? error?.constraint_name;
+    // Two starts raced the same pair. The loser does not get a second campaign for it — whoever
+    // won IS this identity's campaign, so hand that one back rather than an error.
+    if (error?.code === "23505"
+      && (constraint === "uniq_campaigns_org_name" || constraint === "uniq_campaigns_org_brand_funnel_channel")) {
+      const winner = await db.query.campaigns.findFirst({
+        where: and(
+          eq(campaigns.orgId, req.orgId!),
+          eq(campaigns.status, "ongoing"),
+          eq(campaigns.brandId, req.body.brandId),
+          eq(campaigns.acquisitionChannel, acquisitionChannelForFeature(req.body.featureSlug)!),
+          // The funnel, the offer and the leg are part of the identity that collided, so they are
+          // part of finding the winner — otherwise the loser is handed a campaign selling a
+          // different proposition on different money.
+          eq(campaigns.funnelKey, toFunnelKey(req.body.funnelKey)!),
+          req.body.offerId ? eq(campaigns.offerId, req.body.offerId) : isNull(campaigns.offerId),
+        ),
+        orderBy: [campaigns.createdAt],
+      });
+      if (winner) return res.status(200).json({ campaign: winner, started: false, alreadyRunning: true });
+    }
+    console.error("[campaign-service] Start funded pair error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

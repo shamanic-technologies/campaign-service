@@ -68,6 +68,64 @@ auto-stop, or a resume are HISTORY.** They are kept because they explain why eac
 money exists and how it PACES a campaign, which is all still true. (Set 2026-09-06.)
 
 
+## MONEY STARTS NOTHING, AND THE CUSTOMER CAN SAY START — `POST /campaigns/start-funded-pair`
+
+The owner rule above is right and is not being reversed: a funded ceiling provisions no campaign,
+there is no sweep, and nothing in this service decides on its own that a campaign should exist. But
+deleting provisioning left only two things that could bring a campaign into being — onboarding's
+terminal launch and the staff console — so a customer who funded a channel AFTER signup got a
+ceiling, no campaign, and no way to ask for one. Production 2026-09-17: one funded pair on the fleet
+had no campaign at all and never would.
+
+This route is the other half of that decision, and it is the half a PERSON performs.
+
+- **It only ever runs because somebody pressed a button.** No cadence, tick, sweep or ceiling
+  reaches it. `tests/unit/no-legacy.test.ts` asserts that `lib/startable-pair.ts` is imported by
+  `routes/campaigns.ts` and by nothing else, and that the workflow read is imported only by it — a
+  scheduler importing either is the deleted question ("should this money have a campaign?") coming
+  back under a new name.
+- **THE CALLER STATES FOUR THINGS AND CANNOT STATE THE OTHER THREE.** Brand, offer, sales funnel,
+  acquisition channel: exactly what the customer's own screen knows. The WORKFLOW is this service's
+  choice (the greedy rotation re-picks one every run, so a slug resolved in a browser goes stale the
+  moment the catalogue moves), the NAME is derived from the identity, and the MONEY is billing's,
+  per (offer x funnel x channel x leg), and is already set — that is what "funded" means, and a
+  per-campaign ceiling beside it is a second representation of one fact. `StartFundedPairBody` is
+  `.strict()` so a caller reaching for any of the three is TOLD no rather than having it stripped.
+- **THE LEG COMES FROM THE MONEY, NEVER FROM THE FUNNEL.** When the brand's ceilings for the pair
+  name legs, the campaign states the funded one and paces on ITS ceiling — falling back to the
+  coarser offer figure there would hand this campaign the money a sibling leg was funded with, which
+  is the whole failure the leg grain closed. When they name none, the campaign states none: that is
+  the pre-leg population and a leg is never fabricated for it. Two funded legs of one pair is two
+  campaigns to start, so it is REFUSED rather than guessed, and the optional `legKey` is how the
+  caller answers.
+- **WHICH LEGS A CHANNEL CAN SELL A FUNNEL THROUGH is features-service's statement**, read off the
+  PUBLIC catalogue `channel-operator-client.ts` already reads (`legs[].legKey` + `funnelKeys`,
+  joined verbatim). No leg or funnel matrix is held here, and a leg identifier is never split.
+- **A REFUSAL IS THE PRODUCT.** The dashboard renders `error` verbatim to the customer, so it is
+  customer-facing English, and `reason` carries the code a consumer branches on: `unknown_funnel`,
+  `channel_not_paced_here`, `unknown_channel`, `channel_does_not_sell_funnel`, `leg_not_performed`,
+  `several_funded_legs` (400); `not_funded`, `no_workflow` (409); `catalogue_unavailable`,
+  `billing_unavailable`, `workflow_unavailable` (502). "Nothing can run this channel yet" and "we
+  could not read what runs it" are different answers and stay different ones: collapsing them is
+  how an outage looked exactly like a channel with no dynasty.
+- **A PAIR THAT ALREADY HAS A CAMPAIGN NEVER GETS A SECOND ONE.** The incumbent of the identity is
+  matched whatever its status, for the same reason `POST /campaigns` matches it — the unique index
+  is partial on `ongoing` and can never police the stopped rows. A live campaign is handed back
+  untouched (`started: false`); a stopped one is STARTED, because that is what the person just
+  asked for, through `setCampaignStatus` with its own source `start_funded_pair` so the ledger says
+  which surface they acted on. A campaign already doing this work that states no offer or no leg is
+  ADOPTED (the value is filled in, never overwritten) rather than twinned by a second row.
+- **Nothing about pacing, gating, scheduling or serialization is special-cased.** The started
+  campaign is an ordinary sales-family campaign: same ceiling precedence, same funding hold, same
+  turn planner, same cohorts. A channel the CUSTOMER operates is created with NO workflow and a
+  NULL `next_run_at`, exactly as the workflow-less section below describes, and no run is dispatched
+  for it.
+- **The consumer is the dashboard, which has no staging buffer**, so this ships prod-direct and its
+  api-service proxy is a separate, additive gateway route.
+
+(Set 2026-09-17.)
+
+
 # Project: campaign-service
 
 Campaign CRUD and orchestration service for MCP Factory. Manages campaign lifecycle, budget tracking, and run coordination.
