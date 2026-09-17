@@ -1824,3 +1824,54 @@ The campaign picks, per run, WHICH audience to contact and WHICH workflow to run
 **The projection's audience grain is `(audienceId × workflowDynastySlug)`, send-tagged, and it emits a row for EVERY active audience × every active dynasty** (features-service#638) — audiences with no couple floor brand→crossOrg via the cascade. That is what makes the single-endpoint Thompson above possible: the chosen workflow's rows already ARE the brand's active-audience candidate set with workflow-discriminated evidence. `/features/:slug/candidates` no longer exists; its evidence lives in the reshaped `workflow-projection` (`rows[]` grain-ladder + `resolved`), read via `src/lib/features-workflow-projection-client.ts`, which sends `brandId` + `goal` only.
 
 **Never reintroduce a workflow-scoped audience filter that can collapse to a subset the stop-guard doesn't see.** The removed soft-filter narrowed the candidates to audiences that had RUN the chosen workflow; when greedy locked onto a dynasty whose only run-attributed audience was exhausted, the exhaustion exclusion then emptied the set → `/start-run` picked NO audience → empty `lead-serve` → ~20s spin, while `hasServeableAudience` (unscoped) saw the brand's other audiences and refused to stop. Two legs on mismatched eligibility never agree.
+
+## "A run is alive" is ONE definition — the sweep that re-fires and the gate that refuses read the SAME rows, and a recovery is SAID
+
+`/start-run` opens one run per execution and `/end-run` closes it. When the DAG dies in between —
+a Windmill failure, or this service restarting mid-flight, which the box does on every merge to
+main — that row stays `running` forever and nothing else will ever close it. Two legs then have to
+decide whether it means a campaign is working, and they had two different answers:
+
+    scheduler  claimStuckCampaigns  : older than 15 MINUTES → orphan → re-schedule the campaign
+    gate-check block 1 (stale)      : older than 3 HOURS    → still alive → block 2 REFUSES the run
+
+A 12× gap, and it is a full stop that nothing reports as one. From the moment the sweep starts
+re-firing, every run it fires reaches the gate, reads the SAME orphaned row as live, and is refused
+with `A run is already in progress` — for the 2h45m remaining on the gate's own threshold. Each
+refusal burns a Windmill job and produces nothing, and the campaign says, truthfully and uselessly,
+that a run is in progress. Prod 2026-09-17, campaign `647572d9` (org `f0420eb5`, brand `f4d73dab`):
+the v0.72.6 deploy restarted the service at 05:50:41 mid-DAG, the job failed at 05:50:51, `/end-run`
+never came, and the marker run `a05b3846` was still `running` hours later.
+
+- **`RUN_LIVENESS_THRESHOLD_MS` (`src/lib/run-liveness.ts`) is THE definition**, imported by both.
+  Its own module, so neither can hold a number of its own again, and `tests/unit/run-liveness.test.ts`
+  fails on a literal in gate-check. Same reason `campaignFunding` is shared by the leg that HOLDS and
+  the leg that resumes: two legs on two definitions is the shape this service keeps deleting.
+  The value is unchanged (15 min) and must stay strictly above the longest legitimate flow —
+  `lead-serve` has been observed at 755s — because it is also the blind window in which an orphaned
+  campaign cannot be told apart from a working one.
+- **The sweep FINALIZES the evidence of its own decision.** Having established that nothing is alive,
+  `claimStuckCampaigns` marks the campaign's still-`running` marker rows `failed`, scoped exactly
+  like gate-check's read (`campaign-service` / taskName=campaignId) and re-checked per row against
+  the same cutoff. Idempotent by construction: the claim `UPDATE` is the atomic winner-decider, so
+  one instance ever reaches it and a re-run finds no `running` row left. Fail-SOFT — an orphan that
+  cannot be closed never stops the campaign coming back.
+- **A RECOVERY IS SAID ON THE LEDGER** (`campaign-recovery`, `src/lib/recovery-event.ts`), riding the
+  campaign's own ancestor run like `campaign-hold` does, naming the runs it finalized. It was a
+  `console.log` and nothing else, so from `run_events` — the artifact a human actually reads — a
+  campaign that had been forgotten and a campaign that was fine were the same thing. `warn`, not
+  `info`: a run that died without reporting an end is a fault, not an expected business state. It is
+  NOT a per-tick path (once per orphaned run), which is why it is reported at all.
+- **One campaign can no longer stall the FLEET.** The sweep's loop had no per-campaign catch, and it
+  is the first thing a tick does — so a single unreadable campaign aborted the sweep AND, via the
+  tick's own catch, skipped `reRunDueCampaigns` entirely. Now caught per campaign, logged, and the
+  rest of the sweep continues.
+- **Nothing about the holds #470 shipped changed**, and no campaign is force-run: the sweep still
+  only ever touches a row at `(ongoing, workflow_slug NOT NULL, next_run_at IS NULL)`, and a held
+  campaign carries a `next_run_at` on its own cadence, so it is never a candidate.
+
+Residual, and it is inherent: for up to `RUN_LIVENESS_THRESHOLD_MS` after a restart an orphaned
+campaign genuinely cannot be told apart from a working one, so it sits at `next_run_at NULL` with
+nothing said. Shortening that means a heartbeat on the run, not a smaller number.
+
+(Set 2026-09-17.)
