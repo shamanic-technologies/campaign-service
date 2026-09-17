@@ -267,6 +267,9 @@ export async function triggerCampaignsForStep(
         // The LEG the campaign is bought for — what features-service's model rule is keyed on.
         // A campaign that states none has no verdict to read and selects exactly as before.
         legKey: campaign.legKey,
+        // Names the OFFER every brand-scoped read is priced on — a campaign sells exactly one.
+        campaignId: campaign.id,
+        offerId: campaign.offerId,
         requiredAudienceIds: campaign.audienceIds,
         excludedAudienceIds,
       });

@@ -10,7 +10,7 @@ import {
 /** The campaign fields the serveable-audience read needs. */
 export type ServeableAudienceCampaign = Pick<
   Campaign,
-  "id" | "orgId" | "funnelKey" | "audienceIds"
+  "id" | "orgId" | "funnelKey" | "offerId" | "audienceIds"
 >;
 
 /**
@@ -42,10 +42,12 @@ export async function serveableAudienceIdsForCampaign(
   identity: DownstreamIdentity,
 ): Promise<string[]> {
   // A campaign that states its funnel is priced on it; only one that states none needs a goal,
-  // and only the brand can answer that.
+  // and only the brand can answer that. The campaign's OFFER names whose profile words the
+  // snapshot carries — a campaign sells exactly one, so multi-offer brands answer instead of
+  // refusing the brand-scoped read.
   const goal: RuntimeGoal | null = campaign.funnelKey
     ? null
-    : (await fetchBrandRuntimeContext(identity.brandId, identity)).currentGoal;
+    : (await fetchBrandRuntimeContext(identity.brandId, identity, campaign.offerId)).currentGoal;
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
   const rows = await fetchWorkflowProjectionRows({
     featureSlug,

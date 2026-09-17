@@ -457,6 +457,7 @@ describe("Pipeline routes", () => {
           workflowSlug: "sales-email-cold-outreach",
           featureSlug: "sales-cold-email-v1",
         }),
+        null, // the campaign states no offer — brand-scoped read, single-offer-brand behaviour
       );
       // The audience is now selected from the workflow-projection rows (single-endpoint).
       expect(mockFetchCandidates).toHaveBeenCalledWith(
@@ -468,6 +469,25 @@ describe("Pipeline routes", () => {
         }),
       );
       expect(res.body.audienceId).toBe(DEFAULT_AUDIENCE_ID);
+    });
+
+    it("names the campaign's OFFER on the runtime-context read when the campaign states one", async () => {
+      // A brand selling several offers refuses every brand-scoped read with 409 SEVERAL_OFFERS;
+      // a campaign sells exactly one, so it names its own and brand-service answers.
+      const offerId = "832126f3-f3f1-4601-885d-bc8e101e5680";
+      const offerCampaign = await insertTestCampaign(orgId, { brandIds, offerId });
+
+      const offerRes = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": offerCampaign.id, "x-run-id": "parent-run-1" }))
+        .expect(200);
+
+      expect(offerRes.status).toBe(200);
+      expect(mockFetchBrandRuntimeContext).toHaveBeenCalledWith(
+        brandIds[0],
+        expect.objectContaining({ orgId }),
+        offerId,
+      );
     });
 
     // === The audience the TRIGGER chose is consumed here, never re-drawn ===
@@ -1364,6 +1384,7 @@ describe("Pipeline routes", () => {
       expect(mockFetchBrandRuntimeContext).toHaveBeenCalledWith(
         brandIds[0],
         expect.objectContaining({ orgId }),
+        null,
       );
     });
 

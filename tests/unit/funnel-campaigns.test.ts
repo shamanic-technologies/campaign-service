@@ -11,7 +11,9 @@ const {
   mockDeleteWhere,
   mockCreateRun,
   mockUpdateRun,
+  mockTraceEvent,
 } = vi.hoisted(() => ({
+  mockTraceEvent: vi.fn(),
   mockListRuns: vi.fn(),
   mockGetStatsBudget: vi.fn(),
   mockCreateRun: vi.fn(),
@@ -30,6 +32,8 @@ vi.mock("@distribute/runs-client", () => ({
   createRun: mockCreateRun,
   updateRun: mockUpdateRun,
 }));
+
+vi.mock("../../src/lib/trace-event.js", () => ({ traceEvent: mockTraceEvent }));
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
@@ -190,6 +194,15 @@ function captureErrors(): () => string {
   return () => said.join("\n");
 }
 
+/** Run something and return everything it said on console.warn, joined. */
+function captureWarnings(): () => string {
+  const said: string[] = [];
+  vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+    said.push(args.map((a) => (a instanceof Error ? a.message : String(a))).join(" "));
+  });
+  return () => said.join("\n");
+}
+
 describe("selectLowestFillRatio", () => {
   it("hands the turn to the funnel that has filled the least of its own ceiling", () => {
     // The bigger absolute spend is the EMPTIER funnel relative to what it can absorb.
@@ -268,6 +281,8 @@ describe("planFunnelTurns", () => {
     // clearAllMocks does NOT drop queued `...Once` values, so an unconsumed one from a previous
     // test would answer the next test's first read. Reset the two queue-driven mocks outright.
     mockFetch.mockReset();
+    mockTraceEvent.mockReset();
+    mockTraceEvent.mockResolvedValue(undefined);
     mockGetStatsBudget.mockReset();
     mockGetStatsBudget.mockResolvedValue({
       windows: [{ label: "today", totalCostInUsdCents: "0", netTotalCostInUsdCents: "0" }],
@@ -550,5 +565,142 @@ describe("planFunnelTurns", () => {
     mockSpend("0");
     const deferred = await planFunnelTurns([claimed({ funnelKey: "reply_meeting" })]);
     expect(deferred.size).toBe(0);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// A CAMPAIGN THAT IS DELIBERATELY NOT RUNNING MUST SAY SO
+// ————————————————————————————————————————————————————————————————————————
+//
+// Every decision below used to return early with no run created, so no `gate-check-result` was
+// ever emitted and nothing was logged. From `run_events` alone, a campaign correctly parked at
+// its ceiling was indistinguishable from one that had silently died — which is exactly what
+// campaign 38ba8069 looked like for five hours on 2026-09-17.
+describe("planFunnelTurns — the hold is stated on the run ledger", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockReset();
+    mockTraceEvent.mockReset();
+    mockTraceEvent.mockResolvedValue(undefined);
+    mockGetStatsBudget.mockReset();
+    resetLegKeylessCeilingReports();
+    process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+    process.env.BILLING_SERVICE_API_KEY = "billing-key";
+    process.env.BRAND_SERVICE_URL = "https://brand.test.local";
+    process.env.BRAND_SERVICE_API_KEY = "brand-key";
+    mockFetch.mockImplementation(async (input: URL | string) => {
+      throw new Error(`unexpected fetch in test: ${String(input)}`);
+    });
+    mockListRuns.mockResolvedValue({ runs: [] });
+    mockFindFirst.mockResolvedValue({ id: "existing", name: "custom name", status: "ongoing" });
+    aliveBrandCampaigns = [{ id: "campaign-1", featureSlug: SALES }];
+    mockFindMany.mockImplementation(async () => aliveBrandCampaigns);
+    mockInsertValues.mockResolvedValue(undefined);
+    mockUpdateWhere.mockResolvedValue(undefined);
+    mockDeleteWhere.mockResolvedValue(undefined);
+  });
+
+  /** The one hold event emitted for a campaign, or undefined. */
+  function holdFor(campaignId: string) {
+    const call = mockTraceEvent.mock.calls.find(
+      (c) => (c[1] as { data?: { campaignId?: string } }).data?.campaignId === campaignId,
+    );
+    if (!call) return undefined;
+    return {
+      runId: call[0] as string,
+      payload: call[1] as { event: string; level: string; detail: string; data: Record<string, unknown> },
+      headers: call[2] as Record<string, string | undefined>,
+    };
+  }
+
+  it("says WHY a campaign parked at its daily ceiling is not running", async () => {
+    // The 2026-09-17 shape exactly: funded, correct, and spent out for the day.
+    mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "400" }]);
+    mockSpend("428");
+    const now = new Date("2026-09-17T05:33:27Z");
+    const deferred = await planFunnelTurns(
+      [claimed({ funnelKey: "sales_meetings_from_conversation" })],
+      now,
+    );
+    // Behaviour is unchanged — it is still parked on the funding cadence.
+    expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
+
+    const hold = holdFor("campaign-1");
+    expect(hold?.runId).toBe(ANCESTOR_RUN_ID);
+    expect(hold?.payload.event).toBe("campaign-hold");
+    // Spending out a funded ceiling is an EXPECTED business state, not a fault.
+    expect(hold?.payload.level).toBe("info");
+    expect(hold?.payload.data.reason).toBe("daily_ceiling_reached");
+    expect(hold?.payload.data.spentCents).toBe(428);
+    expect(hold?.payload.data.ceilingCents).toBe(400);
+    // Readable from run_events alone: the row carries the campaign.
+    expect(hold?.headers["x-campaign-id"]).toBe("campaign-1");
+  });
+
+  it("says WHY a campaign the customer funds nothing for is not running", async () => {
+    mockFunnelBudgets([], null);
+    const deferred = await planFunnelTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
+    expect(deferred.size).toBe(1);
+    const hold = holdFor("campaign-1");
+    expect(hold?.payload.data.reason).toBe("unfunded");
+    expect(hold?.payload.level).toBe("info");
+  });
+
+  it("says WHY a brand whose ceilings cannot be read is held, and WARNS — that one is a fault", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+    await planFunnelTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
+    const hold = holdFor("campaign-1");
+    expect(hold?.payload.data.reason).toBe("budgets_unreadable");
+    expect(hold?.payload.level).toBe("warn");
+  });
+
+  it("stays SILENT for a campaign that merely yielded its turn — the brand is visibly working", async () => {
+    // A 60-second turn defer fires per campaign per tick for every client, and the winner's own
+    // run produces events all along. An event here would be the per-minute bip, not a signal.
+    mockFunnelBudgets([
+      { funnelKey: "reply_meeting", dailyBudgetCents: "1000" },
+      { funnelKey: "visit_meeting", dailyBudgetCents: "1000" },
+    ]);
+    mockSpend("900");
+    mockSpend("100");
+    const now = new Date("2026-09-17T05:33:27Z");
+    const deferred = await planFunnelTurns(
+      [
+        claimed({ id: "c-reply", funnelKey: "sales_meetings_from_conversation" }),
+        claimed({ id: "c-visit", funnelKey: "sales_meetings_from_website" }),
+      ],
+      now,
+    );
+    expect(deferred.get("c-reply")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
+    expect(mockTraceEvent).not.toHaveBeenCalled();
+  });
+
+  it("stays SILENT while a run of the cohort is in flight", async () => {
+    mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }]);
+    mockSpend("0");
+    mockListRuns.mockResolvedValue({ runs: [{ id: "run-1" }] });
+    await planFunnelTurns(
+      [claimed({ funnelKey: "sales_meetings_from_conversation" })],
+      new Date("2026-09-17T05:33:27Z"),
+    );
+    expect(mockTraceEvent).not.toHaveBeenCalled();
+  });
+
+  it("never invents a run id for a campaign that has no ancestor run", async () => {
+    mockFunnelBudgets([], null);
+    const said = captureWarnings();
+    await planFunnelTurns([claimed({ parentRunId: null })], new Date("2026-09-17T05:33:27Z"));
+    expect(mockTraceEvent).not.toHaveBeenCalled();
+    expect(said()).toContain("no ancestor run");
+  });
+
+  it("a hold that cannot be reported never changes whether a campaign runs", async () => {
+    mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "400" }]);
+    mockSpend("428");
+    mockTraceEvent.mockRejectedValue(new Error("runs-service unreachable"));
+    const now = new Date("2026-09-17T05:33:27Z");
+    await expect(
+      planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })], now),
+    ).resolves.toBeInstanceOf(Map);
   });
 });

@@ -230,11 +230,16 @@ export async function readLegModelEligibility({
   featureSlug,
   brandId,
   legKey,
+  campaignId,
   identity,
 }: {
   featureSlug: string;
   brandId: string;
   legKey: string;
+  /** The campaign the leg is bought for. A campaign sells exactly ONE offer, so naming it names
+   * the offer the read is priced on — brand-service answers instead of refusing a brand selling
+   * several with 409 `several_offers`. Omitted keeps today's brand-scoped read. */
+  campaignId?: string | null;
   identity: DownstreamIdentity;
 }): Promise<LegModelEligibility | null> {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
@@ -249,6 +254,11 @@ export async function readLegModelEligibility({
   // leg is priced through is its own answer from the brand's declared set. The leg identifier is
   // forwarded VERBATIM — it is features-service's word and is never parsed into its two steps.
   url.searchParams.set("leg", legKey);
+  // campaignId is only ever answered BESIDE a leg (features-service 400s it alone), which this
+  // read always carries.
+  if (campaignId && campaignId.trim() !== "") {
+    url.searchParams.set("campaignId", campaignId);
+  }
 
   try {
     const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
@@ -756,6 +766,14 @@ export async function resolveSelectionForTrigger(args: {
    * exists to read, no extra call is made, and the selection is exactly what it was.
    */
   legKey?: string | null;
+  /** The campaign the read is FOR. Naming it names the OFFER the read is priced on (a campaign
+   * sells exactly one offer), so brand-service answers reads that would otherwise be refused
+   * with 409 `SEVERAL_OFFERS` for a brand selling several. Null (the pre-offer population)
+   * keeps the brand-scoped read, which fails loud on a multi-offer brand rather than guessing. */
+  campaignId?: string | null;
+  /** The campaign's own OFFER (brand-service's id, carried and never derived). Names whose
+   * confirmed profile words the runtime-context read carries. */
+  offerId?: string | null;
   /** The campaign's HARD targeting subset — the audience pick may only ever land inside it. */
   requiredAudienceIds?: string[] | null;
   /** The campaign's freshly-exhausted audiences — never chosen. */
@@ -768,6 +786,8 @@ export async function resolveSelectionForTrigger(args: {
     fallbackSlug,
     funnelKey,
     legKey,
+    campaignId,
+    offerId,
     requiredAudienceIds,
     excludedAudienceIds,
   } = args;
@@ -789,11 +809,12 @@ export async function resolveSelectionForTrigger(args: {
     // Only a campaign with no funnel needs a goal at all, and only the brand can answer it.
     const goal: RuntimeGoal | null = funnelKey
       ? null
-      : (await fetchBrandRuntimeContext(primaryBrandId, identity)).currentGoal;
+      : (await fetchBrandRuntimeContext(primaryBrandId, identity, offerId)).currentGoal;
     // The PRICING read and the VERDICT read, in one round trip. They are two calls because
     // features-service prices a leg and a funnel differently and refuses to be asked both at once
     // — see readLegModelEligibility. The leg-keyed body's FIGURES are never read: this ship
-    // restricts which cells may be served and moves no number.
+    // restricts which cells may be served and moves no number. The campaignId on the verdict read
+    // names the offer the leg is priced through, so a multi-offer brand answers instead of 409ing.
     const [rows, eligibility] = await Promise.all([
       fetchWorkflowProjectionRows({
         featureSlug,
@@ -803,7 +824,7 @@ export async function resolveSelectionForTrigger(args: {
         identity,
       }),
       legKey
-        ? readLegModelEligibility({ featureSlug, brandId: primaryBrandId, legKey, identity })
+        ? readLegModelEligibility({ featureSlug, brandId: primaryBrandId, legKey, campaignId, identity })
         : Promise.resolve(null),
     ]);
     // Applied to the ROWS, so the pooled audience column and the cell argmin are computed over the
