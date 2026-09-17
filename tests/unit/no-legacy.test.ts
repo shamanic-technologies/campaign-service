@@ -592,4 +592,43 @@ describe('No Legacy Patterns - CRITICAL', () => {
       `A status change cannot land without a transition — write it through setCampaignStatus / stopOrgCampaignsWithHistory:\n${violations.map(v => `  ${v.file}:${v.line}\n    ${v.code}`).join('\n')}`,
     ).toHaveLength(0);
   });
+  it('should ask workflow-service for a DAG only when a PERSON starts a campaign', () => {
+    // The read deleted on 2026-09-06 answered "should this money have a campaign?" — it ran on a
+    // sweep, off a funded ceiling, and its answer created campaigns nobody asked for. That question
+    // is gone and `feature-workflow-client.ts` stays deleted (above). The read that exists now
+    // answers a different one: "the customer pressed start, which DAG runs this channel?" — so it
+    // is reachable from a ROUTE and from nothing else. A scheduler, a tick or a cadence importing
+    // it is the deleted question coming back under a new name.
+    const files = getAllTsFiles(srcDir);
+    const rel = (f: string) => path.relative(srcDir, f).split(path.sep).join('/');
+
+    const workflowReaders = files
+      .filter((f) => /startable-workflow-client/.test(fs.readFileSync(f, 'utf-8')))
+      .map(rel)
+      .filter((r) => r !== 'lib/startable-workflow-client.ts')
+      .sort();
+    expect(workflowReaders).toEqual(['lib/startable-pair.ts']);
+
+    const startReaders = files
+      .filter((f) => /startable-pair/.test(fs.readFileSync(f, 'utf-8')))
+      .map(rel)
+      .filter((r) => r !== 'lib/startable-pair.ts')
+      .sort();
+    expect(startReaders).toEqual(['routes/campaigns.ts']);
+  });
+
+  it('should NOT take a workflow, a name or a ceiling from the customer starting a funded pair', () => {
+    // Each of the three would be this service handing back a decision that is not the caller's:
+    // the workflow is re-picked every run here (a slug frozen in a browser goes stale), the name is
+    // derivable from the identity, and the money is billing's — a per-campaign ceiling beside it is
+    // a second representation of one fact. `.strict()` is what TELLS a caller so instead of
+    // silently dropping the field.
+    const schemas = fs.readFileSync(path.join(srcDir, 'schemas.ts'), 'utf-8');
+    const match = schemas.match(/export const StartFundedPairBody = z\.object\(\{[\s\S]*?\}\)\.strict\(\)/);
+    expect(match, 'StartFundedPairBody must exist and be .strict()').not.toBeNull();
+    const body = match![0];
+    for (const forbidden of ['workflowSlug', 'name:', 'dailyBudgetCents', 'maxBudget']) {
+      expect(body, `a customer never states ${forbidden} here`).not.toContain(forbidden);
+    }
+  });
 });

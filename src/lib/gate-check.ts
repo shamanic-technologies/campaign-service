@@ -5,8 +5,14 @@ import { eq } from "drizzle-orm";
 import { isSalesFunnelFeature } from "./sales-outreach-campaign.js";
 import { channelCeilingCents, fetchFunnelBudgets, legCeilingCents, offerCeilingCents } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
+import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 
-const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
+// THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
+// hours here against fifteen minutes there, and that gap is a full stop: the sweep re-fires a
+// campaign whose run was orphaned while this block still reads that same row as running, so block 2
+// refuses every one of those runs with "A run is already in progress" until the three hours are up.
+// See run-liveness.ts for the prod incident.
+const STALE_THRESHOLD_MS = RUN_LIVENESS_THRESHOLD_MS;
 
 // How many of the campaign's running rows the gate reads. The invariant is ONE run in flight per
 // campaign, and a row only stays `running` until its DAG ends or block 1 marks it stale, so this
@@ -113,7 +119,8 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     limit: RUNNING_RUNS_LIMIT,
   });
 
-  // 1. Stale run cleanup — mark runs running > 30 min as failed
+  // 1. Stale run cleanup — finalize the campaign's orphaned runs (a DAG that died without ever
+  // calling /end-run) so block 2 stops reading them as a live run.
   const now = Date.now();
   for (const run of runningRuns) {
     if (run.status === "running" && (now - new Date(run.startedAt).getTime()) > STALE_THRESHOLD_MS) {

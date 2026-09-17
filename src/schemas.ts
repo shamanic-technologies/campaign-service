@@ -177,6 +177,30 @@ export const CampaignsFilterQuery = z.object({
   limit: z.coerce.number().int().min(1).max(1000).optional(),
 }).openapi("CampaignsFilterQuery");
 
+/**
+ * What the CUSTOMER states to start the campaign for a pair they have already funded.
+ *
+ * Exactly the four things their own screen knows, and nothing else. `.strict()` is load-bearing:
+ * a caller reaching for a workflow, a name or a budget is TOLD no rather than having it silently
+ * stripped, because each of those would be this service handing back a decision that is not the
+ * browser's to make (the workflow), a fact already derivable (the name), or a second
+ * representation of billing's money (the ceiling).
+ */
+export const StartFundedPairBody = z.object({
+  brandId: z.string().uuid("brandId must be a valid UUID"),
+  // The OFFER whose money funds this pair — brand-service's UUID, carried and never derived.
+  // Absent is the pre-offer population, which resolves on the pair figure exactly as it always has.
+  offerId: z.string().uuid("offerId must be a valid UUID").nullable().optional(),
+  // The SALES FUNNEL, in any accepted spelling (canonical four or the pre-rename four).
+  funnelKey: z.string().min(1, "funnelKey is required"),
+  // The ACQUISITION CHANNEL, as a features-service feature slug. A channel IS a feature slug.
+  featureSlug: z.string().min(1, "featureSlug is required"),
+  // OPTIONAL and only ever a disambiguation: a customer who funds TWO legs of one (funnel,
+  // channel, offer) has two campaigns to start, and this says which. Never required, and a leg the
+  // channel does not perform is refused rather than stamped.
+  legKey: z.string().min(1).nullable().optional(),
+}).strict().openapi("StartFundedPairBody");
+
 export const UpdateCampaignBody = z.object({
   name: z.string().optional(),
   brandIds: z.array(z.string().uuid()).optional(),
@@ -326,6 +350,11 @@ export const StartRunResponse = z.object({
   // servicesOffered / clickDestinationUrl as authoritative per-campaign config (null =
   // inherit the brand). audienceIds is the campaign's targeted subset.
   goal: RuntimeGoalSchema.nullable(),
+  // The OFFER this campaign sells — brand-service's id, carried and never derived. A brand
+  // holding SEVERAL offers refuses every brand-scoped read with 409 SEVERAL_OFFERS, so a
+  // downstream DAG node that reads brand-service scopes its call on this rather than guessing
+  // one. Null for a campaign older than the offer level.
+  offerId: z.string().nullable(),
   audienceIds: z.array(z.string()).nullable(),
   servicesOffered: z.array(z.string()).nullable(),
   clickDestinationUrl: z.string().nullable(),

@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import {
   CampaignSchema,
   CreateCampaignBody,
+  StartFundedPairBody,
   UpdateCampaignBody,
   CampaignsFilterQuery,
   StatsFilterQuery,
@@ -116,6 +117,34 @@ registry.registerPath({
   responses: {
     201: { description: "Campaign created", content: { "application/json": { schema: z.object({ campaign: CampaignSchema }) } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/campaigns/start-funded-pair",
+  tags: ["Campaigns"],
+  summary: "Start the campaign for a pair the customer already funds",
+  description:
+    "The CUSTOMER starting an acquisition channel they fund on one of their sales funnels. Money still starts nothing on its own: this runs only when a person asks, and there is no sweep behind it. "
+    + "The caller states only what their own screen knows (brand, offer, sales funnel, acquisition channel) and CANNOT state a workflow, a name or a budget: the workflow is re-picked every run here so a slug frozen in a browser goes stale, the name is derived from the identity, and the money is billing's per (offer x funnel x channel x leg) and is already set. The body is strict, so a caller reaching for any of the three is told so. "
+    + "legKey is optional and only ever a disambiguation, for a customer who funds TWO legs of one pair and therefore has two campaigns to start. "
+    + "The started campaign is paced, gated and held by billing's ceiling exactly as every other sales-family campaign is. A pair that ALREADY has a campaign never gets a second one: a live campaign is handed back untouched (200, started=false), and a stopped one is started (200, started=true). "
+    + "A pair that cannot be started is refused with `error` in customer-facing English (render it verbatim) and `reason` as a code: unknown_funnel, channel_not_paced_here, unknown_channel, channel_does_not_sell_funnel, leg_not_performed, several_funded_legs (400); not_funded, no_workflow (409); catalogue_unavailable, billing_unavailable, workflow_unavailable (502, try again).",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: StartFundedPairBody } } } },
+  responses: {
+    201: {
+      description: "Campaign created and started",
+      content: { "application/json": { schema: z.object({ campaign: CampaignSchema, started: z.boolean(), alreadyRunning: z.boolean(), ceilingCents: z.number() }) } },
+    },
+    200: {
+      description: "This pair already had a campaign — handed back, started if it had been stopped",
+      content: { "application/json": { schema: z.object({ campaign: CampaignSchema, started: z.boolean(), alreadyRunning: z.boolean(), ceilingCents: z.number().optional() }) } },
+    },
+    400: { description: "Refused — the reason is customer-facing English", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "Refused — nothing funds this pair, or nothing can run the channel yet", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "A sibling service could not be read — try again", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 

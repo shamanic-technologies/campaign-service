@@ -28,6 +28,12 @@ export const TRANSITION_SOURCES = {
   CREATE_RESTART: "create_restart",
   /** PATCH /campaigns/:id with status=activate|stop — a person's decision. */
   PATCH: "patch",
+  /**
+   * POST /campaigns/start-funded-pair — the customer pressed start on a channel they fund. Its
+   * own source rather than CREATE_RESTART so the ledger says which surface a person acted on;
+   * both are a person's explicit act and nothing else may write either.
+   */
+  START_FUNDED_PAIR: "start_funded_pair",
   /** DELETE /internal/campaigns/by-org/:orgId — the org is gone. */
   ORG_TEARDOWN: "org_teardown",
   /** Migration 0057 opened the record by observing the PRESENT. Never written by the runtime. */

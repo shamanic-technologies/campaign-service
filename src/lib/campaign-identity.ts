@@ -103,3 +103,31 @@ export function campaignIdentityColumns(input: {
     acquisitionChannel: acquisitionChannelForFeature(input.featureSlug),
   };
 }
+
+/**
+ * The NAME a campaign is given when its creator did not state one.
+ *
+ * `POST /campaigns` takes a name from its caller; the customer starting a funded pair states only
+ * the identity, so the name is derived from it. It is byte-identical to what the deleted
+ * per-funnel provisioning produced, so a brand whose campaign was provisioned before 2026-09-06
+ * and stopped keeps the name it has always had.
+ *
+ * The name is also the only uniqueness Postgres can enforce on an INSERT here (`brand_ids` is a
+ * `text[]`), so it has to separate everything a campaign IS. The OFFER and the LEG are appended
+ * only when the campaign states one: an offer-less, leg-less campaign keeps the same name it would
+ * have had before either field existed. Two offers of one (funnel, channel, leg) would otherwise
+ * collide on `uniq_campaigns_org_name` and the second insert would be swallowed as a race — the
+ * funded-and-never-started failure, one layer down.
+ */
+export function derivedCampaignName(
+  featureSlug: string,
+  brandId: string,
+  funnelKey: string,
+  offerId?: string | null,
+  legKey?: string | null,
+): string {
+  let name = `${featureSlug} - ${brandId} - ${funnelKey}`;
+  if (offerId) name = `${name} - ${offerId}`;
+  if (legKey) name = `${name} - ${legKey}`;
+  return name;
+}

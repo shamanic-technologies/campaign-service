@@ -9,6 +9,7 @@ const {
   mockListRuns,
   mockCreateRun,
   mockUpdateRun,
+  mockReportCampaignRecovery,
 } = vi.hoisted(() => {
   return {
     mockExecuteCampaignWorkflow: vi.fn(),
@@ -19,6 +20,7 @@ const {
     mockListRuns: vi.fn(),
     mockCreateRun: vi.fn(),
     mockUpdateRun: vi.fn(),
+    mockReportCampaignRecovery: vi.fn(),
   };
 });
 
@@ -101,6 +103,12 @@ vi.mock("../../src/lib/funnel-campaigns.js", () => ({
 
 // The resume sweep has its own suite (tests/integration/campaign-resume.test.ts) and needs a real
 // DB. Inert here so the narrowly-mocked db/schema/drizzle-orm above stay sufficient.
+// The recovery event has its own suite (tests/unit/recovery-event.test.ts). Inert here so these
+// assertions stay about WHAT the sweep decides, not how it reports it.
+vi.mock("../../src/lib/recovery-event.js", () => ({
+  reportCampaignRecovery: mockReportCampaignRecovery,
+}));
+
 vi.mock("../../src/lib/campaign-resume.js", () => ({
   resumeServeableCampaigns: vi.fn(async () => 0),
   countResumableCampaigns: vi.fn(async () => 0),
@@ -624,6 +632,8 @@ describe("Scheduler - claimStuckCampaigns", () => {
     mockDbReturning.mockResolvedValue([]);
     mockDbFindMany.mockResolvedValue([]);
     mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
+    mockUpdateRun.mockResolvedValue({ id: "run-1", status: "failed" });
+    mockReportCampaignRecovery.mockResolvedValue(undefined);
   });
 
   it("should return 0 and skip runs-service when no candidates", async () => {
@@ -693,8 +703,9 @@ describe("Scheduler - claimStuckCampaigns", () => {
     const count = await claimStuckCampaigns();
 
     expect(count).toBe(1);
-    expect(mockListRuns).toHaveBeenCalledTimes(1);
     expect(mockDbReturning).toHaveBeenCalledTimes(1);
+    // One liveness read, then the campaign-scoped read that finds the orphaned marker runs.
+    expect(mockListRuns).toHaveBeenCalledTimes(2);
   });
 
   it("should only claim the stuck candidate when mixed with a running one", async () => {
@@ -716,16 +727,104 @@ describe("Scheduler - claimStuckCampaigns", () => {
     const count = await claimStuckCampaigns();
 
     expect(count).toBe(1);
-    expect(mockListRuns).toHaveBeenCalledTimes(2);
+    // Two liveness reads plus the orphan read for the one campaign that was claimed.
+    expect(mockListRuns).toHaveBeenCalledTimes(3);
     expect(mockDbReturning).toHaveBeenCalledTimes(1);
   });
 
-  it("should propagate listRuns errors (no swallow)", async () => {
-    mockDbFindMany.mockResolvedValue([{ id: "c1", orgId: "org-1" }]);
-    mockListRuns.mockRejectedValue(new Error("runs-service down"));
+  it("should finalize the campaign's orphaned marker runs and report the recovery", async () => {
+    const orphanStartedAt = new Date(Date.now() - 40 * 60_000).toISOString();
+    mockDbFindMany.mockResolvedValue([
+      {
+        id: "c-stuck",
+        orgId: "org-2",
+        createdByUserId: "user-1",
+        parentRunId: "anchor-run-1",
+        workflowSlug: "sales-cold-email-outreach-pelican",
+        brandIds: ["brand-1"],
+        featureSlug: "sales-cold-email-outreach",
+      },
+    ]);
+    mockListRuns
+      .mockResolvedValueOnce({ runs: [], limit: 50, offset: 0 })
+      .mockResolvedValueOnce({
+        runs: [{ id: "orphan-run-1", status: "running", startedAt: orphanStartedAt }],
+        limit: 50,
+        offset: 0,
+      });
+    mockDbReturning.mockResolvedValue([{ id: "c-stuck" }]);
 
-    await expect(claimStuckCampaigns()).rejects.toThrow("runs-service down");
-    expect(mockDbReturning).not.toHaveBeenCalled();
+    const count = await claimStuckCampaigns();
+
+    expect(count).toBe(1);
+    // Scoped exactly like gate-check's own read — the marker row its one-run-at-a-time guard reads.
+    expect(mockListRuns.mock.calls[1][0]).toEqual(
+      expect.objectContaining({
+        orgId: "org-2",
+        serviceName: "campaign-service",
+        taskName: "c-stuck",
+        status: "running",
+      }),
+    );
+    expect(mockUpdateRun).toHaveBeenCalledWith(
+      "orphan-run-1",
+      "failed",
+      expect.objectContaining({ orgId: "org-2", campaignId: "c-stuck" }),
+    );
+    expect(mockReportCampaignRecovery).toHaveBeenCalledTimes(1);
+    const reported = mockReportCampaignRecovery.mock.calls[0][0];
+    expect(reported.campaign.id).toBe("c-stuck");
+    expect(reported.orphanedRunIds).toEqual(["orphan-run-1"]);
+    expect(reported.detail).toContain("orphan-run-1");
+  });
+
+  it("should NOT finalize a marker run that started inside the freshness window", async () => {
+    mockDbFindMany.mockResolvedValue([{ id: "c-stuck", orgId: "org-2", parentRunId: null }]);
+    mockListRuns
+      .mockResolvedValueOnce({ runs: [], limit: 50, offset: 0 })
+      .mockResolvedValueOnce({
+        runs: [{ id: "fresh-marker", status: "running", startedAt: new Date().toISOString() }],
+        limit: 50,
+        offset: 0,
+      });
+    mockDbReturning.mockResolvedValue([{ id: "c-stuck" }]);
+
+    await claimStuckCampaigns();
+
+    expect(mockUpdateRun).not.toHaveBeenCalled();
+    expect(mockReportCampaignRecovery.mock.calls[0][0].orphanedRunIds).toEqual([]);
+  });
+
+  it("should still claim when the orphan cleanup fails (fail-soft)", async () => {
+    mockDbFindMany.mockResolvedValue([{ id: "c-stuck", orgId: "org-2", parentRunId: "anchor" }]);
+    mockListRuns
+      .mockResolvedValueOnce({ runs: [], limit: 50, offset: 0 })
+      .mockRejectedValueOnce(new Error("runs-service down"));
+    mockDbReturning.mockResolvedValue([{ id: "c-stuck" }]);
+
+    const count = await claimStuckCampaigns();
+
+    expect(count).toBe(1);
+    expect(mockReportCampaignRecovery).toHaveBeenCalledTimes(1);
+  });
+
+  it("should keep sweeping the other campaigns when one throws", async () => {
+    // A single unreadable campaign used to abort the whole sweep — and the tick's own catch then
+    // skipped reRunDueCampaigns entirely, so one campaign could stall the entire fleet.
+    mockDbFindMany.mockResolvedValue([
+      { id: "c-broken", orgId: "org-1" },
+      { id: "c-stuck", orgId: "org-2", parentRunId: "anchor" },
+    ]);
+    mockListRuns
+      .mockRejectedValueOnce(new Error("runs-service down"))
+      .mockResolvedValueOnce({ runs: [], limit: 50, offset: 0 })
+      .mockResolvedValueOnce({ runs: [], limit: 50, offset: 0 });
+    mockDbReturning.mockResolvedValue([{ id: "c-stuck" }]);
+
+    const count = await claimStuckCampaigns();
+
+    expect(count).toBe(1);
+    expect(mockDbReturning).toHaveBeenCalledTimes(1);
   });
 });
 

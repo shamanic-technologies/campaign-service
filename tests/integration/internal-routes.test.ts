@@ -488,6 +488,9 @@ describe("Pipeline routes", () => {
         expect.objectContaining({ orgId }),
         offerId,
       );
+      // And it is SERVED: a downstream DAG node reading brand-service learns here which offer to
+      // scope its own call on, so it never makes the brand-scoped read this brand refuses.
+      expect(offerRes.body.offerId).toBe(offerId);
     });
 
     // === The audience the TRIGGER chose is consumed here, never re-drawn ===

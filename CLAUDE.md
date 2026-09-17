@@ -68,6 +68,64 @@ auto-stop, or a resume are HISTORY.** They are kept because they explain why eac
 money exists and how it PACES a campaign, which is all still true. (Set 2026-09-06.)
 
 
+## MONEY STARTS NOTHING, AND THE CUSTOMER CAN SAY START — `POST /campaigns/start-funded-pair`
+
+The owner rule above is right and is not being reversed: a funded ceiling provisions no campaign,
+there is no sweep, and nothing in this service decides on its own that a campaign should exist. But
+deleting provisioning left only two things that could bring a campaign into being — onboarding's
+terminal launch and the staff console — so a customer who funded a channel AFTER signup got a
+ceiling, no campaign, and no way to ask for one. Production 2026-09-17: one funded pair on the fleet
+had no campaign at all and never would.
+
+This route is the other half of that decision, and it is the half a PERSON performs.
+
+- **It only ever runs because somebody pressed a button.** No cadence, tick, sweep or ceiling
+  reaches it. `tests/unit/no-legacy.test.ts` asserts that `lib/startable-pair.ts` is imported by
+  `routes/campaigns.ts` and by nothing else, and that the workflow read is imported only by it — a
+  scheduler importing either is the deleted question ("should this money have a campaign?") coming
+  back under a new name.
+- **THE CALLER STATES FOUR THINGS AND CANNOT STATE THE OTHER THREE.** Brand, offer, sales funnel,
+  acquisition channel: exactly what the customer's own screen knows. The WORKFLOW is this service's
+  choice (the greedy rotation re-picks one every run, so a slug resolved in a browser goes stale the
+  moment the catalogue moves), the NAME is derived from the identity, and the MONEY is billing's,
+  per (offer x funnel x channel x leg), and is already set — that is what "funded" means, and a
+  per-campaign ceiling beside it is a second representation of one fact. `StartFundedPairBody` is
+  `.strict()` so a caller reaching for any of the three is TOLD no rather than having it stripped.
+- **THE LEG COMES FROM THE MONEY, NEVER FROM THE FUNNEL.** When the brand's ceilings for the pair
+  name legs, the campaign states the funded one and paces on ITS ceiling — falling back to the
+  coarser offer figure there would hand this campaign the money a sibling leg was funded with, which
+  is the whole failure the leg grain closed. When they name none, the campaign states none: that is
+  the pre-leg population and a leg is never fabricated for it. Two funded legs of one pair is two
+  campaigns to start, so it is REFUSED rather than guessed, and the optional `legKey` is how the
+  caller answers.
+- **WHICH LEGS A CHANNEL CAN SELL A FUNNEL THROUGH is features-service's statement**, read off the
+  PUBLIC catalogue `channel-operator-client.ts` already reads (`legs[].legKey` + `funnelKeys`,
+  joined verbatim). No leg or funnel matrix is held here, and a leg identifier is never split.
+- **A REFUSAL IS THE PRODUCT.** The dashboard renders `error` verbatim to the customer, so it is
+  customer-facing English, and `reason` carries the code a consumer branches on: `unknown_funnel`,
+  `channel_not_paced_here`, `unknown_channel`, `channel_does_not_sell_funnel`, `leg_not_performed`,
+  `several_funded_legs` (400); `not_funded`, `no_workflow` (409); `catalogue_unavailable`,
+  `billing_unavailable`, `workflow_unavailable` (502). "Nothing can run this channel yet" and "we
+  could not read what runs it" are different answers and stay different ones: collapsing them is
+  how an outage looked exactly like a channel with no dynasty.
+- **A PAIR THAT ALREADY HAS A CAMPAIGN NEVER GETS A SECOND ONE.** The incumbent of the identity is
+  matched whatever its status, for the same reason `POST /campaigns` matches it — the unique index
+  is partial on `ongoing` and can never police the stopped rows. A live campaign is handed back
+  untouched (`started: false`); a stopped one is STARTED, because that is what the person just
+  asked for, through `setCampaignStatus` with its own source `start_funded_pair` so the ledger says
+  which surface they acted on. A campaign already doing this work that states no offer or no leg is
+  ADOPTED (the value is filled in, never overwritten) rather than twinned by a second row.
+- **Nothing about pacing, gating, scheduling or serialization is special-cased.** The started
+  campaign is an ordinary sales-family campaign: same ceiling precedence, same funding hold, same
+  turn planner, same cohorts. A channel the CUSTOMER operates is created with NO workflow and a
+  NULL `next_run_at`, exactly as the workflow-less section below describes, and no run is dispatched
+  for it.
+- **The consumer is the dashboard, which has no staging buffer**, so this ships prod-direct and its
+  api-service proxy is a separate, additive gateway route.
+
+(Set 2026-09-17.)
+
+
 # Project: campaign-service
 
 Campaign CRUD and orchestration service for MCP Factory. Manages campaign lifecycle, budget tracking, and run coordination.
@@ -1383,6 +1441,44 @@ The diagnostic that now works, and did not before:
 
 (Set 2026-09-17.)
 
+## A brand selling SEVERAL OFFERS does not break the pricing read — it DEGRADES it, and an unpriced grid selects nothing
+
+brand-service refuses a brand-scoped read for a brand selling several offers (409 `SEVERAL_OFFERS`),
+and v0.72.4 named the campaign's own offer on the two reads that 409 — `runtime-context` and the
+leg-keyed verdict. The THIRD read of every trigger, the PRICING one, does not 409 at all, which is
+why it was missed: features-service answers a funnel- or goal-keyed read of such a brand with a
+**200**, states `declaredFunnelsUnresolved: {reason: "several_offers", offers}`, and reads the whole
+PROJECTED half null. The VOLUME half (spend, contacted — measured facts about this brand) is
+untouched, so every row is present, nothing throws, no test goes red, and every
+`resolved.costPerOutcomeUsd` — the one number BOTH argmins rank on — is null. Nothing is rankable,
+so the cell pick collapses to the campaign's configured workflow and the whole of v0.72.0 stops
+happening for exactly the brands the 409 fix unblocked. From inside the selection it is
+indistinguishable from a channel with no history.
+
+- **The priced answer is ALREADY in hand.** The leg-keyed verdict read fired in the SAME
+  `Promise.all` names the campaign, which names its offer transitively, so features-service prices
+  it fully (that is what the 409's own body tells a caller to do). `readLegModelEligibility`
+  therefore carries its `rows` back, and `pricedRows` substitutes them **only** when the funnel-keyed
+  body states `declaredFunnelsUnresolved`. It is never done while that body is priced, so no
+  single-offer brand's pick moves by a cent.
+- **Gated on the STATEMENT, never on "all the numbers are null".** A cold channel is legitimately
+  unpriced too, and substituting there would price it on a different denomination for no reason.
+- **`?campaignId=` cannot rescue the pricing read itself**: `leg` + `funnel` together is a 400
+  (`leg_and_funnel`) and `campaignId` alone is a 400 (`campaign_requires_leg`), so the leg-keyed body
+  is the ONLY priced answer that exists for a multi-offer brand. That is a contract fact, not a
+  preference.
+- **No leg-keyed body (the campaign states none, or that read failed too) → the grid stays unpriced
+  and says so on `console.error`.** The fallback still runs the configured workflow, exactly as
+  before; what is new is that it can no longer be silent.
+- **A 409 `several_offers` on the verdict read logs at ERROR, not WARN.** It is not an outage and no
+  retry fixes it — an offer-less campaign on a multi-offer brand is a question with several answers,
+  and the log names what would make it answerable (state the campaign's `offerId`).
+- **`/start-run` SERVES `offerId`** on its response and in `StartRunResponse` / `openapi.json`, so a
+  downstream DAG node reading brand-service scopes its own call instead of guessing. v0.72.5 added
+  the field to the handler only, which left the contract silent about the value it exists to publish.
+
+(Set 2026-09-17, after v0.72.4/v0.72.5.)
+
 ## A `POST /campaigns` PROBE against a real org is a WRITE — it matches the incumbent and RESTARTS it
 
 This route is documented to match the incumbent of an identity WHATEVER ITS STATUS and hand it back
@@ -1786,3 +1882,54 @@ The campaign picks, per run, WHICH audience to contact and WHICH workflow to run
 **The projection's audience grain is `(audienceId × workflowDynastySlug)`, send-tagged, and it emits a row for EVERY active audience × every active dynasty** (features-service#638) — audiences with no couple floor brand→crossOrg via the cascade. That is what makes the single-endpoint Thompson above possible: the chosen workflow's rows already ARE the brand's active-audience candidate set with workflow-discriminated evidence. `/features/:slug/candidates` no longer exists; its evidence lives in the reshaped `workflow-projection` (`rows[]` grain-ladder + `resolved`), read via `src/lib/features-workflow-projection-client.ts`, which sends `brandId` + `goal` only.
 
 **Never reintroduce a workflow-scoped audience filter that can collapse to a subset the stop-guard doesn't see.** The removed soft-filter narrowed the candidates to audiences that had RUN the chosen workflow; when greedy locked onto a dynasty whose only run-attributed audience was exhausted, the exhaustion exclusion then emptied the set → `/start-run` picked NO audience → empty `lead-serve` → ~20s spin, while `hasServeableAudience` (unscoped) saw the brand's other audiences and refused to stop. Two legs on mismatched eligibility never agree.
+
+## "A run is alive" is ONE definition — the sweep that re-fires and the gate that refuses read the SAME rows, and a recovery is SAID
+
+`/start-run` opens one run per execution and `/end-run` closes it. When the DAG dies in between —
+a Windmill failure, or this service restarting mid-flight, which the box does on every merge to
+main — that row stays `running` forever and nothing else will ever close it. Two legs then have to
+decide whether it means a campaign is working, and they had two different answers:
+
+    scheduler  claimStuckCampaigns  : older than 15 MINUTES → orphan → re-schedule the campaign
+    gate-check block 1 (stale)      : older than 3 HOURS    → still alive → block 2 REFUSES the run
+
+A 12× gap, and it is a full stop that nothing reports as one. From the moment the sweep starts
+re-firing, every run it fires reaches the gate, reads the SAME orphaned row as live, and is refused
+with `A run is already in progress` — for the 2h45m remaining on the gate's own threshold. Each
+refusal burns a Windmill job and produces nothing, and the campaign says, truthfully and uselessly,
+that a run is in progress. Prod 2026-09-17, campaign `647572d9` (org `f0420eb5`, brand `f4d73dab`):
+the v0.72.6 deploy restarted the service at 05:50:41 mid-DAG, the job failed at 05:50:51, `/end-run`
+never came, and the marker run `a05b3846` was still `running` hours later.
+
+- **`RUN_LIVENESS_THRESHOLD_MS` (`src/lib/run-liveness.ts`) is THE definition**, imported by both.
+  Its own module, so neither can hold a number of its own again, and `tests/unit/run-liveness.test.ts`
+  fails on a literal in gate-check. Same reason `campaignFunding` is shared by the leg that HOLDS and
+  the leg that resumes: two legs on two definitions is the shape this service keeps deleting.
+  The value is unchanged (15 min) and must stay strictly above the longest legitimate flow —
+  `lead-serve` has been observed at 755s — because it is also the blind window in which an orphaned
+  campaign cannot be told apart from a working one.
+- **The sweep FINALIZES the evidence of its own decision.** Having established that nothing is alive,
+  `claimStuckCampaigns` marks the campaign's still-`running` marker rows `failed`, scoped exactly
+  like gate-check's read (`campaign-service` / taskName=campaignId) and re-checked per row against
+  the same cutoff. Idempotent by construction: the claim `UPDATE` is the atomic winner-decider, so
+  one instance ever reaches it and a re-run finds no `running` row left. Fail-SOFT — an orphan that
+  cannot be closed never stops the campaign coming back.
+- **A RECOVERY IS SAID ON THE LEDGER** (`campaign-recovery`, `src/lib/recovery-event.ts`), riding the
+  campaign's own ancestor run like `campaign-hold` does, naming the runs it finalized. It was a
+  `console.log` and nothing else, so from `run_events` — the artifact a human actually reads — a
+  campaign that had been forgotten and a campaign that was fine were the same thing. `warn`, not
+  `info`: a run that died without reporting an end is a fault, not an expected business state. It is
+  NOT a per-tick path (once per orphaned run), which is why it is reported at all.
+- **One campaign can no longer stall the FLEET.** The sweep's loop had no per-campaign catch, and it
+  is the first thing a tick does — so a single unreadable campaign aborted the sweep AND, via the
+  tick's own catch, skipped `reRunDueCampaigns` entirely. Now caught per campaign, logged, and the
+  rest of the sweep continues.
+- **Nothing about the holds #470 shipped changed**, and no campaign is force-run: the sweep still
+  only ever touches a row at `(ongoing, workflow_slug NOT NULL, next_run_at IS NULL)`, and a held
+  campaign carries a `next_run_at` on its own cadence, so it is never a candidate.
+
+Residual, and it is inherent: for up to `RUN_LIVENESS_THRESHOLD_MS` after a restart an orphaned
+campaign genuinely cannot be told apart from a working one, so it sits at `next_run_at NULL` with
+nothing said. Shortening that means a heartbeat on the run, not a smaller number.
+
+(Set 2026-09-17.)
