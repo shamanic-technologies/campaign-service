@@ -326,6 +326,11 @@ export const StartRunResponse = z.object({
   // servicesOffered / clickDestinationUrl as authoritative per-campaign config (null =
   // inherit the brand). audienceIds is the campaign's targeted subset.
   goal: RuntimeGoalSchema.nullable(),
+  // The OFFER this campaign sells — brand-service's id, carried and never derived. A brand
+  // holding SEVERAL offers refuses every brand-scoped read with 409 SEVERAL_OFFERS, so a
+  // downstream DAG node that reads brand-service scopes its call on this rather than guessing
+  // one. Null for a campaign older than the offer level.
+  offerId: z.string().nullable(),
   audienceIds: z.array(z.string()).nullable(),
   servicesOffered: z.array(z.string()).nullable(),
   clickDestinationUrl: z.string().nullable(),

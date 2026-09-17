@@ -1383,6 +1383,44 @@ The diagnostic that now works, and did not before:
 
 (Set 2026-09-17.)
 
+## A brand selling SEVERAL OFFERS does not break the pricing read — it DEGRADES it, and an unpriced grid selects nothing
+
+brand-service refuses a brand-scoped read for a brand selling several offers (409 `SEVERAL_OFFERS`),
+and v0.72.4 named the campaign's own offer on the two reads that 409 — `runtime-context` and the
+leg-keyed verdict. The THIRD read of every trigger, the PRICING one, does not 409 at all, which is
+why it was missed: features-service answers a funnel- or goal-keyed read of such a brand with a
+**200**, states `declaredFunnelsUnresolved: {reason: "several_offers", offers}`, and reads the whole
+PROJECTED half null. The VOLUME half (spend, contacted — measured facts about this brand) is
+untouched, so every row is present, nothing throws, no test goes red, and every
+`resolved.costPerOutcomeUsd` — the one number BOTH argmins rank on — is null. Nothing is rankable,
+so the cell pick collapses to the campaign's configured workflow and the whole of v0.72.0 stops
+happening for exactly the brands the 409 fix unblocked. From inside the selection it is
+indistinguishable from a channel with no history.
+
+- **The priced answer is ALREADY in hand.** The leg-keyed verdict read fired in the SAME
+  `Promise.all` names the campaign, which names its offer transitively, so features-service prices
+  it fully (that is what the 409's own body tells a caller to do). `readLegModelEligibility`
+  therefore carries its `rows` back, and `pricedRows` substitutes them **only** when the funnel-keyed
+  body states `declaredFunnelsUnresolved`. It is never done while that body is priced, so no
+  single-offer brand's pick moves by a cent.
+- **Gated on the STATEMENT, never on "all the numbers are null".** A cold channel is legitimately
+  unpriced too, and substituting there would price it on a different denomination for no reason.
+- **`?campaignId=` cannot rescue the pricing read itself**: `leg` + `funnel` together is a 400
+  (`leg_and_funnel`) and `campaignId` alone is a 400 (`campaign_requires_leg`), so the leg-keyed body
+  is the ONLY priced answer that exists for a multi-offer brand. That is a contract fact, not a
+  preference.
+- **No leg-keyed body (the campaign states none, or that read failed too) → the grid stays unpriced
+  and says so on `console.error`.** The fallback still runs the configured workflow, exactly as
+  before; what is new is that it can no longer be silent.
+- **A 409 `several_offers` on the verdict read logs at ERROR, not WARN.** It is not an outage and no
+  retry fixes it — an offer-less campaign on a multi-offer brand is a question with several answers,
+  and the log names what would make it answerable (state the campaign's `offerId`).
+- **`/start-run` SERVES `offerId`** on its response and in `StartRunResponse` / `openapi.json`, so a
+  downstream DAG node reading brand-service scopes its own call instead of guessing. v0.72.5 added
+  the field to the handler only, which left the contract silent about the value it exists to publish.
+
+(Set 2026-09-17, after v0.72.4/v0.72.5.)
+
 ## A `POST /campaigns` PROBE against a real org is a WRITE — it matches the incumbent and RESTARTS it
 
 This route is documented to match the incumbent of an identity WHATEVER ITS STATUS and hand it back

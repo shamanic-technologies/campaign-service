@@ -961,6 +961,10 @@
           "goal": {
             "$ref": "#/components/schemas/RuntimeGoal"
           },
+          "offerId": {
+            "type": "string",
+            "nullable": true
+          },
           "audienceIds": {
             "type": "array",
             "nullable": true,
@@ -1000,6 +1004,7 @@
           "brandProfileId",
           "audienceId",
           "goal",
+          "offerId",
           "audienceIds",
           "servicesOffered",
           "clickDestinationUrl",
