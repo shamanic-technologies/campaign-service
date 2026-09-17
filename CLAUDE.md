@@ -1339,6 +1339,50 @@ revived for this and must not be.
 
 (Set 2026-09-12.)
 
+## A CAMPAIGN THAT IS DELIBERATELY NOT RUNNING SAYS SO — the turn planner's early returns are the one place a campaign could go silent with no artifact anywhere
+
+Everything a campaign does reaches `run_events` because it reaches `gate-check`, the first node of
+every DAG. The turn planner sits BEFORE that: its holds return early with no run created, so no
+`gate-check-result` is emitted, and the log-discipline section above correctly forbids a console
+line on a path that fires per campaign per tick across the fleet. The result was a campaign whose
+row is updated every ten minutes, whose status is `ongoing`, whose `stop_reason` is empty, and
+whose last run-event is hours old — which from `run_events` alone is indistinguishable from a
+campaign that silently died.
+
+Prod 2026-09-17, campaign `38ba8069` (brand `f2408cfb`, org `b645207b`): its funded leg ceiling is
+**400 cents/day**; it committed 389.94 cents by 00:22 UTC, crossed to 428.32 at 00:23, and
+`selectLowestFillRatio` correctly returned `null` on every tick for the next five hours. The
+decision was right every single time. Its invisibility was the bug — five hours of a customer's
+campaign producing nothing with no artifact naming a reason, while the sibling campaign
+`31df7683`, blocked by the CREDIT gate (which runs INSIDE a run), said `Insufficient credits`
+loudly every thirty minutes and was diagnosable in one query.
+
+- **Every hold that parks a campaign on a cadence OF ITS OWN emits one `campaign-hold` event**
+  (`src/lib/turn-hold-event.ts`), carrying `reason`, the figures it was decided on, and the
+  `nextRunAt` it wrote. Four reasons, and they are the four early returns: `unfunded`,
+  `budgets_unreadable`, `daily_ceiling_reached`, `planning_failed`.
+- **It rides the campaign's OWN ANCESTOR run** (`campaigns.parent_run_id`) — a run runs-service can
+  resolve, never a minted uuid, which it refuses. That is the run every execution already chains
+  under, so the hold lands where a human asking "what did this campaign do" is already looking, and
+  `run_events.campaign_id` (from the `x-campaign-id` header) makes it readable from `run_events`
+  alone. A campaign with NO ancestor run is warned about, never given an invented one.
+- **The 60-second TURN defer is deliberately SILENT, and so is the cohort in-flight defer.** Those
+  fire per campaign per tick for every client, and a campaign that merely yielded its turn belongs
+  to a brand that is visibly working — the winner's own run is producing events the whole time. An
+  event there would be exactly the per-minute bip the log-discipline section forbids. The silence
+  worth breaking is the one with no other explanation.
+- **Levels follow the rule this repo already states**: spending out a funded ceiling and funding
+  nothing are EXPECTED business states (`info`); a read that failed and a planner that threw are
+  faults (`warn`).
+- **Nothing about any decision changed.** Same holds, same cadences, same fail-CLOSED stance, same
+  `deferred` map. The events are emitted AFTER planning and fail-SOFT in every direction: an
+  unreportable hold never changes whether a campaign runs.
+
+The diagnostic that now works, and did not before:
+`SELECT created_at, event, level, detail FROM run_events WHERE campaign_id = '<id>' ORDER BY created_at DESC LIMIT 5;`
+
+(Set 2026-09-17.)
+
 ## A `POST /campaigns` PROBE against a real org is a WRITE — it matches the incumbent and RESTARTS it
 
 This route is documented to match the incumbent of an identity WHATEVER ITS STATUS and hand it back

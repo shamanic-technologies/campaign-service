@@ -13,6 +13,7 @@ import { acquisitionChannelForFeature } from "./campaign-identity.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
 import { adoptFunnellessAncestorsSafely } from "./funnel-ancestor-adoption.js";
 import { adoptOfferForPairSafely } from "./campaign-offer-adoption.js";
+import { reportTurnHolds, type TurnHold } from "./turn-hold-event.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
 // re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
@@ -149,6 +150,11 @@ export async function planFunnelTurns(
   now: Date = new Date(),
 ): Promise<Map<string, Date>> {
   const deferred = new Map<string, Date>();
+  // Every decision that parks a campaign on a cadence of its own — rather than on its turn — is
+  // collected here and stated on the run ledger once planning is done. See `turn-hold-event.ts`:
+  // these are the paths that used to return early with no run, no event and no log, so a campaign
+  // correctly declining to run was indistinguishable from one that had silently died.
+  const holds: TurnHold[] = [];
 
   // Only the sales-outreach family funds per funnel. Everything else keeps its own pacing and
   // its own per-campaign serialization, untouched.
@@ -165,15 +171,28 @@ export async function planFunnelTurns(
 
   for (const group of groups.values()) {
     try {
-      await planOneBrand(group, now, deferred);
+      await planOneBrand(group, now, deferred, holds);
     } catch (err) {
       // A planning failure is not a licence to spend: hold the group and say so. The gate would
       // refuse these runs anyway (it fail-closes on the same unreadable ceilings), so firing them
       // buys nothing and costs a run each.
       console.warn(`[campaign-service] funnel turn planning failed for campaign ${group[0]?.id} — holding the brand:`, err);
-      for (const c of group) deferred.set(c.id, new Date(now.getTime() + FUNDING_RECHECK_MS));
+      const heldAt = new Date(now.getTime() + FUNDING_RECHECK_MS);
+      for (const c of group) {
+        deferred.set(c.id, heldAt);
+        holds.push({
+          campaign: c,
+          reason: "planning_failed",
+          detail: `Campaign not run — turn planning failed for this brand: ${err instanceof Error ? err.message : String(err)}. Held rather than spent; re-checked at ${heldAt.toISOString()}.`,
+          nextRunAt: heldAt,
+        });
+      }
     }
   }
+
+  // Fail-SOFT and AFTER the planning: the holds are a statement about decisions already made, so
+  // an unreportable one must never change whether a campaign runs.
+  await reportTurnHolds(holds);
 
   return deferred;
 }
@@ -182,6 +201,7 @@ async function planOneBrand(
   group: ClaimedFunnelCampaign[],
   now: Date,
   deferred: Map<string, Date>,
+  holds: TurnHold[],
 ): Promise<void> {
   const seed = group[0];
   const orgId = seed.orgId;
@@ -202,7 +222,15 @@ async function planOneBrand(
   // Fail-CLOSED. An unreadable ceiling is not "spend freely for a tick": the gate refuses the run
   // on the very same read, so firing it only burns a run and re-asks in a minute.
   if (!budgets.ok) {
-    for (const c of group) deferred.set(c.id, heldAt);
+    for (const c of group) {
+      deferred.set(c.id, heldAt);
+      holds.push({
+        campaign: c,
+        reason: "budgets_unreadable",
+        detail: `Campaign not run — billing's funnel budgets for brand ${brandId} could not be read, so the ceiling that paces this campaign is unknown. Held rather than spent (fail-closed); re-checked at ${heldAt.toISOString()}.`,
+        nextRunAt: heldAt,
+      });
+    }
     return;
   }
 
@@ -248,6 +276,12 @@ async function planOneBrand(
     const verdict = fundingFromBudgets(c, budgets);
     if (!verdict.funded) {
       deferred.set(c.id, heldAt);
+      holds.push({
+        campaign: c,
+        reason: "unfunded",
+        detail: `Campaign not run — the customer funds no positive daily ceiling for it (funnel ${c.funnelKey ?? "(none stated)"}, leg ${c.legKey ?? "(none stated)"}, offer ${c.offerId ?? "(none stated)"}). It is waiting for money, not for its turn; re-checked at ${heldAt.toISOString()}.`,
+        nextRunAt: heldAt,
+      });
       continue;
     }
     cohortOf.set(c.id, serializationCohort(c.featureSlug));
@@ -286,8 +320,9 @@ async function planOneBrand(
     else cohorts.set(key, [c]);
   }
 
+  const byId = new Map(group.map((c) => [c.id, c]));
   for (const [cohort, members] of cohorts) {
-    await planOneCohort(orgId, brandId, cohort, members, now, deferred);
+    await planOneCohort(orgId, brandId, cohort, members, byId, now, deferred, holds);
   }
 }
 
@@ -309,8 +344,10 @@ async function planOneCohort(
   brandId: string,
   cohort: string,
   candidates: FunnelTurnCandidate[],
+  byId: Map<string, ClaimedFunnelCampaign>,
   now: Date,
   deferred: Map<string, Date>,
+  holds: TurnHold[],
 ): Promise<void> {
   if (await hasLiveRunForBrandCohort(orgId, brandId, cohort, now)) {
     for (const c of candidates) {
@@ -342,6 +379,21 @@ async function planOneCohort(
   for (const c of candidates) {
     if (c.campaignId === winner) continue;
     deferred.set(c.campaignId, reset ?? new Date(now.getTime() + FUNNEL_TURN_DEFER_MS));
+    // Only the CEILING park is stated. A campaign that merely yielded its turn (a sibling of the
+    // same cohort outranked it, or one is in flight) is deferred sixty seconds and its brand is
+    // visibly working — that is the routine path, it fires per campaign per tick for every client,
+    // and an event there would be exactly the per-minute bip this repo's log discipline forbids.
+    // A campaign parked at its ceiling is the one whose silence has no other explanation.
+    if (!reset) continue;
+    const campaign = byId.get(c.campaignId);
+    if (!campaign) continue;
+    holds.push({
+      campaign,
+      reason: "daily_ceiling_reached",
+      detail: `Campaign not run — it has already spent its whole daily ceiling: ${c.spentCents.toFixed(0)} of ${c.ceilingCents} cents committed today on funnel ${c.funnelKey}. It runs again when the ceiling is raised or the day rolls over; re-checked at ${reset.toISOString()}.`,
+      nextRunAt: reset,
+      data: { spentCents: c.spentCents, ceilingCents: c.ceilingCents, funnelKey: c.funnelKey },
+    });
   }
 }
 
