@@ -4,9 +4,11 @@ import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
-import { listRuns } from "@distribute/runs-client";
+import { listRuns, updateRun } from "@distribute/runs-client";
 import { planFunnelTurns } from "./funnel-campaigns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
+import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
+import { reportCampaignRecovery } from "./recovery-event.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -25,13 +27,14 @@ export const IDLE_MAX_MS = 60 * 60_000; // 1 hour
 // A run is considered "fresh" (campaign actively executing) if it started within this window.
 // Older running rows are treated as orphans (workflow died without /end-run).
 //
-// MUST be strictly greater than the longest legitimate flow duration. lead-service's
-// buffer/next fill can run up to ~10min (PULL_NEXT_TIMEOUT_MS=600s), and the wrapping
-// `lead-service/lead-serve` run has been observed at 755s in prod — so the old 10min
-// (= 600s) value left a legit long fill sitting right at the orphan boundary, where
-// claimStuckCampaigns could misclassify it as stuck and re-fire mid-fill (→ lead-service
-// 409 "Concurrent buffer/next" storms). 15min gives margin above the observed max.
-export const STUCK_RUN_FRESHNESS_THRESHOLD_MS = 15 * 60_000; // 15 minutes
+// THE definition, shared with gate-check's stale cleanup so the two can never disagree about which
+// rows are alive — see run-liveness.ts for why that gap is a full stop nothing reports.
+export const STUCK_RUN_FRESHNESS_THRESHOLD_MS = RUN_LIVENESS_THRESHOLD_MS;
+
+// How many of the campaign's own `running` marker rows the sweep will finalize in one pass. The
+// invariant is ONE run in flight per campaign, so this is orders of magnitude above what any
+// campaign holds; it exists so an unbounded read can never be issued, not as a tuning knob.
+const ORPHANED_RUNS_LIMIT = 20;
 
 /**
  * Is a flow genuinely alive for this campaign right now?
@@ -269,7 +272,18 @@ export async function claimStuckCampaigns(): Promise<number> {
       isNotNull(campaigns.workflowSlug),
       isNull(campaigns.nextRunAt),
     ),
-    columns: { id: true, orgId: true },
+    // Everything the recovery event needs to be attributable, for the same reason the turn
+    // planner's holds carry it: an event that cannot name its campaign's ancestor run cannot be
+    // written at all.
+    columns: {
+      id: true,
+      orgId: true,
+      createdByUserId: true,
+      parentRunId: true,
+      workflowSlug: true,
+      brandIds: true,
+      featureSlug: true,
+    },
   });
 
   if (ongoingCampaigns.length === 0) return 0;
@@ -277,34 +291,113 @@ export async function claimStuckCampaigns(): Promise<number> {
   let claimedCount = 0;
 
   for (const campaign of ongoingCampaigns) {
-    // Same definition of "alive" as reRunDueCampaigns: ANY running run for the
-    // campaign within the freshness window, regardless of which service owns it.
-    const alive = await hasLiveRunForCampaign(campaign.orgId, campaign.id, freshnessCutoff);
+    // Per-campaign, because this loop is the FIRST thing a tick does: an unhandled throw here —
+    // a single unreadable campaign, one non-2xx from runs-service — aborted the whole tick before
+    // reRunDueCampaigns ever ran, i.e. one campaign could stall the entire fleet.
+    try {
+      // Same definition of "alive" as reRunDueCampaigns: ANY running run for the
+      // campaign within the freshness window, regardless of which service owns it.
+      const alive = await hasLiveRunForCampaign(campaign.orgId, campaign.id, freshnessCutoff);
 
-    if (alive) {
-      // Fresh run in flight → campaign is alive, not stuck.
-      continue;
-    }
+      if (alive) {
+        // Fresh run in flight → campaign is alive, not stuck.
+        continue;
+      }
 
-    const claimed = await db
-      .update(campaigns)
-      .set({ nextRunAt: now, updatedAt: now })
-      .where(
-        and(
-          eq(campaigns.id, campaign.id),
-          eq(campaigns.status, "ongoing"),
-          isNull(campaigns.nextRunAt),
-        ),
-      )
-      .returning({ id: campaigns.id });
+      const claimed = await db
+        .update(campaigns)
+        .set({ nextRunAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(campaigns.id, campaign.id),
+            eq(campaigns.status, "ongoing"),
+            isNull(campaigns.nextRunAt),
+          ),
+        )
+        .returning({ id: campaigns.id });
 
-    if (claimed.length > 0) {
+      if (claimed.length === 0) continue;
+
       claimedCount++;
       console.log(`[campaign-service] Claimed stuck campaign ${campaign.id} (no fresh run in last ${STUCK_RUN_FRESHNESS_THRESHOLD_MS / 60_000}min)`);
+
+      // The claim above is the atomic winner-decider (guarded on the same state it read), so only
+      // ONE instance/tick ever reaches here for a given campaign — finalizing the orphan and
+      // reporting it cannot be done twice concurrently, and a re-run finds no `running` row left.
+      const orphanedRunIds = await finalizeOrphanedMarkerRuns(campaign, freshnessCutoff);
+
+      await reportCampaignRecovery({
+        campaign,
+        nextRunAt: now,
+        orphanedRunIds,
+        detail: recoveryDetail(campaign.id, orphanedRunIds),
+      });
+    } catch (err) {
+      console.error(`[campaign-service] Error sweeping stuck campaign ${campaign.id}:`, err);
     }
   }
 
   return claimedCount;
+}
+
+function recoveryDetail(campaignId: string, orphanedRunIds: string[]): string {
+  const minutes = STUCK_RUN_FRESHNESS_THRESHOLD_MS / 60_000;
+  const orphans =
+    orphanedRunIds.length === 0
+      ? "no run of its own was left open"
+      : `its previous run never reported an end and was marked failed (${orphanedRunIds.join(", ")})`;
+  return `Campaign ${campaignId} was re-scheduled by the stuck sweep: nothing has been alive for it in ${minutes} minutes, and ${orphans}.`;
+}
+
+/**
+ * Close the campaign's own marker runs that no `/end-run` will ever close.
+ *
+ * `/start-run` opens one run per execution and `/end-run` closes it. When the DAG dies in between —
+ * a Windmill failure, or this service restarting mid-flight, which the box does on every merge —
+ * that row stays `running` forever. Nothing else closes it: gate-check's block 1 does (now on the
+ * SAME threshold), but only on a run that actually reaches the gate, and block 2 refuses the run
+ * before block 1 has finalized anything on a later tick. So the sweep that decided the campaign is
+ * not alive finalizes the evidence of that decision, at the moment it makes it.
+ *
+ * Scoped exactly like gate-check's own read (`campaign-service` / taskName=campaignId) because the
+ * marker is the row block 2 reads. Fail-SOFT per run: an orphan that cannot be closed must never
+ * stop the campaign being brought back.
+ */
+async function finalizeOrphanedMarkerRuns(
+  campaign: { id: string; orgId: string; createdByUserId: string | null; workflowSlug: string | null; brandIds: string[] | null },
+  freshnessCutoff: Date,
+): Promise<string[]> {
+  const finalized: string[] = [];
+  try {
+    const { runs } = await listRuns({
+      orgId: campaign.orgId,
+      serviceName: "campaign-service",
+      taskName: campaign.id,
+      status: "running",
+      limit: ORPHANED_RUNS_LIMIT,
+    });
+
+    for (const run of runs) {
+      // Belt and braces: the campaign-wide liveness read above already said nothing is fresh, and
+      // this re-states it per row so a race can never close a run that just started.
+      if (new Date(run.startedAt).getTime() > freshnessCutoff.getTime()) continue;
+      try {
+        await updateRun(run.id, "failed", {
+          orgId: campaign.orgId,
+          userId: campaign.createdByUserId ?? undefined,
+          campaignId: campaign.id,
+          brandId: campaign.brandIds?.[0],
+          workflowSlug: campaign.workflowSlug ?? undefined,
+        });
+        finalized.push(run.id);
+      } catch (err) {
+        console.error(`[campaign-service] Failed to finalize orphaned run ${run.id}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error(`[campaign-service] Failed to read orphaned runs for campaign ${campaign.id}:`, err);
+  }
+  return finalized;
 }
 
 /**
