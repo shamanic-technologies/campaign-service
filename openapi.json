@@ -1252,6 +1252,90 @@
           "step"
         ]
       },
+      "PredecessorCampaignResponse": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string"
+          },
+          "legKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "funnelKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "offerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "brandId": {
+            "type": "string",
+            "nullable": true
+          },
+          "fromStepKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "precedingLegKeys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "predecessor": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "campaignId": {
+                "type": "string"
+              },
+              "legKey": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "acquisitionChannel": {
+                "type": "string",
+                "nullable": true
+              },
+              "featureSlug": {
+                "type": "string",
+                "nullable": true
+              },
+              "workflowSlug": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "campaignId",
+              "legKey",
+              "status",
+              "acquisitionChannel",
+              "featureSlug",
+              "workflowSlug"
+            ]
+          },
+          "absence": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "campaignId",
+          "legKey",
+          "funnelKey",
+          "offerId",
+          "brandId",
+          "fromStepKey",
+          "precedingLegKeys",
+          "predecessor",
+          "absence"
+        ]
+      },
       "EarningHistoryResponse": {
         "type": "object",
         "properties": {
@@ -2977,6 +3061,92 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The acquisition-channel catalogue could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/campaigns/{campaignId}/predecessor": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Which campaign ran the leg that ends where this one begins",
+        "description": "A funnel is several LEGS and this service mints one campaign per leg, so a campaign bought for a leg that CONTINUES another cannot find what it is continuing — while the lead, the thread and the record of what is owed them are filed under the campaign that ran the previous leg. This resolves that sibling: same org, brand, offer and funnel, on the leg whose toStep is this campaign's fromStep (features-service's own statement, GET /public/channels -> legs[]; the identifier is carried verbatim and never parsed). The LIVE campaign of the preceding leg wins; when none is live, the most recently created stopped one does. Nothing is written and nothing about funding, gating, scheduling or triggering changes. A campaign at the FIRST leg of its funnel answers `predecessor: null` with `absence: entry_leg` — never a sibling that merely looks close; same for a campaign stating no leg, funnel, offer or brand. `There is none` is kept apart from `it could not be worked out`: an unreadable catalogue is a 502 and a leg the catalogue no longer publishes, or two live siblings, are a 409.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "campaignId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The predecessor, or a named absence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredecessorCampaignResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such campaign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A leg features-service does not publish, or two live siblings on the preceding leg",
             "content": {
               "application/json": {
                 "schema": {

@@ -33,6 +33,7 @@ import {
   EarningHistoryBody,
   EarningHistoryResponse,
   TriggerForStepResponse,
+  PredecessorCampaignResponse,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -446,6 +447,27 @@ registry.registerPath({
     200: { description: "What ran and what did not", content: { "application/json": { schema: TriggerForStepResponse } } },
     400: { description: "No org, malformed body, unknown funnel or unknown step", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/campaigns/{campaignId}/predecessor",
+  tags: ["Internal"],
+  summary: "Which campaign ran the leg that ends where this one begins",
+  description:
+    "A funnel is several LEGS and this service mints one campaign per leg, so a campaign bought for a leg that CONTINUES another cannot find what it is continuing — while the lead, the thread and the record of what is owed them are filed under the campaign that ran the previous leg. This resolves that sibling: same org, brand, offer and funnel, on the leg whose toStep is this campaign's fromStep (features-service's own statement, GET /public/channels -> legs[]; the identifier is carried verbatim and never parsed). The LIVE campaign of the preceding leg wins; when none is live, the most recently created stopped one does. Nothing is written and nothing about funding, gating, scheduling or triggering changes. A campaign at the FIRST leg of its funnel answers `predecessor: null` with `absence: entry_leg` — never a sibling that merely looks close; same for a campaign stating no leg, funnel, offer or brand. `There is none` is kept apart from `it could not be worked out`: an unreadable catalogue is a 502 and a leg the catalogue no longer publishes, or two live siblings, are a 409.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ campaignId: z.string() }),
+  },
+  responses: {
+    200: { description: "The predecessor, or a named absence", content: { "application/json": { schema: PredecessorCampaignResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    404: { description: "No such campaign", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "A leg features-service does not publish, or two live siblings on the preceding leg", content: { "application/json": { schema: ErrorResponse } } },
     502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },

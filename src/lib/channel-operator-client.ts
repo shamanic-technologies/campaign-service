@@ -22,7 +22,9 @@
  *
  * Contract (features-service): GET /public/channels (no auth, no identity)
  *   -> { channels: [{ slug, operatedBy: "platform" | "customer",
- *                     stepTransitions: [{ legKey, from, to }], ... }], legs: [...], steps: [...] }
+ *                     stepTransitions: [{ legKey, from, to }], ... }],
+ *        legs: [{ legKey, fromStep: { key } | null, toStep: { key } | null, funnelKeys }],
+ *        steps: [{ key }] }
  *
  * A channel the catalogue does not publish, and a catalogue that cannot be READ, both resolve to
  * "platform" at the call site — i.e. to today's behaviour exactly. That direction is deliberate:
@@ -41,6 +43,13 @@ export type ChannelOperator = "platform" | "customer";
 export interface CatalogueLeg {
   legKey: string;
   fromStepKey: string | null;
+  /**
+   * The step a lead is taken INTO. Read for the same reason `fromStepKey` is: a campaign bought
+   * for a leg that CONTINUES another needs to find the leg that ENDS where its own begins, and
+   * the only honest way to that is the two steps the catalogue publishes beside the identifier.
+   * `null` is "into nothing", which no published leg states today and is not guessed at.
+   */
+  toStepKey: string | null;
   funnelKeys: ReadonlySet<string>;
 }
 
@@ -96,6 +105,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       legs?: Array<{
         legKey?: unknown;
         fromStep?: { key?: unknown } | null;
+        toStep?: { key?: unknown } | null;
         funnelKeys?: unknown;
       }>;
       steps?: Array<{ key?: unknown }>;
@@ -137,11 +147,13 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
           }
         }
         const fromKey = leg.fromStep?.key;
+        const toKey = leg.toStep?.key;
         legs.push({
           legKey: leg.legKey,
           // An ENTRY leg states no step before it, and that is an ordinary leg — the absence is
           // data, not a special spelling to branch on.
           fromStepKey: typeof fromKey === "string" && fromKey.length > 0 ? fromKey : null,
+          toStepKey: typeof toKey === "string" && toKey.length > 0 ? toKey : null,
           funnelKeys,
         });
       }

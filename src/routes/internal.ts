@@ -18,6 +18,7 @@ import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
 import { triggerCampaignsForStep, StepTriggerScopeError } from "../lib/step-trigger.js";
+import { resolvePredecessorCampaign, PredecessorScopeError } from "../lib/predecessor-campaign.js";
 import { earningHistory, utcDaysBetween } from "../lib/earning-history.js";
 import {
   fetchWorkflowProjectionRows,
@@ -937,5 +938,43 @@ router.post(
     }
   },
 );
+
+/**
+ * GET /internal/campaigns/:campaignId/predecessor
+ *
+ * WHICH CAMPAIGN RAN THE LEG THAT ENDS WHERE THIS ONE BEGINS — same org, same brand, same offer,
+ * same funnel.
+ *
+ * A campaign bought for a leg that CONTINUES another needs to find what it is continuing: the
+ * person, the thread and the record of what we owe them are filed under the campaign that ran the
+ * previous leg. Only this service knows two campaigns are two legs of one journey, so only it can
+ * answer. See `lib/predecessor-campaign.ts` for why an entry leg answers with a NAMED absence
+ * rather than the closest-looking sibling, and why an unreadable catalogue is loud.
+ *
+ * Nothing is written and nothing about funding, gating, scheduling or triggering is touched.
+ *
+ * Returns:
+ *   200 — the predecessor, or `predecessor: null` with `absence` naming why there is none
+ *   401 — bad api key
+ *   404 — no such campaign
+ *   409 — the question cannot be answered: a leg features-service no longer publishes, or two
+ *         live siblings both running the preceding leg for this offer
+ *   502 — the acquisition-channel catalogue could not be read
+ *   500 — internal error
+ */
+router.get("/internal/campaigns/:campaignId/predecessor", requireApiKey, async (req, res) => {
+  try {
+    res.json(await resolvePredecessorCampaign(req.params.campaignId));
+  } catch (error) {
+    if (error instanceof PredecessorScopeError) {
+      console.warn(
+        `[campaign-service] ${error.status} on /internal/campaigns/${req.params.campaignId}/predecessor — ${error.message}`,
+      );
+      return res.status(error.status).json({ error: error.message, reason: error.reason });
+    }
+    console.error("[campaign-service] predecessor lookup error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 export default router;
