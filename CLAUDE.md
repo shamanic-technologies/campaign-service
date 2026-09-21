@@ -1049,6 +1049,55 @@ paces.
 
 (Set 2026-09-06.)
 
+## A campaign bought for a leg that CONTINUES another can FIND what it is continuing — one lookup, nothing stored
+
+A funnel is several LEGS and this service mints one campaign per leg, so the customer's single
+journey is filed across siblings. That is fine until a leg's work is ABOUT A NAMED PERSON whose
+history lives on the leg before it: a prospect replies to a cold email (`start_to_conversation`)
+and the campaign bought to answer them (`conversation_to_meeting_booked`) knows only its own id,
+while the person, the thread and the record of what we owe them are all filed under the cold-email
+campaign. The worker looks in its own campaign's drawer, finds it empty every time, and reports
+"nobody is due" — forever. Measured fleet-wide 2026-09-21: six people waiting, none ever claimed,
+zero answers sent since the feature shipped, the oldest waiting since 6 September. Nothing was red
+anywhere, because an empty drawer is indistinguishable from there being nothing to do.
+
+`GET /internal/campaigns/:campaignId/predecessor` (`src/lib/predecessor-campaign.ts`) answers it.
+
+- **IT IS A LOOKUP OVER STATE ALREADY HELD.** A campaign states its (org, brand, offer, funnel) and
+  the single LEG it was bought for; features-service publishes, per leg, which step it leaves and
+  which step it enters. Joining the two is the whole resolution — no column, table, link table,
+  accumulator or second scheduler, and nothing about how a campaign is funded, gated, scheduled or
+  triggered changes. Money stays on the campaign that spends it.
+- **THE IDENTIFIER IS ASKED, NEVER PARSED.** `channel-operator-client.ts` stays the ONE reader of
+  the public catalogue and now carries each leg's `toStep` beside its `fromStep`; the predecessor is
+  the leg whose `toStep` is this campaign's `fromStep`, joined verbatim against `campaigns.leg_key`.
+  A well-formed `a_to_b` no catalogue names is still not a leg, so splitting one could only invent
+  it — the same posture this service holds for the goal, the offer and the channel.
+- **THE FUNNEL IS PART OF THE JOIN**, because a leg belongs to several funnels at once. Both sides
+  go through `toFunnelKey`, so a pre-rename spelling on either still matches.
+- **NOTHING IS GUESSED.** A campaign at the FIRST leg of its funnel carries an ENTRY leg, which
+  states no step before it, so the answer is `predecessor: null` with `absence: entry_leg` — never
+  the closest-looking sibling. Same named absence for a campaign stating no leg, funnel, offer or
+  brand, and for a preceding leg nobody bought a campaign for.
+- **"THERE IS NONE" AND "IT COULD NOT BE WORKED OUT" STAY DIFFERENT ANSWERS.** An unreadable
+  catalogue is a **502**, a leg features-service no longer publishes is a **409**, and two LIVE
+  siblings both running the preceding leg for one offer is a **409** rather than a tie-break nobody
+  agreed to. Answering any of them with `null` would make an outage look exactly like a funnel with
+  one leg — the same reason the step trigger fails loud on its scope.
+- **WHICH ROW, WHEN THERE ARE SEVERAL.** The LIVE campaign of the preceding leg wins; when none is
+  live, the most recently created STOPPED one does. The history the caller wants is filed under
+  whichever row ran that leg, and the partial unique index is on `ongoing` only, so production
+  carries hundreds of stopped rows per identity.
+- **It is a READ.** Nothing is written, and no caller's existing response changed meaning.
+
+Verified in production on v0.72.10: campaign `8c748ddd` (`conversation_to_meeting_booked`) resolves
+to `f7b1b610` (`start_to_conversation`, live, `cold_email`) on org `b645207b` / brand `75d7e3e8` /
+offer `d5ecba00` / funnel `sales_meetings_from_conversation`, past a stopped
+`feedback_request_email` sibling on the same leg and seventeen stopped cold-email ancestors; and
+`f7b1b610` itself answers `absence: entry_leg`.
+
+(Set 2026-09-21.)
+
 ## A lead reaching a STEP runs the campaign bought for the leg OUT of it, NOW — an event entry point beside the clock
 
 Everything this service schedules is on a clock: the tick claims what is due, `/end-run` reschedules
