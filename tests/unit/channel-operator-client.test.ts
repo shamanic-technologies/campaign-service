@@ -118,7 +118,8 @@ describe("fetchChannelCatalogue", () => {
   it("reads the published LEG vocabulary, each leg naming the step it leaves and its funnels", async () => {
     // The DEPLOYED shape (features-service `funnelLegCatalogue()`): `legs[]` beside `channels[]`,
     // each leg carrying the identifier, the step it takes a lead OUT of (`null` = from nothing),
-    // and every funnel it is a leg of. The steps ride BESIDE the identifier, so nothing splits it.
+    // the step it takes them INTO, and every funnel it is a leg of. Both steps ride BESIDE the
+    // identifier, so nothing splits it.
     const entryLeg = ["start", "to", "conversation"].join("_");
     const legOut = ["conversation","to","meeting","booked"].join("_");
     mockFetch.mockResolvedValue({
@@ -143,8 +144,11 @@ describe("fetchChannelCatalogue", () => {
     if (!read.ok) return;
     expect(read.legs).toHaveLength(2);
     // An ENTRY leg is an ordinary leg: the absent step is DATA, not a different spelling.
-    expect(read.legs[0]).toEqual({ legKey: entryLeg, fromStepKey: null, funnelKeys: new Set(["sales_meetings_from_conversation"]) });
+    expect(read.legs[0]).toEqual({ legKey: entryLeg, fromStepKey: null, toStepKey: "conversation", funnelKeys: new Set(["sales_meetings_from_conversation"]) });
     expect(read.legs[1].fromStepKey).toBe("conversation");
+    // The step a leg leads INTO is read too: a campaign bought for a leg that CONTINUES another
+    // finds what it continues by the leg whose toStep is its own fromStep.
+    expect(read.legs[1].toStepKey).toBe("meeting_booked");
     expect([...read.legs[1].funnelKeys]).toEqual([
       "sales_meetings_from_conversation",
       "sales_meetings_from_website",

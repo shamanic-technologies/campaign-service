@@ -532,6 +532,44 @@ export const TriggerForStepResponse = z.object({
 }).openapi("TriggerForStepResponse");
 
 /**
+ * WHICH CAMPAIGN RAN THE LEG THAT ENDS WHERE THIS ONE BEGINS.
+ *
+ * A funnel is several legs and this service mints one campaign per leg, so a campaign bought for a
+ * leg that CONTINUES another cannot, on its own, find what it is continuing — while the person, the
+ * thread and the record of what is owed them are all filed under the campaign that ran the leg
+ * before. This is that lookup, over state this service already holds.
+ *
+ * `absence` is non-null exactly when `predecessor` is null, and it NAMES why: a campaign at the
+ * first leg of its funnel has no predecessor and says so, rather than being handed the closest
+ * sibling. "There is none" and "it could not be worked out" stay different answers — the second is
+ * a 409 or a 502, never a null.
+ */
+export const PredecessorCampaignResponse = z.object({
+  campaignId: z.string(),
+  legKey: z.string().nullable(),
+  funnelKey: z.string().nullable(),
+  offerId: z.string().nullable(),
+  brandId: z.string().nullable(),
+  /** The step this campaign's leg takes a lead OUT of — where its predecessor must end. */
+  fromStepKey: z.string().nullable(),
+  /** Every published leg ending at that step on this funnel, as features-service names them. */
+  precedingLegKeys: z.array(z.string()),
+  predecessor: z.object({
+    campaignId: z.string(),
+    legKey: z.string(),
+    status: z.string(),
+    acquisitionChannel: z.string().nullable(),
+    featureSlug: z.string().nullable(),
+    workflowSlug: z.string().nullable(),
+  }).nullable(),
+  /**
+   * `entry_leg` | `campaign_states_no_leg` | `campaign_states_no_funnel` |
+   * `campaign_states_no_offer` | `campaign_states_no_brand` | `no_campaign_for_preceding_leg`
+   */
+  absence: z.string().nullable(),
+}).openapi("PredecessorCampaignResponse");
+
+/**
  * WAS THIS CAMPAIGN EARNING, day by day — the request and the answer.
  *
  * A day is a UTC calendar day and is evaluated at its END (or at now, for a day still running):
