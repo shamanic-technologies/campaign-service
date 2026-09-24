@@ -1,4 +1,22 @@
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+
+// These tests assert the ROUTES, not the dispatch: the fire-and-forget execute never leaves the
+// process, so no DNS lookup of a test host can stall the event loop behind a later request.
+vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
+  return { ...original, executeCampaignWorkflow: vi.fn(async () => undefined) };
+});
+
+// Every person-started run is SELECTED (see dispatchSelectedRun); resolve to the configured slug
+// so these route tests make no features-service call.
+vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/features-workflow-projection-client.js")>();
+  return {
+    ...original,
+    resolveSelectionForTrigger: vi.fn(async (a: { fallbackSlug: string }) => ({ workflowSlug: a.fallbackSlug, audienceId: null })),
+  };
+});
+
 import request from "supertest";
 import app from "../../src/index.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";

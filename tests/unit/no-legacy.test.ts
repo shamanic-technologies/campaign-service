@@ -631,4 +631,19 @@ describe('No Legacy Patterns - CRITICAL', () => {
       expect(body, `a customer never states ${forbidden} here`).not.toContain(forbidden);
     }
   });
+
+  it('must NOT execute a workflow without the selector — every dispatch goes through the leg rule', () => {
+    // The stored `workflow_slug` is the selector's FALLBACK, never what runs by fiat. A path that
+    // hands it straight to workflow-service runs whatever the creator stored — prod 2026-09-24,
+    // campaign c8133eca, ran a workflow its leg's model rule excludes as its very first run.
+    // Only the three dispatchers that SELECT first may call executeCampaignWorkflow.
+    const files = getAllTsFiles(srcDir);
+    const rel = (f: string) => path.relative(srcDir, f);
+    const callers = files
+      .filter((f) => /executeCampaignWorkflow\(/.test(fs.readFileSync(f, 'utf-8')))
+      .map(rel)
+      .filter((r) => r !== 'lib/workflows.ts')
+      .sort();
+    expect(callers).toEqual(['lib/scheduler.ts', 'lib/selected-dispatch.ts', 'lib/step-trigger.ts']);
+  });
 });
