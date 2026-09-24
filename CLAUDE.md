@@ -1492,6 +1492,10 @@ The diagnostic that now works, and did not before:
 
 ## A brand selling SEVERAL OFFERS does not break the pricing read — it DEGRADES it, and an unpriced grid selects nothing
 
+> **Since v0.73.0** a campaign stating a leg is always priced on the leg-keyed body (see the
+> model-eligibility section), so the substitution described here only matters historically; what
+> survives is the loud `UNPRICED` error for a campaign that states no leg.
+
 brand-service refuses a brand-scoped read for a brand selling several offers (409 `SEVERAL_OFFERS`),
 and v0.72.4 named the campaign's own offer on the two reads that 409 — `runtime-context` and the
 leg-keyed verdict. The THIRD read of every trigger, the PRICING one, does not 409 at all, which is
@@ -1863,14 +1867,18 @@ argmin spends real money exploring a tier we already know cannot work for that l
   STRING is not a shortcut either: `flash-pro` is CHEAP despite containing "pro", so any substring
   rule is wrong on a live alias. `tests/unit/no-legacy.test.ts` fails on a tier literal, on a
   comparison against a tier or an alias, and on a SECOND reader of `modelEligibility`.
-- **IT IS A SECOND CALL, AND THAT IS THE POINT.** The verdict rides ONLY on a LEG-keyed body, and
-  features-service refuses `?leg=` and `?funnel=` on one request (400 `leg_and_funnel`) because the
-  two price differently: a leg is priced through the brand's best-RETURNING declared funnel and
-  denominated in the leg's own step, while a campaign is priced on the funnel it STATES. Asking the
-  verdict on the pricing call would therefore have moved every number the selection ranks on. So
-  the pricing read is byte-unchanged — same parameter, same figures, same two argmins in the same
-  order — and the leg-keyed body is consumed for the VERDICT ALONE: not one of its numbers is read.
-  Both are fired in the same round trip, so the extra read costs no wall-clock.
+- **SINCE v0.73.0 THE LEG-KEYED BODY IS ALSO WHAT A LEG CAMPAIGN IS PRICED ON** (it was read for
+  the verdict alone before). features-service refuses `?leg=` and `?funnel=` on one request (400
+  `leg_and_funnel`) because they price differently: a leg is denominated in the leg's OWN outcome
+  (`start_to_conversation` → cost per positive reply), a funnel in its terminal one (cost per booked
+  meeting). A campaign bought for a leg is bought for that leg's outcome, and the dashboard's
+  campaign Workflows page ranks on exactly `?leg=&campaignId=&pricing=net` — so the selector sends
+  that same query and ranks on it, and the page and the pick can no longer disagree. Measured before
+  the fix (campaign `c8133eca`, 2026-09-24): every eligible workflow sat at ~$343–350 per meeting on
+  the funnel body while the leg body spread $74–106 per reply, so the selector rotated on noise and
+  never ran the page's leader (`azalea`, $74.43). The funnel-keyed body is read ONLY for a campaign
+  that states no leg (byte-identical to before) or when the leg read failed (warns) or enumerated no
+  rows (warns). The several-offers substitution below is subsumed by this for any leg campaign.
 - **THE RESTRICTION BINDS BOTH LEGS OF THE PICK, because it is applied to the ROWS before either
   argmin.** Since v0.72.0 the pick is two argmins — the audience first over its POOLED column, then
   the cheapest cell within it. Filtering only the cell argmin would leave the audience judged on
