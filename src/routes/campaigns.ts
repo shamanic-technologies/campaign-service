@@ -11,7 +11,8 @@ import {
   CampaignsFilterQuery,
   StartFundedPairBody,
 } from "../schemas.js";
-import { executeCampaignWorkflow, validateWorkflowInputs } from "../lib/workflows.js";
+import { validateWorkflowInputs } from "../lib/workflows.js";
+import { dispatchSelectedRun } from "../lib/selected-dispatch.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import {
@@ -329,17 +330,12 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       // schema requires one), so this is the ordinary path. The guard is what keeps a
       // workflow-less row — a channel the customer operates, provisioned with no DAG — from ever
       // being handed to workflow-service.
-      if (updated.workflowSlug) executeCampaignWorkflow(updated.workflowSlug, {
-        campaignId: updated.id,
-        orgId: req.orgId!,
-        brandId: (updated.brandIds ?? []).join(","),
-        userId: req.userId!,
-        runId: req.runId!,
-        featureSlug: updated.featureSlug!,
-        activeGoalId: updated.activeGoalId,
-        brandProfileId: updated.brandProfileId,
-        audienceId: updated.audienceId,
-      }).catch((err) => {
+      // The stored slug is the selector's FALLBACK, never what runs by fiat: the leg's model rule
+      // binds this run exactly as it binds a scheduled one (see dispatchSelectedRun).
+      if (updated.workflowSlug) dispatchSelectedRun(
+        { ...updated, workflowSlug: updated.workflowSlug, featureSlug: updated.featureSlug! },
+        { orgId: req.orgId!, userId: req.userId!, runId: req.runId! },
+      ).catch((err) => {
         console.error(`[campaign-service] Failed to trigger workflow for campaign ${updated.id}:`, err);
       });
 
@@ -408,19 +404,13 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       }, req.headers).catch(() => {});
     }
 
-    // Trigger first workflow execution (fire-and-forget)
-    const workflowInputs = {
-      campaignId: campaign.id,
-      orgId: req.orgId!,
-      brandId: (campaign.brandIds ?? []).join(","),
-      userId: req.userId!,
-      runId: req.runId!,
-      featureSlug: campaign.featureSlug!,
-      activeGoalId: campaign.activeGoalId,
-      brandProfileId: campaign.brandProfileId,
-      audienceId: campaign.audienceId,
-    };
-    if (campaign.workflowSlug) executeCampaignWorkflow(campaign.workflowSlug, workflowInputs).catch((err) => {
+    // Trigger first workflow execution (fire-and-forget). The first run goes through the same
+    // selection as every later one — the stored slug is only the fallback (see
+    // dispatchSelectedRun), so a workflow the leg's rule excludes never runs even once.
+    if (campaign.workflowSlug) dispatchSelectedRun(
+      { ...campaign, workflowSlug: campaign.workflowSlug, featureSlug: campaign.featureSlug! },
+      { orgId: req.orgId!, userId: req.userId!, runId: req.runId! },
+    ).catch((err) => {
       console.error(`[campaign-service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
 
@@ -470,21 +460,14 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
  * from ever being handed to workflow-service.
  */
 function dispatchFirstRun(
-  campaign: { id: string; workflowSlug: string | null; brandIds: string[] | null; featureSlug: string | null; activeGoalId: string | null; brandProfileId: string | null; audienceId: string | null },
+  campaign: typeof campaigns.$inferSelect,
   req: AuthenticatedRequest,
 ): void {
   if (!campaign.workflowSlug) return;
-  executeCampaignWorkflow(campaign.workflowSlug, {
-    campaignId: campaign.id,
-    orgId: req.orgId!,
-    brandId: (campaign.brandIds ?? []).join(","),
-    userId: req.userId!,
-    runId: req.runId!,
-    featureSlug: campaign.featureSlug!,
-    activeGoalId: campaign.activeGoalId,
-    brandProfileId: campaign.brandProfileId,
-    audienceId: campaign.audienceId,
-  }).catch((err) => {
+  dispatchSelectedRun(
+    { ...campaign, workflowSlug: campaign.workflowSlug, featureSlug: campaign.featureSlug! },
+    { orgId: req.orgId!, userId: req.userId!, runId: req.runId! },
+  ).catch((err) => {
     console.error(`[campaign-service] Failed to trigger first run for campaign ${campaign.id}:`, err);
   });
 }
@@ -767,21 +750,14 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     // Trigger workflow on activation
     if (req.body.status === "activate") {
-      const activateInputs = {
-        campaignId: updated.id,
-        orgId: req.orgId!,
-        brandId: (updated.brandIds ?? []).join(","),
-        userId: req.userId!,
-        runId: req.runId!,
-        featureSlug: req.featureSlug!,
-        activeGoalId: updated.activeGoalId,
-        brandProfileId: updated.brandProfileId,
-        audienceId: updated.audienceId,
-      };
       // A campaign whose channel the customer operates carries no workflow: activating it makes
       // it ongoing (a live scope for their own work) and triggers nothing, because there is
-      // nothing to trigger.
-      if (updated.workflowSlug) executeCampaignWorkflow(updated.workflowSlug, activateInputs).catch((err) => {
+      // nothing to trigger. Otherwise the activation run is SELECTED like every other run — the
+      // stored slug is only the fallback (see dispatchSelectedRun).
+      if (updated.workflowSlug) dispatchSelectedRun(
+        { ...updated, workflowSlug: updated.workflowSlug, featureSlug: req.featureSlug! },
+        { orgId: req.orgId!, userId: req.userId!, runId: req.runId! },
+      ).catch((err) => {
         console.error(`[campaign-service] Failed to trigger workflow for campaign ${id}:`, err);
       });
       // Campaign just activated (status → ongoing) → wake the scheduler from idle.

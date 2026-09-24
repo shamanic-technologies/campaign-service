@@ -1912,6 +1912,31 @@ argmin spends real money exploring a tier we already know cannot work for that l
 
 (Set 2026-09-14.)
 
+## EVERY run is selected — the stored `workflow_slug` is the FALLBACK, never what runs by fiat
+
+The scheduler and the step trigger always ran the selector (cell pick over a grid restricted to
+the workflows the LEG's model rule allows). The four runs a PERSON fires — `POST /campaigns`
+(insert AND the incumbent restart), `POST /campaigns/start-funded-pair`'s first run, and
+`PATCH /campaigns/:id` `status=activate` — executed `campaign.workflowSlug` verbatim, so whatever
+the creator stored ran once before the selector ever saw the campaign. Prod 2026-09-24, campaign
+`c8133eca` (leg `start_to_conversation`): created on `maelstrom` (glm-flash, cheap tier,
+`eligible: false` for that leg), which ran as its only maelstrom run 112ms later; every later run
+went through the selector and picked eligible dynasties.
+
+- **`dispatchSelectedRun` (`src/lib/selected-dispatch.ts`) is what those four paths call**: the
+  scheduler's own `resolveSelectionForTrigger`, same inputs and constraints (hard subset,
+  freshly-exhausted audiences), then `executeCampaignWorkflow` on the SELECTED slug and audience.
+- **The stored slug is untouched and creation is never refused** because of it — it stays the
+  selector's configured fallback (no evidence, features-service down, a leg excluding everything).
+- `tests/unit/no-legacy.test.ts` pins that only `scheduler.ts`, `step-trigger.ts` and
+  `selected-dispatch.ts` call `executeCampaignWorkflow`; a fourth caller is a dispatch that skips
+  the leg rule.
+- Route integration tests mock the selector (or the execute) so they make no network call: on
+  macOS a lookup of `*.test.local` goes through mDNS and stalls the libuv DNS pool for seconds,
+  which reads as a hung PATCH. Linux CI fails those lookups instantly.
+
+(Set 2026-09-24.)
+
 ## Per-run selection: GREEDY workflow + Thompson audience — both from `/workflow-projection` alone. Two levers, two decision points.
 
 **Feature scope (2026-07-07): workflow rotation is ENABLED ONLY for `sales-cold-email-outreach`.** `resolveWorkflowSlugForTrigger` gates on `isWorkflowRotationEnabled(featureSlug)` (allowlist `WORKFLOW_ROTATION_FEATURE_SLUGS` in `features-workflow-projection-client.ts`); any other feature (pr-expert-quote-outreach, pr-expert-quote-opportunities, hiring/vc/pr cold-email, etc.) returns `campaign.workflowSlug` immediately — no features-service call, no greedy pick, same workflow every run. The GREEDY-vs-Thompson description below applies to the sales-cold-email-outreach path; for every other feature the workflow leg is a no-op passthrough. (Kevin: "restreint la rotation à la feature sales cold email outreach".)
