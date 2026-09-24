@@ -206,15 +206,14 @@ function normalizeProjectionRows(rows: RawProjectionRow[]): ProjectionRow[] {
 // nothing else — the same posture this service holds for the goal, the offer, the channel and the
 // leg. A second copy of the rule is a second thing to drift.
 //
-// IT IS A SECOND CALL, AND THAT IS THE POINT. The verdict rides ONLY on a LEG-keyed body, and
-// features-service refuses `?leg=` and `?funnel=` on one request (400 `leg_and_funnel`) because
-// the two price differently: a leg is priced through the brand's best-RETURNING declared funnel
-// and denominated in the leg's own step, while a campaign is priced on the funnel it STATES.
-// Asking the verdict on the pricing call would therefore have moved every number the selection
-// ranks on. So the pricing read is byte-unchanged — same parameter, same figures, same two
-// argmins in the same order — and the leg-keyed body is consumed for the VERDICT ALONE: not one
-// of its numbers is read. Both are fired in the same round trip, so the extra read costs no
-// wall-clock.
+// THE LEG-KEYED BODY IS ALSO WHAT A LEG CAMPAIGN IS PRICED ON. The verdict rides ONLY on a
+// LEG-keyed body, and features-service refuses `?leg=` and `?funnel=` on one request (400
+// `leg_and_funnel`) because the two price differently: a leg is denominated in the leg's OWN
+// outcome (for `start_to_conversation`, a positive reply), a funnel in the funnel's terminal one
+// (a booked meeting). A campaign bought for a leg is bought for that leg's outcome, and the
+// dashboard's campaign Workflows page ranks on exactly this body — so the selector ranks on it
+// too, and the page and the pick cannot disagree about which workflow is best. The funnel-keyed
+// body is read only for a campaign that states no leg, or when the leg read gave us nothing.
 //
 // THE FILTER IS APPLIED ONCE, TO THE ROWS, BEFORE EITHER ARGMIN. Both legs of the pick must see
 // the same restricted grid or the first one is judged on evidence the second can never serve: an
@@ -251,12 +250,9 @@ export interface LegModelEligibility {
   /** Dynasty slug → the sentence features-service stated for excluding it. */
   ineligible: Map<string, string>;
   /**
-   * This body's own PRICED rows. Normally unread: a leg is priced through the brand's
-   * best-RETURNING declared funnel while a campaign is priced on the funnel it STATES, so the two
-   * bodies are denominated differently and the pricing one is the answer. They are read in exactly
-   * ONE case — the funnel-keyed body came back with `declaredFunnelsUnresolved` (a brand selling
-   * several offers), i.e. every figure on it is null and nothing is rankable at all. This body
-   * named the campaign, so features-service resolved the offer transitively and priced it fully.
+   * This body's own PRICED rows — what a campaign stating this leg is RANKED on. They are
+   * denominated in the leg's own outcome, and because the read names the campaign, features-service
+   * resolves the offer transitively and prices them even for a brand selling several offers.
    */
   rows: ProjectionRow[];
 }
@@ -304,6 +300,9 @@ export async function readLegModelEligibility({
   if (campaignId && campaignId.trim() !== "") {
     url.searchParams.set("campaignId", campaignId);
   }
+  // NET — the basis the dashboard's campaign Workflows page ranks this same body on. The pick
+  // ranks on these figures, so it asks for them on the basis the customer reads them on.
+  url.searchParams.set("pricing", "net");
 
   try {
     const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
@@ -797,9 +796,10 @@ export interface TriggerSelection {
  * Rotation is feature-scoped: any other feature keeps its configured workflow and chooses no
  * audience, with no features-service call at all.
  *
- * A campaign that STATES A LEG has its grid restricted first, to the workflows features-service
- * says that leg's model rule allows — read in the same round trip, applied before either argmin,
- * and never re-derived here. A verdict that could not be read excludes nothing, loudly; a leg
+ * A campaign that STATES A LEG is ranked on the LEG-keyed body — priced in the leg's own
+ * outcome, the body the dashboard's campaign Workflows page ranks on — and its grid is restricted
+ * first to the workflows features-service says that leg's model rule allows, applied before
+ * either argmin and never re-derived here. A verdict that could not be read excludes nothing, loudly; a leg
  * that excludes EVERY workflow leaves nothing to select and resolves through the same
  * configured-workflow fallback as any other unrankable grid. The GOAL-ARBITRATED leg above is
  * untouched on purpose: features-service elects both the goal and its workflow there, which is
@@ -809,36 +809,22 @@ export interface TriggerSelection {
  * yet OR features-service is unavailable — a selection optimization must never block a run.
  */
 /**
- * The rows the two argmins rank on — the funnel-keyed body, except when it could not be PRICED.
+ * The funnel-keyed body's rows, said out loud when features-service could not PRICE them.
  *
- * A brand selling several offers degrades the funnel-keyed read to a 200 whose every
- * `resolved.costPerOutcomeUsd` is null (see `declaredFunnelsUnresolved`), so nothing is rankable
- * and the cell pick collapses to the configured workflow — invisibly, since no row is missing and
- * no call failed. The leg-keyed body read in the same round trip NAMED the campaign, which names
- * its offer transitively, so features-service priced it fully. Substituting it is the difference
- * between selecting and not selecting at all; it is never done while the funnel-keyed body is
- * priced, so no campaign whose brand sells one offer moves by a cent.
+ * Only a campaign that states no leg — or whose leg read gave us nothing — ranks on this body. A
+ * brand selling several offers degrades it to a 200 whose every `resolved.costPerOutcomeUsd` is
+ * null (see `declaredFunnelsUnresolved`), so nothing is rankable and the cell pick collapses to the
+ * configured workflow. That is invisible from here (no row is missing, no call failed), so it is
+ * stated on `console.error`: an unpriced grid and a grid with no history must not look the same.
  */
-function pricedRows(
+function funnelRows(
   projection: WorkflowProjection,
-  eligibility: LegModelEligibility | null,
   context: { brandId: string; featureSlug: string; legKey?: string | null },
 ): ProjectionRow[] {
   const unresolved = projection.declaredFunnelsUnresolved;
   if (!unresolved) return projection.rows;
 
   const offers = unresolved.offers?.map((o) => o.name ?? o.offerId).join(", ") ?? "unstated";
-  if (eligibility && eligibility.rows.length > 0) {
-    console.warn(
-      `[campaign-service] ${context.featureSlug} could not be priced on the funnel for brand ` +
-        `${context.brandId} (${unresolved.reason}: ${offers}) — pricing this pick on the ` +
-        `leg-keyed body of leg ${eligibility.legKey}, which names the campaign's own offer.`,
-    );
-    return eligibility.rows;
-  }
-  // No leg-keyed body to fall back on: the campaign states no leg, or that read failed too. The
-  // grid stays unpriced and the caller resolves through its configured-workflow fallback — said
-  // out loud, because an unpriced grid and a grid with no history look identical from here.
   console.error(
     `[campaign-service] ${context.featureSlug} is UNPRICED for brand ${context.brandId} ` +
       `(${unresolved.reason}: ${offers}) and no leg-keyed body priced it` +
@@ -905,36 +891,37 @@ export async function resolveSelectionForTrigger(args: {
       // Null → no arbitration for this brand yet, fall through to the brand goal.
       if (arbitration) return { workflowSlug: arbitration.workflowSlug, audienceId: null };
     }
-    // Only a campaign with no funnel needs a goal at all, and only the brand can answer it.
-    const goal: RuntimeGoal | null = funnelKey
-      ? null
-      : (await fetchBrandRuntimeContext(primaryBrandId, identity, offerId)).currentGoal;
-    // The PRICING read and the VERDICT read, in one round trip. They are two calls because
-    // features-service prices a leg and a funnel differently and refuses to be asked both at once
-    // — see readLegModelEligibility. The leg-keyed body's FIGURES are never read: this ship
-    // restricts which cells may be served and moves no number. The campaignId on the verdict read
-    // names the offer the leg is priced through, so a multi-offer brand answers instead of 409ing.
-    const [projection, eligibility] = await Promise.all([
-      fetchWorkflowProjection({
+    // A campaign bought for a LEG is ranked on that leg's own outcome — the leg-keyed body, which
+    // carries the model verdict too and is exactly what the dashboard's campaign Workflows page
+    // ranks on. Naming the campaign names its offer, so a multi-offer brand is priced as well.
+    const eligibility = legKey
+      ? await readLegModelEligibility({ featureSlug, brandId: primaryBrandId, legKey, campaignId, identity })
+      : null;
+    if (eligibility && eligibility.rows.length === 0) {
+      console.warn(
+        `[campaign-service] leg-keyed workflow-projection for brand ${primaryBrandId} leg ` +
+          `${eligibility.legKey} enumerated NO rows — ranking this pick on the funnel-keyed body instead.`,
+      );
+    }
+    let rows: ProjectionRow[];
+    if (eligibility && eligibility.rows.length > 0) {
+      rows = eligibility.rows;
+    } else {
+      // No leg, or the leg read gave us nothing (it already said why): rank on the funnel-keyed
+      // body exactly as before. Only a campaign with no funnel needs a goal, and only the brand
+      // can answer it.
+      const goal: RuntimeGoal | null = funnelKey
+        ? null
+        : (await fetchBrandRuntimeContext(primaryBrandId, identity, offerId)).currentGoal;
+      const projection = await fetchWorkflowProjection({
         featureSlug,
         brandId: primaryBrandId,
         funnelKey,
         goal,
         identity,
-      }),
-      legKey
-        ? readLegModelEligibility({ featureSlug, brandId: primaryBrandId, legKey, campaignId, identity })
-        : Promise.resolve(null),
-    ]);
-    // WHICH BODY IS PRICED. Normally the funnel-keyed one, and nothing about that moves. But a
-    // brand selling SEVERAL OFFERS does not make that read fail — features-service serves 200 with
-    // every projected figure null and says so on `declaredFunnelsUnresolved`, so both argmins have
-    // nothing to rank and the pick silently collapses to the configured workflow. The leg-keyed
-    // body fetched in the SAME round trip named the campaign, so features-service resolved the
-    // offer transitively and priced it fully — it is the only priced answer that exists for this
-    // brand, and it is used ONLY here. A campaign that states no leg has no such body and keeps
-    // the unpriced grid rather than being priced on a proposition nobody named.
-    const rows = pricedRows(projection, eligibility, { brandId: primaryBrandId, featureSlug, legKey });
+      });
+      rows = funnelRows(projection, { brandId: primaryBrandId, featureSlug, legKey });
+    }
     // Applied to the ROWS, so the pooled audience column and the cell argmin are computed over the
     // SAME set — an audience must never be judged on evidence produced by a workflow that can
     // never be served to it.

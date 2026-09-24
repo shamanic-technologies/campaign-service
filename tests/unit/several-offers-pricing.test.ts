@@ -105,28 +105,70 @@ describe("a brand selling several offers still gets a PRICED pick", () => {
     vi.restoreAllMocks();
   });
 
-  it("prices the pick on the LEG-keyed body when the funnel-keyed one could not be priced", async () => {
+  it("a campaign stating a leg is priced on the LEG-keyed body — the funnel one is never read", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    global.fetch = routeFetch({ funnelUnresolved: true }) as unknown as typeof fetch;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const f = routeFetch({ funnelUnresolved: true });
+    global.fetch = f as unknown as typeof fetch;
 
-    // Without this, every funnel-keyed figure is null → nothing rankable → "wf-configured".
+    // The funnel-keyed body is unpriced for this brand; the leg body names the campaign and is.
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "leg-cheap-wf",
       audienceId: "aud-A",
     });
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0])).toContain("several_offers");
+    expect(f.mock.calls).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled();
+    expect(err).not.toHaveBeenCalled();
   });
 
-  it("leaves a PRICED funnel body alone — a single-offer brand's pick does not move", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("a leg campaign ranks on its LEG's outcome even when the funnel body is priced and disagrees", async () => {
     global.fetch = routeFetch({ funnelUnresolved: false }) as unknown as typeof fetch;
+
+    // funnel-wf is cheapest per booked meeting; leg-cheap-wf is cheapest per leg outcome. The
+    // campaign is bought for the leg, and the dashboard ranks on the leg body — so leg-cheap-wf.
+    await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
+      workflowSlug: "leg-cheap-wf",
+      audienceId: "aud-A",
+    });
+  });
+
+  it("a campaign stating no leg keeps the PRICED funnel body — its pick does not move", async () => {
+    const f = routeFetch({ funnelUnresolved: false });
+    global.fetch = f as unknown as typeof fetch;
+
+    await expect(resolveSelectionForTrigger(baseArgs)).resolves.toEqual({
+      workflowSlug: "funnel-wf",
+      audienceId: "aud-A",
+    });
+    const u = new URL(String(f.mock.calls[0]?.[0]));
+    expect(f.mock.calls).toHaveLength(1);
+    expect(u.searchParams.get("funnel")).toBe("website_purchases");
+    expect(u.searchParams.has("pricing")).toBe(false);
+  });
+
+  it("a leg read that FAILS falls back to the funnel-keyed body, loudly", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    global.fetch = vi.fn(async (url: URL | string) => {
+      const u = new URL(String(url));
+      if (u.searchParams.has("leg")) return { ok: false, status: 502, text: async () => "boom" };
+      return routeFetch({ funnelUnresolved: false })(url);
+    }) as unknown as typeof fetch;
 
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "funnel-wf",
       audienceId: "aud-A",
     });
-    expect(warn).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks the leg body on the NET basis the dashboard ranks it on", async () => {
+    const f = routeFetch({ funnelUnresolved: false });
+    global.fetch = f as unknown as typeof fetch;
+    await resolveSelectionForTrigger({ ...baseArgs, legKey: LEG });
+    const u = new URL(String(f.mock.calls[0]?.[0]));
+    expect(u.searchParams.get("leg")).toBe(LEG);
+    expect(u.searchParams.get("campaignId")).toBe(CAMPAIGN_ID);
+    expect(u.searchParams.get("pricing")).toBe("net");
   });
 
   it("says so LOUDLY when nothing priced it — an unpriced grid is not a channel with no history", async () => {
