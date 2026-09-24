@@ -352,7 +352,7 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     });
     expect((global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
 
-    // Leg stated, cheap-wf excluded → the same grid yields the strong workflow.
+    // Leg stated, cheap-wf excluded → the leg body yields the strong workflow.
     const withLeg = routeFetch({
       legRows: [
         rawLegRow("aud-A", "cheap-wf", { eligible: false, modelAlias: "flash", modelTier: "cheap" }),
@@ -364,11 +364,11 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
       workflowSlug: "strong-wf",
       audienceId: "aud-A",
     });
-    // Two reads, and the pricing one still names the FUNNEL — what is priced did not move.
+    // ONE read: the leg-keyed body both prices and restricts, and no funnel is asked for.
     const urls = withLeg.mock.calls.map((c) => new URL(String(c[0])));
-    expect(urls).toHaveLength(2);
-    expect(urls.some((u) => u.searchParams.get("funnel") === "sales_meetings_from_conversation")).toBe(true);
-    expect(urls.some((u) => u.searchParams.get("leg") === LEG)).toBe(true);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]?.searchParams.get("leg")).toBe(LEG);
+    expect(urls[0]?.searchParams.has("funnel")).toBe(false);
   });
 
   it("threads the campaign's campaignId and offerId so multi-offer brands answer instead of 409ing", async () => {
