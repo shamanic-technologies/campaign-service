@@ -1562,6 +1562,22 @@
           },
           {
             "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "offerId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "legKey",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "integer",
               "minimum": 1,
               "maximum": 1000

@@ -221,10 +221,21 @@ function rowsAtFinestGrain(
  * row is history, the ongoing one is what spends the money. Ties break on the oldest campaign so
  * the answer is stable between calls.
  */
-function campaignForRow(row: RawRow, all: SpendableCampaign[], rowsOfGrain: RawRow[]): SpendableCampaign | null {
+function campaignForRow(
+  row: RawRow,
+  all: SpendableCampaign[],
+  rowsOfGrain: RawRow[],
+  grain: SpendableGrain,
+): SpendableCampaign | null {
   const byFunnel = all.filter((c) => {
-    if (row.funnelKey === null) return true; // brand grain — one pot, every campaign draws on it
-    return c.funnelKey ? toFunnelKey(c.funnelKey) === row.funnelKey : false;
+    if (grain === "brand") return true; // one pot, every campaign draws on it
+    // The (offer, leg, channel) grain: a ceiling stating no funnel, or a campaign stating none, is
+    // matched on the leg and the exact channel — the same rows `offerLegCeilingCents` paces that
+    // campaign on, so the running figure here agrees with what the gate lets it spend.
+    if (row.funnelKey === null || !c.funnelKey) {
+      return !!row.legKey && c.legKey === row.legKey && c.featureSlug === row.featureSlug;
+    }
+    return toFunnelKey(c.funnelKey) === row.funnelKey;
   });
   if (byFunnel.length === 0) return null;
 
@@ -281,7 +292,7 @@ export function computeSpendableBudget(
   const seenCampaign = new Map<string, SpendableCampaign>();
 
   const rows: SpendableRow[] = rawRows.map((raw) => {
-    const campaign = campaignForRow(raw, campaigns, rawRows);
+    const campaign = campaignForRow(raw, campaigns, rawRows, grain);
     const running = campaign?.status === "ongoing";
     if (campaign) {
       seenCampaign.set(campaign.id, campaign);
