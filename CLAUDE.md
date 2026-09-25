@@ -1066,10 +1066,15 @@ per funnel. This wave is ADDITIVE: every funnel-keyed caller behaves byte for by
   guard is the lookup, exactly as for stopped rows.
 - **Found**: `GET /campaigns?featureSlug=&offerId=&legKey=` (exact matches, any funnel).
 - **Paced** by `offerLegCeilingCents` (gate-check block a3, `fundingFromBudgets`, spendable-budget,
-  all reading the same rows): billing's own funnel-less `legs[]` row for (offer, leg, channel) when
-  it serves one, else the funnel-keyed leg rows of that (offer, leg, channel) SUMMED across funnels.
-  Channel matched exactly; offer by billing's sole-named rule; a brand naming no leg → brand pot
-  (what a funnel-less sales campaign always paced on); legs funded but not this one → unfunded.
+  all reading the same rows). Leg grain (some ceiling of the brand names a leg): billing's own
+  funnel-less `legs[]` row for (offer, leg, channel), else that leg's funnel-keyed rows summed;
+  legs funded but not this one → unfunded. NO ceiling names a leg (nearly all of prod, 2026-09-25):
+  the offer's own row on its channel — exactly ONE funnel's; leg-less money of the offer split
+  across several funnels is UNFUNDED, never summed (it cannot say which part is this leg's). Brand
+  funding nothing per funnel → brand pot. v0.73.3 fell to the brand pot on leg-less brands (a
+  300-cent pot instead of the offer's 100-cent row); the post-deploy pacing probe caught it before
+  any funnel-less campaign existed and v0.73.4 fixed it — run that probe (every live campaign's
+  funding with and without its funnel, compared) after any change to this rule.
 - **The billing read tolerates `funnelKey: null`**: kept on a `legs[]` row (which must then name a
   leg), dropped from `funnels`/`channels`/`offers`. Before this a single null-funnel row failed the
   WHOLE read closed and would have held every campaign of the brand the day billing shipped one.
