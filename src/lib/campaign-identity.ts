@@ -122,11 +122,13 @@ export function campaignIdentityColumns(input: {
 export function derivedCampaignName(
   featureSlug: string,
   brandId: string,
-  funnelKey: string,
+  funnelKey: string | null,
   offerId?: string | null,
   legKey?: string | null,
 ): string {
-  let name = `${featureSlug} - ${brandId} - ${funnelKey}`;
+  // A campaign started by (offer, leg, channel) alone states no funnel, and its name carries none
+  // (wave C1); the offer and the leg below still separate it from every sibling.
+  let name = funnelKey ? `${featureSlug} - ${brandId} - ${funnelKey}` : `${featureSlug} - ${brandId}`;
   if (offerId) name = `${name} - ${offerId}`;
   if (legKey) name = `${name} - ${legKey}`;
   return name;

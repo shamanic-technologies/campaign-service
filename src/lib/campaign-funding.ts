@@ -68,6 +68,33 @@ export function fundingFromBudgets(
       : { funded: false, reason: "its own daily budget is zero" };
   }
 
+  // A campaign that states its LEG is identified by (offer, leg, channel), and that is what it is
+  // paced on — whatever funnel it may still carry. The funnel is leaving the model (wave C1): a
+  // leg belongs to several funnels, so the funnel cannot say which money is this campaign's, and
+  // nothing here reads it for a campaign that can say more. Measured on every live campaign
+  // (2026-09-25, 22 of 22): the same verdict AND the same ceiling as the funnel-keyed precedence.
+  // A brand whose money names no leg at all falls through to the brand pot below, exactly as the
+  // funnel precedence did for a brand funding nothing per funnel.
+  if (campaign.legKey) {
+    const leg = offerLegCeilingCents(budgets, campaign.featureSlug, campaign.offerId, campaign.legKey);
+    if (leg.grain === "offer_leg") {
+      if (leg.cents === null) {
+        return {
+          funded: false,
+          reason: `leg ${campaign.legKey} is not funded for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
+        };
+      }
+      return leg.cents > 0
+        ? { funded: true, ceilingCents: leg.cents }
+        : {
+            funded: false,
+            reason: `leg ${campaign.legKey} is funded at zero for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
+          };
+    }
+  }
+
+  // The pre-leg population only (no live campaign, 2026-09-25): a campaign that states no leg is
+  // still paced on the funnel it states, until wave C2 retires both.
   if (campaign.funnelKey && budgets.funnels.length > 0) {
     // Both sides canonicalised — billing still emits the pre-rename spellings, so comparing raw
     // tokens would read a fully funded funnel as unfunded and hold a campaign the customer pays
@@ -154,27 +181,6 @@ export function fundingFromBudgets(
       : { funded: false, reason: `funnel ${campaign.funnelKey} is funded at zero` };
   }
 
-  // A campaign identified by (offer, leg, channel) alone states no funnel: it is funded on that
-  // leg's own money, the same answer gate-check's (a3) reads. A brand whose money names no leg at
-  // all falls through to the brand pot below, exactly as a funnel-less campaign always did.
-  if (!campaign.funnelKey && campaign.legKey) {
-    const leg = offerLegCeilingCents(budgets, campaign.featureSlug, campaign.offerId, campaign.legKey);
-    if (leg.grain === "offer_leg") {
-      if (leg.cents === null) {
-        return {
-          funded: false,
-          reason: `leg ${campaign.legKey} is not funded for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
-        };
-      }
-      return leg.cents > 0
-        ? { funded: true, ceilingCents: leg.cents }
-        : {
-            funded: false,
-            reason: `leg ${campaign.legKey} is funded at zero for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
-          };
-    }
-  }
-
   // A brand with ONE pot — and a funnel campaign of a brand billing reports no per-funnel
   // ceilings for, which paces on that same pot. Stamping the funnel fleet-wide must not turn a
   // brand that never split its budget into an unfunded one.
@@ -224,9 +230,9 @@ export async function campaignFunding(
  * funnel releases it, with no other step.
  */
 export function brandHeldFromBudgets(budgets: Extract<FunnelBudgetsRead, { ok: true }>): boolean {
-  if (budgets.funnels.some((f) => f.dailyBudgetCents > 0)) return false;
-  // Money stated per (offer, leg, channel) with no funnel is in no funnel's sum, and it funds the
-  // brand just the same.
-  if ((budgets.legs ?? []).some((l) => l.funnelKey === null && l.dailyBudgetCents > 0)) return false;
+  // Any positive ceiling at ANY grain billing serves funds the brand. Every coarser grain is a sum
+  // of the finer rows, so this is the same answer the funnel sums gave, read without the funnel.
+  const rows = [...budgets.funnels, ...budgets.channels, ...budgets.offers, ...(budgets.legs ?? [])];
+  if (rows.some((r) => r.dailyBudgetCents > 0)) return false;
   return !(budgets.brandDailyBudgetCents !== null && budgets.brandDailyBudgetCents > 0);
 }

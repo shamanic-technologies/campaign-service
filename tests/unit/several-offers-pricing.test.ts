@@ -146,19 +146,21 @@ describe("a brand selling several offers still gets a PRICED pick", () => {
     expect(u.searchParams.has("pricing")).toBe(false);
   });
 
-  it("a leg read that FAILS falls back to the funnel-keyed body, loudly", async () => {
+  it("a leg read that FAILS runs the configured workflow, loudly — never the funnel-keyed body (wave C1)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    global.fetch = vi.fn(async (url: URL | string) => {
+    const f = vi.fn(async (url: URL | string) => {
       const u = new URL(String(url));
       if (u.searchParams.has("leg")) return { ok: false, status: 502, text: async () => "boom" };
       return routeFetch({ funnelUnresolved: false })(url);
-    }) as unknown as typeof fetch;
+    });
+    global.fetch = f as unknown as typeof fetch;
 
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
-      workflowSlug: "funnel-wf",
-      audienceId: "aud-A",
+      workflowSlug: "wf-configured",
+      audienceId: null,
     });
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(f.mock.calls.every(([u]) => !new URL(String(u)).searchParams.has("funnel"))).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 
   it("asks the leg body on the NET basis the dashboard ranks it on", async () => {

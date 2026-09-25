@@ -21,6 +21,7 @@ import { triggerCampaignsForStep, StepTriggerScopeError } from "../lib/step-trig
 import { resolvePredecessorCampaign, PredecessorScopeError } from "../lib/predecessor-campaign.js";
 import { earningHistory, utcDaysBetween } from "../lib/earning-history.js";
 import {
+  fetchLegProjectionRows,
   fetchWorkflowProjectionRows,
   fetchGoalArbitration,
   selectAudienceFromProjection,
@@ -260,8 +261,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     // bought with a click onto the site. A campaign that states none sells through no sales
     // funnel (PR, hiring, VC, AI-visibility): those are still priced on the brand's goal, which
     // is the one place a goal survives, and are still arbitrated below.
-    const funnelKey: string | null = campaign.funnelKey;
-    let runtimeGoal: RuntimeGoal | null = funnelKey ? null : brandRuntimeContext.currentGoal;
+    // A campaign that states its LEG is priced on the leg and never reads its funnel (wave C1).
+    const legKey: string | null = campaign.legKey;
+    const funnelKey: string | null = legKey ? null : campaign.funnelKey;
+    let runtimeGoal: RuntimeGoal | null = funnelKey || legKey ? null : brandRuntimeContext.currentGoal;
     // Cost-aware Thompson sampling over the chosen workflow's audiences, straight from
     // features-service /workflow-projection — which enumerates EVERY active audience of the
     // brand per dynasty (floored to brand/crossOrg when an audience never ran the workflow),
@@ -297,7 +300,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
         // anything through the DAG. Only for a campaign that states NO funnel — a stated funnel is
         // the customer's funding decision and is never arbitrated away.
         let projectionRows: ProjectionRow[] | null = null;
-        if (!funnelKey) {
+        if (!funnelKey && !legKey) {
           const arbitration = await fetchGoalArbitration({
             featureSlug: featureSlug!,
             brandId: primaryBrandId,
@@ -312,13 +315,23 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
             if (arbitration.workflowSlug === workflowSlug) projectionRows = arbitration.rows;
           }
         }
-        projectionRows ??= await fetchWorkflowProjectionRows({
-          featureSlug: featureSlug!,
-          brandId: primaryBrandId,
-          funnelKey,
-          goal: runtimeGoal,
-          identity: preRunIdentity,
-        });
+        // A LEG campaign picks its audience over the leg-keyed body — the same rows the trigger's
+        // cell pick ranked on — and never over the funnel it may still carry.
+        projectionRows ??= legKey
+          ? await fetchLegProjectionRows({
+              featureSlug: featureSlug!,
+              brandId: primaryBrandId,
+              legKey,
+              campaignId,
+              identity: preRunIdentity,
+            })
+          : await fetchWorkflowProjectionRows({
+              featureSlug: featureSlug!,
+              brandId: primaryBrandId,
+              funnelKey,
+              goal: runtimeGoal,
+              identity: preRunIdentity,
+            });
         audienceId = selectAudienceFromProjection(projectionRows, workflowSlug, {
           // Campaign v2: HARD targeting subset. When the campaign targets a subset of the
           // brand's audiences, the bandit may ONLY pick from it — the campaign never contacts

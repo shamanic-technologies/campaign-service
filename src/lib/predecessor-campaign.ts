@@ -60,13 +60,13 @@ export const PREDECESSOR_ABSENCES = {
   ENTRY_LEG: "entry_leg",
   /** The campaign predates the leg column, or nobody has said which leg it was bought for. */
   NO_LEG: "campaign_states_no_leg",
-  /** The campaign sells through no sales funnel, so there is no chain to walk back up. */
+  /** RETIRED (wave C1): never answered — the chain is walked on (offer, leg). Kept in the contract until C2. */
   NO_FUNNEL: "campaign_states_no_funnel",
   /** The campaign states no offer, and an offer is never inferred from a funnel or a brand. */
   NO_OFFER: "campaign_states_no_offer",
   /** The row names no brand, so there is no (org, brand) scope to look inside. */
   NO_BRAND: "campaign_states_no_brand",
-  /** The preceding leg exists; nobody bought a campaign for it on this offer and funnel. */
+  /** The preceding leg exists; nobody bought a campaign for it on this offer. */
   NO_CAMPAIGN: "no_campaign_for_preceding_leg",
 } as const;
 
@@ -142,7 +142,8 @@ export async function resolvePredecessorCampaign(campaignId: string): Promise<Pr
 
   // Each of these is a TRUE statement about this campaign, not a failure to work something out.
   if (!campaign.legKey) return answer(PREDECESSOR_ABSENCES.NO_LEG);
-  if (!funnelKey) return answer(PREDECESSOR_ABSENCES.NO_FUNNEL);
+  // `NO_FUNNEL` is never answered since wave C1: the chain is walked on (offer, leg), and a
+  // campaign stating no funnel resolves exactly like one that states one.
   if (!campaign.offerId) return answer(PREDECESSOR_ABSENCES.NO_OFFER);
   if (!brandId) return answer(PREDECESSOR_ABSENCES.NO_BRAND);
 
@@ -173,12 +174,12 @@ export async function resolvePredecessorCampaign(campaignId: string): Promise<Pr
   if (!ownLeg.fromStepKey) return answer(PREDECESSOR_ABSENCES.ENTRY_LEG);
 
   const fromStepKey = ownLeg.fromStepKey;
-  // The legs that END where this one BEGINS, on the funnel this campaign sells. A leg belongs to
-  // several funnels at once, which is why the funnel is part of the join rather than derived.
+  // The legs that END where this one BEGINS — any funnel (wave C1). The OFFER is what scopes the
+  // journey: the sibling that ran the preceding leg is the campaign of this offer bought for one of
+  // these legs, and whatever funnel it may carry is not read.
   const precedingLegKeys = catalogue.legs
     .filter((leg) => leg.legKey !== ownLeg.legKey)
     .filter((leg) => leg.toStepKey === fromStepKey)
-    .filter((leg) => [...leg.funnelKeys].some((key) => toFunnelKey(key) === funnelKey))
     .map((leg) => leg.legKey);
 
   const partial = { fromStepKey, precedingLegKeys };
@@ -186,8 +187,7 @@ export async function resolvePredecessorCampaign(campaignId: string): Promise<Pr
     return answer(PREDECESSOR_ABSENCES.NO_CAMPAIGN, partial);
   }
 
-  // Same org, same brand, same offer, same funnel — the identity a sibling leg of one journey
-  // shares. Status is NOT filtered: the history the caller wants is filed under whichever row ran
+  // Same org, same brand, same offer — the identity a sibling leg of one journey shares. Status is NOT filtered: the history the caller wants is filed under whichever row ran
   // that leg, and production carries hundreds of stopped rows per identity.
   const rows = await db.query.campaigns.findMany({
     where: and(
@@ -198,7 +198,7 @@ export async function resolvePredecessorCampaign(campaignId: string): Promise<Pr
     ),
   });
 
-  const siblings = rows.filter((row) => toFunnelKey(row.funnelKey) === funnelKey);
+  const siblings = rows;
   const live = siblings.filter((row) => row.status === "ongoing");
   if (live.length > 1) {
     throw new PredecessorScopeError(

@@ -229,11 +229,22 @@ function campaignForRow(
 ): SpendableCampaign | null {
   const byFunnel = all.filter((c) => {
     if (grain === "brand") return true; // one pot, every campaign draws on it
-    // The (offer, leg, channel) grain: a ceiling stating no funnel, or a campaign stating none, is
-    // matched on the leg and the exact channel — the same rows `offerLegCeilingCents` paces that
-    // campaign on, so the running figure here agrees with what the gate lets it spend.
-    if (row.funnelKey === null || !c.funnelKey) {
-      return !!row.legKey && c.legKey === row.legKey && c.featureSlug === row.featureSlug;
+    // The (offer, leg, channel) grain: a campaign that states its LEG — whatever funnel it may
+    // still carry (wave C1) — and a ceiling stating no funnel are matched on the leg and the exact
+    // channel: the same rows `offerLegCeilingCents` paces that campaign on, so the running figure
+    // here agrees with what the gate lets it spend.
+    if (row.funnelKey === null || c.legKey) {
+      if (c.featureSlug !== row.featureSlug) return false;
+      if (row.legKey) return c.legKey === row.legKey;
+      // LEG-LESS money, claimed by a leg campaign only where `offerLegCeilingCents` lets it spend
+      // it: no ceiling of the brand names a leg, and this offer's leg-less rows on this channel
+      // sit under exactly ONE funnel.
+      if (!c.legKey) return false;
+      if (rowsOfGrain.some((r) => r.legKey !== null)) return false;
+      const sameOfferChannel = rowsOfGrain.filter(
+        (r) => r.featureSlug === row.featureSlug && (r.offerId === null || r.offerId === c.offerId),
+      );
+      return new Set(sameOfferChannel.map((r) => r.funnelKey)).size === 1;
     }
     return toFunnelKey(c.funnelKey) === row.funnelKey;
   });

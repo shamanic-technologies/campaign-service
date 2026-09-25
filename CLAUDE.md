@@ -1066,10 +1066,15 @@ per funnel. This wave is ADDITIVE: every funnel-keyed caller behaves byte for by
   guard is the lookup, exactly as for stopped rows.
 - **Found**: `GET /campaigns?featureSlug=&offerId=&legKey=` (exact matches, any funnel).
 - **Paced** by `offerLegCeilingCents` (gate-check block a3, `fundingFromBudgets`, spendable-budget,
-  all reading the same rows): billing's own funnel-less `legs[]` row for (offer, leg, channel) when
-  it serves one, else the funnel-keyed leg rows of that (offer, leg, channel) SUMMED across funnels.
-  Channel matched exactly; offer by billing's sole-named rule; a brand naming no leg → brand pot
-  (what a funnel-less sales campaign always paced on); legs funded but not this one → unfunded.
+  all reading the same rows). Leg grain (some ceiling of the brand names a leg): billing's own
+  funnel-less `legs[]` row for (offer, leg, channel), else that leg's funnel-keyed rows summed;
+  legs funded but not this one → unfunded. NO ceiling names a leg (nearly all of prod, 2026-09-25):
+  the offer's own row on its channel — exactly ONE funnel's; leg-less money of the offer split
+  across several funnels is UNFUNDED, never summed (it cannot say which part is this leg's). Brand
+  funding nothing per funnel → brand pot. v0.73.3 fell to the brand pot on leg-less brands (a
+  300-cent pot instead of the offer's 100-cent row); the post-deploy pacing probe caught it before
+  any funnel-less campaign existed and v0.73.4 fixed it — run that probe (every live campaign's
+  funding with and without its funnel, compared) after any change to this rule.
 - **The billing read tolerates `funnelKey: null`**: kept on a `legs[]` row (which must then name a
   leg), dropped from `funnels`/`channels`/`offers`. Before this a single null-funnel row failed the
   WHOLE read closed and would have held every campaign of the brand the day billing shipped one.
@@ -1078,6 +1083,36 @@ per funnel. This wave is ADDITIVE: every funnel-keyed caller behaves byte for by
 - Measured in prod 2026-09-25 before shipping: 22 ongoing campaigns / 16 orgs, all funnel + leg +
   offer; **0** groups (any status) share (org, brand, channel, offer, leg) across funnels; **0**
   funnel-less rows with a leg. Nothing existing changes status, money or matching.
+
+(Set 2026-09-25.)
+
+## WAVE C1 — nothing in this service READS the funnel of a campaign that states a leg
+
+The sales funnel is retiring fleet-wide (org > brand > offer > outcome > leg). Wave C1 stops every
+consumer reading it; wave C2 drops the column, index word and routes. Here, every live campaign
+states a leg (22 of 22 on 2026-09-25), and for such a campaign:
+
+- **Pacing and funding** (`fundingFromBudgets`, gate-check block a3, turn planner, spendable-budget)
+  read `offerLegCeilingCents` only — the leg branch is taken FIRST, whatever funnel the row carries.
+  `brandHeldFromBudgets` reads every grain's rows, not the funnel sums. Measured side by side before
+  shipping: same verdict AND same ceiling for 22/22 live campaigns (10 funded, 12 held).
+- **Turn tie-break** is leg then campaign id (was funnel); hold events name offer/leg/channel.
+- **The funnel-less-ancestor adoption is no longer CALLED** by the tick (it wrote a funnel onto
+  history). Its module stays for its migration-parity test until C2.
+- **Selection** ranks a leg campaign on the leg-keyed body only; a leg campaign is never
+  goal-arbitrated; a failed/empty leg read runs the configured workflow (it used to fall back to
+  the funnel body). `/start-run`'s audience pick and the `/end-run` stop-guard read the leg-keyed
+  rows too (`fetchLegProjectionRows`, which THROWS — the guard must not read an outage as a verdict).
+- **Create** (`POST /campaigns`): a sales create naming `offerId` + `legKey` matches the incumbent
+  of (org, brand, channel, offer, leg) WHATEVER funnel either states; the funnel a caller still sends
+  is stored, never matched. **Start** (`start-funded-pair`): `funnelKey` optional — without it
+  `offerId` + `legKey` are required (`leg_required`), funded at (offer, leg, channel), created with a
+  NULL funnel. **Step trigger**: `funnelKey` optional; when sent it only narrows the legs out of the
+  step, campaigns are matched on (offer, leg). **Predecessor**: walked on (org, brand, offer,
+  preceding leg); `campaign_states_no_funnel` is never answered any more.
+- **What still reads a funnel, deliberately, until C2**: a campaign stating NO leg (none live), and a
+  caller that still NAMES one (it narrows the legs, or resolves a pre-leg start exactly as before).
+  Responses still echo the stored `funnelKey`. No column, index, route or table was dropped.
 
 (Set 2026-09-25.)
 

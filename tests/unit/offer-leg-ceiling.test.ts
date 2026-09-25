@@ -37,8 +37,43 @@ describe("offerLegCeilingCents — a campaign identified by (offer, leg, channel
     expect(offerLegCeilingCents(readWith([row({})]), SALES, OFFER_A, null)).toEqual({ grain: "none" });
   });
 
-  it("answers none when the brand's money names no leg at all (the brand pot keeps pacing it)", () => {
-    expect(offerLegCeilingCents(readWith([row({ legKey: null })]), SALES, OFFER_A, LEG)).toEqual({ grain: "none" });
+  it("answers none when the brand funds nothing per funnel (the brand pot keeps pacing it)", () => {
+    expect(offerLegCeilingCents(readWith([], 5000), SALES, OFFER_A, LEG)).toEqual({ grain: "none" });
+  });
+
+  describe("no ceiling names a leg — the (offer, channel) grain, never the brand pot", () => {
+    // Shaped like prod brand f4d73dab on 2026-09-25: leg-less rows, one per (funnel, channel, offer).
+    const offerRows = [
+      { funnelKey: "sales_meetings_from_conversation" as const, featureSlug: "ai-meeting-booking", offerId: OFFER_B, dailyBudgetCents: 100 },
+      { funnelKey: "sales_meetings_from_conversation" as const, featureSlug: SALES, offerId: OFFER_B, dailyBudgetCents: 100 },
+      { funnelKey: "website_purchases" as const, featureSlug: SALES, offerId: OFFER_A, dailyBudgetCents: 100 },
+    ];
+    const read = (rows = offerRows): Extract<FunnelBudgetsRead, { ok: true }> => ({
+      ok: true, brandDailyBudgetCents: 300, funnels: [], channels: [], offers: rows,
+      legs: rows.map((o) => ({ ...o, legKey: null })),
+    });
+
+    it("paces on its offer's own row on its channel", () => {
+      expect(offerLegCeilingCents(read(), SALES, OFFER_A, LEG)).toEqual({ grain: "offer_leg", cents: 100 });
+      expect(offerLegCeilingCents(read(), SALES, OFFER_B, OTHER_LEG)).toEqual({ grain: "offer_leg", cents: 100 });
+    });
+
+    it("is unfunded when its offer funds nothing on its channel", () => {
+      expect(offerLegCeilingCents(read(), FEEDBACK, OFFER_A, LEG)).toEqual({ grain: "offer_leg", cents: null });
+    });
+
+    it("is unfunded when the offer's leg-less money is split across funnels — never summed", () => {
+      const split = read([...offerRows, { funnelKey: "sales_meetings_from_website" as const, featureSlug: SALES, offerId: OFFER_A, dailyBudgetCents: 400 }]);
+      expect(offerLegCeilingCents(split, SALES, OFFER_A, LEG)).toEqual({ grain: "offer_leg", cents: null });
+    });
+
+    it("spendable-budget attributes that same row to the funnel-less campaign", () => {
+      const result = computeSpendableBudget("org", "brand", read(), [
+        { id: "c1", status: "ongoing", funnelKey: null, featureSlug: SALES, offerId: OFFER_A, legKey: LEG, createdAt: new Date() },
+      ]);
+      const line = result.campaigns.find((c) => c.campaignId === "c1")!;
+      expect(line.runningDailyBudgetCents).toBe(100);
+    });
   });
 
   it("prefers billing's own funnel-less (offer, leg, channel) row", () => {
@@ -92,7 +127,7 @@ describe("fundingFromBudgets — funnel-less campaign", () => {
     expect(v.funded).toBe(false);
   });
 
-  it("falls back to the brand pot when no money names a leg", () => {
+  it("falls back to the brand pot when the brand funds nothing per funnel", () => {
     expect(fundingFromBudgets(campaign, readWith([], 400))).toEqual({ funded: true, ceilingCents: 400 });
   });
 
@@ -153,5 +188,29 @@ describe("computeSpendableBudget — agrees with what the gate paces a funnel-le
     ]);
     expect(result.runningDailyBudgetCents).toBe(1000);
     expect(result.rows[0]!.campaignId).toBe("c1");
+  });
+});
+
+describe("wave C1 — a campaign that states a LEG is paced without reading its funnel", () => {
+  it("gives the same verdict whether or not it still carries a funnel", () => {
+    const read = readWith([row({ funnelKey: "website_purchases", dailyBudgetCents: 700 })]);
+    const base = { featureSlug: SALES, offerId: OFFER_A, legKey: LEG };
+    expect(fundingFromBudgets({ ...base, funnelKey: "website_purchases" }, read))
+      .toEqual(fundingFromBudgets({ ...base, funnelKey: null }, read));
+    expect(fundingFromBudgets({ ...base, funnelKey: "website_purchases" }, read))
+      .toEqual({ funded: true, ceilingCents: 700 });
+  });
+
+  it("ignores a STALE funnel on the row — the leg's money binds it, not the funnel's", () => {
+    // Funded on the leg; the funnel the row still carries names no money at all.
+    const read = readWith([row({ funnelKey: "website_purchases", dailyBudgetCents: 400 })]);
+    expect(
+      fundingFromBudgets({ featureSlug: SALES, offerId: OFFER_A, legKey: LEG, funnelKey: "form_magnet" }, read),
+    ).toEqual({ funded: true, ceilingCents: 400 });
+  });
+
+  it("holds a brand only when no row at ANY grain is positive", () => {
+    expect(brandHeldFromBudgets(readWith([row({ funnelKey: null, dailyBudgetCents: 100 })]))).toBe(false);
+    expect(brandHeldFromBudgets(readWith([row({ dailyBudgetCents: 0 })]))).toBe(true);
   });
 });
