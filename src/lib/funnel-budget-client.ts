@@ -506,28 +506,26 @@ export function legCeilingCents(
  * ever asked this — every funnel-keyed campaign keeps `legCeilingCents` and its precedence, byte
  * for byte.
  *
- * Which rows count, in order:
- *
- *   1. billing's own (offer, leg, channel) grain — a `legs` row that states NO funnel. When any
- *      matches, it is the answer: billing stated this exact thing.
+ * When ANY of the brand's ceilings names a leg (the leg grain):
+ *   1. billing's own (offer, leg, channel) row — a `legs` row that states NO funnel — wins.
  *   2. until billing serves that grain, the funnel-keyed `legs` rows of this (offer, leg, channel),
- *      SUMMED across funnels. Each is money the customer set for this leg on this channel for this
- *      offer, under a funnel that no longer names a separate campaign; this campaign is the one
- *      campaign doing that work, so it is paced on all of it. (Prod 2026-09-25: no brand funds one
- *      (offer, leg, channel) under two funnels, so the sum is a single row everywhere today.)
+ *      SUMMED across funnels: each is money set for exactly this leg, and this campaign is the one
+ *      campaign doing it (the create lookup never lets a funnel-keyed twin coexist).
+ *   Legs funded but not this one → unfunded.
+ *
+ * When NO ceiling names a leg (almost every brand in production on 2026-09-25 — the stored rows
+ * are per (funnel, channel, offer)), the next grain that needs no funnel is (offer, channel): the
+ * `offers` rows of this offer on this channel. Exactly ONE funnel's row may answer. Leg-less money
+ * of one offer split across SEVERAL funnels does not say which part is this leg's, and summing it
+ * would hand this campaign money funded for another funnel's leg — so it is UNFUNDED, never
+ * guessed. (Measured: one brand's funnel-less read would otherwise have paced on its 300-cent brand
+ * pot instead of its offer's 100-cent row.) A brand with no per-funnel rows at all answers `none`
+ * and paces on the brand pot, as a funnel-less sales campaign always did.
  *
  * The offer half is billing's rule, mirrored from `offerCeilingCents`: a row naming the offer
  * counts, an unscoped one counts only when this offer is the brand's sole named one. The channel
  * must match EXACTLY — the sole-channel fallback of the funnel grains exists for rows billing's
  * migration filed under a default channel, and no funnel-less campaign predates that migration.
- *
- * Three answers, same shape as every grain above:
- *   - `grain: "none"` — no leg question to ask (the campaign states no leg, or the brand's money
- *     names no leg at all); the caller falls through to the brand pot, which is exactly how a
- *     funnel-less sales campaign was paced before this existed.
- *   - `cents` — funded at that amount.
- *   - `cents: null` — the brand's money IS scoped to legs and none of it is this one's: unfunded,
- *     never a fallback to a coarser figure.
  */
 export function offerLegCeilingCents(
   read: Extract<FunnelBudgetsRead, { ok: true }>,
@@ -536,27 +534,33 @@ export function offerLegCeilingCents(
   legKey: string | null | undefined,
 ): { grain: "none" } | { grain: "offer_leg"; cents: number | null } {
   if (!legKey) return { grain: "none" };
-  const stored = read.legs ?? [];
-  if (!stored.some((l) => l.legKey !== null)) return { grain: "none" };
 
-  const namedOffers = new Set(
-    stored.map((l) => l.offerId).filter((id): id is string => id !== null),
-  );
-  const soleNamed = namedOffers.size === 1 && !!offerId && namedOffers.has(offerId);
-  const matching = stored.filter(
-    (l) =>
-      l.legKey === legKey
-      && !!featureSlug
-      && l.featureSlug === featureSlug
-      && (namedOffers.size === 0 || l.offerId === (offerId ?? null) || (soleNamed && l.offerId === null)),
-  );
-  if (matching.length === 0) return { grain: "offer_leg", cents: null };
+  const ownedBy = <R extends { offerId: string | null; featureSlug: string }>(rows: R[]): R[] => {
+    const named = new Set(rows.map((r) => r.offerId).filter((id): id is string => id !== null));
+    const soleNamed = named.size === 1 && !!offerId && named.has(offerId);
+    return rows.filter(
+      (r) =>
+        !!featureSlug
+        && r.featureSlug === featureSlug
+        && (named.size === 0 || r.offerId === (offerId ?? null) || (soleNamed && r.offerId === null)),
+    );
+  };
 
-  const funnelless = matching.filter((l) => l.funnelKey === null);
-  if (funnelless.length > 0) {
-    return { grain: "offer_leg", cents: funnelless.reduce((sum, l) => sum + l.dailyBudgetCents, 0) };
+  const legs = read.legs ?? [];
+  if (legs.some((l) => l.legKey !== null)) {
+    const matching = ownedBy(legs).filter((l) => l.legKey === legKey);
+    if (matching.length === 0) return { grain: "offer_leg", cents: null };
+    const funnelless = matching.filter((l) => l.funnelKey === null);
+    const counted = funnelless.length > 0 ? funnelless : matching;
+    return { grain: "offer_leg", cents: counted.reduce((sum, l) => sum + l.dailyBudgetCents, 0) };
   }
-  return { grain: "offer_leg", cents: matching.reduce((sum, l) => sum + l.dailyBudgetCents, 0) };
+
+  const offers = read.offers ?? [];
+  if (offers.length === 0) return { grain: "none" };
+  const owned = ownedBy(offers);
+  if (owned.length === 0) return { grain: "offer_leg", cents: null };
+  if (new Set(owned.map((o) => o.funnelKey)).size > 1) return { grain: "offer_leg", cents: null };
+  return { grain: "offer_leg", cents: owned.reduce((sum, o) => sum + o.dailyBudgetCents, 0) };
 }
 
 
