@@ -108,9 +108,11 @@ export const CreateCampaignBody = z.object({
   activeGoalId: z.string().min(1).nullable().optional(),
   brandProfileId: z.string().min(1).nullable().optional(),
   audienceId: z.string().min(1).nullable().optional(),
-  // The SALES FUNNEL this campaign sells, stated at birth. REQUIRED for every sales-outreach
-  // feature (the route 400s without it) and ignored for every other feature, which sells through
-  // no sales funnel. Accepts the canonical four (sales_meetings_from_conversation |
+  // The SALES FUNNEL this campaign sells, stated at birth. For every sales-outreach feature the
+  // route requires EITHER this OR both `offerId` and `legKey`: a campaign stating the offer and the
+  // leg and no funnel is identified by (offer, leg, channel) alone — the model the funnel is being
+  // retired in favour of — and one already doing that work under any funnel is handed back rather
+  // than twinned. Ignored for every other feature, which sells through no sales funnel. Accepts the canonical four (sales_meetings_from_conversation |
   // sales_meetings_from_website | website_purchases | form_magnet) and the pre-rename spellings
   // (reply_meeting | visit_meeting | visit_signup | visit_form), stored canonical. Nothing is ever
   // inferred: a creator provisions per funded funnel, so it already knows the answer.
@@ -171,6 +173,10 @@ export const CampaignsFilterQuery = z.object({
   status: CampaignStatusEnum.optional(),
   workflowSlug: z.string().optional(),
   featureSlug: z.string().optional(),
+  // Find a campaign by (offer, leg, channel): with featureSlug these three are what a campaign
+  // IS once the funnel stops being part of it. Each is an exact match; any funnel is returned.
+  offerId: z.string().optional(),
+  legKey: z.string().optional(),
   // Optional cap on how many rows come back. Absent = every match, which is what every
   // existing consumer gets today. When present the response also carries `hasMore`, so a
   // truncated list is never mistaken for a complete one.

@@ -190,7 +190,9 @@ export async function triggerCampaignsForStep(
       // campaign of the offer the caller named — the same reason nothing here derives an offer
       // from a funnel, a goal or a workflow.
       c.offerId === req.offerId &&
-      toFunnelKey(c.funnelKey) === funnelKey &&
+      // A campaign identified by (offer, leg, channel) alone states no funnel: the leg IS what it
+      // was bought for, and `wanted` already holds only legs of the funnel the caller named.
+      (c.funnelKey === null || toFunnelKey(c.funnelKey) === funnelKey) &&
       c.legKey !== null &&
       wanted.has(c.legKey),
   );

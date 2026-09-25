@@ -68,7 +68,7 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
 router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilterQuery), async (req: AuthenticatedRequest, res) => {
   try {
     const {
-      brandId, status, workflowSlug, featureSlug, limit,
+      brandId, status, workflowSlug, featureSlug, offerId, legKey, limit,
     } = CampaignsFilterQuery.parse(req.query);
 
     const conditions = [eq(campaigns.orgId, req.orgId!)];
@@ -77,6 +77,10 @@ router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilt
     if (status) conditions.push(eq(campaigns.status, status));
     if (workflowSlug) conditions.push(eq(campaigns.workflowSlug, workflowSlug));
     if (featureSlug) conditions.push(eq(campaigns.featureSlug, featureSlug));
+    // Together with featureSlug (the channel) these find a campaign by (offer, leg, channel) —
+    // what a campaign IS once the funnel stops being part of it — whatever funnel it states.
+    if (offerId) conditions.push(eq(campaigns.offerId, offerId));
+    if (legKey) conditions.push(eq(campaigns.legKey, legKey));
 
     const query = db
       .select()
@@ -168,12 +172,20 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     const funnelKey = isSalesFunnelFeature(resolvedFeatureSlug)
       ? toFunnelKey(bodyFunnelKey)
       : null;
-    if (isSalesFunnelFeature(resolvedFeatureSlug) && !funnelKey) {
+    // ...OR it is identified by (OFFER, LEG, CHANNEL) and states no funnel at all. The funnel is
+    // leaving what a campaign IS: one leg belongs to several funnels, so the same leg run by the
+    // same channel for the same offer is ONE campaign, not one per funnel. A caller that states
+    // both the offer and the leg and no funnel is creating exactly that. A caller that states a
+    // funnel keeps today's behaviour byte for byte.
+    const offerLegIdentity =
+      isSalesFunnelFeature(resolvedFeatureSlug) && !bodyFunnelKey && !!offerId && !!legKey;
+    if (isSalesFunnelFeature(resolvedFeatureSlug) && !funnelKey && !offerLegIdentity) {
       return res.status(400).json({
         error: bodyFunnelKey
           ? `Unknown sales funnel "${bodyFunnelKey}" — expected one of: ${acceptedFunnelKeys().join(", ")}`
           : `Cannot create a ${resolvedFeatureSlug} campaign without stating its sales funnel — ` +
-            `funnelKey is required (one of: ${acceptedFunnelKeys().join(", ")})`,
+            `funnelKey is required (one of: ${acceptedFunnelKeys().join(", ")}) unless both ` +
+            `offerId and legKey are stated`,
       });
     }
 
@@ -265,10 +277,34 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         // stopped rows the most recent is the one the customer last worked with.
         orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
       });
-    let incumbent =
-      identity.brandId && identity.acquisitionChannel ? (await findIncumbent(true)) ?? null : null;
-    if (!incumbent && offerId && identity.brandId && identity.acquisitionChannel) {
-      incumbent = (await findIncumbent(false)) ?? null;
+    // The (offer, leg, channel) incumbent, WHATEVER FUNNEL it states. A create that names no
+    // funnel is asking for the one campaign doing this leg for this offer on this channel, and a
+    // campaign already doing it under a funnel IS that campaign — creating a funnel-less twin
+    // beside it is the duplication this identity exists to end. A create that DOES name a funnel
+    // asks only for the funnel-LESS row here, so a funnel-keyed flow never adopts another funnel's
+    // campaign (its behaviour is unchanged), yet never twins one created without a funnel either.
+    const findOfferLegIncumbent = (anyFunnel: boolean) =>
+      db.query.campaigns.findFirst({
+        where: and(
+          eq(campaigns.orgId, req.orgId!),
+          eq(campaigns.brandId, identity.brandId!),
+          eq(campaigns.acquisitionChannel, identity.acquisitionChannel!),
+          eq(campaigns.offerId, offerId!),
+          eq(campaigns.legKey, legKey!),
+          anyFunnel ? undefined : isNull(campaigns.funnelKey),
+        ),
+        orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
+      });
+    const hasIdentity = !!identity.brandId && !!identity.acquisitionChannel;
+    let incumbent: Awaited<ReturnType<typeof findIncumbent>> | null = null;
+    if (hasIdentity && offerLegIdentity) {
+      incumbent = (await findOfferLegIncumbent(true)) ?? null;
+    } else if (hasIdentity) {
+      incumbent = (await findIncumbent(true)) ?? null;
+      if (!incumbent && offerId) incumbent = (await findIncumbent(false)) ?? null;
+      if (!incumbent && funnelKey && offerId && legKey) {
+        incumbent = (await findOfferLegIncumbent(false)) ?? null;
+      }
     }
 
     if (incumbent) {
@@ -544,7 +580,15 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
         eq(campaigns.orgId, req.orgId!),
         eq(campaigns.brandId, brandId),
         eq(campaigns.acquisitionChannel, acquisitionChannel),
-        eq(campaigns.funnelKey, funnelKey),
+        // This pair's funnel — or NO funnel, for a campaign identified by (offer, leg, channel)
+        // alone, which is this pair's campaign when it names the same offer and leg. Starting a
+        // second one beside it would be the very duplication that identity exists to end.
+        or(
+          eq(campaigns.funnelKey, funnelKey),
+          offerId && legKey
+            ? and(isNull(campaigns.funnelKey), eq(campaigns.offerId, offerId), eq(campaigns.legKey, legKey))
+            : sql`false`,
+        ),
         offerId ? or(eq(campaigns.offerId, offerId), isNull(campaigns.offerId)) : isNull(campaigns.offerId),
         legKey ? or(eq(campaigns.legKey, legKey), isNull(campaigns.legKey)) : isNull(campaigns.legKey),
       ),

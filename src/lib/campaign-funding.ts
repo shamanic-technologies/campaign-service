@@ -4,6 +4,7 @@ import {
   legCeilingCents,
   fetchFunnelBudgets,
   offerCeilingCents,
+  offerLegCeilingCents,
   type FunnelBudgetsRead,
 } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
@@ -153,6 +154,27 @@ export function fundingFromBudgets(
       : { funded: false, reason: `funnel ${campaign.funnelKey} is funded at zero` };
   }
 
+  // A campaign identified by (offer, leg, channel) alone states no funnel: it is funded on that
+  // leg's own money, the same answer gate-check's (a3) reads. A brand whose money names no leg at
+  // all falls through to the brand pot below, exactly as a funnel-less campaign always did.
+  if (!campaign.funnelKey && campaign.legKey) {
+    const leg = offerLegCeilingCents(budgets, campaign.featureSlug, campaign.offerId, campaign.legKey);
+    if (leg.grain === "offer_leg") {
+      if (leg.cents === null) {
+        return {
+          funded: false,
+          reason: `leg ${campaign.legKey} is not funded for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
+        };
+      }
+      return leg.cents > 0
+        ? { funded: true, ceilingCents: leg.cents }
+        : {
+            funded: false,
+            reason: `leg ${campaign.legKey} is funded at zero for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
+          };
+    }
+  }
+
   // A brand with ONE pot — and a funnel campaign of a brand billing reports no per-funnel
   // ceilings for, which paces on that same pot. Stamping the funnel fleet-wide must not turn a
   // brand that never split its budget into an unfunded one.
@@ -203,5 +225,8 @@ export async function campaignFunding(
  */
 export function brandHeldFromBudgets(budgets: Extract<FunnelBudgetsRead, { ok: true }>): boolean {
   if (budgets.funnels.some((f) => f.dailyBudgetCents > 0)) return false;
+  // Money stated per (offer, leg, channel) with no funnel is in no funnel's sum, and it funds the
+  // brand just the same.
+  if ((budgets.legs ?? []).some((l) => l.funnelKey === null && l.dailyBudgetCents > 0)) return false;
   return !(budgets.brandDailyBudgetCents !== null && budgets.brandDailyBudgetCents > 0);
 }
