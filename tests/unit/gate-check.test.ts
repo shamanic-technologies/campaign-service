@@ -719,6 +719,38 @@ describe("Gate Check", () => {
             expect(result.nextRunAt).toBeUndefined();
     });
 
+    it("wave C1: a campaign stating a LEG is paced on its (offer, leg, channel) row, never its funnel's", async () => {
+      // The funnel ceiling is roomy (5000); the leg row this campaign was bought for is 1000.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          brandId: "brand-1",
+          dailyBudgetCents: "5000",
+          funnels: [{ funnelKey: "website_purchases", dailyBudgetCents: "5000" }],
+          offers: [],
+          legs: [
+            { funnelKey: "website_purchases", featureSlug: "sales-cold-email-outreach", offerId: "offer-1", legKey: "start_to_website_visit", dailyBudgetCents: "1000" },
+            { funnelKey: "website_purchases", featureSlug: "sales-cold-email-outreach", offerId: "offer-1", legKey: "website_visit_to_signup", dailyBudgetCents: "4000" },
+          ],
+        }),
+      });
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1500" }]),
+      );
+
+      const result = await runGateChecks(
+        makeCampaign({
+          brandIds: ["brand-1"],
+          featureSlug: "sales-cold-email-outreach",
+          funnelKey: "website_purchases",
+          offerId: "offer-1",
+          legKey: "start_to_website_visit",
+        }),
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Leg daily budget reached");
+    });
+
     it("allows while this funnel is under its own ceiling", async () => {
       mockFunnelBudgets([{ funnelKey: "visit_signup", dailyBudgetCents: "1000" }]);
       mockGetStatsBudget.mockResolvedValue(

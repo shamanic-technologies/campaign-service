@@ -190,3 +190,27 @@ describe("computeSpendableBudget — agrees with what the gate paces a funnel-le
     expect(result.rows[0]!.campaignId).toBe("c1");
   });
 });
+
+describe("wave C1 — a campaign that states a LEG is paced without reading its funnel", () => {
+  it("gives the same verdict whether or not it still carries a funnel", () => {
+    const read = readWith([row({ funnelKey: "website_purchases", dailyBudgetCents: 700 })]);
+    const base = { featureSlug: SALES, offerId: OFFER_A, legKey: LEG };
+    expect(fundingFromBudgets({ ...base, funnelKey: "website_purchases" }, read))
+      .toEqual(fundingFromBudgets({ ...base, funnelKey: null }, read));
+    expect(fundingFromBudgets({ ...base, funnelKey: "website_purchases" }, read))
+      .toEqual({ funded: true, ceilingCents: 700 });
+  });
+
+  it("ignores a STALE funnel on the row — the leg's money binds it, not the funnel's", () => {
+    // Funded on the leg; the funnel the row still carries names no money at all.
+    const read = readWith([row({ funnelKey: "website_purchases", dailyBudgetCents: 400 })]);
+    expect(
+      fundingFromBudgets({ featureSlug: SALES, offerId: OFFER_A, legKey: LEG, funnelKey: "form_magnet" }, read),
+    ).toEqual({ funded: true, ceilingCents: 400 });
+  });
+
+  it("holds a brand only when no row at ANY grain is positive", () => {
+    expect(brandHeldFromBudgets(readWith([row({ funnelKey: null, dailyBudgetCents: 100 })]))).toBe(false);
+    expect(brandHeldFromBudgets(readWith([row({ dailyBudgetCents: 0 })]))).toBe(true);
+  });
+});

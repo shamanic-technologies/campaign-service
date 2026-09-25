@@ -8,10 +8,8 @@ import {
 } from "./funnel-budget-client.js";
 import { buildProvisioningIdentity } from "./provisioning-identity.js";
 import { isOutboundSalesFeature, isSalesFunnelFeature } from "./sales-outreach-campaign.js";
-import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { acquisitionChannelForFeature } from "./campaign-identity.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
-import { adoptFunnellessAncestorsSafely } from "./funnel-ancestor-adoption.js";
 import { adoptOfferForPairSafely } from "./campaign-offer-adoption.js";
 import { reportTurnHolds, type TurnHold } from "./turn-hold-event.js";
 
@@ -78,8 +76,13 @@ export interface ClaimedFunnelCampaign {
 /** One funnel campaign in the running to take the brand's next turn. */
 export interface FunnelTurnCandidate {
   campaignId: string;
-  funnelKey: string;
-  /** Committed spend today for THIS campaign — i.e. for this funnel — in cents. */
+  /**
+   * The LEG the campaign was bought for (empty for the pre-leg population). Used only to break a
+   * tie deterministically — never the funnel, which is leaving the model (wave C1). On every brand
+   * with two campaigns in one cohort today the leg order equals the funnel order it replaces.
+   */
+  legKey: string;
+  /** Committed spend today for THIS campaign, in cents. */
   spentCents: number;
   /** This funnel's own daily ceiling, in cents. Always > 0 (a zero ceiling is not funded). */
   ceilingCents: number;
@@ -96,7 +99,8 @@ export interface FunnelTurnCandidate {
  * yields its turn with no special case: its ratio is >= 1, so it is simply not a candidate.
  *
  * Returns null when every funded funnel is at its ceiling — nothing runs until they reset.
- * Ties break on funnelKey so the choice is deterministic rather than insertion-ordered.
+ * Ties break on the leg, then the campaign id, so the choice is deterministic rather than
+ * insertion-ordered.
  */
 export function selectLowestFillRatio(candidates: FunnelTurnCandidate[]): string | null {
   let bestId: string | null = null;
@@ -107,9 +111,10 @@ export function selectLowestFillRatio(candidates: FunnelTurnCandidate[]): string
     if (!(c.ceilingCents > 0)) continue; // not funded — never run
     const ratio = c.spentCents / c.ceilingCents;
     if (ratio >= 1) continue; // at its ceiling: stops and yields to another funded funnel
-    if (ratio < bestRatio || (ratio === bestRatio && c.funnelKey < bestKey)) {
+    const key = `${c.legKey}\u0000${c.campaignId}`;
+    if (ratio < bestRatio || (ratio === bestRatio && key < bestKey)) {
       bestRatio = ratio;
-      bestKey = c.funnelKey;
+      bestKey = key;
       bestId = c.campaignId;
     }
   }
@@ -247,20 +252,17 @@ async function planOneBrand(
   // would stop the brand's live campaigns for a fault that is not theirs.
   reportLegKeylessCeilings(orgId, brandId, legKeylessFundedCeilings(budgets), now);
 
-  // Attribution only — neither of these creates a campaign, starts one, or changes a status.
-  // Nothing about money reaches them: they state which OFFER a campaign already running sells,
-  // and which FUNNEL its own stopped ancestors belong to, so its history lands in the totals the
-  // customer reads. Both are fail-soft and both are a no-op on an ordinary tick.
+  // Attribution only — it creates no campaign, starts none, and changes no status. Nothing about
+  // money reaches it: it states which OFFER a campaign already running sells, so its history lands
+  // in the totals the customer reads. Fail-soft, and a no-op on an ordinary tick.
+  //
+  // The funnel-less-ancestor adoption that used to sit beside it is no longer called (wave C1): it
+  // wrote a FUNNEL onto stopped history, and nothing here reads or writes the funnel for a tick
+  // any more. Its module stays until wave C2 drops the column, because its migration-parity test
+  // pins what migrations 0048/0051 wrote.
   const provisioning = await buildProvisioningIdentity(seed, brandId);
   if (provisioning) {
     await adoptOfferForPairSafely({ orgId, brandId }, provisioning, now);
-  }
-  for (const channel of new Set(
-    group
-      .map((c) => acquisitionChannelForFeature(c.featureSlug))
-      .filter((ch): ch is string => !!ch),
-  )) {
-    await adoptFunnellessAncestorsSafely({ orgId, brandId, acquisitionChannel: channel }, now);
   }
 
   // (0) The hold. A campaign the customer funds nothing for waits for money, not for a turn — so
@@ -279,18 +281,15 @@ async function planOneBrand(
       holds.push({
         campaign: c,
         reason: "unfunded",
-        detail: `Campaign not run — the customer funds no positive daily ceiling for it (funnel ${c.funnelKey ?? "(none stated)"}, leg ${c.legKey ?? "(none stated)"}, offer ${c.offerId ?? "(none stated)"}). It is waiting for money, not for its turn; re-checked at ${heldAt.toISOString()}.`,
+        detail: `Campaign not run — the customer funds no positive daily ceiling for it (offer ${c.offerId ?? "(none stated)"}, leg ${c.legKey ?? "(none stated)"}, channel ${c.featureSlug ?? "(none stated)"}). It is waiting for money, not for its turn; re-checked at ${heldAt.toISOString()}.`,
         nextRunAt: heldAt,
       });
       continue;
     }
     cohortOf.set(c.id, serializationCohort(c.featureSlug));
-    // A row written before the rename still carries the pre-rename spelling until migration 0043
-    // reaches it — and a mixed fleet must rank on one vocabulary or a funnel silently loses its
-    // ceiling and never takes a turn.
     candidates.push({
       campaignId: c.id,
-      funnelKey: toFunnelKey(c.funnelKey) ?? "",
+      legKey: c.legKey ?? "",
       // The campaign's OWN feature, never the seed's: the spend read filters on it, so asking
       // runs-service for a Google Ads campaign's spend under the seed's cold-email slug answers
       // ZERO — the ad campaign then reads as perfectly empty and takes every turn, forever.
@@ -390,9 +389,9 @@ async function planOneCohort(
     holds.push({
       campaign,
       reason: "daily_ceiling_reached",
-      detail: `Campaign not run — it has already spent its whole daily ceiling: ${c.spentCents.toFixed(0)} of ${c.ceilingCents} cents committed today on funnel ${c.funnelKey}. It runs again when the ceiling is raised or the day rolls over; re-checked at ${reset.toISOString()}.`,
+      detail: `Campaign not run — it has already spent its whole daily ceiling: ${c.spentCents.toFixed(0)} of ${c.ceilingCents} cents committed today on leg ${c.legKey || "(none stated)"}. It runs again when the ceiling is raised or the day rolls over; re-checked at ${reset.toISOString()}.`,
       nextRunAt: reset,
-      data: { spentCents: c.spentCents, ceilingCents: c.ceilingCents, funnelKey: c.funnelKey },
+      data: { spentCents: c.spentCents, ceilingCents: c.ceilingCents, legKey: c.legKey || null },
     });
   }
 }

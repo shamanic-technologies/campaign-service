@@ -270,3 +270,35 @@ describe("resolveStartablePair", () => {
     expect(result.pair.funnelKey).toBe(FUNNEL);
   });
 });
+
+describe("wave C1 — a pair started by (offer, leg, channel), no funnel named", () => {
+  const legMoney = budgets({
+    legs: [{ funnelKey: null, featureSlug: CHANNEL, offerId: OFFER, legKey: ENTRY_LEG, dailyBudgetCents: 700 }],
+  });
+
+  it("resolves on the (offer, leg, channel) money and states no funnel", async () => {
+    const out = await start({ funnelKey: undefined, legKey: ENTRY_LEG }, { budgets: legMoney });
+    expect(out).toEqual({
+      ok: true,
+      pair: { funnelKey: null, legKey: ENTRY_LEG, ceilingCents: 700, workflowSlug: "aurora" },
+    });
+  });
+
+  it("refuses with leg_required when neither a funnel nor the leg is named", async () => {
+    const out = await start({ funnelKey: undefined, legKey: null }, { budgets: legMoney });
+    expect(out).toMatchObject({ ok: false, refusal: { status: 400, code: "leg_required" } });
+  });
+
+  it("refuses a leg the channel does not perform", async () => {
+    const out = await start(
+      { funnelKey: undefined, legKey: SECOND_LEG },
+      { budgets: legMoney, catalogue: catalogue({ channelLegs: [ENTRY_LEG] }) },
+    );
+    expect(out).toMatchObject({ ok: false, refusal: { status: 400, code: "leg_not_performed" } });
+  });
+
+  it("refuses not_funded when the leg carries no money", async () => {
+    const out = await start({ funnelKey: undefined, legKey: SECOND_LEG }, { budgets: legMoney });
+    expect(out).toMatchObject({ ok: false, refusal: { status: 409, code: "not_funded" } });
+  });
+});

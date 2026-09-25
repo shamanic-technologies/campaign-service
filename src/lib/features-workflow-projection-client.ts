@@ -257,23 +257,7 @@ export interface LegModelEligibility {
   rows: ProjectionRow[];
 }
 
-/**
- * Read features-service's verdict on which workflows the model rule excludes for THIS leg.
- *
- * Returns null when the verdict could not be READ — a different answer from "this leg excludes
- * nothing", and the caller treats it as such: it selects over the UNFILTERED grid, i.e. exactly
- * what it did before this existed. We never exclude a workflow on a gap in our own reading, and
- * never silently: the failure warns. (features-service applies the same doctrine one level down —
- * a workflow whose tier IT cannot resolve is served ELIGIBLE with its own stated reason, so an
- * unknowable tier never reaches this map at all.)
- */
-export async function readLegModelEligibility({
-  featureSlug,
-  brandId,
-  legKey,
-  campaignId,
-  identity,
-}: {
+interface LegProjectionInput {
   featureSlug: string;
   brandId: string;
   legKey: string;
@@ -282,7 +266,25 @@ export async function readLegModelEligibility({
    * several with 409 `several_offers`. Omitted keeps today's brand-scoped read. */
   campaignId?: string | null;
   identity: DownstreamIdentity;
-}): Promise<LegModelEligibility | null> {
+}
+
+/**
+ * The LEG-keyed body's rows, normalized to the shape every audience/workflow pick reads. THROWS on
+ * any failure — for a caller that must not read an unreadable answer as a decision (the /end-run
+ * stop-guard) or that already fails soft on a throw (/start-run's audience pick). A campaign that
+ * states a leg reads this body and never the funnel-keyed one (wave C1).
+ */
+export async function fetchLegProjectionRows(input: LegProjectionInput): Promise<ProjectionRow[]> {
+  return normalizeProjectionRows(await fetchLegProjectionRawRows(input));
+}
+
+async function fetchLegProjectionRawRows({
+  featureSlug,
+  brandId,
+  legKey,
+  campaignId,
+  identity,
+}: LegProjectionInput): Promise<RawEligibilityRow[]> {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
   const apiKey = process.env.FEATURES_SERVICE_API_KEY;
   if (!baseUrl || !apiKey) {
@@ -304,13 +306,30 @@ export async function readLegModelEligibility({
   // ranks on these figures, so it asks for them on the basis the customer reads them on.
   url.searchParams.set("pricing", "net");
 
-  try {
-    const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
-    if (!res.ok) throw new Error(`workflow-projection (leg) failed (${res.status}): ${await res.text()}`);
+  const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
+  if (!res.ok) throw new Error(`workflow-projection (leg) failed (${res.status}): ${await res.text()}`);
 
-    const body = await res.json() as { rows?: RawEligibilityRow[] };
-    if (!Array.isArray(body.rows)) throw new Error("workflow-projection (leg) returned an invalid rows payload");
-    const legRows: RawEligibilityRow[] = body.rows;
+  const body = await res.json() as { rows?: RawEligibilityRow[] };
+  if (!Array.isArray(body.rows)) throw new Error("workflow-projection (leg) returned an invalid rows payload");
+  return body.rows;
+}
+
+/**
+ * Read features-service's verdict on which workflows the model rule excludes for THIS leg.
+ *
+ * Returns null when the verdict could not be READ — a different answer from "this leg excludes
+ * nothing", and the caller treats it as such: it selects over the UNFILTERED grid, i.e. exactly
+ * what it did before this existed. We never exclude a workflow on a gap in our own reading, and
+ * never silently: the failure warns. (features-service applies the same doctrine one level down —
+ * a workflow whose tier IT cannot resolve is served ELIGIBLE with its own stated reason, so an
+ * unknowable tier never reaches this map at all.)
+ */
+export async function readLegModelEligibility(
+  input: LegProjectionInput,
+): Promise<LegModelEligibility | null> {
+  const { brandId, legKey } = input;
+  try {
+    const legRows = await fetchLegProjectionRawRows(input);
 
     const ineligible = new Map<string, string>();
     for (const row of legRows) {
@@ -882,7 +901,9 @@ export async function resolveSelectionForTrigger(args: {
     // A campaign that STATES A FUNNEL is never arbitrated: the customer funds each funnel
     // separately, and that funding — not a cost ranking — decides which funnel is worked.
     // Arbitration only answers for a campaign that sells through no sales funnel.
-    if (!funnelKey) {
+    // A campaign that states a LEG is a sales campaign bought for that leg (wave C1: the leg, not
+    // the funnel, is what says so), so it is never arbitrated either — whatever funnel it carries.
+    if (!funnelKey && !legKey) {
       const arbitration = await fetchGoalArbitration({ featureSlug, brandId: primaryBrandId, identity });
       // The elected goal already determined this workflow — features-service ranked the goal's
       // workflows itself, and which goal a brand optimizes for is its answer, not a cell of a
@@ -897,19 +918,25 @@ export async function resolveSelectionForTrigger(args: {
     const eligibility = legKey
       ? await readLegModelEligibility({ featureSlug, brandId: primaryBrandId, legKey, campaignId, identity })
       : null;
-    if (eligibility && eligibility.rows.length === 0) {
-      console.warn(
-        `[campaign-service] leg-keyed workflow-projection for brand ${primaryBrandId} leg ` +
-          `${eligibility.legKey} enumerated NO rows — ranking this pick on the funnel-keyed body instead.`,
-      );
-    }
     let rows: ProjectionRow[];
-    if (eligibility && eligibility.rows.length > 0) {
+    if (legKey) {
+      // A LEG campaign is ranked on the leg-keyed body and on nothing else — never the funnel it
+      // may still carry (wave C1). A read that failed (it already said why) or enumerated nothing
+      // leaves the pick on the campaign's configured workflow, the same fail-soft every other
+      // failure of this read takes: a selection optimization never blocks a run.
+      if (!eligibility || eligibility.rows.length === 0) {
+        console.warn(
+          `[campaign-service] leg-keyed workflow-projection for brand ${primaryBrandId} leg ` +
+            `${legKey} ${eligibility ? "enumerated NO rows" : "could not be read"} — running the ` +
+            `configured workflow ${fallbackSlug}.`,
+        );
+        return { workflowSlug: fallbackSlug, audienceId: null };
+      }
       rows = eligibility.rows;
     } else {
-      // No leg, or the leg read gave us nothing (it already said why): rank on the funnel-keyed
-      // body exactly as before. Only a campaign with no funnel needs a goal, and only the brand
-      // can answer it.
+      // No leg (the pre-leg population, and every feature that sells through no sales funnel):
+      // rank on the funnel-keyed body exactly as before. Only a campaign with no funnel needs a
+      // goal, and only the brand can answer it.
       const goal: RuntimeGoal | null = funnelKey
         ? null
         : (await fetchBrandRuntimeContext(primaryBrandId, identity, offerId)).currentGoal;
