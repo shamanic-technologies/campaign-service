@@ -1049,6 +1049,38 @@ paces.
 
 (Set 2026-09-06.)
 
+## A sales campaign can be identified by (OFFER, LEG, CHANNEL) with NO funnel — the funnel is leaving the identity
+
+The fleet is retiring the sales funnel (org > brand > offer > outcome > leg). One leg belongs to
+several funnels, so the same leg run by the same channel for the same offer is ONE campaign, not one
+per funnel. This wave is ADDITIVE: every funnel-keyed caller behaves byte for byte as before.
+
+- **`POST /campaigns` accepts a sales campaign stating `offerId` + `legKey` and no `funnelKey`**
+  (stored `funnel_key NULL`). Stating neither a funnel nor both of those is still the same 400.
+- **It is never twinned, in either direction.** A funnel-less create matches the incumbent of
+  (org, brand, channel, offer, leg) under ANY funnel (live first) and hands it back; a funnel-keyed
+  create that finds nothing on its own funnel matches the FUNNEL-LESS campaign of that
+  (offer, leg). A funnel-keyed create never adopts ANOTHER funnel's campaign — that is today's
+  behaviour and it is kept. `start-funded-pair`'s sibling lookup includes the funnel-less row too.
+  No index polices this (the partial unique index still keys `coalesce(funnel_key,'')`), so the
+  guard is the lookup, exactly as for stopped rows.
+- **Found**: `GET /campaigns?featureSlug=&offerId=&legKey=` (exact matches, any funnel).
+- **Paced** by `offerLegCeilingCents` (gate-check block a3, `fundingFromBudgets`, spendable-budget,
+  all reading the same rows): billing's own funnel-less `legs[]` row for (offer, leg, channel) when
+  it serves one, else the funnel-keyed leg rows of that (offer, leg, channel) SUMMED across funnels.
+  Channel matched exactly; offer by billing's sole-named rule; a brand naming no leg → brand pot
+  (what a funnel-less sales campaign always paced on); legs funded but not this one → unfunded.
+- **The billing read tolerates `funnelKey: null`**: kept on a `legs[]` row (which must then name a
+  leg), dropped from `funnels`/`channels`/`offers`. Before this a single null-funnel row failed the
+  WHOLE read closed and would have held every campaign of the brand the day billing shipped one.
+- **`trigger-for-step` also runs a funnel-less campaign** of a leg out of the step on the named
+  funnel. **`/predecessor` still answers a named absence** for a campaign stating no funnel.
+- Measured in prod 2026-09-25 before shipping: 22 ongoing campaigns / 16 orgs, all funnel + leg +
+  offer; **0** groups (any status) share (org, brand, channel, offer, leg) across funnels; **0**
+  funnel-less rows with a leg. Nothing existing changes status, money or matching.
+
+(Set 2026-09-25.)
+
 ## A campaign bought for a leg that CONTINUES another can FIND what it is continuing — one lookup, nothing stored
 
 A funnel is several LEGS and this service mints one campaign per leg, so the customer's single

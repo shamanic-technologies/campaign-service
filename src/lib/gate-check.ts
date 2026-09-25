@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { isSalesFunnelFeature } from "./sales-outreach-campaign.js";
-import { channelCeilingCents, fetchFunnelBudgets, legCeilingCents, offerCeilingCents } from "./funnel-budget-client.js";
+import { channelCeilingCents, fetchFunnelBudgets, legCeilingCents, offerCeilingCents, offerLegCeilingCents } from "./funnel-budget-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 
@@ -367,6 +367,41 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         }
         if (spentCents >= ceilingCents) {
           return { allowed: false, reason: "Funnel daily budget reached" };
+        }
+      }
+    } else if (campaign.legKey) {
+      // (a3) A campaign identified by (OFFER, LEG, CHANNEL) alone — it states no sales funnel,
+      // because the leg is what the customer bought and one leg belongs to several funnels. It is
+      // paced on that leg's own money (`offerLegCeilingCents`), read fail-CLOSED like every
+      // funnel grain above. A brand whose money names no leg at all has nothing to say at this
+      // grain, so the campaign paces on the brand pot exactly as (b) below would pace it.
+      const campaignSpend = await getStatsBudget({
+        orgId: campaign.orgId,
+        campaignId: campaign.campaignId,
+        featureSlug: campaign.featureSlug,
+        windows: [{ label: "today", since: startOfToday().toISOString() }],
+      });
+      const today = campaignSpend.windows.find(w => w.label === "today");
+      const spentCents = today
+        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
+        : 0;
+
+      for (const brandId of campaign.brandIds) {
+        const budgets = await fetchFunnelBudgets(brandId, identity);
+        if (!budgets.ok) {
+          return { allowed: false, reason: "Funnel daily budget unavailable" };
+        }
+        const leg = offerLegCeilingCents(budgets, campaign.featureSlug, campaign.offerId, campaign.legKey);
+        if (leg.grain === "none") {
+          const blocked = await brandDailyBudgetBlock(campaign, identity, brandId);
+          if (blocked) return blocked;
+          continue;
+        }
+        if (leg.cents === null || leg.cents <= 0) {
+          return { allowed: false, reason: "Leg not funded" };
+        }
+        if (spentCents >= leg.cents) {
+          return { allowed: false, reason: "Leg daily budget reached" };
         }
       }
     } else {
