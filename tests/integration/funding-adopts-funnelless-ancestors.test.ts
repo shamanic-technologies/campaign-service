@@ -147,8 +147,12 @@ afterAll(async () => {
   await closeDb();
 });
 
-describe("provisioning a funnel campaign leaves no funnel-less ancestor behind", () => {
-  it("folds the ancestor even though the funded funnel's campaign ALREADY EXISTS", async () => {
+// WAVE C1 (2026-09-25): the tick no longer writes a FUNNEL onto stopped history — the funnel is
+// retiring and nothing reads it for a campaign that states a leg. The module and its
+// migration-parity test stay until C2 drops the column; what is pinned here is that the TICK never
+// calls it, and that the brand keeps running without it.
+describe("wave C1: a tick writes NO funnel onto a funnel-less ancestor", () => {
+  it("leaves a stopped funnel-less ancestor exactly as it was, and runs the live campaign", async () => {
     // Exactly the prod shape: 9570e3ce ongoing on the funnel, 2bd9ec88 stopped and stating none.
     const brandId = crypto.randomUUID();
     const live = await salesCampaign(brandId, orgId);
@@ -162,15 +166,13 @@ describe("provisioning a funnel campaign leaves no funnel-less ancestor behind",
     billingFunds([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }]);
     await reRunDueCampaigns();
 
-    expect(await funnelOf(ancestor.id)).toBe(CONVERSATION);
-    // Nothing else about it moves — it stays STOPPED, which is the whole point: features-service
-    // folds a stopped ancestor onto the live member of the identity.
+    expect(await funnelOf(ancestor.id)).toBeNull();
     expect(await statusOf(ancestor.id)).toBe("stopped");
     expect(await funnelOf(live.id)).toBe(CONVERSATION);
     expect(await statusOf(live.id)).toBe("ongoing");
   });
 
-  it("records the write with the value it replaced, under its own source tag", async () => {
+  it("records no ancestor-adoption decision", async () => {
     const brandId = crypto.randomUUID();
     await salesCampaign(brandId, orgId);
     const ancestor = await salesCampaign(brandId, orgId, {
@@ -182,16 +184,13 @@ describe("provisioning a funnel campaign leaves no funnel-less ancestor behind",
     billingFunds([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }]);
     await reRunDueCampaigns();
 
-    const [decision] = await db
+    const decisions = await db
       .select()
       .from(campaignFunnelOwnerDecisions)
       .where(eq(campaignFunnelOwnerDecisions.source, ANCESTOR_ADOPTION_SOURCE));
 
-    expect(decision?.campaignId).toBe(ancestor.id);
-    expect(decision?.previousFunnelKey).toBeNull();
-    expect(decision?.funnelKey).toBe(CONVERSATION);
-    expect(decision?.orgId).toBe(orgId);
-    expect(decision?.brandId).toBe(brandId);
+    expect(decisions).toEqual([]);
+    expect(await funnelOf(ancestor.id)).toBeNull();
   });
 
   it("a second tick changes nothing — the ancestor states a funnel now", async () => {
@@ -220,7 +219,7 @@ describe("provisioning a funnel campaign leaves no funnel-less ancestor behind",
     );
   });
 
-  it("never tries to resume the folded ancestor alongside the incumbent it now shares an identity with", async () => {
+  it("never resumes the ancestor, and never holds the brand", async () => {
     // Folding an ancestor onto the live campaign's funnel makes it findable by the
     // existing-campaign lookup. Ordered on creation date alone, a stopped ancestor created AFTER
     // the incumbent is returned instead of it, and the resume path then brings it back next to a
@@ -246,7 +245,7 @@ describe("provisioning a funnel campaign leaves no funnel-less ancestor behind",
     await db.update(campaigns).set({ nextRunAt: past() }).where(eq(campaigns.id, live.id));
     await reRunDueCampaigns();
 
-    expect(await funnelOf(ancestor.id)).toBe(CONVERSATION);
+    expect(await funnelOf(ancestor.id)).toBeNull();
     expect(await statusOf(ancestor.id)).toBe("stopped");
     expect(await statusOf(live.id)).toBe("ongoing");
     // The brand was never held: the campaign fired on both ticks.

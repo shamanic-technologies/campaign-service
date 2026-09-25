@@ -119,17 +119,19 @@ describe("Campaign identified by (offer, leg, channel)", () => {
     expect(funnelKeyed.body.campaign.funnelKey).toBeNull();
   });
 
-  it("funnel-keyed creates keep today's behaviour: another funnel is another campaign", async () => {
+  it("wave C1: a create naming (offer, leg) matches THE campaign of that leg, whatever funnel either states", async () => {
     const brandId = crypto.randomUUID();
     const offerId = crypto.randomUUID();
 
     const a = await create(body("Funnel A", brandId, {
       funnelKey: "sales_meetings_from_conversation", offerId, legKey: LEG,
     })).expect(201);
+    // Same (offer, leg, channel) under another funnel is the SAME campaign: one leg belongs to
+    // several funnels and is bought once. It is handed back, never twinned.
     const b = await create(body("Funnel B", brandId, {
       funnelKey: "sales_meetings_from_website", offerId, legKey: LEG,
-    })).expect(201);
-    expect(b.body.campaign.id).not.toBe(a.body.campaign.id);
+    })).expect(200);
+    expect(b.body.campaign.id).toBe(a.body.campaign.id);
   });
 
   it("still refuses a sales campaign that states neither a funnel nor an offer + leg", async () => {

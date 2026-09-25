@@ -91,15 +91,20 @@ export interface StepTriggerRequest {
   brandId: string;
   /** The OFFER the lead is on — brand-service's id, matched exactly and never inferred. */
   offerId: string;
-  /** Any spelling the vocabulary accepts; canonicalized before anything is compared. */
-  funnelKey: string;
+  /**
+   * OPTIONAL since wave C1. When sent (any spelling the vocabulary accepts), it only narrows the
+   * legs out of the step to the legs of that funnel — exactly today's answer for a caller that
+   * still names one. When absent, every leg out of the step is in scope: a leg belongs to several
+   * funnels, and the campaign bought for it is identified by (offer, leg, channel).
+   */
+  funnelKey?: string | null;
   /** The step the lead just REACHED. features-service's step key, carried verbatim. */
   step: string;
 }
 
 export interface StepTriggerOutcome {
-  /** The canonical funnel the request named. */
-  funnelKey: string;
+  /** The canonical funnel the request named, or null when it named none. */
+  funnelKey: string | null;
   step: string;
   /** The legs OUT of that step on that funnel, as features-service names them. */
   legKeys: string[];
@@ -128,8 +133,8 @@ export class StepTriggerScopeError extends Error {
 export async function triggerCampaignsForStep(
   req: StepTriggerRequest,
 ): Promise<StepTriggerOutcome> {
-  const funnelKey = toFunnelKey(req.funnelKey);
-  if (!funnelKey) {
+  const funnelKey = req.funnelKey ? toFunnelKey(req.funnelKey) : null;
+  if (req.funnelKey && !funnelKey) {
     throw new StepTriggerScopeError(
       `funnelKey ${JSON.stringify(req.funnelKey)} names no sales funnel`,
       400,
@@ -154,12 +159,12 @@ export async function triggerCampaignsForStep(
     );
   }
 
-  // The legs OUT of this step, on the funnel the caller named. A terminal step legitimately has
-  // none — a lead who became a paying client is at the end of the chain — and that is an ordinary
-  // empty answer, not an error.
+  // The legs OUT of this step — on the funnel the caller named, when it still names one. A
+  // terminal step legitimately has none — a lead who became a paying client is at the end of the
+  // chain — and that is an ordinary empty answer, not an error.
   const legKeys = catalogue.legs
     .filter((leg) => leg.fromStepKey === req.step)
-    .filter((leg) => [...leg.funnelKeys].some((key) => toFunnelKey(key) === funnelKey))
+    .filter((leg) => !funnelKey || [...leg.funnelKeys].some((key) => toFunnelKey(key) === funnelKey))
     .map((leg) => leg.legKey);
 
   const outcome: StepTriggerOutcome = {
@@ -174,8 +179,8 @@ export async function triggerCampaignsForStep(
   const wanted = new Set(legKeys);
 
   // Read the brand's live campaigns and select in memory. The population is a handful of rows per
-  // brand, and the three words that identify the campaign (offer, funnel, leg) are compared under
-  // the same canonicalization everything else in this service uses.
+  // brand, and a campaign is identified by (offer, leg, channel) — the funnel it may still carry is
+  // not read (wave C1): `wanted` already holds only the legs in scope.
   const live = await db.query.campaigns.findMany({
     where: and(
       eq(campaigns.orgId, req.orgId),
@@ -190,9 +195,6 @@ export async function triggerCampaignsForStep(
       // campaign of the offer the caller named — the same reason nothing here derives an offer
       // from a funnel, a goal or a workflow.
       c.offerId === req.offerId &&
-      // A campaign identified by (offer, leg, channel) alone states no funnel: the leg IS what it
-      // was bought for, and `wanted` already holds only legs of the funnel the caller named.
-      (c.funnelKey === null || toFunnelKey(c.funnelKey) === funnelKey) &&
       c.legKey !== null &&
       wanted.has(c.legKey),
   );
@@ -265,6 +267,7 @@ export async function triggerCampaignsForStep(
           featureSlug: campaign.featureSlug,
         },
         fallbackSlug: campaign.workflowSlug,
+        // Read only for a campaign stating NO leg (none reach here: `responsible` requires one).
         funnelKey: campaign.funnelKey,
         // The LEG the campaign is bought for — what features-service's model rule is keyed on.
         // A campaign that states none has no verdict to read and selects exactly as before.

@@ -41,6 +41,7 @@ export interface StartRefusal {
   /** Machine-readable, for a consumer that wants to branch rather than render. */
   code:
     | "unknown_funnel"
+    | "leg_required"
     | "channel_not_paced_here"
     | "unknown_channel"
     | "channel_does_not_sell_funnel"
@@ -56,7 +57,8 @@ export interface StartRefusal {
 }
 
 export interface StartablePair {
-  funnelKey: SalesFunnelKey;
+  /** The funnel the caller still named, or null for a start by (offer, leg, channel) alone. */
+  funnelKey: SalesFunnelKey | null;
   /**
    * The single funnel LEG this campaign is bought for, taken from the CEILING the customer set —
    * never derived from the funnel or the channel. Null when the customer's money for this pair
@@ -81,8 +83,12 @@ export interface StartPairRequest {
   brandId: string;
   /** brand-service's offer UUID, as stated by the customer's own screen. */
   offerId?: string | null;
-  /** The sales funnel, in any accepted spelling. */
-  funnelKey: string;
+  /**
+   * OPTIONAL since wave C1. A caller that still names a funnel (any accepted spelling) is resolved
+   * exactly as before. A caller that names none must state the OFFER and the LEG: that is the
+   * campaign's identity, and the money is read at (offer, leg, channel).
+   */
+  funnelKey?: string | null;
   /** The acquisition channel — a features-service feature slug. */
   featureSlug: string;
   /**
@@ -114,9 +120,16 @@ export async function resolveStartablePair(
   const readBudgets = deps.budgets ?? ((brandId: string) => fetchFunnelBudgets(brandId, identity));
   const readWorkflow = deps.workflow ?? fetchStartableWorkflowSlug;
 
-  const funnelKey = toFunnelKey(input.funnelKey);
-  if (!funnelKey) {
+  const funnelKey = input.funnelKey ? toFunnelKey(input.funnelKey) : null;
+  if (input.funnelKey && !funnelKey) {
     return refuse(400, "unknown_funnel", `We don't recognise the sales funnel "${input.funnelKey}".`);
+  }
+  if (!funnelKey && (!input.offerId || !input.legKey)) {
+    return refuse(
+      400,
+      "leg_required",
+      "Tell us which offer and which step this channel should work, so we know which budget it runs on.",
+    );
   }
 
   // Membership in the funnel-funded family is a MONEY statement: it says this campaign's ceiling is
@@ -147,6 +160,34 @@ export async function resolveStartablePair(
       "unknown_channel",
       `We don't recognise the acquisition channel "${input.featureSlug}".`,
     );
+  }
+
+  // A START BY (OFFER, LEG, CHANNEL) — no funnel named, none read (wave C1). The leg must be one
+  // this channel performs (features-service's statement, joined verbatim), and the money is the
+  // (offer, leg, channel) ceiling: the same one definition the gate and the turn planner read.
+  if (!funnelKey) {
+    const legKey = input.legKey!;
+    if (!performed.has(legKey)) {
+      return refuse(400, "leg_not_performed", "This channel doesn't perform that step.");
+    }
+    const budgets = await readBudgets(input.brandId);
+    if (!budgets.ok) {
+      return refuse(
+        502,
+        "billing_unavailable",
+        "We couldn't read this brand's budget just now. Please try again in a minute.",
+      );
+    }
+    const verdict = fundingFromBudgets(
+      { funnelKey: null, featureSlug: input.featureSlug, offerId: input.offerId ?? null, legKey },
+      budgets,
+    );
+    if (!verdict.funded) return refuse(409, "not_funded", NOT_FUNDED_MESSAGE);
+    return finishStart(catalogue, input.featureSlug, identity, readWorkflow, {
+      funnelKey: null,
+      legKey,
+      ceilingCents: verdict.ceilingCents,
+    });
   }
 
   // WHICH LEGS THIS CHANNEL CAN SELL THIS FUNNEL THROUGH — features-service's statement, joined
@@ -234,19 +275,31 @@ export async function resolveStartablePair(
   );
   if (!verdict.funded) return refuse(409, "not_funded", NOT_FUNDED_MESSAGE);
 
+  return finishStart(catalogue, input.featureSlug, identity, readWorkflow, {
+    funnelKey,
+    legKey: resolvedLeg,
+    ceilingCents: verdict.ceilingCents,
+  });
+}
+
+/** Who runs the channel, and on which DAG — the same answer whichever way the pair was named. */
+async function finishStart(
+  catalogue: Extract<ChannelCatalogueRead, { ok: true }>,
+  featureSlug: string,
+  identity: IdentityHeaders & { userId: string; runId: string },
+  readWorkflow: typeof fetchStartableWorkflowSlug,
+  pair: { funnelKey: SalesFunnelKey | null; legKey: string | null; ceilingCents: number },
+): Promise<StartablePairRead> {
   // A channel the CUSTOMER operates has NO workflow, and that absence is the statement rather than
   // a gap: the legs the platform does not automate are performed by a human off-platform, and the
   // campaign exists so their work has a budget line, a scope for stats and something they can
   // pause. Inventing a no-op DAG for it would be a second, false representation of the same fact.
-  const operator = catalogue.operatorBySlug.get(input.featureSlug) ?? "platform";
+  const operator = catalogue.operatorBySlug.get(featureSlug) ?? "platform";
   if (operator === "customer") {
-    return {
-      ok: true,
-      pair: { funnelKey, legKey: resolvedLeg, ceilingCents: verdict.ceilingCents, workflowSlug: null },
-    };
+    return { ok: true, pair: { ...pair, workflowSlug: null } };
   }
 
-  const workflow = await readWorkflow(input.featureSlug, identity);
+  const workflow = await readWorkflow(featureSlug, identity);
   if (!workflow.ok) {
     return refuse(
       502,
@@ -262,15 +315,7 @@ export async function resolveStartablePair(
     );
   }
 
-  return {
-    ok: true,
-    pair: {
-      funnelKey,
-      legKey: resolvedLeg,
-      ceilingCents: verdict.ceilingCents,
-      workflowSlug: workflow.workflowSlug,
-    },
-  };
+  return { ok: true, pair: { ...pair, workflowSlug: workflow.workflowSlug } };
 }
 
 const NOT_FUNDED_MESSAGE =

@@ -197,13 +197,15 @@ export const StartFundedPairBody = z.object({
   // The OFFER whose money funds this pair — brand-service's UUID, carried and never derived.
   // Absent is the pre-offer population, which resolves on the pair figure exactly as it always has.
   offerId: z.string().uuid("offerId must be a valid UUID").nullable().optional(),
-  // The SALES FUNNEL, in any accepted spelling (canonical four or the pre-rename four).
-  funnelKey: z.string().min(1, "funnelKey is required"),
+  // OPTIONAL since wave C1 (the sales funnel is retiring). A caller naming one (any accepted
+  // spelling) is resolved exactly as before. A caller naming none must state `offerId` AND
+  // `legKey` — the campaign's identity — or is refused with `leg_required`.
+  funnelKey: z.string().min(1).optional(),
   // The ACQUISITION CHANNEL, as a features-service feature slug. A channel IS a feature slug.
   featureSlug: z.string().min(1, "featureSlug is required"),
-  // OPTIONAL and only ever a disambiguation: a customer who funds TWO legs of one (funnel,
-  // channel, offer) has two campaigns to start, and this says which. Never required, and a leg the
-  // channel does not perform is refused rather than stamped.
+  // With a funnel: OPTIONAL and only a disambiguation between two funded legs of one (funnel,
+  // channel, offer). Without one: REQUIRED, with `offerId` — it is what the campaign is bought for.
+  // A leg the channel does not perform is refused rather than stamped.
   legKey: z.string().min(1).nullable().optional(),
 }).strict().openapi("StartFundedPairBody");
 
@@ -505,19 +507,21 @@ export const TriggerForStepBody = z.object({
   // The OFFER the lead is on — brand-service's id. Matched exactly against the campaign's own; a
   // campaign that states no offer is not the campaign of the offer named here.
   offerId: z.string().uuid("offerId must be a valid UUID"),
-  // The sales funnel the lead is on. Accepts the canonical four and the pre-rename spellings, the
-  // same vocabulary every other funnel-shaped request here accepts. A leg belongs to several
-  // funnels, so this is asked rather than derived.
-  funnelKey: z.string().min(1, "funnelKey is required"),
+  // OPTIONAL since wave C1 (the sales funnel is retiring). When sent — the canonical four or a
+  // pre-rename spelling — it narrows the legs out of the step to that funnel's, exactly as before.
+  // When omitted, every leg out of the step is in scope and the campaign bought for it is matched
+  // on (offer, leg).
+  funnelKey: z.string().min(1).optional(),
   // The step the lead just REACHED — features-service's step key, carried verbatim and never
   // parsed. A step it does not publish is a 400, never an empty answer.
   step: z.string().min(1, "step is required"),
 }).openapi("TriggerForStepBody");
 
 export const TriggerForStepResponse = z.object({
-  funnelKey: z.string(),
+  /** The canonical funnel the request named; null when it named none. */
+  funnelKey: z.string().nullable(),
   step: z.string(),
-  /** The legs OUT of that step on that funnel, as features-service names them. */
+  /** The legs OUT of that step (on the named funnel, when one was named), as features-service names them. */
   legKeys: z.array(z.string()),
   triggered: z.array(z.object({
     campaignId: z.string(),

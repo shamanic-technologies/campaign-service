@@ -172,12 +172,22 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
-  it("does not run a campaign of another funnel, even on the same leg", async () => {
+  it("runs the campaign bought for the leg whatever funnel it carries — the leg is the identity (wave C1)", async () => {
     mockFindMany.mockResolvedValue([campaign({ funnelKey: "website_purchases" })]);
 
     const outcome = await triggerCampaignsForStep(request);
 
-    expect(outcome.triggered).toEqual([]);
+    expect(outcome.triggered).toHaveLength(1);
+  });
+
+  it("answers a request that names NO funnel: every leg out of the step is in scope", async () => {
+    mockFindMany.mockResolvedValue([campaign()]);
+    const { funnelKey: _omit, ...noFunnel } = request;
+
+    const outcome = await triggerCampaignsForStep(noFunnel);
+
+    expect(outcome.funnelKey).toBeNull();
+    expect(outcome.triggered).toHaveLength(1);
   });
 
   it("reads the campaign's funnel under the pre-rename spelling too", async () => {

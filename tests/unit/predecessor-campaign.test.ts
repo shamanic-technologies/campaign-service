@@ -172,13 +172,21 @@ describe("resolvePredecessorCampaign", () => {
     expect(out.precedingLegKeys).toEqual([ENTRY_LEG]);
   });
 
-  it("never hands back a sibling on ANOTHER funnel", async () => {
+  it("hands back the sibling of this offer whatever funnel it carries — the chain is walked on (offer, leg) (wave C1)", async () => {
     mockFindFirst.mockResolvedValue(campaign());
     mockFindMany.mockResolvedValue([sibling({ funnelKey: "website_purchases" })]);
 
     const out = await resolvePredecessorCampaign("8c748ddd-0000-4000-8000-000000000010");
-    expect(out.predecessor).toBeNull();
-    expect(out.absence).toBe(PREDECESSOR_ABSENCES.NO_CAMPAIGN);
+    expect(out.predecessor?.campaignId).toBe("f7b1b610-0000-4000-8000-000000000011");
+    expect(out.absence).toBeNull();
+  });
+
+  it("resolves a campaign that states NO funnel exactly like one that does", async () => {
+    mockFindFirst.mockResolvedValue(campaign({ funnelKey: null }));
+    mockFindMany.mockResolvedValue([sibling({ funnelKey: null })]);
+
+    const out = await resolvePredecessorCampaign("8c748ddd-0000-4000-8000-000000000010");
+    expect(out.predecessor?.campaignId).toBe("f7b1b610-0000-4000-8000-000000000011");
   });
 
   it("canonicalizes the funnel on BOTH sides, so a pre-rename spelling still matches", async () => {
@@ -192,7 +200,6 @@ describe("resolvePredecessorCampaign", () => {
 
   it.each([
     ["states no leg", { legKey: null }, PREDECESSOR_ABSENCES.NO_LEG],
-    ["states no funnel", { funnelKey: null }, PREDECESSOR_ABSENCES.NO_FUNNEL],
     ["states no offer", { offerId: null }, PREDECESSOR_ABSENCES.NO_OFFER],
     ["states no brand", { brandId: null, brandIds: [] }, PREDECESSOR_ABSENCES.NO_BRAND],
   ])("answers a named absence for a campaign that %s", async (_label, over, absence) => {

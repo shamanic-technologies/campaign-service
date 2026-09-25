@@ -250,8 +250,45 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       if (spentCents >= campaign.dailyBudgetCents) {
         return { allowed: false, reason: "Campaign daily budget reached" };
       }
+    } else if (campaign.legKey) {
+      // (a3) A campaign that states its LEG is identified by (OFFER, LEG, CHANNEL) — whatever
+      // funnel it may still carry, because the leg is what the customer bought and one leg belongs
+      // to several funnels (wave C1: nothing here reads the funnel of a campaign that states a
+      // leg). It is paced on that leg's own money (`offerLegCeilingCents`), read fail-CLOSED like
+      // every grain below — the same answer `campaignFunding` gives the turn planner. A brand whose money names no leg at all has nothing to say at this
+      // grain, so the campaign paces on the brand pot exactly as (b) below would pace it.
+      const campaignSpend = await getStatsBudget({
+        orgId: campaign.orgId,
+        campaignId: campaign.campaignId,
+        featureSlug: campaign.featureSlug,
+        windows: [{ label: "today", since: startOfToday().toISOString() }],
+      });
+      const today = campaignSpend.windows.find(w => w.label === "today");
+      const spentCents = today
+        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
+        : 0;
+
+      for (const brandId of campaign.brandIds) {
+        const budgets = await fetchFunnelBudgets(brandId, identity);
+        if (!budgets.ok) {
+          return { allowed: false, reason: "Funnel daily budget unavailable" };
+        }
+        const leg = offerLegCeilingCents(budgets, campaign.featureSlug, campaign.offerId, campaign.legKey);
+        if (leg.grain === "none") {
+          const blocked = await brandDailyBudgetBlock(campaign, identity, brandId);
+          if (blocked) return blocked;
+          continue;
+        }
+        if (leg.cents === null || leg.cents <= 0) {
+          return { allowed: false, reason: "Leg not funded" };
+        }
+        if (spentCents >= leg.cents) {
+          return { allowed: false, reason: "Leg daily budget reached" };
+        }
+      }
     } else if (campaign.funnelKey) {
-      // (a2) The campaign works ONE sales funnel: pace it on THAT funnel's own daily ceiling
+      // (a2) The pre-leg population only (a campaign stating a funnel and NO leg — none live on
+      // 2026-09-25), kept until wave C2. The campaign works ONE sales funnel: pace it on THAT funnel's own daily ceiling
       // (billing-service brand_funnel_budgets), not on the brand-level total. The brand total
       // is still exactly the SUM of those ceilings, so a brand funding two funnels has both
       // worked, neither exceeds its own ceiling, and the day's total cannot exceed the sum.
@@ -367,41 +404,6 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         }
         if (spentCents >= ceilingCents) {
           return { allowed: false, reason: "Funnel daily budget reached" };
-        }
-      }
-    } else if (campaign.legKey) {
-      // (a3) A campaign identified by (OFFER, LEG, CHANNEL) alone — it states no sales funnel,
-      // because the leg is what the customer bought and one leg belongs to several funnels. It is
-      // paced on that leg's own money (`offerLegCeilingCents`), read fail-CLOSED like every
-      // funnel grain above. A brand whose money names no leg at all has nothing to say at this
-      // grain, so the campaign paces on the brand pot exactly as (b) below would pace it.
-      const campaignSpend = await getStatsBudget({
-        orgId: campaign.orgId,
-        campaignId: campaign.campaignId,
-        featureSlug: campaign.featureSlug,
-        windows: [{ label: "today", since: startOfToday().toISOString() }],
-      });
-      const today = campaignSpend.windows.find(w => w.label === "today");
-      const spentCents = today
-        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
-        : 0;
-
-      for (const brandId of campaign.brandIds) {
-        const budgets = await fetchFunnelBudgets(brandId, identity);
-        if (!budgets.ok) {
-          return { allowed: false, reason: "Funnel daily budget unavailable" };
-        }
-        const leg = offerLegCeilingCents(budgets, campaign.featureSlug, campaign.offerId, campaign.legKey);
-        if (leg.grain === "none") {
-          const blocked = await brandDailyBudgetBlock(campaign, identity, brandId);
-          if (blocked) return blocked;
-          continue;
-        }
-        if (leg.cents === null || leg.cents <= 0) {
-          return { allowed: false, reason: "Leg not funded" };
-        }
-        if (spentCents >= leg.cents) {
-          return { allowed: false, reason: "Leg daily budget reached" };
         }
       }
     } else {

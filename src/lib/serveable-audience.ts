@@ -1,8 +1,9 @@
 import type { Campaign } from "../db/schema.js";
 import type { DownstreamIdentity } from "./downstream-headers.js";
-import { fetchBrandRuntimeContext, type RuntimeGoal } from "./brand-runtime-client.js";
+import { fetchBrandRuntimeContext } from "./brand-runtime-client.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import {
+  fetchLegProjectionRows,
   fetchWorkflowProjectionRows,
   serveableAudienceIdsInProjection,
 } from "./features-workflow-projection-client.js";
@@ -10,7 +11,7 @@ import {
 /** The campaign fields the serveable-audience read needs. */
 export type ServeableAudienceCampaign = Pick<
   Campaign,
-  "id" | "orgId" | "funnelKey" | "offerId" | "audienceIds"
+  "id" | "orgId" | "funnelKey" | "offerId" | "legKey" | "audienceIds"
 >;
 
 /**
@@ -41,21 +42,31 @@ export async function serveableAudienceIdsForCampaign(
   featureSlug: string,
   identity: DownstreamIdentity,
 ): Promise<string[]> {
-  // A campaign that states its funnel is priced on it; only one that states none needs a goal,
-  // and only the brand can answer that. The campaign's OFFER names whose profile words the
-  // snapshot carries — a campaign sells exactly one, so multi-offer brands answer instead of
-  // refusing the brand-scoped read.
-  const goal: RuntimeGoal | null = campaign.funnelKey
-    ? null
-    : (await fetchBrandRuntimeContext(identity.brandId, identity, campaign.offerId)).currentGoal;
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
-  const rows = await fetchWorkflowProjectionRows({
-    featureSlug,
-    brandId: identity.brandId,
-    funnelKey: campaign.funnelKey,
-    goal,
-    identity,
-  });
+  // A campaign that states its LEG reads the leg-keyed body — never the funnel it may still carry
+  // (wave C1). Membership is the same set either way (every active audience per dynasty); only the
+  // cost attached to each row differs, and this read ignores cost. The body is UNFILTERED by the
+  // leg's model rule, so the guard still sees the superset.
+  const rows = campaign.legKey
+    ? await fetchLegProjectionRows({
+        featureSlug,
+        brandId: identity.brandId,
+        legKey: campaign.legKey,
+        campaignId: campaign.id,
+        identity,
+      })
+    : await fetchWorkflowProjectionRows({
+        featureSlug,
+        brandId: identity.brandId,
+        funnelKey: campaign.funnelKey,
+        // A campaign that states its funnel is priced on it; only one that states none needs a
+        // goal, and only the brand can answer that. The campaign's OFFER names whose profile words
+        // the snapshot carries.
+        goal: campaign.funnelKey
+          ? null
+          : (await fetchBrandRuntimeContext(identity.brandId, identity, campaign.offerId)).currentGoal,
+        identity,
+      });
   return serveableAudienceIdsInProjection(rows, {
     requiredAudienceIds: campaign.audienceIds ?? undefined,
     excludedAudienceIds,

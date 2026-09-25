@@ -403,18 +403,23 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     err.mockRestore();
   });
 
-  it("an unreadable verdict selects over the unfiltered grid — a failed read never blocks a run", async () => {
+  it("an unreadable verdict runs the configured workflow — a failed read never blocks a run, and no funnel body is read", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    global.fetch = vi.fn(async (url: URL | string) => {
+    const f = vi.fn(async (url: URL | string) => {
       const u = new URL(String(url));
       if (u.searchParams.has("leg")) return { ok: false, status: 500, text: async () => "boom" };
       return routeFetch({ legRows: [] })(url);
-    }) as unknown as typeof fetch;
-
-    await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toMatchObject({
-      workflowSlug: "cheap-wf",
     });
-    expect(warn).toHaveBeenCalledTimes(1);
+    global.fetch = f as unknown as typeof fetch;
+
+    await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
+      workflowSlug: "wf-configured",
+      audienceId: null,
+    });
+    // Wave C1: a LEG campaign never falls back to the funnel-keyed body.
+    expect(f.mock.calls.every(([u]) => !new URL(String(u)).searchParams.has("funnel"))).toBe(true);
+    // One warn from the unreadable verdict, one from the configured-workflow fallback.
+    expect(warn).toHaveBeenCalledTimes(2);
     warn.mockRestore();
   });
 });
