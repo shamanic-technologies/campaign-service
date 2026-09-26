@@ -163,7 +163,7 @@ describe("salesMaxBudgetRefusal", () => {
         const message = salesMaxBudgetRefusal(slug, { [field]: "10.00" });
         expect(message).toContain(field);
         expect(message).toContain("billing");
-        expect(message).toMatch(/funnel/i);
+        expect(message).toMatch(/offer, leg/i);
       }
     }
   });

@@ -42,7 +42,6 @@ const BRAND = "75d7e3e8-0000-4000-8000-000000000002";
 const OFFER = "231bb036-0000-4000-8000-000000000003";
 const STEP = "conversation";
 const LEG_OUT = "conversation" + "_to_" + ["meeting", "booked"].join("_");
-const FUNNEL = "sales_meetings_from_conversation";
 
 const post = (body: Record<string, unknown>, orgId: string | null = ORG) => {
   const req = request(app)
@@ -52,7 +51,7 @@ const post = (body: Record<string, unknown>, orgId: string | null = ORG) => {
   return req.send(body);
 };
 
-const body = { brandId: BRAND, offerId: OFFER, funnelKey: FUNNEL, step: STEP };
+const body = { brandId: BRAND, offerId: OFFER, step: STEP };
 
 /**
  * A prospect who states a sales interest and hears nothing for a day is the problem this closes.
@@ -68,7 +67,7 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
       operatorBySlug: new Map(),
       legsBySlug: new Map(),
       stepKeys: new Set([STEP, "meeting_booked", "paid_client"]),
-      legs: [{ legKey: LEG_OUT, fromStepKey: STEP, funnelKeys: new Set([FUNNEL]) }],
+      legs: [{ legKey: LEG_OUT, fromStepKey: STEP, toStepKey: "meeting_booked" }],
     });
     mockFunding.mockResolvedValue({ funded: true, ceilingCents: 5000 });
     mockListRuns.mockResolvedValue({ runs: [] });
@@ -89,7 +88,6 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
       workflowSlug: "aurora-v3",
       createdByUserId: "user-1",
       parentRunId: "9f0d1c22-0000-4000-8000-000000000009",
-      funnelKey: FUNNEL,
       offerId: OFFER,
       legKey: LEG_OUT,
     });
@@ -115,7 +113,6 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
       workflowSlug: "aurora-v3",
       createdByUserId: "user-1",
       parentRunId: "9f0d1c22-0000-4000-8000-000000000009",
-      funnelKey: FUNNEL,
       offerId: OFFER,
       legKey: LEG_OUT,
       nextRunAt: new Date(Date.now() + 10 * 60_000),
@@ -146,7 +143,6 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
       status: "stopped",
       featureSlug: "sales-cold-email-outreach",
       createdByUserId: "user-1",
-      funnelKey: FUNNEL,
       offerId: OFFER,
       legKey: LEG_OUT,
     });
@@ -167,7 +163,6 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
       workflowSlug: "aurora-v3",
       createdByUserId: "user-1",
       parentRunId: "9f0d1c22-0000-4000-8000-000000000009",
-      funnelKey: FUNNEL,
       offerId: OFFER,
       legKey: LEG_OUT,
     });
@@ -194,9 +189,11 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
     expect(res.body.error).toContain("smoke_signal");
   });
 
-  it("refuses a funnel naming none of the four", async () => {
+  it("ignores a sales funnel a caller still sends — it narrows nothing and is never refused", async () => {
     const res = await post({ ...body, funnelKey: "combinedSales" });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("funnelKey");
+    expect(res.body.legKeys).toEqual([LEG_OUT]);
   });
 
   it("502s when the leg catalogue cannot be read", async () => {

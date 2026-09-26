@@ -28,7 +28,6 @@ import {
   setCampaignStatus,
 } from "../lib/campaign-status-history.js";
 import { isSalesFamilyFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
-import { acceptedFunnelKeys, toFunnelKey } from "../lib/sales-funnel-vocabulary.js";
 import { resolveStartablePair } from "../lib/startable-pair.js";
 
 const router = Router();
@@ -779,9 +778,9 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     // Restating the leg or the offer can move a campaign onto an identity another live campaign
     // already holds.
     // That is a real conflict and it says so, rather than surfacing as an internal error.
-    if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_brand_funnel_channel") {
+    if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_brand_offer_leg_channel") {
       return res.status(409).json({
-        error: "Another live campaign already runs this (brand, sales funnel, offer, leg, acquisition channel)",
+        error: "Another live campaign already runs this (brand, offer, leg, acquisition channel)",
       });
     }
     console.error("[campaign-service] Update campaign error:", error);

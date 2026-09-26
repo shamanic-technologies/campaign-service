@@ -240,16 +240,22 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       // from billing fail-CLOSED, the same answer `campaignFunding` gives the turn planner. A brand
       // whose money is not split per campaign at all has one pot, and the campaign paces on it
       // exactly as (b) does.
-      const campaignSpend = await getStatsBudget({
-        orgId: campaign.orgId,
-        campaignId: campaign.campaignId,
-        featureSlug: campaign.featureSlug,
-        windows: [{ label: "today", since: startOfToday().toISOString() }],
-      });
-      const today = campaignSpend.windows.find(w => w.label === "today");
-      const spentCents = today
-        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
-        : 0;
+      // Read once, and only when a per-campaign ceiling actually has to be compared against it.
+      let spentCents: number | null = null;
+      const campaignSpentToday = async (): Promise<number> => {
+        if (spentCents !== null) return spentCents;
+        const campaignSpend = await getStatsBudget({
+          orgId: campaign.orgId,
+          campaignId: campaign.campaignId,
+          featureSlug: campaign.featureSlug,
+          windows: [{ label: "today", since: startOfToday().toISOString() }],
+        });
+        const today = campaignSpend.windows.find(w => w.label === "today");
+        spentCents = today
+          ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
+          : 0;
+        return spentCents;
+      };
 
       for (const brandId of campaign.brandIds) {
         const budgets = await fetchCampaignBudgets(brandId, identity);
@@ -268,7 +274,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         if (ceiling.cents === null || ceiling.cents <= 0) {
           return { allowed: false, reason: "Campaign not funded" };
         }
-        if (spentCents >= ceiling.cents) {
+        if ((await campaignSpentToday()) >= ceiling.cents) {
           return { allowed: false, reason: "Campaign daily budget reached" };
         }
       }

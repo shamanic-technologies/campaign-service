@@ -10,9 +10,8 @@ export const ErrorResponse = z.object({
 }).openapi("ErrorResponse");
 
 // The runtime optimization goal — an OPAQUE string, deliberately not an enum. This service does
-// NOT own the vocabulary and no longer WRITES it: a campaign says what it sells with its SALES
-// FUNNEL (`funnelKey`), which is the only word that separates a meeting bought with a positive
-// reply from one bought with a click onto the site. The goal collapsed both onto `meetingBooked`.
+// NOT own the vocabulary and no longer WRITES it: a campaign says what it sells with its OFFER and
+// the LEG it is bought for.
 //
 // The value is still SERVED wherever it is stored, because consumers are still reading it and
 // migrate next; nothing sets it any more (it is absent from the create/update bodies). The COLUMN
@@ -42,7 +41,7 @@ export const CampaignSchema = z.object({
   // Per-campaign OWN config (Campaign v2). Null = inherit the brand. audienceIds is the
   // targeted subset. `goal` is a LEGACY read-only field: still served wherever it is stored so
   // consumers reading it keep working, never written any more, and scheduled for removal — a
-  // campaign states what it sells with `funnelKey`.
+  // campaign states what it sells with `offerId` + `legKey`.
   goal: RuntimeGoalSchema.nullable(),
   audienceIds: z.array(z.string()).nullable(),
   servicesOffered: z.array(z.string()).nullable(),
@@ -53,31 +52,20 @@ export const CampaignSchema = z.object({
   maxBudgetTotalUsd: z.string().nullable(),
   // Per-campaign daily budget for the sales feature (cents). Null = fall back to brand daily budget.
   dailyBudgetCents: z.number().int().nullable(),
-  // The sales funnel this campaign works — the ONE word for what it sells, in brand-service's
-  // vocabulary (sales_meetings_from_conversation | sales_meetings_from_website |
-  // website_purchases | form_magnet). A consumer reads what a campaign buys HERE and nowhere else.
-  // STATED at creation for every sales campaign; null only for a feature that sells through no
-  // sales funnel (PR, hiring, VC, AI-visibility) and for sales rows created before it was
-  // required. A stated funnel paces the campaign on THAT funnel's own daily ceiling in billing —
-  // unless billing holds no per-funnel ceilings for the brand at all, in which case the brand has
-  // one pot and the campaign paces on the brand daily budget exactly as it always has.
+  // RETIRED, READ-ONLY. The sales funnel is gone from this service's model (wave C2): nothing here
+  // reads it, and no route accepts it. The stored value is still SERVED on the campaign row for the
+  // readers that have not migrated off it yet (lead-service step statements, instantly-service
+  // stop-on-click, workflow-service's ai-meeting-booking booking link, features-service revenue).
+  // The column is dropped once they have. Null on every campaign created since wave C1.
   funnelKey: z.string().nullable(),
-  // The OFFER this campaign sells — a brand-service offer UUID. An offer is one distinct thing a
-  // brand sells, so a campaign is (offer x sales funnel x acquisition channel) and this is the
-  // word that separates two campaigns a brand runs on one funnel through one channel for two
-  // different offers. Never derived from the funnel, the goal or the workflow — several offers
-  // sell through one funnel, which is why the dimension exists. Null = the campaign states no
-  // offer, which is every campaign created before it could be stated and every caller that has
-  // not migrated yet; nothing reads it for pacing, funding, selection or identity.
+  // The OFFER this campaign sells — a brand-service offer UUID. A campaign is (offer x leg x
+  // acquisition channel). Never derived from the goal or the workflow. Null = the campaign states
+  // no offer (every campaign created before it could be stated).
   offerId: z.string().nullable(),
-  // The single funnel LEG this campaign is bought for — features-service's canonical leg
-  // identifier, published on its `GET /public/channels` catalogue as `legs[].legKey`. A leg is the
-  // step-to-step move a customer actually buys, and it identifies itself: two campaigns on one
-  // channel buying two different legs are told apart by this value alone, with no funnel involved.
-  // OPAQUE — never split into the steps it connects (the catalogue serves those beside it), and
-  // never derived from the funnel, the channel or the workflow. Null = the campaign states no leg,
-  // which is every campaign created before it could state one and every caller that has not
-  // migrated yet; nothing reads it for pacing, funding, provisioning, scheduling or identity.
+  // The single LEG this campaign is bought for — features-service's canonical leg identifier,
+  // published on its `GET /public/channels` catalogue as `legs[].legKey`. A leg is the
+  // step-to-step move a customer actually buys. OPAQUE — never split into the steps it connects,
+  // and never derived from the channel or the workflow. Null = the campaign states no leg.
   legKey: z.string().nullable(),
   maxLeads: z.number().int().nullable(),
   startDate: z.string().nullable(),
@@ -109,38 +97,14 @@ export const CreateCampaignBody = z.object({
   activeGoalId: z.string().min(1).nullable().optional(),
   brandProfileId: z.string().min(1).nullable().optional(),
   audienceId: z.string().min(1).nullable().optional(),
-  // The SALES FUNNEL this campaign sells, stated at birth. For every sales-outreach feature the
-  // route requires EITHER this OR both `offerId` and `legKey`: a campaign stating the offer and the
-  // leg and no funnel is identified by (offer, leg, channel) alone — the model the funnel is being
-  // retired in favour of — and one already doing that work under any funnel is handed back rather
-  // than twinned. Ignored for every other feature, which sells through no sales funnel. Accepts the canonical four (sales_meetings_from_conversation |
-  // sales_meetings_from_website | website_purchases | form_magnet) and the pre-rename spellings
-  // (reply_meeting | visit_meeting | visit_signup | visit_form), stored canonical. Nothing is ever
-  // inferred: a creator provisions per funded funnel, so it already knows the answer.
-  funnelKey: z.string().min(1).optional(),
-  // The OFFER this campaign sells — a brand-service offer UUID.
-  //
-  // OPTIONAL, on purpose and for now: making it required is a breaking request-contract change,
-  // so callers state it as they migrate and a create without one behaves exactly as it did
-  // before the field existed. It becomes required in a later wave, once they have.
-  //
-  // Nothing is ever inferred when it is absent — not from the funnel (several offers sell through
-  // one funnel), not from the goal, not from the workflow. Absent means the campaign states no
-  // offer, and that is stored as NULL.
+  // The OFFER this campaign sells — a brand-service offer UUID. REQUIRED for the sales family
+  // (with `legKey`: that is what billing funds a campaign at); optional for every other feature.
+  // Nothing is ever inferred when it is absent.
   offerId: z.string().uuid("offerId must be a valid UUID").nullable().optional(),
-  // The single funnel LEG this campaign is bought for — features-service's canonical leg
-  // identifier, taken verbatim from its published catalogue (`GET /public/channels` →
-  // `legs[].legKey`). A leg that STARTS a funnel is spelled exactly like every other one, so a
-  // caller never branches on it.
-  //
-  // OPTIONAL, on purpose and for now: making it required is a breaking request-contract change,
-  // so callers state it as they migrate and a create without one behaves exactly as it did before
-  // the field existed. The sales funnel stays required for the sales family and the identity is
-  // unchanged; a later ship makes this the identity and drops the funnel.
-  //
-  // Not validated against a local list, because there is no local list: this service does not own
-  // the leg vocabulary and must not mint a second one. The value is carried verbatim, exactly as
-  // the goal and the offer id are.
+  // The single LEG this campaign is bought for — features-service's canonical leg identifier,
+  // taken verbatim from its published catalogue (`GET /public/channels` → `legs[].legKey`).
+  // REQUIRED for the sales family, optional otherwise. Not validated against a local list,
+  // because there is no local list: this service does not own the leg vocabulary.
   legKey: z.string().min(1).nullable().optional(),
   // Per-campaign OWN config (Campaign v2). Omit / null = inherit the brand. audienceIds is the
   // targeted SUBSET (one or more) of the brand's audiences; an empty array is rejected — use
@@ -175,7 +139,7 @@ export const CampaignsFilterQuery = z.object({
   workflowSlug: z.string().optional(),
   featureSlug: z.string().optional(),
   // Find a campaign by (offer, leg, channel): with featureSlug these three are what a campaign
-  // IS once the funnel stops being part of it. Each is an exact match; any funnel is returned.
+  // IS. Each is an exact match.
   offerId: z.string().optional(),
   legKey: z.string().optional(),
   // Optional cap on how many rows come back. Absent = every match, which is what every
@@ -187,7 +151,7 @@ export const CampaignsFilterQuery = z.object({
 /**
  * What the CUSTOMER states to start the campaign for a pair they have already funded.
  *
- * Exactly the four things their own screen knows, and nothing else. `.strict()` is load-bearing:
+ * Exactly the four things their own screen knows (brand, offer, leg, channel), and nothing else. `.strict()` is load-bearing:
  * a caller reaching for a workflow, a name or a budget is TOLD no rather than having it silently
  * stripped, because each of those would be this service handing back a decision that is not the
  * browser's to make (the workflow), a fact already derivable (the name), or a second
@@ -195,18 +159,13 @@ export const CampaignsFilterQuery = z.object({
  */
 export const StartFundedPairBody = z.object({
   brandId: z.string().uuid("brandId must be a valid UUID"),
-  // The OFFER whose money funds this pair — brand-service's UUID, carried and never derived.
-  // Absent is the pre-offer population, which resolves on the pair figure exactly as it always has.
+  // The OFFER whose money funds this campaign — brand-service's UUID, carried and never derived.
+  // Required together with `legKey` (refused with `leg_required` otherwise).
   offerId: z.string().uuid("offerId must be a valid UUID").nullable().optional(),
-  // OPTIONAL since wave C1 (the sales funnel is retiring). A caller naming one (any accepted
-  // spelling) is resolved exactly as before. A caller naming none must state `offerId` AND
-  // `legKey` — the campaign's identity — or is refused with `leg_required`.
-  funnelKey: z.string().min(1).optional(),
   // The ACQUISITION CHANNEL, as a features-service feature slug. A channel IS a feature slug.
   featureSlug: z.string().min(1, "featureSlug is required"),
-  // With a funnel: OPTIONAL and only a disambiguation between two funded legs of one (funnel,
-  // channel, offer). Without one: REQUIRED, with `offerId` — it is what the campaign is bought for.
-  // A leg the channel does not perform is refused rather than stamped.
+  // The LEG the campaign is bought for. REQUIRED, with `offerId`. A leg the channel does not
+  // perform is refused rather than stamped.
   legKey: z.string().min(1).nullable().optional(),
 }).strict().openapi("StartFundedPairBody");
 
@@ -222,7 +181,7 @@ export const UpdateCampaignBody = z.object({
   // untouched; null clears it back to "states no offer". This is how a caller that created a
   // campaign before it could state an offer says which one it runs, without a second campaign.
   offerId: z.string().uuid("offerId must be a valid UUID").nullable().optional(),
-  // State (or clear) the single funnel LEG this campaign is bought for — features-service's
+  // State (or clear) the single LEG this campaign is bought for — features-service's
   // canonical leg identifier, verbatim. Omit and it is untouched; null clears it back to "states
   // no leg". This is how a campaign created before it could state a leg says which one it buys,
   // without a second campaign.
@@ -428,7 +387,6 @@ export const DeleteCampaignsByOrgResponse = z.object({
  * campaign's total are all stated, alongside the ceiling rows that produced them.
  */
 export const SpendableBudgetRow = z.object({
-  funnelKey: z.string().nullable(),
   featureSlug: z.string().nullable(),
   offerId: z.string().nullable(),
   legKey: z.string().nullable(),
@@ -450,7 +408,6 @@ export const SpendableBudgetCampaign = z.object({
   campaignId: z.string(),
   status: z.string(),
   running: z.boolean(),
-  funnelKey: z.string().nullable(),
   featureSlug: z.string().nullable(),
   offerId: z.string().nullable(),
   legKey: z.string().nullable(),
@@ -461,7 +418,7 @@ export const SpendableBudgetCampaign = z.object({
 export const SpendableBudgetResponse = z.object({
   orgId: z.string(),
   brandId: z.string(),
-  grain: z.enum(["leg", "offer", "channel", "funnel", "brand", "none"]),
+  grain: z.enum(["campaign", "brand", "none"]),
   configuredDailyBudgetCents: z.number().int(),
   runningDailyBudgetCents: z.number().int(),
   offers: z.array(SpendableBudgetOffer),
@@ -498,9 +455,8 @@ export const BatchSpendableBudgetResponse = z.object({
 /**
  * A LEAD JUST REACHED A STEP — run the campaign bought for the leg OUT of it, now.
  *
- * The scope is the (brand, offer, funnel) the lead is on plus the step they reached. Nothing is
- * inferred from anything else: the leg is features-service's statement about that step and that
- * funnel, and the campaign is the one already stating that leg. The org rides on `x-org-id`, like
+ * The scope is the (brand, offer) the lead is on plus the step they reached. Nothing is inferred
+ * from anything else: the leg is features-service's statement about that step, and the campaign is the one already stating that leg. The org rides on `x-org-id`, like
  * every other per-(org, brand) read in this service.
  */
 export const TriggerForStepBody = z.object({
@@ -508,21 +464,14 @@ export const TriggerForStepBody = z.object({
   // The OFFER the lead is on — brand-service's id. Matched exactly against the campaign's own; a
   // campaign that states no offer is not the campaign of the offer named here.
   offerId: z.string().uuid("offerId must be a valid UUID"),
-  // OPTIONAL since wave C1 (the sales funnel is retiring). When sent — the canonical four or a
-  // pre-rename spelling — it narrows the legs out of the step to that funnel's, exactly as before.
-  // When omitted, every leg out of the step is in scope and the campaign bought for it is matched
-  // on (offer, leg).
-  funnelKey: z.string().min(1).optional(),
   // The step the lead just REACHED — features-service's step key, carried verbatim and never
   // parsed. A step it does not publish is a 400, never an empty answer.
   step: z.string().min(1, "step is required"),
 }).openapi("TriggerForStepBody");
 
 export const TriggerForStepResponse = z.object({
-  /** The canonical funnel the request named; null when it named none. */
-  funnelKey: z.string().nullable(),
   step: z.string(),
-  /** The legs OUT of that step (on the named funnel, when one was named), as features-service names them. */
+  /** The legs OUT of that step, as features-service names them. */
   legKeys: z.array(z.string()),
   triggered: z.array(z.object({
     campaignId: z.string(),
@@ -545,25 +494,24 @@ export const TriggerForStepResponse = z.object({
 /**
  * WHICH CAMPAIGN RAN THE LEG THAT ENDS WHERE THIS ONE BEGINS.
  *
- * A funnel is several legs and this service mints one campaign per leg, so a campaign bought for a
+ * A journey is several legs and this service mints one campaign per leg, so a campaign bought for a
  * leg that CONTINUES another cannot, on its own, find what it is continuing — while the person, the
  * thread and the record of what is owed them are all filed under the campaign that ran the leg
  * before. This is that lookup, over state this service already holds.
  *
  * `absence` is non-null exactly when `predecessor` is null, and it NAMES why: a campaign at the
- * first leg of its funnel has no predecessor and says so, rather than being handed the closest
+ * first leg of a journey has no predecessor and says so, rather than being handed the closest
  * sibling. "There is none" and "it could not be worked out" stay different answers — the second is
  * a 409 or a 502, never a null.
  */
 export const PredecessorCampaignResponse = z.object({
   campaignId: z.string(),
   legKey: z.string().nullable(),
-  funnelKey: z.string().nullable(),
   offerId: z.string().nullable(),
   brandId: z.string().nullable(),
   /** The step this campaign's leg takes a lead OUT of — where its predecessor must end. */
   fromStepKey: z.string().nullable(),
-  /** Every published leg ending at that step on this funnel, as features-service names them. */
+  /** Every published leg ending at that step, as features-service names them. */
   precedingLegKeys: z.array(z.string()),
   predecessor: z.object({
     campaignId: z.string(),
@@ -574,7 +522,7 @@ export const PredecessorCampaignResponse = z.object({
     workflowSlug: z.string().nullable(),
   }).nullable(),
   /**
-   * `entry_leg` | `campaign_states_no_leg` | `campaign_states_no_funnel` |
+   * `entry_leg` | `campaign_states_no_leg` |
    * `campaign_states_no_offer` | `campaign_states_no_brand` | `no_campaign_for_preceding_leg`
    */
   absence: z.string().nullable(),

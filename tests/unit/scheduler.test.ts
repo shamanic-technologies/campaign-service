@@ -94,7 +94,7 @@ vi.mock("../../src/lib/brand-pause.js", () => ({
   notPausedBrandClause: vi.fn(() => undefined),
 }));
 
-// Per-funnel turn-taking has its own suite (tests/unit/funnel-campaigns.test.ts). Here it is a
+// Per-brand turn-taking has its own suite (tests/unit/brand-turns.test.ts). Here it is a
 // no-op so these campaigns (a non-sales-outreach feature slug) keep the pre-funnel behaviour the
 // assertions below were written for.
 vi.mock("../../src/lib/brand-turns.js", () => ({

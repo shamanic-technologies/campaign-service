@@ -24,12 +24,8 @@ const LEG = "start_to_conversation";
 const OTHER_LEG = "conversation_to_meeting_booked";
 
 /**
- * A sales campaign can be identified by (OFFER, LEG, CHANNEL) alone, with no funnel.
- *
- * The funnel is leaving what a campaign IS: one leg belongs to several funnels, so the same leg
- * run by the same channel for the same offer is ONE campaign. These pin that such a campaign can
- * be created and found, that it is never twinned — by another funnel-less create or by a
- * funnel-keyed one — and that a funnel-keyed flow behaves exactly as it did.
+ * A sales campaign IS (OFFER, LEG, CHANNEL). These pin that such a campaign can be created and
+ * found, and that it is never twinned.
  */
 describe("Campaign identified by (offer, leg, channel)", () => {
   beforeEach(async () => {
@@ -64,7 +60,7 @@ describe("Campaign identified by (offer, leg, channel)", () => {
     return { name, workflowSlug: "sales-cold-email-outreach-osprey", orgId: ORG, brandIds: [brandId], ...extra };
   }
 
-  it("creates a sales campaign from offer + leg with no funnel, and finds it by (offer, leg, channel)", async () => {
+  it("creates a sales campaign from offer + leg, and finds it by (offer, leg, channel)", async () => {
     const brandId = crypto.randomUUID();
     const offerId = crypto.randomUUID();
 
@@ -84,7 +80,7 @@ describe("Campaign identified by (offer, leg, channel)", () => {
     });
   });
 
-  it("a second funnel-less create of the same (offer, leg, channel) is the SAME campaign", async () => {
+  it("a second create of the same (offer, leg, channel) is the SAME campaign", async () => {
     const brandId = crypto.randomUUID();
     const offerId = crypto.randomUUID();
 
@@ -93,55 +89,10 @@ describe("Campaign identified by (offer, leg, channel)", () => {
     expect(again.body.campaign.id).toBe(first.body.campaign.id);
   });
 
-  it("a funnel-less create hands back the campaign already running that (offer, leg, channel) under a funnel", async () => {
-    const brandId = crypto.randomUUID();
-    const offerId = crypto.randomUUID();
-
-    const funnelKeyed = await create(body("Funnel-keyed", brandId, {
-      funnelKey: "sales_meetings_from_conversation", offerId, legKey: LEG,
-    })).expect(201);
-
-    const funnelless = await create(body("Funnel-less", brandId, { offerId, legKey: LEG })).expect(200);
-    expect(funnelless.body.campaign.id).toBe(funnelKeyed.body.campaign.id);
-    // Nothing about the incumbent's identity moved.
-    expect(funnelless.body.campaign.funnelKey).toBe("sales_meetings_from_conversation");
-  });
-
-  it("a funnel-keyed create never twins a campaign created without a funnel", async () => {
-    const brandId = crypto.randomUUID();
-    const offerId = crypto.randomUUID();
-
-    const funnelless = await create(body("Funnel-less", brandId, { offerId, legKey: LEG })).expect(201);
-    const funnelKeyed = await create(body("Funnel-keyed", brandId, {
-      funnelKey: "sales_meetings_from_conversation", offerId, legKey: LEG,
-    })).expect(200);
-    expect(funnelKeyed.body.campaign.id).toBe(funnelless.body.campaign.id);
-    expect(funnelKeyed.body.campaign.funnelKey).toBeNull();
-  });
-
-  it("wave C1: a create naming (offer, leg) matches THE campaign of that leg, whatever funnel either states", async () => {
-    const brandId = crypto.randomUUID();
-    const offerId = crypto.randomUUID();
-
-    const a = await create(body("Funnel A", brandId, {
-      funnelKey: "sales_meetings_from_conversation", offerId, legKey: LEG,
-    })).expect(201);
-    // Same (offer, leg, channel) under another funnel is the SAME campaign: one leg belongs to
-    // several funnels and is bought once. It is handed back, never twinned.
-    const b = await create(body("Funnel B", brandId, {
-      funnelKey: "sales_meetings_from_website", offerId, legKey: LEG,
-    })).expect(200);
-    expect(b.body.campaign.id).toBe(a.body.campaign.id);
-  });
-
-  it("still refuses a sales campaign that states neither a funnel nor an offer + leg", async () => {
+  it("refuses a sales campaign that does not state both an offer and a leg", async () => {
     const brandId = crypto.randomUUID();
     await create(body("Nothing stated", brandId, {})).expect(400);
     await create(body("Leg only", brandId, { legKey: LEG })).expect(400);
     await create(body("Offer only", brandId, { offerId: crypto.randomUUID() })).expect(400);
-    // An unrecognised funnel is still refused, even beside an offer and a leg.
-    await create(body("Bad funnel", brandId, {
-      funnelKey: "not_a_funnel", offerId: crypto.randomUUID(), legKey: LEG,
-    })).expect(400);
   });
 });

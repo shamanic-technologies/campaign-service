@@ -75,12 +75,12 @@ function catalogueAnswers() {
       {
         legKey: LEG_OUT,
         fromStepKey: STEP,
-        funnelKeys: new Set(["sales_meetings_from_conversation", "sales_meetings_from_website"]),
+        toStepKey: null,
       },
       {
         legKey: LEG_ELSEWHERE,
         fromStepKey: "meeting_booked",
-        funnelKeys: new Set(["sales_meetings_from_conversation"]),
+        toStepKey: null,
       },
     ],
   });
@@ -99,7 +99,6 @@ function campaign(over: Record<string, unknown> = {}) {
     activeGoalId: null,
     brandProfileId: null,
     audienceId: null,
-    funnelKey: "sales_meetings_from_conversation",
     dailyBudgetCents: null,
     offerId: OFFER,
     legKey: LEG_OUT,
@@ -111,7 +110,6 @@ const request = {
   orgId: ORG,
   brandId: BRAND,
   offerId: OFFER,
-  funnelKey: "sales_meetings_from_conversation",
   step: STEP,
 };
 
@@ -128,7 +126,7 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     mockExecute.mockResolvedValue(undefined);
   });
 
-  it("executes the campaign of that (brand, offer, funnel) stating that leg", async () => {
+  it("executes the campaign of that (brand, offer) stating that leg", async () => {
     mockFindMany.mockResolvedValue([campaign()]);
 
     const outcome = await triggerCampaignsForStep(request);
@@ -172,35 +170,9 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
-  it("runs the campaign bought for the leg whatever funnel it carries — the leg is the identity (wave C1)", async () => {
-    mockFindMany.mockResolvedValue([campaign({ funnelKey: "website_purchases" })]);
-
-    const outcome = await triggerCampaignsForStep(request);
-
-    expect(outcome.triggered).toHaveLength(1);
-  });
-
-  it("answers a request that names NO funnel: every leg out of the step is in scope", async () => {
-    mockFindMany.mockResolvedValue([campaign()]);
-    const { funnelKey: _omit, ...noFunnel } = request;
-
-    const outcome = await triggerCampaignsForStep(noFunnel);
-
-    expect(outcome.funnelKey).toBeNull();
-    expect(outcome.triggered).toHaveLength(1);
-  });
-
-  it("reads the campaign's funnel under the pre-rename spelling too", async () => {
-    mockFindMany.mockResolvedValue([campaign({ funnelKey: "reply_meeting" })]);
-
-    const outcome = await triggerCampaignsForStep({ ...request, funnelKey: "reply_meeting" });
-
-    expect(outcome.triggered).toHaveLength(1);
-  });
-
   it("never lets a reply make a DEFUNDED campaign spend", async () => {
     mockFindMany.mockResolvedValue([campaign()]);
-    mockFunding.mockResolvedValue({ funded: false, reason: "funnel is funded at zero" });
+    mockFunding.mockResolvedValue({ funded: false, reason: "campaign is funded at zero" });
 
     const outcome = await triggerCampaignsForStep(request);
 
@@ -210,7 +182,7 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
         campaignId: CAMPAIGN,
         legKey: LEG_OUT,
         reason: STEP_TRIGGER_SKIPS.UNFUNDED,
-        detail: "funnel is funded at zero",
+        detail: "campaign is funded at zero",
       },
     ]);
     expect(mockExecute).not.toHaveBeenCalled();
@@ -292,11 +264,6 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     it("refuses a step features-service does not publish", async () => {
       await expect(triggerCampaignsForStep({ ...request, step: "smoke_signal" }))
         .rejects.toMatchObject({ name: "StepTriggerScopeError", status: 400 });
-    });
-
-    it("refuses a funnel naming none of the four", async () => {
-      await expect(triggerCampaignsForStep({ ...request, funnelKey: "combinedSales" }))
-        .rejects.toBeInstanceOf(StepTriggerScopeError);
     });
 
     it("refuses when the catalogue cannot be read — never 'nobody performs this leg'", async () => {

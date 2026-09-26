@@ -4,7 +4,7 @@ import { ensureCampaignRunId, type AnchorableCampaign } from "./trigger-run.js";
 /**
  * The identity the PROVISIONING path carries — well-formed enough for a sibling to accept it.
  *
- * Provisioning asks two services what a funded pair may do: features-service which funnels a
+ * Provisioning asks two services what a funded pair may do: features-service which legs a
  * channel sells (`GET /features/{slug}`) and workflow-service which workflow can run it
  * (`GET /workflows?featureSlug=`). Both REJECT a request that does not state a full identity —
  * `400 Missing required headers: x-run-id` and `400 x-org-id, x-user-id, and x-run-id headers are
@@ -50,7 +50,7 @@ export async function buildProvisioningIdentity(
     runId = await ensureCampaignRunId(seed);
   } catch (err) {
     console.warn(
-      `[campaign-service] Not provisioning funded funnels of brand ${brandId} (org ${seed.orgId}) this sweep — the ancestor run its reads must state could not be established:`,
+      `[campaign-service] Not provisioning funded campaigns of brand ${brandId} (org ${seed.orgId}) this sweep — the ancestor run its reads must state could not be established:`,
       err,
     );
     return null;

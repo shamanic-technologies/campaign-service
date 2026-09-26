@@ -257,9 +257,8 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       preRunIdentity,
       campaign.offerId,
     );
-    // What this run is PRICED on: the LEG the campaign states, and nothing else. The funnel- and
-    // goal-keyed reads and the goal arbitration are gone (wave C2), so a campaign that states no
-    // leg has no audience picked here and says so below.
+    // What this run is PRICED on: the LEG the campaign states, and nothing else. A campaign that
+    // states no leg has no audience picked here and says so below.
     const legKey: string | null = campaign.legKey;
     // Cost-aware Thompson sampling over the chosen workflow's audiences, straight from
     // features-service /workflow-projection — which enumerates EVERY active audience of the
@@ -296,7 +295,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
         // picked, loudly, and nothing is invented to ask with.
         if (!legKey) {
           throw new Error(
-            `campaign ${campaignId} states NO leg — no funnel- or goal-keyed read exists (wave C2), ` +
+            `campaign ${campaignId} states NO leg — nothing prices it, ` +
               "so no audience can be picked. State the campaign's legKey.",
           );
         }
