@@ -272,7 +272,7 @@ describe('No Legacy Patterns - CRITICAL', () => {
   it('wave C3: no CODE in src stores, reads, serves or accepts a sales funnel', () => {
     // The funnel left campaign-service's model: a campaign is (offer x leg x channel) and billing
     // funds it at that grain. Wave C3 dropped the last survivor, the read-only `funnel_key` column
-    // and its `funnelKey` echo on the campaign row (migration 0059). Comments may explain the
+    // and its `funnelKey` echo on the campaign row (migration 0060). Comments may explain the
     // removal; code may not use it.
     const offenders: string[] = [];
     for (const file of getAllTsFiles(srcDir)) {
