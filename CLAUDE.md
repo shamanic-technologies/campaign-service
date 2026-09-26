@@ -32,7 +32,8 @@ Four rules, and every older section is read subject to them:
    partial on `ongoing`, and production carries **663 stopped rows sharing 33 identities** from
    before this was one campaign. History is never rewritten, so a full unique index is
    uncreatable and the guard lives in the LOOKUP; the index stays the backstop for the live case.
-3. **A SYSTEM CONDITION NEVER CHANGES A STATUS.** Out of credit, audience exhausted, today's
+3. **A SYSTEM CONDITION NEVER CHANGES A STATUS** (one owner-stated exception, a declined card —
+   see the `payment_declined` section below). Out of credit, audience exhausted, today's
    budget spent, the lifetime `maxBudgetTotalUsd`, the `maxLeads` cap: each of those blocks the
    RUN and nothing else. The campaign stays exactly as the customer left it, does not run this
    tick, and runs again on a later tick once the condition has passed. `autoStopCampaign` is gone
@@ -66,6 +67,42 @@ which creates a campaign, starts one, or changes a status.
 **Sections below that describe provisioning a campaign from a funded pair, a funding sweep, an
 auto-stop, or a resume are HISTORY.** They are kept because they explain why each grain of the
 money exists and how it PACES a campaign, which is all still true. (Set 2026-09-06.)
+
+
+## THE ONE EXCEPTION TO RULE 3, STATED BY THE OWNER: A DECLINED CARD STOPS EVERY CAMPAIGN OF ITS ORG (`payment_declined`)
+
+Rule 3 says no system condition changes a status. On 2026-09-26 the owner carved out exactly one:
+an org whose card billing cannot charge keeps spending money it is not paying (PPE Pro Solutions,
+card declined, −$50, one campaign still running at $49/day and read as "active" by the
+customer-health board). So:
+
+- **billing states the verdict; this service never re-derives it.** `lib/payment-hold.ts` reads
+  billing's existing `GET /internal/accounts/by-org/:orgId/payment-outlook` and maps ONE thing:
+  `state === "charge_blocked"` ⟺ held, carrying billing's `blockedReason` verbatim
+  (`card_declined`, `card_unusable`, `retries_exhausted`, `card_country_unsupported`, …). No reason
+  is filtered, no balance compared. 404 (no billing account) = not held. Measured 2026-09-26: 2 of
+  22 billed orgs answered `charge_blocked` — `81b34252` (PPE, card_declined) and `f74660b1` (The
+  Federal Architect, card_country_unsupported) — exactly the two the owner named.
+- **The sweep** (`lib/payment-hold-sweep.ts`, first thing every scheduler tick, own
+  `PAYMENT_HOLD_RECHECK_MS` = 10 min cadence; the tick never sleeps past it while anything is live)
+  asks billing for every org with an `ongoing` campaign and stops all of a held org's ongoing
+  campaigns with `stop_reason = payment_declined`, one transition each with source
+  `payment_hold` (`stopOrgCampaignsWithHistory`, which now takes its source). Fail-SOFT: an
+  unreadable billing stops nothing and warns. A campaign already stopped keeps its own reason.
+- **Every start path refuses a held org** — `POST /campaigns` (new or restart),
+  `POST /campaigns/start-funded-pair`, `PATCH /campaigns/:id status=activate` — with **409**
+  `{ error, reason: "payment_declined", blockedReason }`, `error` in customer-facing English the
+  dashboard renders verbatim. It refuses whatever stopped the campaign (a hand-stopped campaign of
+  a declined org is just as unpaid). Fail-CLOSED: billing unreadable → **502**
+  `billing_unavailable`, nothing started.
+- **NOTHING RESUMES AUTOMATICALLY.** Once billing stops saying `charge_blocked` (the customer paid
+  what is owed AND a chargeable card is on file — both billing's judgement), the customer presses
+  start and it works. The owner accepted manual resume; an auto-resume would be the retired
+  resume sweep coming back.
+- `tests/setup.ts` mocks `lib/payment-hold.js` fleet-wide to "not held" (no test talks to billing);
+  `tests/unit/payment-hold.test.ts` reads the real module via `vi.importActual`.
+
+(Set 2026-09-26.)
 
 
 ## MONEY STARTS NOTHING, AND THE CUSTOMER CAN SAY START — `POST /campaigns/start-funded-pair`

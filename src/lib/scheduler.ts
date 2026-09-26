@@ -1,4 +1,5 @@
 import { db } from "../db/index.js";
+import { holdPaymentDeclinedOrgs, PAYMENT_HOLD_RECHECK_MS } from "./payment-hold-sweep.js";
 import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
@@ -473,6 +474,11 @@ async function tick(): Promise<void> {
       // intent: money does not create one, money does not start one, and no system condition
       // stops one — so there is nothing for a sweep to resume and no funded ceiling for a sweep
       // to stand a campaign up from. What is left is the tick's own work.
+      // The ONE exception the owner stated (2026-09-26): a declined card stops the org's campaigns.
+      // It runs FIRST so a due campaign of a just-declined org is stopped rather than fired.
+      await holdPaymentDeclinedOrgs().catch((err) => {
+        console.error("[campaign-service] Payment hold sweep error:", err);
+      });
       await claimStuckCampaigns();
       await reRunDueCampaigns();
     } catch (err) {
@@ -481,7 +487,12 @@ async function tick(): Promise<void> {
 
     let delayMs = ACTIVE_INTERVAL_MS;
     try {
-      delayMs = computeNextDelayMs(await loadOngoingSnapshot());
+      const snapshot = await loadOngoingSnapshot();
+      // While anything is live, never sleep past the payment-hold cadence: that interval is the
+      // promise that a declined card stops its org's campaigns within ten minutes.
+      delayMs = snapshot.length > 0
+        ? Math.min(computeNextDelayMs(snapshot), PAYMENT_HOLD_RECHECK_MS)
+        : computeNextDelayMs(snapshot);
     } catch (err) {
       console.error("[campaign-service] Scheduler delay computation error:", err);
     }

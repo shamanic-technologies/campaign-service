@@ -15,10 +15,11 @@ function everySrcFile(dir: string): string[] {
 }
 
 describe("stop reasons", () => {
-  it("names ONLY the reasons a person decided — a system condition never stops a campaign", () => {
+  it("names the reasons a person decided, plus the ONE system stop the owner stated (a declined card)", () => {
     expect(STOP_REASONS).toEqual({
       MANUAL: "manual",
       ORG_TEARDOWN: "org_teardown",
+      PAYMENT_DECLINED: "payment_declined",
     });
   });
 

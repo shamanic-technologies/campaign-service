@@ -113,11 +113,14 @@ registry.registerPath({
   path: "/campaigns",
   tags: ["Campaigns"],
   summary: "Create a new campaign",
+  description: "A PAYMENT HOLD refuses every start: when billing-service cannot charge the org's card (payment-outlook state charge_blocked) the answer is 409 with reason `payment_declined`, `blockedReason` (billing's own code, e.g. card_declined, card_country_unsupported) and `error` in customer-facing English to render verbatim; when billing cannot be read it is 502 with reason `billing_unavailable`. Such an org's campaigns are stopped by the scheduler within ten minutes with stopReason `payment_declined`, and can be started again by a person once billing no longer reports the charge as blocked (paid AND a chargeable card on file).",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: CreateCampaignBody } } } },
   responses: {
     201: { description: "Campaign created", content: { "application/json": { schema: z.object({ campaign: CampaignSchema }) } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "Refused — payment_declined: billing cannot charge this org's card (see description)", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), blockedReason: z.string().optional() }) } } },
+    502: { description: "Refused — billing_unavailable: the org's payment state could not be read, nothing was started", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 
@@ -131,7 +134,8 @@ registry.registerPath({
     + "The caller states only what their own screen knows (brand, offer, sales funnel, acquisition channel) and CANNOT state a workflow, a name or a budget: the workflow is re-picked every run here so a slug frozen in a browser goes stale, the name is derived from the identity, and the money is billing's per (offer x funnel x channel x leg) and is already set. The body is strict, so a caller reaching for any of the three is told so. "
     + "Since wave C1 the sales funnel is OPTIONAL: a caller may instead name the offer and the leg (offerId + legKey, both required then), and the pair is resolved and funded at (offer, leg, channel) with no funnel read. With a funnel, legKey is optional and only ever a disambiguation, for a customer who funds TWO legs of one pair and therefore has two campaigns to start. "
     + "The started campaign is paced, gated and held by billing's ceiling exactly as every other sales-family campaign is. A pair that ALREADY has a campaign never gets a second one: a live campaign is handed back untouched (200, started=false), and a stopped one is started (200, started=true). "
-    + "A pair that cannot be started is refused with `error` in customer-facing English (render it verbatim) and `reason` as a code: unknown_funnel, leg_required, channel_not_paced_here, unknown_channel, channel_does_not_sell_funnel, leg_not_performed, several_funded_legs (400); not_funded, no_workflow (409); catalogue_unavailable, billing_unavailable, workflow_unavailable (502, try again).",
+    + "A pair that cannot be started is refused with `error` in customer-facing English (render it verbatim) and `reason` as a code: unknown_funnel, leg_required, channel_not_paced_here, unknown_channel, channel_does_not_sell_funnel, leg_not_performed, several_funded_legs (400); not_funded, no_workflow, payment_declined (409); catalogue_unavailable, billing_unavailable, workflow_unavailable (502, try again). "
+    + "A PAYMENT HOLD refuses every start: when billing-service cannot charge the org's card (payment-outlook state charge_blocked) the answer is 409 with reason `payment_declined`, `blockedReason` (billing's own code, e.g. card_declined, card_country_unsupported) and `error` in customer-facing English to render verbatim; when billing cannot be read it is 502 with reason `billing_unavailable`. Such an org's campaigns are stopped by the scheduler within ten minutes with stopReason `payment_declined`, and can be started again by a person once billing no longer reports the charge as blocked (paid AND a chargeable card on file).",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: StartFundedPairBody } } } },
   responses: {
@@ -154,6 +158,7 @@ registry.registerPath({
   path: "/campaigns/{id}",
   tags: ["Campaigns"],
   summary: "Update a campaign",
+  description: "status=activate starts the campaign. A PAYMENT HOLD refuses every start: when billing-service cannot charge the org's card (payment-outlook state charge_blocked) the answer is 409 with reason `payment_declined`, `blockedReason` (billing's own code, e.g. card_declined, card_country_unsupported) and `error` in customer-facing English to render verbatim; when billing cannot be read it is 502 with reason `billing_unavailable`. Such an org's campaigns are stopped by the scheduler within ten minutes with stopReason `payment_declined`, and can be started again by a person once billing no longer reports the charge as blocked (paid AND a chargeable card on file).",
   security: [{ [apiKeyAuth.name]: [] }],
   request: {
     params: z.object({ id: z.string().uuid() }),
@@ -162,6 +167,8 @@ registry.registerPath({
   responses: {
     200: { description: "Campaign updated", content: { "application/json": { schema: z.object({ campaign: CampaignSchema }) } } },
     404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "Refused — payment_declined: billing cannot charge this org's card (see description)", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), blockedReason: z.string().optional() }) } } },
+    502: { description: "Refused — billing_unavailable: the org's payment state could not be read, nothing was started", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 

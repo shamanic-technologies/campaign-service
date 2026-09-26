@@ -4,7 +4,7 @@
  * A campaign's STATUS is the CUSTOMER's statement of intent, and nothing else may change it.
  * So there is exactly one kind of value here: a value written by a person's decision. A system
  * CONDITION — out of credit, audience exhausted, today's budget spent, a lead cap reached — never
- * stops a campaign. It stops the campaign RUNNING this tick; the campaign stays exactly as the
+ * stops a campaign. ONE exception, stated by the owner: a declined card (`payment_declined`). It stops the campaign RUNNING this tick; the campaign stays exactly as the
  * customer left it and runs again on a later tick once the condition has passed.
  *
  * That is why there is nothing here for exhaustion or a lead cap any more, and why nothing
@@ -18,6 +18,14 @@ export const STOP_REASONS = {
   MANUAL: "manual",
   /** DELETE /internal/campaigns/by-org/:orgId — the org is being torn down. */
   ORG_TEARDOWN: "org_teardown",
+  /**
+   * The ONE system-written stop, by the owner's explicit decision (2026-09-26): billing reports it
+   * cannot charge this org's card, so every campaign of the org is stopped and none may be started
+   * until billing stops saying so (paid AND a chargeable card on file). See `lib/payment-hold.ts`.
+   * It is not a condition that passes on its own: the customer must act, and then a PERSON starts
+   * the campaign again — nothing resumes it automatically.
+   */
+  PAYMENT_DECLINED: "payment_declined",
 } as const;
 
 export type StopReason = (typeof STOP_REASONS)[keyof typeof STOP_REASONS];

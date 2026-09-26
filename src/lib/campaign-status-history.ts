@@ -36,6 +36,8 @@ export const TRANSITION_SOURCES = {
   START_FUNDED_PAIR: "start_funded_pair",
   /** DELETE /internal/campaigns/by-org/:orgId — the org is gone. */
   ORG_TEARDOWN: "org_teardown",
+  /** The payment-hold sweep: billing cannot charge the org's card (lib/payment-hold-sweep.ts). */
+  PAYMENT_HOLD: "payment_hold",
   /** Migration 0057 opened the record by observing the PRESENT. Never written by the runtime. */
   RECORD_OPENED: "record_opened",
 } as const;
@@ -91,7 +93,8 @@ export async function setCampaignStatus(write: StatusWrite) {
 
 /**
  * Stop every campaign an org holds, recording one transition each — inside a transaction the
- * caller already owns (the teardown does more than campaigns in the same atomic step).
+ * caller already owns (the teardown does more than campaigns in the same atomic step). The caller
+ * names which path it is (org teardown, payment hold) so the ledger says why.
  *
  * The rows are read BEFORE they are updated, so each transition states the status it actually
  * came from rather than leaving it unstated.
@@ -101,6 +104,7 @@ export async function stopOrgCampaignsWithHistory(
   orgId: string,
   reason: string,
   predicate: SQL | undefined,
+  source: TransitionSource,
 ): Promise<{ id: string }[]> {
   const before = await tx
     .select({ id: campaigns.id, status: campaigns.status })
@@ -123,7 +127,7 @@ export async function stopOrgCampaignsWithHistory(
       fromStatus: statusById.get(c.id) ?? null,
       toStatus: "stopped",
       reason,
-      source: TRANSITION_SOURCES.ORG_TEARDOWN,
+      source,
     })),
   );
 

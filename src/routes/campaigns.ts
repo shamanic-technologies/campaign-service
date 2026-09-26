@@ -20,6 +20,7 @@ import {
   campaignIdentityColumns,
   derivedCampaignName,
 } from "../lib/campaign-identity.js";
+import { paymentStartRefusal } from "../lib/payment-hold.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
 import {
   TRANSITION_SOURCES,
@@ -235,6 +236,11 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     // a single brand 137 rows — one per workflow version — each holding a slice of a history nobody
     // could read as one campaign. So a create that names an identity already alive UPDATES that
     // campaign to the requested workflow and configuration and hands it back.
+    // Every path through this route ends with a campaign ONGOING, so an org whose card billing
+    // cannot charge is refused before anything is matched or written (lib/payment-hold.ts).
+    const createRefusal = await paymentStartRefusal(req.orgId!);
+    if (createRefusal) return res.status(createRefusal.status).json(createRefusal.body);
+
     const identity = campaignIdentityColumns({ brandIds, featureSlug: resolvedFeatureSlug });
     // The OFFER is part of the identity too: a customer funds their money per offer, so two offers
     // worked through one (funnel, channel, leg) are two ceilings and must be able to be two
@@ -568,6 +574,10 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
     }
     const identity = { orgId: req.orgId!, userId: req.userId, runId: req.runId, brandId };
 
+    // A pair of an org whose card billing cannot charge is never started (lib/payment-hold.ts).
+    const startRefusal = await paymentStartRefusal(req.orgId!);
+    if (startRefusal) return res.status(startRefusal.status).json(startRefusal.body);
+
     const resolved = await resolveStartablePair(
       { brandId, offerId, funnelKey: bodyFunnelKey, featureSlug, legKey: bodyLegKey ?? null },
       identity,
@@ -774,6 +784,13 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
           error: `Cannot activate campaign — missing required headers for workflow execution: ${missingHeaders.join(", ")}`,
         });
       }
+    }
+
+    // Starting a campaign of an org whose card billing cannot charge is refused, whatever stopped
+    // it — a campaign stopped by hand is just as unfunded (lib/payment-hold.ts).
+    if (req.body.status === "activate") {
+      const activateRefusal = await paymentStartRefusal(req.orgId!);
+      if (activateRefusal) return res.status(activateRefusal.status).json(activateRefusal.body);
     }
 
     if (req.runId) {
