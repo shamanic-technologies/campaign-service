@@ -593,18 +593,6 @@ function poolArmsByAudience(rows: ProjectionRow[]): Map<string, Arm> {
 }
 
 /**
- * Per-run AUDIENCE selection at the TRIGGER: cost-aware Thompson sampling over every audience the
- * grid enumerates, each scored on its POOLED column.
- *
- * The two constraints are the campaign's, not a workflow's, so they apply here exactly as they
- * applied to the later, workflow-scoped pick this replaces:
- *   requiredAudienceIds — the Campaign v2 HARD targeting subset (no fallback — empty → null).
- *   excludedAudienceIds — the freshly-exhausted set (no fallback — empty → null).
- *
- * Returns the chosen audienceId, or null when the grid enumerates no audience the campaign may
- * be served.
- */
-/**
  * Audience ids features-service states are SERVED OUT (availableToContactCount === 0) — known to have
  * nobody left to contact before any serve is spent finding out (features-service#1035). An unknown
  * count (null) is never in this set.
@@ -629,6 +617,18 @@ function preferAudiencesWithPeople<T>(candidates: T[], idOf: (c: T) => string, s
   return withPeople.length > 0 ? withPeople : candidates;
 }
 
+/**
+ * Per-run AUDIENCE selection at the TRIGGER: cost-aware Thompson sampling over every audience the
+ * grid enumerates, each scored on its POOLED column.
+ *
+ * The two constraints are the campaign's, not a workflow's, so they apply here exactly as they
+ * applied to the later, workflow-scoped pick this replaces:
+ *   requiredAudienceIds — the Campaign v2 HARD targeting subset (no fallback — empty → null).
+ *   excludedAudienceIds — the freshly-exhausted set (no fallback — empty → null).
+ *
+ * Returns the chosen audienceId, or null when the grid enumerates no audience the campaign may
+ * be served.
+ */
 export function selectAudiencePooled(
   rows: ProjectionRow[],
   opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[]; rng?: Rng } = {},
