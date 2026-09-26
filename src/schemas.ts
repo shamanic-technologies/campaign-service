@@ -67,7 +67,10 @@ export const CampaignSchema = z.object({
   status: z.string(),
   // WHY the campaign stopped: manual (a person stopped it) | org_teardown | payment_declined
   // (billing cannot charge the org's card — the customer must pay what is owed and add a working
-  // card, then start it again; until then every start is refused with reason payment_declined).
+  // card, then start it again; until then every start is refused with reason payment_declined)
+  // | no_payment_method (the org has no card billing can charge — removed or never added; the
+  // customer must add one, then start it again; until then every start is refused with reason
+  // no_payment_method).
   // Null on an ongoing campaign, and on every campaign stopped before the reason was recorded.
   // Nothing restarts a stopped campaign automatically.
   stopReason: z.string().nullable(),

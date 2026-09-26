@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // tests/setup.ts mocks this module fleet-wide; this file tests the REAL one.
-const { readPaymentHold, paymentStartRefusal } = await vi.importActual<
+const { readPaymentHold, paymentStartRefusal, paymentStopReason } = await vi.importActual<
   typeof import("../../src/lib/payment-hold.js")
 >("../../src/lib/payment-hold.js");
 
@@ -101,10 +101,40 @@ describe("paymentStartRefusal — what a person pressing start is told", () => {
     expect(refusal?.body.error).toContain("issuing country");
   });
 
+  it("refuses an org with NO payment method with 409 no_payment_method, and never says declined", async () => {
+    answer(200, { state: "charge_blocked", blockedReason: "no_chargeable_card" });
+    const refusal = await paymentStartRefusal(ORG);
+    expect(refusal?.status).toBe(409);
+    expect(refusal?.body).toMatchObject({ reason: "no_payment_method", blockedReason: "no_chargeable_card" });
+    expect(refusal?.body.error).toContain("no payment method");
+    expect(refusal?.body.error).toContain("Add a card");
+    expect(refusal?.body.error).not.toContain("declined");
+    expect(refusal?.body.error).not.toContain("—");
+  });
+
+  it.each(["card_declined", "card_unusable", "retries_exhausted", "card_country_unsupported", "some_future_reason"])(
+    "keeps every other blocked reason (%s) on payment_declined, unchanged",
+    async (blockedReason) => {
+      answer(200, { state: "charge_blocked", blockedReason });
+      const refusal = await paymentStartRefusal(ORG);
+      expect(refusal?.status).toBe(409);
+      expect(refusal?.body).toMatchObject({ reason: "payment_declined", blockedReason });
+    },
+  );
+
   it("fails CLOSED when billing cannot be read: nothing starts, 502 billing_unavailable", async () => {
     answer(503, {});
     const refusal = await paymentStartRefusal(ORG);
     expect(refusal?.status).toBe(502);
     expect(refusal?.body.reason).toBe("billing_unavailable");
+  });
+});
+
+describe("paymentStopReason — which of the two payment stops", () => {
+  it("maps no_chargeable_card to no_payment_method and everything else to payment_declined", () => {
+    expect(paymentStopReason("no_chargeable_card")).toBe("no_payment_method");
+    expect(paymentStopReason("card_declined")).toBe("payment_declined");
+    expect(paymentStopReason("card_country_unsupported")).toBe("payment_declined");
+    expect(paymentStopReason("retries_exhausted")).toBe("payment_declined");
   });
 });
