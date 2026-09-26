@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 
 /**
- * Funding a sales funnel is what makes its campaigns eligible to run.
+ * Funding a campaign is what makes it eligible to run.
  *
  * This file replaces the brand-pause suite. `brand_pause` was a second source of truth for a fact
  * the money already states: the customer surface that wrote it was deleted when the product
- * decided a customer stops a funnel by defunding it, no writer replaced it anywhere in the fleet,
+ * decided a customer stops a campaign by defunding it, no writer replaced it anywhere in the fleet,
  * and the flag kept holding campaigns nobody could release — 27 brands stored paused, 10 of them
  * funded, 11 ongoing campaigns that could never be claimed.
  *
- * What is pinned here is the RULE, not any row count: nothing funded → held; fund one funnel →
+ * What is pinned here is the RULE, not any row count: nothing funded → held; fund one campaign →
  * eligible, with no manual step.
  */
 
@@ -42,81 +42,44 @@ import { campaigns, brandPauseTransitions } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { reRunDueCampaigns, claimStuckCampaigns } from "../../src/lib/scheduler.js";
 import { SALES_OUTREACH_FEATURE_SLUG } from "../../src/lib/sales-outreach-campaign.js";
-import { FUNDING_RECHECK_MS } from "../../src/lib/funnel-campaigns.js";
+import { FUNDING_RECHECK_MS } from "../../src/lib/brand-turns.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const orgId = "funding-eligibility-org";
 const past = () => new Date(Date.now() - 60_000);
 
-// billing-service is the ONE source of "is this funded". It still names these funnels the
-// pre-rename way on the wire, which is exactly what production sends today.
+// billing-service is the ONE source of "is this funded": per-campaign ceilings, at the grain a
+// campaign is bought — (offer, leg, channel).
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-/** billing answers these per-funnel ceilings for every brand asked about. */
-function billingAnswers(
-  funnels: Array<{ funnelKey: string; dailyBudgetCents: string }>,
-  brandDailyBudgetCents: string | null,
-  // The ADDITIVE (funnel, acquisition-channel feature) grain. Omitted = a billing deploy that does
-  // not serve it, which is what every case that does not pass it relies on.
-  channels?: Array<{ funnelKey: string; featureSlug: string; dailyBudgetCents: string }>,
-  // Which sales funnels each channel may be SOLD THROUGH, as features-service states it. Default:
-  // every channel sells every funnel.
-  sellableByFeature?: Record<string, string[]>,
-) {
+const OFFER = "11111111-1111-4111-8111-111111111111";
+const LEG = "start_to_conversation";
+
+type Entry = { offerId?: string | null; legKey?: string | null; featureSlug?: string; dailyBudgetCents: string };
+
+/** billing answers these per-campaign ceilings for every brand asked about. */
+function billingAnswers(entries: Entry[], brandDailyBudgetCents: string | null) {
   mockFetch.mockImplementation(async (url: string) => {
-    if (String(url).includes("/funnel-budgets")) {
+    if (String(url).includes("/campaign-budgets")) {
       return {
         ok: true,
         json: async () => ({
           brandId: "b",
           dailyBudgetCents: brandDailyBudgetCents,
-          funnels: funnels.map((f) => ({ ...f, updatedAt: null })),
-          ...(channels ? { channels: channels.map((c) => ({ ...c, updatedAt: null })) } : {}),
+          campaigns: entries.map((e) => ({
+            offerId: OFFER,
+            legKey: LEG,
+            featureSlug: SALES_OUTREACH_FEATURE_SLUG,
+            ...e,
+            updatedAt: null,
+          })),
         }),
       };
     }
-    // workflow-service: which workflow can RUN a channel. A workflow belongs to a feature, so a
-    // second channel never inherits the first one's.
-    if (String(url).includes("/workflows")) {
-      const featureSlug = new URL(String(url)).searchParams.get("featureSlug");
-      return {
-        ok: true,
-        json: async () => ({
-          workflows: [{ workflowSlug: `${featureSlug}-seed`, featureSlug, createdAt: "2026-08-18T00:00:00.000Z" }],
-        }),
-      };
-    }
-    // features-service's per-channel statement: which sales funnels this acquisition channel may
-    // be SOLD THROUGH. The cold-email pitch sells every funnel.
-    if (String(url).includes("/features/")) {
-      const slug = decodeURIComponent(String(url).split("/features/")[1]!);
-      return {
-        ok: true,
-        json: async () => ({
-          feature: {
-            slug,
-            salesFunnels: sellableByFeature?.[slug] ?? [
-              "sales_meetings_from_conversation",
-              "sales_meetings_from_website",
-              "website_purchases",
-              "form_magnet",
-            ],
-          },
-        }),
-      };
-    }
-    // brand-service's declared sales funnels — every funnel billing funds is declared active.
-    if (String(url).includes("/sales-funnels")) {
-      return {
-        ok: true,
-        json: async () => ({
-          funnels: [
-            { funnelKey: "sales_meetings_from_conversation", active: true, name: "x", steps: [], rates: {} },
-            { funnelKey: "website_purchases", active: true, name: "y", steps: [], rates: {} },
-          ],
-        }),
-      };
+    // The brand pot, read by the gate for a brand with no per-campaign ceilings.
+    if (String(url).includes("/daily-budget")) {
+      return { ok: true, json: async () => ({ brandId: "b", dailyBudgetCents: brandDailyBudgetCents, updatedAt: null }) };
     }
     return { ok: false, status: 500, json: async () => ({}) };
   });
@@ -143,7 +106,8 @@ async function insertSalesCampaign(brandId: string, over: Record<string, unknown
     acquisitionChannel: "cold_email",
     featureSlug: SALES_OUTREACH_FEATURE_SLUG,
     createdByUserId: "user-x",
-    funnelKey: "sales_meetings_from_conversation",
+    offerId: OFFER,
+    legKey: LEG,
     ...over,
   });
 }
@@ -164,8 +128,8 @@ beforeEach(async () => {
 });
 
 describe("the scheduler holds what the customer funds nothing for", () => {
-  it("holds a sales campaign whose every funnel is funded at zero, and leaves it ongoing", async () => {
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
+  it("holds a sales campaign funded at zero, and leaves it ongoing", async () => {
+    billingAnswers([{ dailyBudgetCents: "0" }], "0");
     const brandId = crypto.randomUUID();
     const campaign = await insertSalesCampaign(brandId);
 
@@ -196,8 +160,8 @@ describe("the scheduler holds what the customer funds nothing for", () => {
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
-  it("runs the campaign of a funnel the customer funds — no manual step", async () => {
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
+  it("runs a campaign the customer funds — no manual step", async () => {
+    billingAnswers([{ dailyBudgetCents: "5000" }], "5000");
     const brandId = crypto.randomUUID();
     await insertSalesCampaign(brandId);
 
@@ -205,26 +169,26 @@ describe("the scheduler holds what the customer funds nothing for", () => {
     expect(mockExecute).toHaveBeenCalledTimes(1);
   });
 
-  it("funding a funnel releases the campaign that was held, on the next tick", async () => {
+  it("funding a campaign releases it on the next tick", async () => {
     const brandId = crypto.randomUUID();
     const campaign = await insertSalesCampaign(brandId);
 
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
+    billingAnswers([{ dailyBudgetCents: "0" }], "0");
     await reRunDueCampaigns();
     expect(mockExecute).not.toHaveBeenCalled();
 
-    // The customer funds the funnel. Nothing else happens — no button, no API call to us.
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
+    // The customer funds the campaign. Nothing else happens — no button, no API call to us.
+    billingAnswers([{ dailyBudgetCents: "5000" }], "5000");
     await db.update(campaigns).set({ nextRunAt: past() }).where(eq(campaigns.id, campaign.id));
 
     await reRunDueCampaigns();
     expect(mockExecute).toHaveBeenCalledTimes(1);
   });
 
-  it("still runs a brand with ONE pot and no per-funnel ceilings, exactly as before", async () => {
+  it("still runs a brand with ONE pot and no per-campaign ceilings", async () => {
     billingAnswers([], "5000");
     const brandId = crypto.randomUUID();
-    await insertSalesCampaign(brandId, { funnelKey: null });
+    await insertSalesCampaign(brandId);
 
     await reRunDueCampaigns();
     expect(mockExecute).toHaveBeenCalledTimes(1);
@@ -246,7 +210,7 @@ describe("the scheduler holds what the customer funds nothing for", () => {
   });
 
   it("claimStuckCampaigns still recovers a stuck campaign — the hold is applied at the turn, not the claim", async () => {
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
+    billingAnswers([{ dailyBudgetCents: "0" }], "0");
     const brandId = crypto.randomUUID();
     const campaign = await insertSalesCampaign(brandId, { nextRunAt: null });
 
@@ -266,12 +230,11 @@ describe("money never starts anything", () => {
     // before this, a sweep created a campaign for it. A campaign exists because the customer said
     // so, so the second channel simply has no campaign until they launch one.
     billingAnswers(
-      [{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }],
-      "5000",
       [
-        { funnelKey: "reply_meeting", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" },
-        { funnelKey: "reply_meeting", featureSlug: "feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
+        { featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" },
+        { featureSlug: "feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
       ],
+      "5000",
     );
     const brandId = crypto.randomUUID();
     await insertSalesCampaign(brandId);
@@ -284,7 +247,7 @@ describe("money never starts anything", () => {
   });
 
   it("leaves a brand whose campaigns are ALL STOPPED exactly as it is, however well funded", async () => {
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
+    billingAnswers([{ dailyBudgetCents: "5000" }], "5000");
     const brandId = crypto.randomUUID();
     const stopped = await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null });
 
@@ -298,7 +261,7 @@ describe("money never starts anything", () => {
   });
 
   it("never resumes a campaign the customer stopped, however well funded its ceiling", async () => {
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }], "5000");
+    billingAnswers([{ dailyBudgetCents: "5000" }], "5000");
     const brandId = crypto.randomUUID();
     const stopped = await insertSalesCampaign(brandId, {
       status: "stopped",
@@ -316,8 +279,8 @@ describe("money never starts anything", () => {
 });
 
 describe("GET /brands/:brandId/pause answers from the money", () => {
-  it("held when every funnel is funded at zero", async () => {
-    billingAnswers([{ funnelKey: "reply_meeting", dailyBudgetCents: "0" }], "0");
+  it("held when every campaign is funded at zero", async () => {
+    billingAnswers([{ dailyBudgetCents: "0" }], "0");
     const brandId = crypto.randomUUID();
     const res = await getPause(brandId).expect(200);
     expect(res.body).toEqual({ brandId, orgId, paused: true, updatedAt: null });
@@ -330,11 +293,11 @@ describe("GET /brands/:brandId/pause answers from the money", () => {
     expect(res.body.paused).toBe(true);
   });
 
-  it("NOT held when one funnel carries a positive ceiling", async () => {
+  it("NOT held when one campaign carries a positive ceiling", async () => {
     billingAnswers(
       [
-        { funnelKey: "reply_meeting", dailyBudgetCents: "0" },
-        { funnelKey: "visit_signup", dailyBudgetCents: "1000" },
+        { dailyBudgetCents: "0" },
+        { legKey: "start_to_website_visit", dailyBudgetCents: "1000" },
       ],
       "1000",
     );

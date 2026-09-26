@@ -14,11 +14,10 @@ export interface ProjectionAudienceEvidence {
   observedPositiveReplies: number;
   // Goal-RESOLVED (expected) outcome count for this audience grain — the numerator behind the
   // grain's cost-per-outcome, projected from the grain's OWN observed clicks/replies through
-  // the queried goal's funnel (features-service owns the funnel; for the combined `sales` goal
-  // it's the best channel max(clicks·v2pc, replies·r2pc)). Coherent: spentUsd / this ==
+  // the queried leg (features-service owns that projection). Coherent: spentUsd / this ==
   // cost-per-outcome. 0 when the grain observed 0 of the driving outcome; null only at cold
   // start (no economics). This is the Thompson success count — campaign-service NEVER re-decides
-  // the CPC-vs-CPPR funnel metric, features-service does.
+  // the CPC-vs-CPPR metric, features-service does.
   resolvedOutcomeCount: number | null;
 }
 
@@ -111,14 +110,11 @@ function normalizeProjectionRows(rows: RawProjectionRow[]): ProjectionRow[] {
 // leg. A second copy of the rule is a second thing to drift.
 //
 // THE LEG-KEYED BODY IS ALSO WHAT A LEG CAMPAIGN IS PRICED ON. The verdict rides ONLY on a
-// LEG-keyed body, and features-service refuses `?leg=` and `?funnel=` on one request (400
-// `leg_and_funnel`) because the two price differently: a leg is denominated in the leg's OWN
-// outcome (for `start_to_conversation`, a positive reply), a funnel in the funnel's terminal one
-// (a booked meeting). A campaign bought for a leg is bought for that leg's outcome, and the
+// LEG-keyed body, denominated in the leg's OWN outcome (for `start_to_conversation`, a positive
+// reply). A campaign bought for a leg is bought for that leg's outcome, and the
 // dashboard's campaign Workflows page ranks on exactly this body — so the selector ranks on it
 // too, and the page and the pick cannot disagree about which workflow is best. It is the ONLY
-// body this service reads (wave C2): the funnel- and goal-keyed reads and the goal arbitration
-// are gone, and a campaign that states no leg is not priced at all.
+// body this service reads, and a campaign that states no leg is not priced at all.
 //
 // THE FILTER IS APPLIED ONCE, TO THE ROWS, BEFORE EITHER ARGMIN. Both legs of the pick must see
 // the same restricted grid or the first one is judged on evidence the second can never serve: an
@@ -176,7 +172,7 @@ interface LegProjectionInput {
  * The LEG-keyed body's rows, normalized to the shape every audience/workflow pick reads. THROWS on
  * any failure — for a caller that must not read an unreadable answer as a decision (the /end-run
  * stop-guard) or that already fails soft on a throw (/start-run's audience pick). A campaign that
- * states a leg reads this body and never the funnel-keyed one (wave C1).
+ * states a leg reads this body.
  */
 export async function fetchLegProjectionRows(input: LegProjectionInput): Promise<ProjectionRow[]> {
   return normalizeProjectionRows(await fetchLegProjectionRawRows(input));
@@ -197,9 +193,7 @@ async function fetchLegProjectionRawRows({
 
   const url = new URL(`${baseUrl.replace(/\/$/, "")}/features/${encodeURIComponent(featureSlug)}/workflow-projection`);
   url.searchParams.set("brandId", brandId);
-  // A leg-keyed read names NO funnel: features-service refuses both at once, and the funnel the
-  // leg is priced through is its own answer from the brand's declared set. The leg identifier is
-  // forwarded VERBATIM — it is features-service's word and is never parsed into its two steps.
+  // The leg identifier is forwarded VERBATIM — it is features-service's word and is never parsed into its two steps.
   url.searchParams.set("leg", legKey);
   // campaignId is only ever answered BESIDE a leg (features-service 400s it alone), which this
   // read always carries.
@@ -263,7 +257,7 @@ export async function readLegModelEligibility(
       console.error(
         `[campaign-service] model-eligibility UNANSWERABLE for brand ${brandId} leg ${legKey}: the ` +
           "brand sells several offers and this campaign names none, so features-service cannot say " +
-          "which offer's funnels price the leg. Selecting over the UNFILTERED grid — state the " +
+          "which offer prices the leg. Selecting over the UNFILTERED grid — state the " +
           "campaign's offerId to make this answerable.",
       );
       return null;
@@ -316,8 +310,7 @@ export function restrictToEligibleWorkflows(
 // later at /start-run, keeps Thompson — see selectAudienceFromProjection).
 //
 // features-service already computes `resolved.costPerOutcomeUsd` per row (cost per
-// goal-outcome — e.g. per signup — over the upgrade funnel × the brand's effective
-// economics, for the goal we queried). So the "best" workflow is simply
+// outcome of the leg we queried, over the brand's effective economics). So the "best" workflow is simply
 // argmin(resolved.costPerOutcomeUsd) over the rows. GRAIN IS IRRELEVANT: whether the
 // evidence resolved at brand level or cross-org, we take the cheapest — "always the
 // best workflow returned by /workflow-projection", per the product decision.
@@ -499,7 +492,7 @@ export function selectCellFromProjection(
 //   costPerTrial = spend per contacted lead (USD — only ordering matters)
 // The engine's score = costPerTrial / sampledRate = spend / resolvedOutcomes = cost-per-outcome
 // (== ROI ranking, since a brand's LTR is constant). campaign-service never re-decides whether
-// the funnel is click- or reply-driven; features-service is the guardian of that via the count.
+// the leg is click- or reply-driven; features-service is the guardian of that via the count.
 // A row with no audience-grain evidence (floored / never-run couple) is a COLD arm (0 trials,
 // null cost) so it still gets explored. resolvedOutcomeCount null (cold-start economics) → 0.
 function toArm(ev: ProjectionAudienceEvidence | null): Arm {
@@ -678,10 +671,9 @@ export async function resolveSelectionForTrigger(args: {
   identity: DownstreamIdentity;
   fallbackSlug: string;
   /**
-   * The single funnel LEG the campaign is bought for — features-service's identifier, carried and
+   * The single LEG the campaign is bought for — features-service's identifier, carried and
    * NEVER parsed. The pick is priced on the leg-keyed body and restricted to the workflows the
-   * leg's model rule allows. Null → the campaign cannot be priced at all (no funnel- or goal-keyed
-   * read exists any more, wave C2): it runs its configured workflow and says so on console.error.
+   * leg's model rule allows. Null → the campaign cannot be priced at all: it runs its configured workflow and says so on console.error.
    */
   legKey?: string | null;
   /** The campaign the read is FOR. Naming it names the OFFER the read is priced on (a campaign
@@ -706,14 +698,13 @@ export async function resolveSelectionForTrigger(args: {
   } = args;
   // Rotation is feature-scoped: non-rotating features keep their configured workflow.
   if (!isWorkflowRotationEnabled(featureSlug)) return { workflowSlug: fallbackSlug, audienceId: null };
-  // A campaign that states NO LEG has nothing to be priced on. The funnel- and goal-keyed reads
-  // (and the goal arbitration) are gone fleet-wide (wave C2), and inventing a goal or a funnel to
-  // ask with would be pricing on a guess. Such a campaign should not reach selection at all, so it
+  // A campaign that states NO LEG has nothing to be priced on, and inventing something to ask with
+  // would be pricing on a guess. Such a campaign should not reach selection at all, so it
   // is said loudly and runs the workflow the customer configured — never a re-picked one.
   if (!legKey) {
     console.error(
       `[campaign-service] campaign ${campaignId ?? "(unknown)"} of ${featureSlug} on brand ${primaryBrandId} ` +
-        `states NO leg — it cannot be priced (no funnel- or goal-keyed read exists), so no workflow ` +
+        `states NO leg — it cannot be priced, so no workflow ` +
         `or audience is selected; running the configured workflow ${fallbackSlug}. State the ` +
         `campaign's legKey.`,
     );

@@ -1,7 +1,7 @@
 /**
  * WHO OPERATES AN ACQUISITION CHANNEL — features-service's statement, asked rather than held.
  *
- * A funnel is sold LEG BY LEG, and the legs the platform does not automate are performed by a human
+ * A customer buys LEG BY LEG, and the legs the platform does not automate are performed by a human
  * at the CUSTOMER's side: they work the replies, they run the meeting, they close the deal. There
  * is no DAG for that and there must not be one — the work happens off-platform and the customer
  * reports what happened, lead by lead. So "this channel has no active workflow" means two opposite
@@ -12,18 +12,17 @@
  * this read carries no identity at all: no customer identity ever appears on that path (the
  * marketing site is generated from it). It is also why nothing here holds a list of manual slugs —
  * a ninth customer-operated channel published upstream works with no change in this repo, the same
- * posture this service holds for the goal, the funnel and the channel vocabularies.
+ * posture this service holds for the goal and the channel vocabularies.
  *
  * The same catalogue is also the ONE place that says WHICH LEGS a channel performs. A leg is what
- * a customer buys — one leg belongs to several funnels at once, so the funnel never identified the
- * purchase — and the identifiers are minted and published there. They are carried verbatim: no leg
+ * a customer buys, and the identifiers are minted and published there. They are carried verbatim: no leg
  * vocabulary, list or matrix exists in this service, and the identifier is never SPLIT back into
  * the two steps it connects (they ride beside it on the very same payload).
  *
  * Contract (features-service): GET /public/channels (no auth, no identity)
  *   -> { channels: [{ slug, operatedBy: "platform" | "customer",
  *                     stepTransitions: [{ legKey, from, to }], ... }],
- *        legs: [{ legKey, fromStep: { key } | null, toStep: { key } | null, funnelKeys }],
+ *        legs: [{ legKey, fromStep: { key } | null, toStep: { key } | null }],
  *        steps: [{ key }] }
  *
  * A channel the catalogue does not publish, and a catalogue that cannot be READ, both resolve to
@@ -37,7 +36,7 @@ export type ChannelOperator = "platform" | "customer";
 /**
  * ONE leg of the published vocabulary, narrowed to what this service reads: the identifier it
  * carries verbatim, the step a lead is taken OUT of (`null` is "from nothing" — this leg starts a
- * funnel), and every declared funnel the leg is a leg of. The steps ride BESIDE the identifier on
+ * journey) and the step it takes them INTO. The steps ride BESIDE the identifier on
  * the catalogue precisely so nobody splits it, so they are read here and never derived.
  */
 export interface CatalogueLeg {
@@ -50,7 +49,6 @@ export interface CatalogueLeg {
    * `null` is "into nothing", which no published leg states today and is not guessed at.
    */
   toStepKey: string | null;
-  funnelKeys: ReadonlySet<string>;
 }
 
 export type ChannelCatalogueRead =
@@ -64,7 +62,7 @@ export type ChannelCatalogueRead =
        */
       legsBySlug: Map<string, ReadonlySet<string>>;
       /**
-       * EVERY leg of every declared funnel, published beside the channels. Read so a caller naming
+       * EVERY published leg, beside the channels. Read so a caller naming
        * the step a lead just reached can be answered with the leg OUT of it, without this service
        * holding a leg vocabulary of its own.
        */
@@ -106,7 +104,6 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
         legKey?: unknown;
         fromStep?: { key?: unknown } | null;
         toStep?: { key?: unknown } | null;
-        funnelKeys?: unknown;
       }>;
       steps?: Array<{ key?: unknown }>;
     };
@@ -119,7 +116,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
     for (const channel of data.channels) {
       if (typeof channel?.slug !== "string" || channel.slug.length === 0) continue;
       // Which legs this channel performs. A channel that publishes none states an EMPTY set,
-      // which is a truthful answer ("this channel performs no leg of any declared funnel") and
+      // which is a truthful answer ("this channel performs no leg") and
       // not the same thing as a slug the catalogue never names.
       const legs = new Set<string>();
       if (Array.isArray(channel.stepTransitions)) {
@@ -140,12 +137,6 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
     if (Array.isArray(data.legs)) {
       for (const leg of data.legs) {
         if (typeof leg?.legKey !== "string" || leg.legKey.length === 0) continue;
-        const funnelKeys = new Set<string>();
-        if (Array.isArray(leg.funnelKeys)) {
-          for (const key of leg.funnelKeys) {
-            if (typeof key === "string" && key.length > 0) funnelKeys.add(key);
-          }
-        }
         const fromKey = leg.fromStep?.key;
         const toKey = leg.toStep?.key;
         legs.push({
@@ -154,7 +145,6 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
           // data, not a special spelling to branch on.
           fromStepKey: typeof fromKey === "string" && fromKey.length > 0 ? fromKey : null,
           toStepKey: typeof toKey === "string" && toKey.length > 0 ? toKey : null,
-          funnelKeys,
         });
       }
     }

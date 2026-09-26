@@ -29,7 +29,6 @@ export async function dispatchSelectedRun(
     workflowSlug: string;
     brandIds: string[] | null;
     featureSlug: string;
-    funnelKey: string | null;
     legKey: string | null;
     offerId: string | null;
     audienceIds: string[] | null;

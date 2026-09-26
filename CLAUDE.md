@@ -121,27 +121,18 @@ This route is the other half of that decision, and it is the half a PERSON perfo
   `routes/campaigns.ts` and by nothing else, and that the workflow read is imported only by it — a
   scheduler importing either is the deleted question ("should this money have a campaign?") coming
   back under a new name.
-- **THE CALLER STATES FOUR THINGS AND CANNOT STATE THE OTHER THREE.** Brand, offer, sales funnel,
-  acquisition channel: exactly what the customer's own screen knows. The WORKFLOW is this service's
-  choice (the greedy rotation re-picks one every run, so a slug resolved in a browser goes stale the
-  moment the catalogue moves), the NAME is derived from the identity, and the MONEY is billing's,
-  per (offer x funnel x channel x leg), and is already set — that is what "funded" means, and a
-  per-campaign ceiling beside it is a second representation of one fact. `StartFundedPairBody` is
-  `.strict()` so a caller reaching for any of the three is TOLD no rather than having it stripped.
-- **THE LEG COMES FROM THE MONEY, NEVER FROM THE FUNNEL.** When the brand's ceilings for the pair
-  name legs, the campaign states the funded one and paces on ITS ceiling — falling back to the
-  coarser offer figure there would hand this campaign the money a sibling leg was funded with, which
-  is the whole failure the leg grain closed. When they name none, the campaign states none: that is
-  the pre-leg population and a leg is never fabricated for it. Two funded legs of one pair is two
-  campaigns to start, so it is REFUSED rather than guessed, and the optional `legKey` is how the
-  caller answers.
-- **WHICH LEGS A CHANNEL CAN SELL A FUNNEL THROUGH is features-service's statement**, read off the
-  PUBLIC catalogue `channel-operator-client.ts` already reads (`legs[].legKey` + `funnelKeys`,
-  joined verbatim). No leg or funnel matrix is held here, and a leg identifier is never split.
+- **THE CALLER STATES FOUR THINGS AND CANNOT STATE THE OTHER THREE.** Brand, offer, LEG,
+  acquisition channel (offer + leg REQUIRED, else `leg_required`): exactly what the customer's own
+  screen knows. The WORKFLOW is this service's choice (re-picked every run), the NAME is derived
+  from the identity, and the MONEY is billing's, per (offer x leg x channel), and is already set.
+  `StartFundedPairBody` is `.strict()`, so a caller reaching for any of the three — or for a
+  retired `funnelKey` — is TOLD no rather than having it stripped.
+- **WHICH LEGS A CHANNEL PERFORMS is features-service's statement**, read off the PUBLIC catalogue
+  `channel-operator-client.ts` already reads (`channels[].stepTransitions[].legKey`, joined
+  verbatim). No leg matrix is held here, and a leg identifier is never split.
 - **A REFUSAL IS THE PRODUCT.** The dashboard renders `error` verbatim to the customer, so it is
-  customer-facing English, and `reason` carries the code a consumer branches on: `unknown_funnel`,
-  `channel_not_paced_here`, `unknown_channel`, `channel_does_not_sell_funnel`, `leg_not_performed`,
-  `several_funded_legs` (400); `not_funded`, `no_workflow` (409); `catalogue_unavailable`,
+  customer-facing English, and `reason` carries the code a consumer branches on: `leg_required`,
+  `channel_not_paced_here`, `unknown_channel`, `leg_not_performed` (400); `not_funded`, `no_workflow` (409); `catalogue_unavailable`,
   `billing_unavailable`, `workflow_unavailable` (502). "Nothing can run this channel yet" and "we
   could not read what runs it" are different answers and stay different ones: collapsing them is
   how an outage looked exactly like a channel with no dynasty.
@@ -255,6 +246,52 @@ Billing's `/internal/brands/:id/daily-budget` reads (`gate-check.ts`,
 `transactional-email.ts`) are a different service and already carry `x-org-id` too.
 (Set 2026-08-01.)
 
+## WAVE C2 — THE SALES FUNNEL IS GONE FROM THIS SERVICE; A CAMPAIGN IS (OFFER x LEG x CHANNEL)
+
+The fleet retired the sales funnel (org > brand > offer > outcome > leg). Wave C1 stopped every
+reader here; wave C2 (2026-09-26) deleted the rest. What is true now:
+
+- **Identity** is (org, brand, OFFER, LEG, acquisition channel): `uniq_campaigns_org_brand_offer_leg_channel`
+  (migration 0058, partial on `ongoing`, `coalesce` on offer and leg). `POST /campaigns` REQUIRES
+  `offerId` + `legKey` for the sales family and matches the incumbent of that identity whatever its
+  status (the index can never police stopped rows — the guard is the lookup). No route accepts a
+  funnel: `funnelKey` is gone from the create, start-funded-pair (`.strict()` → 400) and
+  trigger-for-step bodies (non-strict → silently ignored; instantly-service still sends one).
+- **Money** is billing's per-campaign read, `GET /internal/brands/:id/campaign-budgets`
+  (`src/lib/campaign-budget-client.ts`) — one entry per (offer, leg, channel), summing to the brand
+  total. WHICH entries are a campaign's is billing's own rule (`campaignCeilingRows`), mirrored in
+  `ceilingEntriesOf`: an exact (offer, leg, channel) entry; an offer-less one only while the brand
+  names no other offer; a leg-less one only while that channel names no other leg. Precedence
+  (gate, funding hold, turn planner, spendable-budget — one definition in `campaign-funding.ts`):
+  own `dailyBudgetCents` → the campaign's entries (none → UNFUNDED, never the brand total) → the
+  brand pot only when billing states no per-campaign entry at all. Fail-CLOSED. Verified in prod
+  before the switch: same verdict and ceiling on 19 of 20 live campaigns; the 20th (`2d322166`,
+  ai-meeting-booking) had been HELD by the old leg-grain rule on a $1/day ceiling billing itself
+  attributes to it, and is funded now. `/funnel-budgets` is no longer called, which is what lets
+  billing drop it.
+- **`spendable-budget`** serves `grain: campaign | brand | none` and no funnel on rows or lines.
+- **`GET /brands/:brandId/pause`** answers from the same money: held ⟺ no campaign entry is positive
+  AND the brand pot is not positive; 502 when billing cannot be read. There is no pause writer.
+- **Deleted**: `funnel-budget-client.ts`, `sales-funnel-vocabulary.ts` (`toFunnelKey`),
+  `funnel-ancestor-adoption.ts`, `scripts/backfill-campaign-leg.ts`, the catalogue's
+  `legs[].funnelKeys` read, `/start-run`'s `funnelKey`, the predecessor's `funnelKey` and
+  `campaign_states_no_funnel`, `idx_campaigns_org_feature_funnel`, and the
+  `campaign_funnel_owner_decisions` table (snapshotted in prod first — migration 0058 refuses to
+  drop a populated table whose snapshot `campaign_funnel_owner_decisions_funnel_snapshot_20260926`
+  does not exist). Renamed: `funnel-campaigns.ts` → `brand-turns.ts` (`planBrandTurns`),
+  `SALES_FUNNEL_FEATURE_SLUGS` → `SALES_FAMILY_FEATURE_SLUGS` (`isSalesFamilyFeature`).
+- **KEPT, READ-ONLY: `campaigns.funnel_key` and its echo `funnelKey` on the campaign row.** Nothing
+  here reads or writes it. It stays because four services still read `campaign.funnelKey` off
+  `GET /campaigns[/:id]` in production: lead-service (`campaign-funnel-client.ts`, step statements),
+  instantly-service (`funnelStopsOnClick`, campaign identity), workflow-service's active
+  ai-meeting-booking DAG (picks the booking URL by it), features-service (revenue attribution). Drop
+  the column once they have moved; every campaign created since C1 already carries NULL.
+- `tests/unit/no-legacy.test.ts` fails on any non-comment src line mentioning a funnel other than
+  those two retained declarations.
+
+Sections further down that describe per-funnel funding, funnel-keyed identity or funnel
+narrowing were DELETED with this wave; a sentence still mentioning a funnel elsewhere is history.
+
 ## WAVE C2 — nothing here asks features-service anything keyed on a funnel or a goal
 
 features-service retired its funnel-keyed compatibility surface: `/features/:slug/goal-arbitration`
@@ -284,99 +321,6 @@ every sales slug appears in the SQL (true only until the family grows). Adding t
 acquisition channel failed it, on a migration that is correct and can never mention a feature that
 did not exist when it ran. Assert the direction that stays true — what the frozen file names is
 in-scope — never that a live set is fully covered by it. (Set 2026-08-18.)
-
-## Per (funnel, ACQUISITION CHANNEL) funding — a channel IS a feature slug, and every funded pair runs
-
-A sales funnel can be worked through more than one OFFER at once: the straight sales pitch
-(`sales-cold-email-outreach`) and the feedback request
-(`feedback-request-cold-email-outreach`), which asks a buyer about the problem we solve
-instead of pitching. Same infrastructure, same measurement — only the offer differs, so a brand can
-work ONE funnel through BOTH, and each is a campaign of its own.
-
-- **A CHANNEL IS A FEATURES-SERVICE FEATURE SLUG.** There is no channel table, enum or vocabulary
-  in this service and none is to be introduced. Adding a further channel is one line in
-  `SALES_FUNNEL_FEATURE_SLUGS` (`src/lib/sales-outreach-campaign.ts`) plus its
-  `CHANNEL_BY_FEATURE` token — a second offer on the same medium needs its OWN channel token
-  (`feedback_request_email`, not `cold_email`), or the two campaigns of one funnel would collide on
-  the identity index and only one could exist.
-- **One campaign per funded (funnel, channel) PAIR.** billing serves the pair ceiling ADDITIVELY on
-  the same read (`channels: [{funnelKey, featureSlug, dailyBudgetCents}]`, `funnels` being its
-  per-funnel SUM), so nothing here adds anything up. `fundedPairs` provisions off `channels` when
-  billing states any and off `funnels` × the seed's channel when it does not — that fallback is
-  what keeps a brand funding one channel per funnel, i.e. every brand today, byte-identical.
-- **The ceiling that binds a campaign is its OWN pair's** (`channelCeilingCents`), inserted at one
-  place in gate-check's precedence and one in `campaign-funding`: own `dailyBudgetCents` → PAIR
-  ceiling → funnel ceiling → brand pot. Ranking two channels of one funnel against the funnel TOTAL
-  is how one offer spends the money the other was funded for, and it shows up in no log at all.
-  A funnel SPLIT across channels that does not fund this campaign's channel is UNFUNDED — never a
-  fallback to the funnel or brand figure.
-- **A funnel funded through exactly ONE channel binds whatever feature the campaign states.** That
-  mirrors billing's own rule for a write naming no channel, and it is load-bearing: billing's
-  migration attributed some brands' single ceiling to the DEFAULT channel while their campaign runs
-  another sales feature, and holding those would break a brand that has funded one channel per
-  funnel all along.
-- **THE PROVISIONING PATH STATES A FULL IDENTITY, RUN ID INCLUDED — its two channel reads are
-  REFUSED without one.** features-service `GET /features/{slug}` answers `400 Missing required
-  headers: x-run-id` and workflow-service `GET /workflows` answers `400 x-org-id, x-user-id, and
-  x-run-id headers are required`, whatever the caller is doing. The provisioning identity is built
-  from a CAMPAIGN ROW, which carries no run, so both reads were rejected on every sweep and both
-  rejections were laundered into "unknown" and skipped: per-channel funding never worked once in
-  production (brand `75d7e3e8` funded the feedback-request channel on 19 Aug and had no campaign
-  for it nineteen hours later, with nothing in the logs about any of it). The brand-service read on
-  the same path answers 200 without a run id, which is why only this half was dead and why it
-  looked like nothing at all. `buildProvisioningIdentity` (`src/lib/provisioning-identity.ts`)
-  establishes the campaign's own ancestor via `ensureCampaignRunId` — a run runs-service can
-  resolve, never a minted uuid — and `ProvisioningIdentity` makes `userId` and `runId` REQUIRED so
-  the two clients cannot go back to attaching them when they happen to have them.
-  `tests/unit/no-legacy.test.ts` fails on a conditional identity header in either client.
-- **A pair passed over because a statement could not be READ says so, naming the pair.** "This
-  channel sells no such funnel" and "features-service would not answer" are different answers and
-  are returned as different ones (`FeatureSalesFunnelsRead` / `ActiveWorkflowRead`, both
-  `{ok:false, detail}` on a failure). A pair the customer is paying for that we FAILED to evaluate
-  is not a pair we evaluated and rejected, and collapsing the two is what let a read that was
-  rejected on every sweep look exactly like a channel with no dynasty. Skipping stays correct;
-  only the silence was wrong. Fail-SOFT still: an unreadable statement provisions nothing and does
-  NOT hold the brand — this decides which questions can be asked, not whether money may be spent.
-- **THE STATEMENT IS NESTED UNDER THE FEATURE THE REQUEST NAMED — `{ feature: { …, salesFunnels } }`
-  — and reading it a level up looks EXACTLY like a channel that declares nothing.** features-service
-  answers 200 with the envelope; the client read `salesFunnels` at the top level, found nothing, and
-  reported that the service had stated none, so every funded pair fleet-wide was passed over as
-  unevaluatable for the whole life of the feature. Nothing contradicted it because every test mocked
-  the shape the client expected — a client agreeing with itself and with nothing else — which is why
-  `tests/unit/feature-sales-funnels-client.test.ts` pins the read to the nested level AND asserts a
-  TOP-LEVEL payload is REFUSED. A payload assumption that no test states against the DEPLOYED
-  contract is not an assumption anything can catch. The sibling read (workflow-service `GET
-  /workflows` → `workflows`) really is top-level; check the contract per endpoint rather than
-  assuming one envelope for the fleet. (2026-08-20.)
-- **Which funnels a channel may be SOLD THROUGH is features-service's statement, asked per feature**
-  (`GET /features/{slug}` → `feature.salesFunnels`, `src/lib/feature-sales-funnels-client.ts`). The feedback
-  request states `sales_meetings_from_conversation` alone: its offer buys a CONVERSATION, and the
-  other three chains buy their first step with a website click it has no way to sell. A funded pair
-  the feature may not sell gets NO campaign, the same way a funnel billing funds but brand-service
-  does not declare gets none. An unreadable statement provisions nothing for that channel — a pair
-  is never guessed at. `tests/unit/no-legacy.test.ts` fails if a feature slug and a funnel key ever
-  appear on one line of code outside the client that ASKS: a local matrix is a second copy of one
-  product fact, drifting the day a channel gains or loses a chain.
-- **A workflow belongs to a FEATURE, so a new channel's campaign is given its own** (workflow-service
-  `GET /workflows?featureSlug=&status=active`). The seed campaign's slug is only right for the
-  seed's own channel; handing it to another offer runs the wrong DAG, and a slug of no feature at
-  all is refused by workflow-service — a campaign that stays ongoing and produces nothing forever.
-  A channel with NO active workflow is not provisioned (fail-closed); the next sweep stands it up
-  the moment the dynasty ships.
-- **A feature slug RENAMED upstream must be renamed here the same day, and it is renamed in ONE
-  spelling.** `CHANNEL_BY_FEATURE` is total by construction — an unrecognised slug falls through to
-  `featureSlug.replace(/-/g, "_")` — which is right for a feature nobody has named a token for and
-  WRONG for one that was renamed: the campaign is filed under a channel nothing else uses, silently,
-  with no error anywhere and no failing test, and it collides with nothing so the identity index
-  never complains. So the total-by-construction default is exactly what makes an upstream rename
-  invisible, and the map is not the only site: the family constant, the docs and every fixture
-  carry the literal. Never accept both spellings, alias them or normalise one onto the other — a
-  translation table is what this service keeps deleting, and two names for one channel is how a
-  brand grows two identities for one offer. (`sales-feedback-request-cold-email-outreach` →
-  `feedback-request-cold-email-outreach`, 2026-08-18.)
-- Everything below — the turn-taking, the fail-closed hold, the per-brand serialization, which
-  stopped campaigns funding may resume — is UNCHANGED and applies per campaign, so it applies per
-  pair without a special case. (Set 2026-08-18.)
 
 ## A channel the CUSTOMER operates gets its campaign with NO workflow — the absence of a DAG is the statement
 
@@ -600,550 +544,6 @@ campaign whose real ceiling was $50 read as a stale mirror).
   sales campaigns with the columns null and the dashboard writes billing, so nothing was writing
   them even before the guard. (Set 2026-08-24, issue #398.)
 
-## The ceiling a campaign paces on is its OWN OFFER's — the pair figure holds a sibling's money too
-
-billing states daily ceilings at THREE grains on one read (`GET /internal/brands/:id/funnel-budgets`):
-`funnels[]`, `channels[]` (per funnel × channel) and `offers[]` (per funnel × channel × OFFER, the
-STORED grain — one row per campaign). The first two are SUMS of the third, so a funnel worked
-through one channel for TWO offers is one summed `channels` row, and pacing both campaigns on it
-lets each spend what the other was funded for. That is the exact failure the pair grain closed one
-level up, re-opened one level down.
-
-- **Precedence, one line, shared by the gate and the turn planner**: the campaign's own
-  `dailyBudgetCents` → its (funnel, channel, OFFER) ceiling → its (funnel, channel) PAIR ceiling →
-  its funnel ceiling → the brand pot. `offerCeilingCents` (`src/lib/funnel-budget-client.ts`) sits
-  one notch below `channelCeilingCents` and answers the same three-way shape.
-- **WHICH ROWS AN OFFER MAY CLAIM IS BILLING'S RULE, READ FROM BILLING** (`offerBudgetRows` /
-  `resolveEntryOfferId`, billing `src/lib/brand-funnel-budgets.ts`): a ceiling that NAMES the offer
-  always counts, and an UNSCOPED one (`offerId: null`, every ceiling written before offers existed)
-  counts only when this offer is the brand's SOLE named one — then the money has exactly one
-  campaign-owner. A brand naming two offers has no honest owner for an unscoped remainder, so it
-  belongs to neither. Do not invent a second rule here; the two services would drift the day
-  billing changes theirs.
-- **Four cases answer `grain: "none"` and fall through to the pair figure, byte-identical to
-  before**: a billing deploy that serves no `offers` field, a campaign stating NO offer (the
-  pre-offer population — an offer is never fabricated for it), a brand whose stored ceilings name
-  no offer AT ALL (20 of the fleet's 21 rows the day this shipped), and a funnel billing states no
-  row for. The third is load-bearing: campaigns DO carry `offer_id` on brands billing still funds
-  unscoped, and reading billing's per-offer rule literally there would unfund every one of them.
-- **An offer the brand's money is not scoped to is UNFUNDED** (`cents: null`) — never a fallback to
-  the pair, funnel or brand total. That is the whole point of the grain.
-- **A channel mismatch resolves the same way one grain up**: an offer whose funnel is worked through
-  exactly ONE channel binds whatever feature the campaign states (billing's default-channel
-  attribution); a funnel SPLIT across channels funds only the channels it names.
-- Nothing new is stored, cached or summed here: `channels` stays billing's own sum and provisioning,
-  identity and the turn planner are untouched. (Set 2026-08-24.)
-
-## Per-funnel funding: every funded funnel runs, each paced on its OWN ceiling
-
-billing-service lets a customer fund each of a brand's SALES FUNNELS separately. Its brand-level
-`GET /internal/brands/:id/daily-budget` still answers the SUM, so nothing reading the brand total
-changes — but "which funnel is best by ROI, run that one" is no longer the right question. Both
-funded funnels get worked, each spending up to its own ceiling and stopping there.
-
-- **One campaign per funded funnel** (`campaigns.funnel_key`, migration 0041). The cost ledger is
-  already keyed on campaignId, so a funnel's spend today IS its campaign's spend today — no new
-  attribution dimension. Reconciled by the scheduler (`src/lib/funnel-campaigns.ts`) from
-  billing's `GET /internal/brands/:id/funnel-budgets` ∩ brand-service's
-  `GET /internal/brands/:id/sales-funnels`. A funnel billing funds but brand-service does not
-  declare ACTIVE is never provisioned.
-- **A campaign cannot be CREATED without stating its funnel, so nothing is ever adopted or
-  inferred.** `POST /campaigns` 400s a sales-outreach create with no `funnelKey` (and on a token no
-  catalogue names); the creator provisions per funded funnel, so it already knows the answer. Every
-  other feature sells through no sales funnel and states none. Nothing SEEDS a campaign for a brand
-  that has none except the per-funnel step, which provisions one campaign per funded, declared
-  funnel (`ensureRunnableSalesOutreachCampaign`, the old un-pause seeder, is DELETED with the
-  pause route that called it). The goal-based adoption of a funnel-less incumbent (`findIncumbentForFunnel`, `isRemovableStandIn`)
-  is DELETED with the goal vocabulary — provisioning adds, it never re-labels an existing campaign.
-- **THE FUNNEL IS THE ONLY WORD. A campaign STATES it, persisted, and a consumer names what the
-  campaign buys without a translation table.** The four canonical keys are
-  `sales_meetings_from_conversation`, `sales_meetings_from_website`, `website_purchases`,
-  `form_magnet`. brand-service retired the goal set and renamed the keys (#434, 2026-08-02): its
-  funnel reads carry NO goal, so reading one is what silently stops every funnel campaign being
-  provisioned — pinned by `tests/unit/no-legacy.test.ts`. `campaigns.goal` is served as stored and
-  never written (see above): it cannot tell the two meeting funnels apart, which is why nothing here
-  reads it back and why the column is scheduled for removal.
-- **Every spelling in, one canonical token out** — `toFunnelKey` in
-  `src/lib/sales-funnel-vocabulary.ts`, the ONE place the vocabulary lives. Load-bearing on THREE
-  boundaries, not just history: **billing-service still emits the pre-rename keys today**
-  (`reply_meeting`, `visit_meeting`, `visit_signup`, `visit_form`), brand-service emits the
-  canonical four, and a campaign row can carry either. Compare raw tokens on any of the three and a
-  fully-funded funnel reads as UNFUNDED — the gate blocks it and it silently stops sending. Never
-  delete a legacy entry.
-- **History was written by four migrations, and no code reads a goal for a funnel any more.** 0042
-  wrote the funnel of every campaign stating a goal; 0043 renamed those keys (and the provisioned
-  campaign NAME, which carries the same token) to the canonical four; **0047** wrote the last three
-  LIVE rows from their (org, brand) pair's DECLARED funnel set, and only where that set names
-  exactly one funnel; **0048** wrote the STOPPED ancestors of a live campaign (see below). The boot
-  backfill (`src/lib/funnel-backfill.ts`) that read each pair's `currentGoal` is DELETED with the
-  map it used. A pair declaring several funnels is left alone rather than guessed at.
-- **A STOPPED campaign's funnel is NOT inert history — it decides whose totals its history lands
-  in.** 0047 left stopped rows alone on the premise that "a funnel nobody stated for a campaign
-  nobody is running changes nothing about what it did". That premise is wrong: features-service
-  totals a brand's campaigns into families keyed on (org, brand, funnel, channel), so a stopped
-  ancestor carrying NO funnel keys onto a family with no live member — it renders no line at all
-  while its runs, spend, leads and replies keep counting at BRAND level. That is the whole gap a
-  customer reads between the campaign view and the brand view (prod 2026-08-13, brand 75d7e3e8: 12
-  positive replies against 15, $1,246.63 of spend against $2,057.06, the missing $810.43 on 45
-  stopped ancestors). **0048** closes it by RULE, not by a list: a stopped row carrying no funnel
-  states the funnel of the live campaign of its (org, brand, acquisition channel), and only where
-  that triple has EXACTLY ONE live campaign stating one — none, or several, is left alone, and a
-  stopped row that already states a funnel is never restated. The partial unique index is on
-  `ongoing` rows only, so writing a stopped row can never collide with it. Pinned by
-  `tests/integration/stopped-ancestor-funnel-backfill.test.ts`, which applies the file itself to a
-  prod-shaped database twice.
-- **That rule is an INVARIANT, so it lives on the TICK — a migration can only ever state it once.**
-  0048 ran against the fleet of 13 Aug and the bug recurred in nine days, on a brand that was not
-  yet eligible: org `d3367008` / brand `b97440f6` / `cold_email` read $53 on the offer and $1.81 on
-  the offer's one live campaign, $51.68 of it on an ancestor stating no funnel. The sequence is the
-  whole argument — on 13 Aug that ancestor was still LIVE and stated none, so 0048 correctly
-  declined it; on 16 Aug the funnel was funded and provisioning INSERTED a twin (a row at
-  `funnel_key NULL` can never match `eq(campaigns.funnelKey, …)`); on 19 Aug it stopped, becoming
-  eligible the same moment, with nothing left to apply the rule. `adoptFunnellessAncestors`
-  (`src/lib/funnel-ancestor-adoption.ts`) now applies it, scoped to one (org, brand, acquisition
-  channel), whenever a funnel campaign is provisioned OR confirmed for that triple. Migration
-  **0051** is the same rule re-stated for the one row eligible on 20 Aug, and is the last time it is
-  written as a migration. Same exclusions, same audit table, same idempotence in both halves;
-  `tests/integration/stopped-ancestor-funnel-rerun.test.ts` runs the file and the runtime rule over
-  ONE seed and asserts they reach the same verdict on every row, which is what stops the two copies
-  drifting. **The call site is collected into `adoptFor` and drained AFTER the loop on purpose**:
-  the existing-campaign check returns early with `continue`, so an adoption written inside it would
-  never run for a brand whose twin already exists — which is every brand this recurs on. The other
-  470 stopped funnel-less rows across 17 brands are NOT backfilled: the rule does not select them
-  (no live sibling stating a funnel on their triple), and the runtime half covers each the moment
-  its brand funds a funnel again.
-- **The live campaign of a (funnel, channel) wins the existing-campaign lookup over a stopped one,
-  whatever their creation dates.** Ordering on `created_at` alone answers "the newest row", a
-  different question: a stopped ancestor created after the incumbent — or one that only just became
-  findable because its funnel was folded onto this identity — is returned instead, and the resume
-  branch then brings it back alongside the incumbent. That is a `23505` on the partial unique index,
-  thrown INSIDE `planFunnelTurns`, which fail-closes and holds the whole brand every tick, forever,
-  for a brand whose campaign is running fine. It appears in no customer-visible state at all.
-- **The gate paces on that funnel's own ceiling** (`gate-check.ts`, block a2), fail-CLOSED like
-  the brand ceiling. Precedence: campaign's own `dailyBudgetCents` → `funnelKey` ceiling → brand
-  daily budget. A funnel funded at ZERO, or absent from billing while the brand funds OTHER
-  funnels, blocks (`Funnel not funded`) — it NEVER falls back to the brand total, which would let
-  it spend another funnel's money. The ONE case that reads the funnel as a label rather than a
-  ceiling: a brand billing reports NO per-funnel ceilings for at all (`funnels: []`) still has one
-  pot, so the campaign paces on the brand daily budget exactly as it did before every campaign
-  stated a funnel. Without that, stamping the funnel fleet-wide would have blocked every brand
-  that never split its budget.
-- **Serial, for now: one run in flight per BRAND** (`hasLiveRunForBrand` in funnel-campaigns.ts).
-  Running funnels concurrently needs an audit of lead de-duplication and of sending-account load
-  that nobody has done. Deleting that one block is what unlocks parallelism; nothing else has to
-  be undone.
-- **The turn goes to the lowest spent-today ÷ own-ceiling ratio** (`selectLowestFillRatio`),
-  never a fixed order and never "the primary first". A fixed order starves whatever sits last —
-  if the first funnel can absorb the whole day the others never run, and that shows up in no log
-  at all. A funnel at its ceiling yields with no special case (ratio ≥ 1 → not a candidate); all
-  funnels full → parked, but on the FUNDING cadence (`min(nextDayStart, now + FUNDING_RECHECK_MS)`),
-  never on the day rollover alone. That defer is written ONCE from the ceiling current at that
-  instant and nothing re-checks an ongoing campaign due tomorrow — not the claim
-  (`next_run_at <= now()`), not `claimStuckCampaigns` (`next_run_at IS NULL`), not the resume sweep
-  (stopped rows only) — so a customer who RAISES a ceiling mid-day saw the money spent the next day
-  (prod 2026-08-23, brand `75d7e3e8`: $39.13 of a $40 ceiling, raised to $50 at 14:57, zero runs
-  after 13:24). `FUNDING_RECHECK_MS` already carries that promise for a campaign funded from ZERO;
-  one funded MORE is the same rule, missing branch. A brand still at its ceiling simply re-ranks and
-  defers again — no run, no spend, gate untouched. EVERY alive campaign of the brand is a candidate
-  every tick — one that states no funnel is ranked on the brand daily budget, the ceiling the gate
-  actually binds it to. No campaign is ever held out of the running because another one covers its
-  funnel; there is no superseded state, and `tests/unit/no-legacy.test.ts` fails if the concept
-  returns.
-- **Fail-SOFT in the scheduler, fail-CLOSED in the gate.** An unreadable budget/funnel set leaves
-  the brand on today's behaviour (turn-taking is an optimization); the gate is what refuses to
-  spend past a cap it cannot read.
-- A brand that never set per-funnel ceilings grows no funnel campaigns and behaves exactly as
-  before: its campaigns state their funnel (a label) and keep pacing on the brand-level pot.
-- The brand-level PAUSE FLAG is GONE — funding is the only thing that holds a campaign. See the
-  next section.
-(Set 2026-08-02; adoption + fleet-wide funnel statement, same day; pause retired 2026-08-16.)
-
-## Funding a sales funnel is what makes its campaigns eligible — there is no pause flag any more
-
-"Is this brand paused" used to live here, in `brand_pause`, while "is this brand funded" lives in
-billing as a per-funnel daily ceiling. Two representations of one fact, and they disagreed. The
-product decided months ago that a customer stops a chain by dropping its ceiling to zero, and the
-brand-wide pause control was deleted from the customer dashboard along with its writer — but the
-flag was still READ, so 27 brands sat stored-paused with no API path back, 10 of them funded,
-holding 11 `ongoing` campaigns the scheduler would never claim. The flag is retired (migration
-0049 drops the table) and the money says it instead.
-
-- **ONE definition, `src/lib/campaign-funding.ts`.** A campaign is funded when a POSITIVE ceiling
-  exists for it, on gate-check's exact precedence: its own `dailyBudgetCents` (the mirror of its
-  funnel ceiling) → its `funnelKey`'s ceiling → the brand-level pot. Shared by the leg that HOLDS
-  an ongoing campaign (`planFunnelTurns`) and the leg that RESUMES a stopped one
-  (`campaign-resume`), for the same reason `serveableAudienceIdsForCampaign` is shared: two legs
-  on two definitions is how a campaign gets held by one and never picked up by the other.
-- **A ceiling nobody ever stated is UNFUNDED, not unbounded.** `brandDailyBudgetBlock` used to
-  read a null brand budget as "no cap this tick" and let the campaign run. That is how two brands
-  funding nothing at all (`8ea87a06…` org `d46ba002…`, `d7d25db9…` org `21bbec7f…`) kept sending
-  against no ceiling while 27 brands that DID state a zero were held by a flag nobody could
-  write. The gate now answers `Brand not funded`. It is only ever reached for a sales-outreach
-  campaign — every other feature family is untouched by funding, exactly as the pause was
-  sales-scoped.
-- **The hold is at the TURN, not the claim.** There is no SQL clause any more: the claim
-  `UPDATE … RETURNING` cannot call billing, and mirroring the ceiling into a column would rebuild
-  the same second-representation problem one layer down. A held campaign is claimed, held by
-  `planFunnelTurns`, and given `nextRunAt = now + FUNDING_RECHECK_MS` (10 min) — not the 1-minute
-  turn cadence, because it is not waiting its turn, it is waiting for money. That interval IS the
-  feature's latency: fund a funnel and its campaign runs within ten minutes, with no manual step.
-- **Fail-CLOSED here, unlike the rest of the turn planner.** An unreadable budget holds the brand.
-  Turn-taking is fail-soft because it only reorders work already allowed; this decides whether to
-  spend, and the gate refuses the same run on the same unreadable read anyway — firing it could
-  only burn a run.
-- **A brand nothing will CLAIM soon is swept, and "soon" is the selection — not "has nothing
-  running".** `provisionFundedPairsForQuietBrands` (own 10-min cadence) reads the (org, brand)
-  pairs that have sales campaigns and none of them in flight or due within the sweep interval,
-  and stands up one campaign per funded, DECLARED pair. Selecting on "no `ongoing` campaign" was
-  right for the brand whose campaigns are all STOPPED (27 of 44 the day it shipped) and blind to
-  the brand PARKED AT ITS CEILING: the turn planner defers it to the day rollover, so the claim
-  path — where provisioning otherwise lives — does not look at it again until midnight UTC, and a
-  channel funded in the meantime waits for the rollover. That brand is too alive for an
-  idle-selection sweep and too quiet for the claim path, and it fell between them for nineteen
-  hours in prod (brand `75d7e3e8`, second channel funded 2026-08-19 13:59, no campaign until the
-  next day — issue #386). Read volume is unchanged for a brand that is working: it is EXCLUDED
-  here precisely because the claim path reaches it sooner, so the cost is one billing read per
-  QUIET brand per ten minutes — the same cadence and the same argument as `FUNDING_RECHECK_MS`.
-  The scheduler's idle sleep is capped at that interval for the same reason the resume sweep
-  needed it: a brand with nothing ongoing yields an empty snapshot and would otherwise be looked
-  at hourly. The seed prefers an `ongoing` row (it carries the current owner, workflow and offer),
-  and the declared-funnel question is asked over every offer the pair's sales campaigns state, not
-  just the seed's. (Widened 2026-08-23.)
-- **Funding brings back the campaign that was HELD, never the campaign that stopped for a reason
-  of its own.** A row carrying `audience_exhausted`, `max_leads_reached`, `manual` or
-  `org_teardown` said why it stopped and money answers none of them (the exhaustion sweep owns the
-  first — it asks the audience owner, the only honest test). A NULL reason is the pre-column
-  population, i.e. the workflow-version churn, so it is the campaign rather than a decision about
-  it, and funding resumes it.
-- **`GET /brands/:brandId/pause` STAYS and answers from the money**: held ⟺ no funnel carries a
-  positive ceiling AND the brand pot is not positive. `updatedAt` is always null (nothing stores
-  it) and an unreadable billing is a **502**, never a cheerful `paused:false`. **`PATCH
-  /brands/:brandId/pause` is DELETED** — re-adding a writer is the contradiction wearing a
-  different hat, and `tests/unit/no-legacy.test.ts` fails on any route that writes a pause.
-  api-service still proxies the PATCH; that proxy is now dead (it had no caller).
-- **`brand_pause_transitions` is KEPT as a CLOSED history.** No new row can be written (its writer
-  was the PATCH), but the flips that happened are real and features-service's Customer Success
-  board reads them via `/pause-history`. Dropping it would lose history to answer nothing.
-- **Consumer note (features-service):** its account triage reads this route as one of
-  paused → active → inactive. `paused` now means "funds nothing", which SUBSUMES the old
-  `inactive` (budget 0 or unset), so those two collapse into one for a sales brand. Money sums are
-  unaffected — both were already excluded from spend/MRR/ARR.
-- **Verified at ship**: all 27 stored-paused brands answer zero on every funnel and null on the
-  brand pot, so every one of them is still held after this ships, by the new rule. (Set
-  2026-08-16.)
-
-## A campaign is unique on (org, brand, sales funnel, acquisition channel) — the WORKFLOW is not part of it
-
-Nothing else is part of that identity. A campaign changes workflow whenever selection picks a
-better one; it is not replaced by a second campaign each time it does. Treating the workflow as
-identity is what grew brand `f4d73dab` **137 stopped rows**, one per workflow version (`Aurora`,
-`Aurora V2`, `V3`, `Hassium` ×12, `Tributary` ×5 …), each holding a slice of a history nobody could
-read as one campaign.
-
-- **Two of the four were not stored facts** until migration 0044. `brand_id` (scalar) exists
-  because no unique index can span `brand_ids text[]` — the reality is one brand per campaign, and
-  every `ongoing` row in prod carries exactly one. `acquisition_channel` exists because consumers
-  derived the channel from the WORKFLOW SLUG, i.e. from the one attribute that legitimately
-  changes. Both are written once at creation by `campaignIdentityColumns`
-  (`src/lib/campaign-identity.ts`) — every `insert(campaigns)` goes through it, so a new write site
-  cannot leave a row Postgres will not police. Nothing re-derives either at read time.
-- **The channel is named per FEATURE FAMILY, not per medium alone.** `cold_email` for the sales
-  funnels; every other product family names its own (`pr_cold_email`, `expert_quote_outreach`, …).
-  A bare `cold_email` for all of them would make a brand's PR cold-email campaign and its SALES
-  cold-email campaign one identity, so the second could never exist. An unknown feature gets its
-  own slug with `-` as `_` — a feature shipped later can never silently share another's identity.
-- **`uniq_campaigns_org_brand_funnel_channel`** enforces it, partial on `status='ongoing'`: a
-  stopped row is history, not a competitor for the brand's turn. `coalesce(funnel_key,'')` is
-  load-bearing — Postgres treats NULLs as distinct, so without it a brand could grow unlimited
-  funnel-less campaigns on one channel.
-- **`POST /campaigns` on an identity already alive UPDATES that campaign** to the requested
-  workflow + configuration and returns it `200`, instead of inserting a second row. The NAME is
-  deliberately left alone (it is the campaign's own label, unique per org, not a restatement of
-  which workflow runs). A create that loses a race on the index gets the winner back, not an error.
-- **Still open**: the 134 historical stopped rows that DO carry runs cannot be collapsed from here
-  — their history lives in runs-service, keyed on `campaign_id`, and repointing it is runs-service's
-  own ledger to move. Deleting them would orphan the history, which is the one thing never allowed.
-
-## The OFFER is part of what ONE campaign IS — a brand funding two offers on one (funnel, channel, leg) gets two campaigns
-
-A customer funds their money PER OFFER: billing-service has keyed a daily ceiling on
-(org, brand, funnel, channel, OFFER, leg) since its migration 0037, and the dashboard lets each
-offer's ceiling be set separately on Offer Settings. This service carried `offer_id` (migration
-0050) but the offer was in NONE of the three places that decide whether a funded thing already has
-a campaign: not in the uniqueness Postgres polices, not in the existing-campaign lookup, and not in
-the grain the funded pairs are derived at — which deduplicated two stored ceilings differing only
-by offer into ONE provisioning question, on purpose. So a brand selling two offers through one
-(funnel, channel, leg) had two ceilings and ONE campaign: the second offer was funded and never
-provisioned, with no error, no log and no failing test. Verified in prod the day this shipped: 194
-offers across 144 brands, 22 brands holding two or more, and no brand yet funding two offers on one
-identity — armed, never fired.
-
-- **`fundedPairs` reads billing's OFFER grain**, between `channels` and `legs`: `legs` first (it
-  carries both the offer and the leg), then `offers`, then `channels`, then `funnels`. Each
-  fallback keeps the population below it byte-identical, and a row whose `offerId` is null is an
-  UNSCOPED ceiling — money written before a ceiling could name an offer — which provisions exactly
-  as it always did.
-- **Migration 0056 widens `uniq_campaigns_org_brand_funnel_channel` with `coalesce(offer_id, '')`.**
-  A pure LOOSENING, the same shape as 0055's leg: every row that states no offer keys byte-identically
-  to before, so no currently-valid state becomes invalid and no existing pair can start colliding.
-  The index NAME still says funnel_channel, for the same reason it did after the leg: the funnel is
-  still part of this identity and the ship that removes it renames the index.
-- **THE LOOKUP GIVES THE SAME ANSWER BILLING GIVES ABOUT WHICH MONEY IT IS.** A pair whose ceiling
-  NAMES an offer matches the campaign OF THAT OFFER. When that finds nothing there are two cases and
-  only one is a second campaign to have: a SINGLE offer funded on the identity (every brand alive
-  today) means the campaign already doing that work IS this pair's campaign whatever offer it
-  states, so it is matched exactly as it always was; SEVERAL offers funded on it means there are
-  genuinely two campaigns to have and this pair gets its own. `sharedIdentity` on the pair is that
-  count, and it is what makes the widening a loosening at runtime rather than only in the index.
-- **NOTHING IS EVER STAMPED ON A CAMPAIGN THAT STATES NO OFFER.** Only brand-service knows which
-  offer a live campaign belongs to (`adoptOfferForPairSafely` writes one, and only where the (org,
-  brand) pair holds exactly one), and guessing from a ceiling would move real money onto the wrong
-  proposition. That is why the single-funded-offer case LEAVES the campaign alone instead of
-  adopting it the way the leg did — the leg identifier came from the same customer statement the
-  campaign was already working; the offer does not.
-- **WHICH funnels a funded offer may be sold through is asked OF THAT OFFER.** A brand that funds a
-  NEW offer has no campaign stating it, so its declaration was never read by
-  `resolveDeclaredFunnels` — `funnelsByOffer` returns what that pass already read and the funded
-  offer is asked directly otherwise. An unreadable declaration provisions nothing and warns; an
-  offer that does not declare the funnel provisions nothing and says so. The `contested` refusal
-  (several offers declare one funnel, none outranks another) is now only reached by a pair whose
-  ceiling names NO offer — when the money names one, there is nothing ambiguous left to wait on.
-- **The deterministic NAME appends the offer when the pair states one**, before the leg. Two offers
-  of one (funnel, channel, leg) would otherwise collide on `uniq_campaigns_org_name` and the second
-  insert would be swallowed as a race — the funded-and-never-provisioned failure one layer down. An
-  offer-less campaign keeps the name it has always had, byte for byte.
-- **The create route matches the same way, in two steps**: the campaign of THIS offer wins, and only
-  when there is none does an offer-LESS incumbent match — which is what happened before the field
-  was part of the key, and is how such a campaign learns the offer it sells from a caller that now
-  states one. A create stating a DIFFERENT offer is a new campaign, and a `23505` hands back the
-  winner of the same offer rather than a campaign selling another one. A `PATCH` that moves a
-  campaign onto an identity another live campaign holds is a 409.
-- **Nothing about pacing, scheduling or serialization changed.** `offerCeilingCents` already paced
-  on the offer and `spendable-budget` already reported at that grain; what was missing was only that
-  a second campaign could not EXIST to be paced. No column, table, vocabulary or accumulator was
-  added, and no live campaign changed id, status, money or history.
-
-(Set 2026-09-06.)
-
-
-## A campaign states the single funnel LEG it is bought for — features-service's identifier, carried and never parsed
-
-A sales funnel is a chain of steps, and the thing a customer actually BUYS is one of its **LEGS**:
-the leg that takes a lead sitting at one step and moves it to the next. Until now a campaign stated
-a FUNNEL and the leg it performs was derived downstream, by intersecting that funnel with the legs
-its acquisition channel can produce. That derivation cannot survive the funnel leaving a campaign's
-identity — and it is leaving, because a leg belongs to SEVERAL funnels at once and a customer buys
-the leg, not the funnel. Two different legs can land on the SAME step (a booked meeting is reached
-from a positive reply AND from a website visit), so the step a leg lands on does not identify it.
-`campaigns.leg_key` (migration **0055**) is the statement that does.
-
-- **features-service OWNS the vocabulary and MINTS the identifier** (`lib/funnel-legs.ts`,
-  published on its `GET /public/channels` catalogue as `legs[].legKey`). This column carries that
-  value and nothing else. No leg vocabulary, enum, list or matrix exists here and none is to be
-  introduced — the same posture this service holds for the goal, the offer and the channel.
-- **OPAQUE, and NEVER PARSED.** The two steps a leg connects ride BESIDE the identifier on the
-  catalogue (`fromStep` / `toStep`), so a consumer that wants them READS them there. A well-formed
-  `a_to_b` that no catalogue names is still not a leg, so splitting the string can only ever invent
-  one. `tests/unit/no-legacy.test.ts` fails on a leg-key LITERAL anywhere in `src` and on any
-  `split`/`slice`/`match`/`startsWith` of a `legKey`.
-- **AN ENTRY LEG IS AN ORDINARY LEG.** A leg that STARTS a funnel — the lead was on no funnel
-  before — carries a plain identifier like every other one (`start_to_conversation`). It is the
-  special case in features-service's DATA, never in the vocabulary, so there is no branch here.
-- **NEVER derived.** Not from the funnel (several legs sell one funnel and one leg belongs to
-  several funnels, which is the whole reason this word exists), not from the channel, not from the
-  workflow. It is stated by the creator or it is NULL.
-- **OPTIONAL, deliberately and temporarily.** Requiring it is a breaking request-contract change,
-  so a create that states no leg behaves EXACTLY as it did before the column existed and callers
-  state it as they migrate. `PATCH` sets or clears it, which is how a campaign created before it
-  could state a leg says which one it buys, without a second campaign.
-- **It decided no MONEY question at first, and now it decides the FINEST one** — see the section
-  below. `idx_campaigns_org_leg` still serves the per-leg attribution read it was added for.
-- **It IS part of the uniqueness, because a campaign bought for one leg is not the campaign bought
-  for another.** `uniq_campaigns_org_brand_funnel_channel` gained `coalesce(leg_key, '')`, and the
-  create route's incumbent lookup and its `23505` winner lookup gained the same clause — without
-  that, a brand working ONE channel for TWO legs cannot hold two live campaigns at all: the second
-  create is read as a restatement of the first, which is precisely the pair the leg exists to tell
-  apart. **The widening is a pure LOOSENING**: `coalesce` collapses every row that states no leg
-  onto the value it had before the column existed, so every campaign alive today keys
-  byte-identically and no existing pair can start colliding. A `PATCH` that moves a campaign onto an
-  identity another live campaign holds is a **409**, not an internal error.
-- **The NAME of that index still says `funnel_channel` on purpose** — the funnel is still part of
-  this identity. Removing the funnel from a campaign, and renaming the index with it, is the LATER
-  ship; this one adds the leg beside it and changes nothing about what is required at create.
-
-(Set 2026-08-30.)
-
-## The LEG is what a campaign is PROVISIONED, FOUND and PACED on — the sales funnel becomes a way of READING legs
-
-Stating the leg was half of it: the funnel was still what this service provisioned on, keyed its
-existing-campaign lookup on, and asked other services about. A leg belongs to SEVERAL funnels at
-once, so a funnel can never say which of them the customer bought — and a (funnel, channel, offer)
-worked for TWO legs was one provisioning question, one identity and one summed ceiling, i.e. one
-campaign doing two jobs on money funded for two.
-
-- **billing's LEG grain is the finest it stores and the unit ONE campaign is provisioned per**
-  (`legs[]` on `GET /internal/brands/:id/funnel-budgets`: funnel, channel, offer, `legKey`). Every
-  coarser grain billing serves is a SUM of these rows, so nothing is added up here — `fundedPairs`
-  reads `legs` first, falls back to `channels`, then to `funnels`. **A row whose `legKey` is null
-  is a ceiling written before legs existed and provisions a leg-less campaign byte-identically to
-  what the pair grain provisioned for it**, which is why every brand alive today is untouched.
-- **`legCeilingCents` is one notch below `offerCeilingCents`**, in gate-check and in
-  `campaign-funding`, on the one shared precedence: own `dailyBudgetCents` → LEG → offer → pair →
-  funnel → brand pot. Same three answers and the same reasons as every grain above it, so a
-  campaign that states no leg — and a brand whose ceilings name none — answers `none` and paces
-  exactly as it always did. The offer half of the match is billing's own rule, mirrored rather
-  than re-invented. A leg the brand's money is not scoped to is UNFUNDED, never a fallback to the
-  offer or pair figure: that is the whole point of the grain.
-- **WHAT A CHANNEL CAN DO IS ASKED IN THE VOCABULARY OF WHAT WAS BOUGHT.** A pair that states a
-  LEG asks "does this channel perform this leg?" and names NO funnel — features-service publishes
-  every channel's legs as `channels[].stepTransitions[].legKey` on the same public catalogue this
-  pass already reads for who operates them, so one read answers both and the identifier is joined
-  verbatim. A pair that states no leg keeps asking the per-feature FUNNEL question, unchanged: that
-  IS the question for a ceiling written before a campaign could state a leg. An unreadable
-  catalogue provisions nothing for that leg and says so — a funded pair we failed to EVALUATE is
-  not a pair we evaluated and rejected.
-- **The existing-campaign lookup keys on the leg**, so a brand working ONE channel for TWO legs
-  gets two campaigns instead of finding the first one for the second pair and never provisioning
-  it. The insert states the leg, and the deterministic NAME appends it — two legs of one (funnel,
-  channel) would otherwise collide on `uniq_campaigns_org_name` and the second insert would be
-  swallowed as a race. **A leg-less campaign keeps the name it has always had, byte for byte.**
-- **A campaign already doing the work is ADOPTED, never twinned.** When a pair states a leg and no
-  campaign of that leg exists, the LEG-LESS campaign of the same (org, brand, funnel, channel) is
-  that pair's campaign — it has been doing exactly this work since before a campaign could say
-  which leg it was bought for — so the leg is stamped on it. Leaving it alone inserts a twin
-  beside it: two live campaigns doing one job, splitting one identity's history and spending on two
-  ceilings, which is the funnel-less-ancestor recurrence one word along. Nothing else about the row
-  moves (id, status, schedule, spend and history are untouched) and the money is the same money
-  restated at the grain it was funded at. Guarded on the row still stating no leg, so a re-run
-  writes nothing and a race with a live create cannot overwrite it; a `23505` leaves the row alone
-  and says so.
-- **`spendable-budget` counts at the LEG grain too**, or a (funnel, channel, offer) funding two
-  legs would give one campaign the whole summed figure and report the other as running on nothing —
-  a secondary surface contradicting the ceiling the gate actually binds. `legKey` rides on the row
-  and the campaign line; the grain enum gained `leg`.
-- **Nothing about pacing, scheduling or serialization changed.** The turn planner still ranks on
-  spent ÷ own ceiling (that ceiling is simply the leg's when one binds), the cohorts are still the
-  acquisition channel's, the cadences are the same, and no campaign changed id, status, money or
-  history because of this.
-- **The funnel COLUMN stays.** It is still part of the identity index, still what billing's rows
-  and brand-service's declarations are keyed on, and still what a leg-less campaign is provisioned
-  by. Dropping it is a later, separate step once nothing reads it.
-
-(Set 2026-08-31.)
-
-## A campaign that CAN state its leg states it — the backfill is a SCRIPT, and it derives nothing new
-
-The write path states the leg, so every campaign created since migration 0055 carries one. Every
-campaign that predates it does not: 234 rows carry a funnel and a channel and no leg. While the
-column is blank, every consumer resolving what such a campaign buys falls back to DERIVING the leg
-from its funnel and its channel — the derivation the column exists to replace — per-leg attribution
-answers about one campaign in 235, and a ceiling stated at the leg grain cannot find the campaign it
-paces.
-
-- **`scripts/backfill-campaign-leg.ts` writes down the answer the consumers already compute.**
-  features-service publishes, on the ONE public catalogue this service reads
-  (`channel-operator-client.ts`), which legs each CHANNEL performs and which funnels each LEG is a
-  leg of. The leg a campaign is bought for is the one in BOTH sets. Nothing new is decided, so a
-  backfilled campaign reads identically to the way it read before — this makes explicit what is
-  already inferred and changes no campaign's meaning.
-- **The identifier is features-service's, read from what it publishes.** Nothing is minted, nothing
-  is parsed, no list of legs exists here — the same posture this service holds for the goal, the
-  offer and the channel.
-- **A campaign that does not resolve to EXACTLY ONE leg is LEFT ALONE**: no leg, several legs (the
-  funnel genuinely does not say which was bought), a channel the catalogue does not publish, a
-  funnel token no catalogue names. Each is reported with its reason, grouped by the (funnel,
-  channel) pair. An unreadable catalogue writes NOTHING at all and throws — "the catalogue states no
-  leg" and "the catalogue could not be asked" are different answers.
-- **Idempotent, reversible, previewable.** It selects and writes only rows whose `leg_key` is still
-  NULL and restates that guard in the UPDATE, so a second run writes nothing and a run racing a live
-  create cannot overwrite a leg a caller just stated; the previous value is NULL by construction, so
-  the undo is exactly the ids it prints (which it emits as a statement); and it DRY-RUNS by default,
-  `--apply` being the only way to write.
-- **A row whose leg would COLLIDE with a live sibling's identity is left alone, per row.** A
-  campaign is unique on (org, brand, funnel, offer, leg, channel) among `ongoing` rows and a
-  leg-less row keys as the empty string, so stating a leg can land a row exactly on top of a live
-  campaign that already states it — Postgres saying the two are the same campaign. That is a real
-  answer about the data, reported like any other left-alone reason. Caught PER ROW, because
-  unhandled it aborts the whole run on the first collision and leaves every later campaign
-  unwritten (observed in the production run: two campaigns provisioned mid-run, one of them a twin).
-  Any OTHER write error still throws.
-- **`leg_key` is the only column that moves** (plus `updated_at`). No campaign is created or
-  deleted, and no status, money, schedule, history or other word of the identity is touched.
-- **Not a migration, because SQL cannot make the read** — the same reason the offer backfill is a
-  script. It is RE-RUNNABLE rather than one-shot: a channel that gains a leg upstream, or a campaign
-  that becomes resolvable later, is picked up by running it again, never by widening what it is
-  willing to guess.
-
-(Set 2026-09-06.)
-
-## A sales campaign can be identified by (OFFER, LEG, CHANNEL) with NO funnel — the funnel is leaving the identity
-
-The fleet is retiring the sales funnel (org > brand > offer > outcome > leg). One leg belongs to
-several funnels, so the same leg run by the same channel for the same offer is ONE campaign, not one
-per funnel. This wave is ADDITIVE: every funnel-keyed caller behaves byte for byte as before.
-
-- **`POST /campaigns` accepts a sales campaign stating `offerId` + `legKey` and no `funnelKey`**
-  (stored `funnel_key NULL`). Stating neither a funnel nor both of those is still the same 400.
-- **It is never twinned, in either direction.** A funnel-less create matches the incumbent of
-  (org, brand, channel, offer, leg) under ANY funnel (live first) and hands it back; a funnel-keyed
-  create that finds nothing on its own funnel matches the FUNNEL-LESS campaign of that
-  (offer, leg). A funnel-keyed create never adopts ANOTHER funnel's campaign — that is today's
-  behaviour and it is kept. `start-funded-pair`'s sibling lookup includes the funnel-less row too.
-  No index polices this (the partial unique index still keys `coalesce(funnel_key,'')`), so the
-  guard is the lookup, exactly as for stopped rows.
-- **Found**: `GET /campaigns?featureSlug=&offerId=&legKey=` (exact matches, any funnel).
-- **Paced** by `offerLegCeilingCents` (gate-check block a3, `fundingFromBudgets`, spendable-budget,
-  all reading the same rows). Leg grain (some ceiling of the brand names a leg): billing's own
-  funnel-less `legs[]` row for (offer, leg, channel), else that leg's funnel-keyed rows summed;
-  legs funded but not this one → unfunded. NO ceiling names a leg (nearly all of prod, 2026-09-25):
-  the offer's own row on its channel — exactly ONE funnel's; leg-less money of the offer split
-  across several funnels is UNFUNDED, never summed (it cannot say which part is this leg's). Brand
-  funding nothing per funnel → brand pot. v0.73.3 fell to the brand pot on leg-less brands (a
-  300-cent pot instead of the offer's 100-cent row); the post-deploy pacing probe caught it before
-  any funnel-less campaign existed and v0.73.4 fixed it — run that probe (every live campaign's
-  funding with and without its funnel, compared) after any change to this rule.
-- **The billing read tolerates `funnelKey: null`**: kept on a `legs[]` row (which must then name a
-  leg), dropped from `funnels`/`channels`/`offers`. Before this a single null-funnel row failed the
-  WHOLE read closed and would have held every campaign of the brand the day billing shipped one.
-- **`trigger-for-step` also runs a funnel-less campaign** of a leg out of the step on the named
-  funnel. **`/predecessor` still answers a named absence** for a campaign stating no funnel.
-- Measured in prod 2026-09-25 before shipping: 22 ongoing campaigns / 16 orgs, all funnel + leg +
-  offer; **0** groups (any status) share (org, brand, channel, offer, leg) across funnels; **0**
-  funnel-less rows with a leg. Nothing existing changes status, money or matching.
-
-(Set 2026-09-25.)
-
-## WAVE C1 — nothing in this service READS the funnel of a campaign that states a leg
-
-The sales funnel is retiring fleet-wide (org > brand > offer > outcome > leg). Wave C1 stops every
-consumer reading it; wave C2 drops the column, index word and routes. Here, every live campaign
-states a leg (22 of 22 on 2026-09-25), and for such a campaign:
-
-- **Pacing and funding** (`fundingFromBudgets`, gate-check block a3, turn planner, spendable-budget)
-  read `offerLegCeilingCents` only — the leg branch is taken FIRST, whatever funnel the row carries.
-  `brandHeldFromBudgets` reads every grain's rows, not the funnel sums. Measured side by side before
-  shipping: same verdict AND same ceiling for 22/22 live campaigns (10 funded, 12 held).
-- **Turn tie-break** is leg then campaign id (was funnel); hold events name offer/leg/channel.
-- **The funnel-less-ancestor adoption is no longer CALLED** by the tick (it wrote a funnel onto
-  history). Its module stays for its migration-parity test until C2.
-- **Selection** ranks a leg campaign on the leg-keyed body only; a leg campaign is never
-  goal-arbitrated; a failed/empty leg read runs the configured workflow (it used to fall back to
-  the funnel body). `/start-run`'s audience pick and the `/end-run` stop-guard read the leg-keyed
-  rows too (`fetchLegProjectionRows`, which THROWS — the guard must not read an outage as a verdict).
-- **Create** (`POST /campaigns`): a sales create naming `offerId` + `legKey` matches the incumbent
-  of (org, brand, channel, offer, leg) WHATEVER funnel either states; the funnel a caller still sends
-  is stored, never matched. **Start** (`start-funded-pair`): `funnelKey` optional — without it
-  `offerId` + `legKey` are required (`leg_required`), funded at (offer, leg, channel), created with a
-  NULL funnel. **Step trigger**: `funnelKey` optional; when sent it only narrows the legs out of the
-  step, campaigns are matched on (offer, leg). **Predecessor**: walked on (org, brand, offer,
-  preceding leg); `campaign_states_no_funnel` is never answered any more.
-- **What still reads a funnel, deliberately, until C2**: a caller that still NAMES one (it narrows
-  the legs, or resolves a pre-leg start exactly as before). A campaign stating no leg is no longer
-  priced on one — see WAVE C2 above.
-  Responses still echo the stored `funnelKey`. No column, index, route or table was dropped.
-
-(Set 2026-09-25.)
-
 ## A campaign bought for a leg that CONTINUES another can FIND what it is continuing — one lookup, nothing stored
 
 A funnel is several LEGS and this service mints one campaign per leg, so the customer's single
@@ -1168,8 +568,7 @@ anywhere, because an empty drawer is indistinguishable from there being nothing 
   the leg whose `toStep` is this campaign's `fromStep`, joined verbatim against `campaigns.leg_key`.
   A well-formed `a_to_b` no catalogue names is still not a leg, so splitting one could only invent
   it — the same posture this service holds for the goal, the offer and the channel.
-- **THE FUNNEL IS PART OF THE JOIN**, because a leg belongs to several funnels at once. Both sides
-  go through `toFunnelKey`, so a pre-rename spelling on either still matches.
+- **(C2) No funnel is part of the join** — the chain is walked on (org, brand, offer, leg).
 - **NOTHING IS GUESSED.** A campaign at the FIRST leg of its funnel carries an ENTRY leg, which
   states no step before it, so the answer is `predecessor: null` with `absence: entry_leg` — never
   the closest-looking sibling. Same named absence for a campaign stating no leg, funnel, offer or
@@ -1236,10 +635,7 @@ campaign bought for the leg OUT of that step runs immediately.
   `fromStep` and the funnels it is a leg of), joined VERBATIM against `campaigns.leg_key`. The steps
   ride beside the identifier precisely so nobody splits it, and a well-formed `a_to_b` no catalogue
   names is still not a leg. `channel-operator-client.ts` stays the ONE reader of that catalogue.
-- **The FUNNEL is part of the question because a leg belongs to several.** `conversation ->
-  meeting_booked` is a leg of more than one chain, and only the customer's funding says which one
-  they bought — so it is named by the caller rather than derived from the leg. (`conversation` is
-  the step key every customer-facing surface labels "sales interest"; the label is not the token.)
+- **(C2) No funnel is part of the join** — the chain is walked on (org, brand, offer, leg).
 - **THE GATE IS UNTOUCHED.** The dispatch is the SCHEDULER'S OWN — same anchor run
   (`ensureCampaignRunId`), same greedy workflow pick, same `/execute` — so the run starts at
   `gate-check`, the first node of every DAG, and is refused there exactly as a scheduled run is.
@@ -1407,71 +803,6 @@ attribution and on the customer's screen.
     writes nothing and a race with a live create cannot overwrite it) and fail-SOFT (an attribution
     correction must never hold up the provisioning that called it).
 
-## "Which funnels are sold here?" is asked of the OFFER — the only grain with ONE answer
-
-An offer owns its own value proposition AND its own declared sales funnels with their own
-economics, so "the funnels of brand X" stopped having one answer the day a brand could sell
-several. brand-service says so itself: it REFUSES a brand-keyed
-`GET /internal/brands/:id/sales-funnels` on a brand holding more than one offer rather than guessing
-which one the caller meant. A campaign already STATES the offer it sells, so the unambiguous
-question is `GET /internal/offers/:offerId/sales-funnels` — keyed on the offer alone, one answer per
-offer, ten answers on the brand ten orgs claim.
-
-- **Three outcomes, never one `null`.** `SalesFunnelsRead`
-  (`src/lib/brand-sales-funnels-client.ts`) is `{ok, funnels}` | `{ok:false, reason:
-  "ambiguous" | "unavailable" | "unknown_offer"}`. Collapsing them is what made the offer level
-  SILENT rather than merely broken: any non-2xx read as "declares nothing", so the day a customer
-  creates their second offer the brand's campaigns simply stop being provisioned, with nothing
-  crashing and nothing logged about an offer anywhere. An EMPTY list stays a truthful answer and is
-  NOT logged (it is the routine state of a brand that has declared nothing); a REFUSAL warns that it
-  is a refusal, in those words. `tests/unit/no-legacy.test.ts` fails on a nullable return here.
-- **`ambiguous` is matched on the STATUS and on the CODE.** 409 is enough on its own, and
-  `OFFER_REQUIRED` / `MULTIPLE_OFFERS` / `AMBIGUOUS_OFFER` / `ORG_REQUIRED` are matched whatever
-  status they arrive dressed in — a refusal read as an empty set is the whole failure mode, so it
-  must not depend on brand-service keeping one status forever.
-- **Asked over the WHOLE claimed group, once per distinct offer.** `resolveDeclaredFunnels`
-  (`funnel-campaigns.ts`) reads one offer at a time and unions the answers, keeping which offer
-  declared each funnel. The brand-keyed read is made ONLY when a campaign of the group states no
-  offer — so a campaign that states none behaves exactly as it did before offers existed, and a
-  brand whose campaigns all state one never makes the read that would be refused.
-- **A funnel SEVERAL offers of one brand declare is provisioned for NEITHER, loudly.** They are
-  equals and none outranks another, so there is no offer to file a new campaign under; picking one
-  would rank it on another product's economics. It waits for a caller that says which offer it
-  means. Same rule, same reason, as never resolving a brand to one of its offers.
-- **A campaign provisioned from an offer's declaration CARRIES that offer** (`offerId` on the
-  insert). Still carried, never derived: the value comes from the campaign whose declaration put the
-  funnel in scope, not from the funnel, the goal or the workflow.
-- The quiet-brand funding sweep asks the same way, over the offers its pair's campaigns state.
-(Set 2026-08-19.)
-
-## Nothing can be unattributable — so nothing holds a brand's provisioning back
-
-The rule that used to live here held a brand's per-funnel provisioning back while ANY alive campaign
-of it could not be attributed to a funnel (a goal like `combinedSales` names several, so it named
-none). It was correct while a funnel could be unknown, and it cost exactly what it was protecting:
-a customer funded a funnel and never got a campaign for it — 2 of 18 live campaigns were in that
-state on 2026-08-12, and the empty column in the dashboard was only where it showed.
-
-A funnel cannot be unknown any more: **creation refuses a sales campaign that states none**, so the
-condition the rule tested can no longer arise. It is DELETED, along with the stand-in cleanup that
-existed to undo the duplicates it prevented. **A brand that funds a funnel gets a campaign for that
-funnel, full stop** — `tests/unit/funnel-campaigns.test.ts` pins that even a campaign carrying no
-funnel (a row older than the rule) does not hold provisioning back, and nothing is re-labelled or
-deleted when it happens: provisioning only adds.
-
-**An owner answer about a campaign's funnel is still written through `campaign_funnel_owner_decisions`**
-— one row per campaign written, holding the value it replaced and the migration tag that wrote it,
-so every such write is auditable, re-runnable and undoable by that tag. Nothing in the runtime reads
-the table. Two answers exist: migration **0045** (org `f0420eb5` / brand `f4d73dab`, Kevin
-2026-08-02 — the live campaign `d5a759bf` states `sales_meetings_from_conversation`, its 51 stopped
-sales campaigns state `website_purchases`; a run-date split was declined, so 33,229 of `d5a759bf`'s
-54,809 runs predate the July 19 switch and sit under the meeting funnel, one-directional and NOT to
-be "fixed"), migration **0047** (the three live rows above, taken from each pair's declared
-funnel set), and migration **0048** (the 45 stopped ancestors of the one live campaign of org
-`b645207b` / brand `75d7e3e8` / `cold_email`, taken from that campaign's own stated funnel). Note
-that a brand row is claimed by several orgs — the stopped campaigns other orgs hold on `f4d73dab`
-are other customers' and keep a NULL funnel, and 0048's rule joins on the org for the same reason.
-
 ## Brand serialization counts the runs of the SAME COHORT — a brand's PR run, and its ad run, are not its cold email's business
 
 `hasLiveRunForBrandCohort` asks runs-service campaign by campaign, over the brand's `ongoing`
@@ -1607,48 +938,6 @@ The diagnostic that now works, and did not before:
 `SELECT created_at, event, level, detail FROM run_events WHERE campaign_id = '<id>' ORDER BY created_at DESC LIMIT 5;`
 
 (Set 2026-09-17.)
-
-## A brand selling SEVERAL OFFERS does not break the pricing read — it DEGRADES it, and an unpriced grid selects nothing
-
-> **Since v0.73.0** a campaign stating a leg is always priced on the leg-keyed body (see the
-> model-eligibility section), so the substitution described here only matters historically. Since
-> WAVE C2 the funnel-keyed read itself is gone, so none of this is reachable any more.
-
-brand-service refuses a brand-scoped read for a brand selling several offers (409 `SEVERAL_OFFERS`),
-and v0.72.4 named the campaign's own offer on the two reads that 409 — `runtime-context` and the
-leg-keyed verdict. The THIRD read of every trigger, the PRICING one, does not 409 at all, which is
-why it was missed: features-service answers a funnel- or goal-keyed read of such a brand with a
-**200**, states `declaredFunnelsUnresolved: {reason: "several_offers", offers}`, and reads the whole
-PROJECTED half null. The VOLUME half (spend, contacted — measured facts about this brand) is
-untouched, so every row is present, nothing throws, no test goes red, and every
-`resolved.costPerOutcomeUsd` — the one number BOTH argmins rank on — is null. Nothing is rankable,
-so the cell pick collapses to the campaign's configured workflow and the whole of v0.72.0 stops
-happening for exactly the brands the 409 fix unblocked. From inside the selection it is
-indistinguishable from a channel with no history.
-
-- **The priced answer is ALREADY in hand.** The leg-keyed verdict read fired in the SAME
-  `Promise.all` names the campaign, which names its offer transitively, so features-service prices
-  it fully (that is what the 409's own body tells a caller to do). `readLegModelEligibility`
-  therefore carries its `rows` back, and `pricedRows` substitutes them **only** when the funnel-keyed
-  body states `declaredFunnelsUnresolved`. It is never done while that body is priced, so no
-  single-offer brand's pick moves by a cent.
-- **Gated on the STATEMENT, never on "all the numbers are null".** A cold channel is legitimately
-  unpriced too, and substituting there would price it on a different denomination for no reason.
-- **`?campaignId=` cannot rescue the pricing read itself**: `leg` + `funnel` together is a 400
-  (`leg_and_funnel`) and `campaignId` alone is a 400 (`campaign_requires_leg`), so the leg-keyed body
-  is the ONLY priced answer that exists for a multi-offer brand. That is a contract fact, not a
-  preference.
-- **No leg-keyed body (the campaign states none, or that read failed too) → the grid stays unpriced
-  and says so on `console.error`.** The fallback still runs the configured workflow, exactly as
-  before; what is new is that it can no longer be silent.
-- **A 409 `several_offers` on the verdict read logs at ERROR, not WARN.** It is not an outage and no
-  retry fixes it — an offer-less campaign on a multi-offer brand is a question with several answers,
-  and the log names what would make it answerable (state the campaign's `offerId`).
-- **`/start-run` SERVES `offerId`** on its response and in `StartRunResponse` / `openapi.json`, so a
-  downstream DAG node reading brand-service scopes its own call instead of guessing. v0.72.5 added
-  the field to the handler only, which left the contract silent about the value it exists to publish.
-
-(Set 2026-09-17, after v0.72.4/v0.72.5.)
 
 ## A `POST /campaigns` PROBE against a real org is a WRITE — it matches the incumbent and RESTARTS it
 

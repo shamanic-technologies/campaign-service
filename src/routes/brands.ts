@@ -6,11 +6,11 @@ import { brandPauseTransitions, campaigns } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { BatchSpendableBudgetBody, SetBrandCampaignsDailyBudgetBody } from "../schemas.js";
-import { fetchFunnelBudgets } from "../lib/funnel-budget-client.js";
+import { fetchCampaignBudgets } from "../lib/campaign-budget-client.js";
 import { brandHeldFromBudgets } from "../lib/campaign-funding.js";
 import {
   OUTBOUND_SALES_FEATURE_SLUGS,
-  SALES_FUNNEL_FEATURE_SLUGS,
+  SALES_FAMILY_FEATURE_SLUGS,
 } from "../lib/sales-outreach-campaign.js";
 import {
   computeSpendableBudget,
@@ -22,8 +22,8 @@ import {
 // still prefers over every billing ceiling when it is set. Scoped to the OUTBOUND cold-email
 // channels, i.e. exactly the campaigns that carry it today.
 //
-// A paid-reach campaign is deliberately NOT stamped: its ceiling is billing's, stated per (funnel,
-// channel, offer) and read live on every plan, and writing a brand-level number onto its row would
+// A paid-reach campaign is deliberately NOT stamped: its ceiling is billing's, stated per (offer,
+// leg, channel) and read live on every plan, and writing a brand-level number onto its row would
 // bind it AHEAD of the offer ceiling it was funded on — a second representation of one fact, which
 // is the thing this service keeps deleting.
 const SALES_FEATURE_SLUGS = [...OUTBOUND_SALES_FEATURE_SLUGS];
@@ -35,13 +35,13 @@ const router = Router();
  *
  * The answer is the MONEY's, not a flag's. It used to be a stored boolean (`brand_pause.paused`)
  * that the customer dashboard wrote; that control was deleted when the product decided a customer
- * stops a funnel by dropping its ceiling to zero, and the flag outlived its writer — 27 brands
+ * stops a campaign by dropping its ceiling to zero, and the flag outlived its writer — 27 brands
  * stored paused, 10 of them funded, holding campaigns with no API path back. The flag is gone and
- * this route answers from billing's per-funnel ceilings, which is the same fact the customer is
+ * this route answers from billing's per-campaign ceilings, which is the same fact the customer is
  * already editing.
  *
- * Held ⟺ no sales funnel of this (org, brand) carries a positive ceiling AND the brand-level pot
- * is not positive either. Funding any one funnel releases it, with no other step.
+ * Held ⟺ no campaign ceiling of this (org, brand) is positive AND the brand-level pot
+ * is not positive either. Funding any one campaign releases it, with no other step.
  *
  * Fail-LOUD (502) when billing cannot be read: answering `paused:false` on an unreadable budget
  * would tell a consumer a brand is running when nobody knows whether it is.
@@ -54,7 +54,7 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
     const { brandId } = req.params;
     const orgId = req.orgId!;
 
-    const budgets = await fetchFunnelBudgets(brandId, { orgId, userId: req.userId ?? undefined });
+    const budgets = await fetchCampaignBudgets(brandId, { orgId, userId: req.userId ?? undefined });
     if (!budgets.ok) {
       res.status(502).json({ error: "Brand funding unavailable" });
       return;
@@ -151,7 +151,7 @@ router.get("/brands/:brandId/pause-history", requireApiKey, serviceAuth, async (
  * The sales-family campaigns of one (org, brand) pair — ongoing AND stopped.
  *
  * A stopped campaign is what makes "configured but not running" legible: naming it is the
- * difference between "this funnel's money is idle because the campaign is stopped" and "there is
+ * difference between "this campaign's money is idle because the campaign is stopped" and "there is
  * no such campaign", which are different things to a customer and to a staff audit.
  *
  * The brand is matched on the scalar identity column AND on the historical `brand_ids` array: the
@@ -164,7 +164,6 @@ async function loadSalesCampaigns(orgId: string, brandId: string): Promise<Spend
     .select({
       id: campaigns.id,
       status: campaigns.status,
-      funnelKey: campaigns.funnelKey,
       featureSlug: campaigns.featureSlug,
       offerId: campaigns.offerId,
       legKey: campaigns.legKey,
@@ -174,7 +173,7 @@ async function loadSalesCampaigns(orgId: string, brandId: string): Promise<Spend
     .where(and(
       eq(campaigns.orgId, orgId),
       or(eq(campaigns.brandId, brandId), arrayContains(campaigns.brandIds, [brandId])),
-      inArray(campaigns.featureSlug, [...SALES_FUNNEL_FEATURE_SLUGS]),
+      inArray(campaigns.featureSlug, [...SALES_FAMILY_FEATURE_SLUGS]),
     ));
   return rows;
 }
@@ -185,7 +184,7 @@ async function spendableBudgetFor(
   brandId: string,
   userId?: string,
 ): Promise<{ ok: true; budget: SpendableBudget } | { ok: false; reason: string }> {
-  const budgets = await fetchFunnelBudgets(brandId, { orgId, userId });
+  const budgets = await fetchCampaignBudgets(brandId, { orgId, userId });
   // Fail LOUD. A brand whose ceilings cannot be read is not a brand funding nothing, and
   // reporting it as a smaller figure is exactly the silent under-count this endpoint exists to
   // remove from the staff numbers.

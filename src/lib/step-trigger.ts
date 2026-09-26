@@ -2,7 +2,6 @@ import { and, arrayContains, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
-import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 import { campaignFunding } from "./campaign-funding.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
@@ -11,7 +10,7 @@ import { executeCampaignWorkflow } from "./workflows.js";
 import {
   hasLiveRunForBrandCohort,
   serializationCohort,
-} from "./funnel-campaigns.js";
+} from "./brand-turns.js";
 import { hasLiveRunForCampaign, STUCK_RUN_FRESHNESS_THRESHOLD_MS } from "./scheduler.js";
 
 /**
@@ -23,7 +22,7 @@ import { hasLiveRunForCampaign, STUCK_RUN_FRESHNESS_THRESHOLD_MS } from "./sched
  * before anyone answers them, which is the whole problem the leg they bought exists to solve.
  *
  * This is that entry point, and it is a LOOKUP over state this service already holds. A campaign
- * states the (org, brand, offer, funnel, channel) it belongs to and the single LEG it was bought
+ * states the (org, brand, offer, channel) it belongs to and the single LEG it was bought
  * for; features-service publishes which leg leaves which step. Joining the two is the entire
  * resolution — no new column, table, vocabulary or accumulator, and no second scheduler.
  *
@@ -31,26 +30,25 @@ import { hasLiveRunForCampaign, STUCK_RUN_FRESHNESS_THRESHOLD_MS } from "./sched
  *
  * The caller names the STEP a lead just reached. The leg OUT of that step is features-service's
  * statement, read off the public catalogue it already publishes (`GET /public/channels` ->
- * `legs[]`, each carrying `legKey`, `fromStep` and the funnels it is a leg of). The identifier is
+ * `legs[]`, each carrying `legKey` and `fromStep`). The identifier is
  * joined VERBATIM against `campaigns.leg_key` and never split back into its two steps — the steps
  * ride beside it on that payload precisely so nobody parses it, and a well-formed `a_to_b` that no
  * catalogue names is still not a leg.
  *
- * A leg belongs to several funnels at once, which is why the funnel the caller names is part of the
- * question rather than derivable from it: `conversation -> meeting_booked` is a leg of more than one
- * chain, and only the customer's funding says which one they bought. (`conversation` is the step
- * key every customer-facing surface labels "sales interest" — the label is not the token.)
+ * Every leg out of the step is in scope, and the campaign bought for it is matched on the (offer,
+ * leg) it states. (`conversation` is the step key every customer-facing surface labels "sales
+ * interest" — the label is not the token.)
  *
  * ── FAIL LOUD ON THE SCOPE, NO-OP ON THE ANSWER ─────────────────────────────────────────────────
  *
  * A trigger that cannot RESOLVE its scope throws (`StepTriggerScopeError`): a step no catalogue
- * publishes, a funnel naming none of the four, a catalogue that cannot be read. None of those is a
+ * publishes or a catalogue that cannot be read. None of those is a
  * quiet zero — they are a caller's mistake or an outage, and answering them with "nothing to do"
  * would make an unreachable feature indistinguishable from a brand that simply has no campaign for
  * this leg.
  *
  * The ANSWER, on the other hand, is very often nothing, and that is not a failure. Most brands buy
- * one leg of one funnel; a step nobody bought the leg out of, a campaign that is stopped, held for
+ * one leg; a step nobody bought the leg out of, a campaign that is stopped, held for
  * money, already running, or operated by the customer's own team all return a NAMED skip the caller
  * can read. That is what makes "no campaign performs this" distinguishable from "something broke".
  *
@@ -91,22 +89,13 @@ export interface StepTriggerRequest {
   brandId: string;
   /** The OFFER the lead is on — brand-service's id, matched exactly and never inferred. */
   offerId: string;
-  /**
-   * OPTIONAL since wave C1. When sent (any spelling the vocabulary accepts), it only narrows the
-   * legs out of the step to the legs of that funnel — exactly today's answer for a caller that
-   * still names one. When absent, every leg out of the step is in scope: a leg belongs to several
-   * funnels, and the campaign bought for it is identified by (offer, leg, channel).
-   */
-  funnelKey?: string | null;
   /** The step the lead just REACHED. features-service's step key, carried verbatim. */
   step: string;
 }
 
 export interface StepTriggerOutcome {
-  /** The canonical funnel the request named, or null when it named none. */
-  funnelKey: string | null;
   step: string;
-  /** The legs OUT of that step on that funnel, as features-service names them. */
+  /** The legs OUT of that step, as features-service names them. */
   legKeys: string[];
   triggered: Array<{ campaignId: string; legKey: string | null; workflowSlug: string }>;
   skipped: Array<{
@@ -133,14 +122,6 @@ export class StepTriggerScopeError extends Error {
 export async function triggerCampaignsForStep(
   req: StepTriggerRequest,
 ): Promise<StepTriggerOutcome> {
-  const funnelKey = req.funnelKey ? toFunnelKey(req.funnelKey) : null;
-  if (req.funnelKey && !funnelKey) {
-    throw new StepTriggerScopeError(
-      `funnelKey ${JSON.stringify(req.funnelKey)} names no sales funnel`,
-      400,
-    );
-  }
-
   const catalogue = await fetchChannelCatalogue();
   if (!catalogue.ok) {
     // Fail LOUD, unlike provisioning's read of the same catalogue. There the fallback is today's
@@ -159,16 +140,13 @@ export async function triggerCampaignsForStep(
     );
   }
 
-  // The legs OUT of this step — on the funnel the caller named, when it still names one. A
-  // terminal step legitimately has none — a lead who became a paying client is at the end of the
+  // The legs OUT of this step. A terminal step legitimately has none — a lead who became a paying client is at the end of the
   // chain — and that is an ordinary empty answer, not an error.
   const legKeys = catalogue.legs
     .filter((leg) => leg.fromStepKey === req.step)
-    .filter((leg) => !funnelKey || [...leg.funnelKeys].some((key) => toFunnelKey(key) === funnelKey))
     .map((leg) => leg.legKey);
 
   const outcome: StepTriggerOutcome = {
-    funnelKey,
     step: req.step,
     legKeys,
     triggered: [],
@@ -179,8 +157,7 @@ export async function triggerCampaignsForStep(
   const wanted = new Set(legKeys);
 
   // Read the brand's live campaigns and select in memory. The population is a handful of rows per
-  // brand, and a campaign is identified by (offer, leg, channel) — the funnel it may still carry is
-  // not read (wave C1): `wanted` already holds only the legs in scope.
+  // brand, and a campaign is identified by (offer, leg, channel).
   const live = await db.query.campaigns.findMany({
     where: and(
       eq(campaigns.orgId, req.orgId),
@@ -193,7 +170,7 @@ export async function triggerCampaignsForStep(
     (c) =>
       // The offer is matched EXACTLY and never inferred. A campaign that states none is not the
       // campaign of the offer the caller named — the same reason nothing here derives an offer
-      // from a funnel, a goal or a workflow.
+      // from a goal or a workflow.
       c.offerId === req.offerId &&
       c.legKey !== null &&
       wanted.has(c.legKey),

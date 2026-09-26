@@ -407,6 +407,13 @@
       "when": 1778200000000,
       "tag": "0057_campaign_earning_history",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1778300000000,
+      "tag": "0058_drop_funnel_identity",
+      "breakpoints": true
     }
   ]
 }

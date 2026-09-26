@@ -7,8 +7,8 @@ export const SALES_CRM_FEATURE_SLUG = "sales-crm-email-outreach";
  *
  * A channel IS a feature slug in this fleet's vocabulary, so a second channel is a second feature
  * and nothing else: no channel table, enum or vocabulary exists here or should be introduced.
- * Which sales funnels this feature may be SOLD THROUGH is features-service's statement, read per
- * feature — never a matrix held here.
+ * Which legs it performs is features-service's statement, read from its catalogue — never a
+ * matrix held here.
  */
 export const SALES_FEEDBACK_REQUEST_FEATURE_SLUG = "feedback-request-cold-email-outreach";
 
@@ -17,9 +17,8 @@ export const SALES_FEEDBACK_REQUEST_FEATURE_SLUG = "feedback-request-cold-email-
  *
  * A channel is still a feature slug, so this is one line and no new vocabulary — google-service
  * wraps the Google Ads API and declares the spend an org's campaigns incur as that org's cost,
- * features-service publishes the channel and states which funnels it may be sold through (the
- * visit-led funnels: an ad buys a click, and there is no reply in it to sell a conversation with),
- * and billing states its per-(funnel, channel, offer) ceiling like any other. What was missing was
+ * features-service publishes the channel and states which legs it performs (an ad buys a click),
+ * and billing states its per-(offer, leg, channel) ceiling like any other. What was missing was
  * the one thing that makes a funded channel happen at all: a campaign, provisioned and scheduled.
  *
  * Only THIS channel of the published paid-reach catalogue is here. The rest (meta-ads,
@@ -34,8 +33,8 @@ export const GOOGLE_ADS_FEATURE_SLUG = "google-ads";
  *
  * A channel is still a feature slug, so this is one line and no new mechanism — features-service
  * publishes it and states which legs it performs, workflow-service holds its dynasty, and billing
- * states its per-(funnel, channel, offer, leg) ceiling like any other. It is a member of the
- * funnel-funded family for exactly that reason: its money is billing's, read live on every plan.
+ * states its per-(offer, leg, channel) ceiling like any other. It is a member of the
+ * sales family for exactly that reason: its money is billing's, read live on every plan.
  *
  * It is deliberately NOT a member of the OUTBOUND set below. It contacts nobody new: it shares no
  * lead population and no sending-account load with cold email, it produces no send-tagged outcome
@@ -50,11 +49,10 @@ export const AI_MEETING_BOOKING_FEATURE_SLUG = "ai-meeting-booking";
  * message nor by an impression, but by being quoted.
  *
  * A channel is still a feature slug, so this is one line and no new mechanism. features-service
- * publishes it (family `earned`, platform-operated, its one leg `start_to_website_visit`, and the
- * three VISIT-led funnels it may be sold through — a published article buys a click, and there is
- * no reply in it to sell a conversation with), workflow-service holds eight active dynasties for
- * it, and billing states its per-(funnel, channel, offer, leg) ceiling like any other. It is a
- * member of the funnel-funded family for exactly that reason: its money is billing's, read live
+ * publishes it (family `earned`, platform-operated, its one leg `start_to_website_visit` — a published article
+ * buys a click), workflow-service holds eight active dynasties for it, and billing states its
+ * per-(offer, leg, channel) ceiling like any other. It is a member of the sales family for exactly
+ * that reason: its money is billing's, read live
  * on every plan.
  *
  * It is deliberately NOT a member of the OUTBOUND set below. It contacts nobody new: it shares no
@@ -73,7 +71,7 @@ export const PR_EXPERT_QUOTE_FEATURE_SLUG = "pr-expert-quote-outreach";
  *
  * They share what a paid-reach channel shares with nothing: the same lead population, the same
  * sending accounts, the same "everybody in this audience has now been contacted" ending. So three
- * behaviours are theirs alone and are keyed on THIS set rather than on the funnel-funded family:
+ * behaviours are theirs alone and are keyed on THIS set rather than on the sales family:
  * the per-brand serialization (one outbound run in flight per brand, because two of them would
  * contact the same people from the same mailboxes), the greedy workflow rotation (which prices a
  * DAG on send-tagged outcome evidence these channels produce), and the extend-audience lifecycle
@@ -90,12 +88,12 @@ export function isOutboundSalesFeature(slug?: string | null): boolean {
 }
 
 /**
- * THE FUNNEL-FUNDED FAMILY: every acquisition channel that SELLS A SALES FUNNEL.
+ * THE SALES FAMILY: every acquisition channel whose campaigns are funded per (offer, leg, channel).
  *
  * Membership means one thing and it is a MONEY statement, not a medium one: this campaign's
- * ceiling is billing's, stated per (sales funnel, acquisition channel, offer, leg) and read live
- * on every plan — so the campaign states its funnel at birth (`POST /campaigns` refuses one that
- * does not), is HELD when the customer funds nothing for it, takes its turn on its own
+ * ceiling is billing's, stated per (offer, leg, acquisition channel) and read live on every plan —
+ * so the campaign states its offer and leg at birth (`POST /campaigns` refuses one that does not),
+ * is HELD when the customer funds nothing for it, takes its turn on its own
  * spent-over-ceiling ratio, and carries no per-campaign budget column of its own.
  *
  * Membership says nothing about a campaign COMING INTO BEING. Money starts nothing: a campaign
@@ -115,7 +113,7 @@ export function isOutboundSalesFeature(slug?: string | null): boolean {
  * operates them, a different question. It is also read synchronously on gate-check's money path
  * and inside SQL, so deriving it would make an unreadable catalogue silently change whether a
  * per-campaign budget column binds. What IS derived is everything the catalogue actually owns:
- * who operates a channel, which funnels it may sell, which legs it performs.
+ * who operates a channel and which legs it performs.
  *
  * The cost of a channel MISSING from this set is silent and it is the reason each addition is
  * worth the line: outside the family gate-check reads the campaign as a non-sales one and
@@ -124,15 +122,15 @@ export function isOutboundSalesFeature(slug?: string | null): boolean {
  * nothing enforces. Also auto-adopting every published channel would name the dozen paid-reach
  * slugs nothing can execute, so a channel is added only once something can run it.
  */
-export const SALES_FUNNEL_FEATURE_SLUGS: ReadonlySet<string> = new Set([
+export const SALES_FAMILY_FEATURE_SLUGS: ReadonlySet<string> = new Set([
   ...OUTBOUND_SALES_FEATURE_SLUGS,
   GOOGLE_ADS_FEATURE_SLUG,
   AI_MEETING_BOOKING_FEATURE_SLUG,
   PR_EXPERT_QUOTE_FEATURE_SLUG,
 ]);
 
-export function isSalesFunnelFeature(slug?: string | null): boolean {
-  return !!slug && SALES_FUNNEL_FEATURE_SLUGS.has(slug);
+export function isSalesFamilyFeature(slug?: string | null): boolean {
+  return !!slug && SALES_FAMILY_FEATURE_SLUGS.has(slug);
 }
 
 // The four per-campaign budget-window columns. gate-check enforces them for every OTHER feature
@@ -145,7 +143,7 @@ export const MAX_BUDGET_FIELDS = [
 ] as const;
 
 /**
- * A sales campaign's money is BILLING's, per (funnel, channel, offer) — read live on every plan.
+ * A sales campaign's money is BILLING's, per (offer, leg, channel) — read live on every plan.
  * gate-check runs the whole campaign-budget-windows block under `if (!isSalesFeature)`, so a
  * `maxBudget*` on a sales row is inert BY CONSTRUCTION: correct behaviour, silent presentation.
  * A row that states a dollar ceiling nothing reads is what misled a live diagnosis (#396 —
@@ -159,12 +157,12 @@ export function salesMaxBudgetRefusal(
   featureSlug: string | null | undefined,
   body: Record<string, unknown>,
 ): string | null {
-  if (!isSalesFunnelFeature(featureSlug)) return null;
+  if (!isSalesFamilyFeature(featureSlug)) return null;
   const stated = MAX_BUDGET_FIELDS.filter((field) => body?.[field] !== undefined);
   if (stated.length === 0) return null;
   return (
     `A ${featureSlug} campaign cannot state ${stated.join(", ")} — nothing reads a per-campaign ` +
-    `budget ceiling for the sales family. Its money is billing's, stated per (sales funnel, ` +
-    `acquisition channel, offer) on the brand's daily ceilings; set it there instead.`
+    `budget ceiling for the sales family. Its money is billing's, stated per (offer, leg, ` +
+    `acquisition channel) on the brand's daily ceilings; set it there instead.`
   );
 }

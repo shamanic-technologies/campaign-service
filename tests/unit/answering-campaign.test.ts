@@ -83,9 +83,9 @@ beforeEach(() => {
     ]),
     stepKeys: new Set(["conversation", "meeting_booked", "meeting_attended"]),
     legs: [
-      { legKey: ENTRY_LEG, fromStepKey: null, toStepKey: "conversation", funnelKeys: new Set() },
-      { legKey: CONTINUING_LEG, fromStepKey: "conversation", toStepKey: "meeting_booked", funnelKeys: new Set() },
-      { legKey: LATER_LEG, fromStepKey: "meeting_booked", toStepKey: "meeting_attended", funnelKeys: new Set() },
+      { legKey: ENTRY_LEG, fromStepKey: null, toStepKey: "conversation" },
+      { legKey: CONTINUING_LEG, fromStepKey: "conversation", toStepKey: "meeting_booked" },
+      { legKey: LATER_LEG, fromStepKey: "meeting_booked", toStepKey: "meeting_attended" },
     ],
   });
 });

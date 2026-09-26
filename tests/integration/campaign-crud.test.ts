@@ -208,7 +208,7 @@ describe("Campaign CRUD", () => {
     });
 
     it("switches the workflow of the campaign that already IS this identity, never creating a second", async () => {
-      // (org, brand, funnel, channel) is the identity. The WORKFLOW is not part of it: a campaign
+      // (org, brand, offer, leg, channel) is the identity. The WORKFLOW is not part of it: a campaign
       // changes workflow whenever selection picks a better one. Creating one per workflow is what
       // grew a single brand 137 stopped rows, one per workflow version.
       const brandIds = freshBrand();
@@ -391,7 +391,7 @@ describe("Campaign CRUD", () => {
       await createCampaign({ ...validBody, name: "Empty Aud", audienceIds: [] }).expect(400);
     });
 
-    // `goal` is not writable any more: a campaign says what it sells with its SALES FUNNEL, the
+    // `goal` is not writable any more: a campaign says what it sells with its OFFER and LEG, the
     // only word that separates a meeting bought with a positive reply from one bought with a click
     // onto the site. The field is still SERVED (consumers migrate next) and it is simply ignored on
     // the way in rather than 400-ing a caller that has not dropped it yet.
@@ -407,10 +407,10 @@ describe("Campaign CRUD", () => {
       const sharedBrand = crypto.randomUUID();
       const a = await createCampaign({ ...validBody, name: "Sibling A", brandIds: [sharedBrand] }).expect(201);
       // Two campaigns CAN share a brand — on different acquisition channels. Same brand, same
-      // channel and same funnel would be one identity, so B runs a different feature.
+      // channel, offer and leg would be one identity, so B runs a different feature.
       const b = await createCampaign(
-        // A sales-outreach feature STATES the funnel it sells; every other feature states none.
-        { ...validBody, name: "Sibling B", brandIds: [sharedBrand], funnelKey: "form_magnet" },
+        // A sales-family feature STATES the offer and the leg it is bought for.
+        { ...validBody, name: "Sibling B", brandIds: [sharedBrand], offerId: "11111111-1111-4111-8111-111111111111", legKey: "start_to_conversation" },
         "org_test_crud",
         "sales-crm-email-outreach",
       ).expect(201);
@@ -430,68 +430,55 @@ describe("Campaign CRUD", () => {
     });
   });
 
-  // === A campaign STATES the sales funnel it sells, at birth ===
-  describe("the sales funnel a campaign states", () => {
+  // === A sales campaign STATES the offer it sells and the leg it is bought for, at birth ===
+  describe("the (offer, leg) a sales campaign states", () => {
     const SALES = "sales-cold-email-outreach";
+    const OFFER = "11111111-1111-4111-8111-111111111111";
+    const LEG = "start_to_conversation";
 
-    function get(id: string, orgId = "org_test_crud") {
-      return request(app).get(`/campaigns/${id}`).set("x-api-key", API_KEY).set("x-org-id", orgId);
-    }
-
-    it("refuses to create a sales campaign that states no funnel", async () => {
-      const res = await createCampaign(
-        { ...validBody, name: "No Funnel", brandIds: freshBrand() },
-        "org_test_crud",
-        SALES,
-      ).expect(400);
-      expect(res.body.error).toContain("funnelKey is required");
+    it("refuses a sales campaign that states no offer or no leg", async () => {
+      for (const extra of [{}, { offerId: OFFER }, { legKey: LEG }]) {
+        const res = await createCampaign(
+          { ...validBody, name: `Incomplete ${JSON.stringify(extra)}`, brandIds: freshBrand(), ...extra },
+          "org_test_crud",
+          SALES,
+        ).expect(400);
+        expect(res.body.error).toContain("offerId and legKey are required");
+      }
     });
 
-    it("refuses a funnel token no catalogue names, rather than storing a fifth funnel", async () => {
+    it("accepts no sales funnel — a caller still sending one has it ignored, never stored", async () => {
       const res = await createCampaign(
-        { ...validBody, name: "Bad Funnel", brandIds: freshBrand(), funnelKey: "whatsapp_funnel" },
+        { ...validBody, name: "Still sends a funnel", brandIds: freshBrand(), offerId: OFFER, legKey: LEG, funnelKey: "reply_meeting" },
         "org_test_crud",
         SALES,
-      ).expect(400);
-      expect(res.body.error).toContain("Unknown sales funnel");
-    });
-
-    it("stores the funnel the caller states, canonicalised from any spelling billing still emits", async () => {
-      const res = await createCampaign(
-        { ...validBody, name: "Legacy Spelling", brandIds: freshBrand(), funnelKey: "reply_meeting" },
-        "org_test_crud",
-        SALES,
-      ).expect(201);
-      expect(res.body.campaign.funnelKey).toBe("sales_meetings_from_conversation");
-
-      const read = await get(res.body.campaign.id).expect(200);
-      expect(read.body.campaign.funnelKey).toBe("sales_meetings_from_conversation");
-    });
-
-    it("a feature that sells through no sales funnel states none, and is not asked for one", async () => {
-      const res = await createCampaign(
-        { ...validBody, name: "PR Campaign", brandIds: freshBrand() },
-        "org_test_crud",
-        "pr-cold-email-outreach",
       ).expect(201);
       expect(res.body.campaign.funnelKey).toBeNull();
     });
 
-    it("one live campaign per (org, brand, funnel, channel) — the same funnel switches workflow, a different one is its own campaign", async () => {
+    it("a non-sales feature states neither, and is not asked for either", async () => {
+      await createCampaign(
+        { ...validBody, name: "PR Campaign", brandIds: freshBrand() },
+        "org_test_crud",
+        "pr-cold-email-outreach",
+      ).expect(201);
+    });
+
+    it("one live campaign per (org, brand, offer, leg, channel) — the same one switches workflow, another leg is its own campaign", async () => {
       const brandIds = freshBrand();
       const first = await createCampaign(
-        { ...validBody, name: "Meetings", brandIds, funnelKey: "sales_meetings_from_conversation" },
+        { ...validBody, name: "Replies", brandIds, offerId: OFFER, legKey: LEG },
         "org_test_crud",
         SALES,
       ).expect(201);
 
-      // Same identity, later workflow → the SAME campaign, re-pointed. Never a second row.
       const again = await createCampaign(
         {
           ...validBody,
-          name: "Meetings — later workflow",
+          name: "Replies — later workflow",
           brandIds,
-          funnelKey: "sales_meetings_from_conversation",
+          offerId: OFFER,
+          legKey: LEG,
           workflowSlug: "sales-cold-email-outreach-osprey",
         },
         "org_test_crud",
@@ -499,21 +486,18 @@ describe("Campaign CRUD", () => {
       ).expect(200);
       expect(again.body.campaign.id).toBe(first.body.campaign.id);
 
-      // A DIFFERENT funnel of the same brand and channel is a different identity: its own campaign,
-      // paced on its own ceiling.
       const other = await createCampaign(
-        { ...validBody, name: "Purchases", brandIds, funnelKey: "website_purchases" },
+        { ...validBody, name: "Visits", brandIds, offerId: OFFER, legKey: "start_to_website_visit" },
         "org_test_crud",
         SALES,
       ).expect(201);
       expect(other.body.campaign.id).not.toBe(first.body.campaign.id);
-      expect(other.body.campaign.funnelKey).toBe("website_purchases");
     });
 
     it("a STOPPED campaign of the identity is never duplicated — the create hands it back, started", async () => {
       const brandIds = freshBrand();
       const first = await createCampaign(
-        { ...validBody, name: "Stopped Then New", brandIds, funnelKey: "form_magnet" },
+        { ...validBody, name: "Stopped Then New", brandIds, offerId: OFFER, legKey: LEG },
         "org_test_crud",
         SALES,
       ).expect(201);
@@ -525,22 +509,17 @@ describe("Campaign CRUD", () => {
         .send({ status: "stop" })
         .expect(200);
 
-      // A row already exists for this identity, so nothing new is created — whatever its status.
-      // Creating a second one beside a stopped campaign is how a brand ended up with two identical
-      // live rows, and how a deliberately-stopped one was left invisible while a twin spent its
-      // money. This create IS the customer launching it, so it comes back ongoing.
       const second = await createCampaign(
-        { ...validBody, name: "Stopped Then New — the live one", brandIds, funnelKey: "form_magnet" },
+        { ...validBody, name: "Stopped Then New — the live one", brandIds, offerId: OFFER, legKey: LEG },
         "org_test_crud",
         SALES,
       ).expect(200);
       expect(second.body.campaign.id).toBe(first.body.campaign.id);
       expect(second.body.campaign.status).toBe("ongoing");
       expect(second.body.campaign.stopReason).toBeNull();
-      expect(second.body.campaign.funnelKey).toBe("form_magnet");
     });
   });
-  // A sales campaign's money is billing's, per (funnel, channel, offer). gate-check runs the
+  // A sales campaign's money is billing's, per (offer, leg, channel). gate-check runs the
   // campaign-budget-windows block under `if (!isSalesFeature)`, so a `maxBudget*` on a sales row
   // decides nothing — and a row stating a ceiling nothing reads is what misled a live diagnosis.
   describe("per-campaign budget windows on the sales family", () => {
@@ -553,7 +532,7 @@ describe("Campaign CRUD", () => {
           ...validBody,
           name: "Sales campaign stating a dead ceiling",
           brandIds: freshBrand(),
-          funnelKey: "sales_meetings_from_conversation",
+          offerId: "11111111-1111-4111-8111-111111111111", legKey: "start_to_conversation",
           maxBudgetDailyUsd: "10.00",
         },
         "org_test_crud",
@@ -570,7 +549,7 @@ describe("Campaign CRUD", () => {
           ...validBody,
           name: "Sales campaign updated later",
           brandIds: freshBrand(),
-          funnelKey: "sales_meetings_from_conversation",
+          offerId: "11111111-1111-4111-8111-111111111111", legKey: "start_to_conversation",
         },
         "org_test_crud",
         SALES,

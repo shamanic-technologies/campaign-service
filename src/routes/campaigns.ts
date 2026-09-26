@@ -27,8 +27,7 @@ import {
   campaignBirthTransition,
   setCampaignStatus,
 } from "../lib/campaign-status-history.js";
-import { isSalesFunnelFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
-import { acceptedFunnelKeys, toFunnelKey } from "../lib/sales-funnel-vocabulary.js";
+import { isSalesFamilyFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
 import { resolveStartablePair } from "../lib/startable-pair.js";
 
 const router = Router();
@@ -79,7 +78,7 @@ router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilt
     if (workflowSlug) conditions.push(eq(campaigns.workflowSlug, workflowSlug));
     if (featureSlug) conditions.push(eq(campaigns.featureSlug, featureSlug));
     // Together with featureSlug (the channel) these find a campaign by (offer, leg, channel) —
-    // what a campaign IS once the funnel stops being part of it — whatever funnel it states.
+    // what a campaign IS.
     if (offerId) conditions.push(eq(campaigns.offerId, offerId));
     if (legKey) conditions.push(eq(campaigns.legKey, legKey));
 
@@ -143,7 +142,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       activeGoalId,
       brandProfileId,
       audienceId,
-      funnelKey: bodyFunnelKey,
       offerId,
       legKey,
       audienceIds,
@@ -165,28 +163,13 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     // featureSlug comes exclusively from x-feature-slug header
     const resolvedFeatureSlug = req.featureSlug || "";
 
-    // A sales campaign STATES the funnel it sells, at birth. The creator provisions per funded
-    // funnel, so it already knows which one — nothing is inferred here, not from a goal, not from
-    // the brand's declared set, not ever. A sales campaign with no funnel is what left a customer
-    // funding a funnel and never getting a campaign for it, so this is a hard 400 rather than a
-    // row nobody can attribute. Every other feature sells through no sales funnel and states none.
-    const funnelKey = isSalesFunnelFeature(resolvedFeatureSlug)
-      ? toFunnelKey(bodyFunnelKey)
-      : null;
-    // ...OR it is identified by (OFFER, LEG, CHANNEL) and states no funnel at all. The funnel is
-    // leaving what a campaign IS: one leg belongs to several funnels, so the same leg run by the
-    // same channel for the same offer is ONE campaign, not one per funnel. A caller that states
-    // both the offer and the leg and no funnel is creating exactly that. A caller that states a
-    // funnel keeps today's behaviour byte for byte.
-    const offerLegIdentity =
-      isSalesFunnelFeature(resolvedFeatureSlug) && !bodyFunnelKey && !!offerId && !!legKey;
-    if (isSalesFunnelFeature(resolvedFeatureSlug) && !funnelKey && !offerLegIdentity) {
+    // A sales campaign IS (offer, leg, channel): it states the offer it sells and the leg it is
+    // bought for, at birth, because that is what billing funds it at. Nothing is inferred — a sales
+    // campaign stating neither is a row no ceiling can ever be matched to, so this is a hard 400.
+    if (isSalesFamilyFeature(resolvedFeatureSlug) && (!offerId || !legKey)) {
       return res.status(400).json({
-        error: bodyFunnelKey
-          ? `Unknown sales funnel "${bodyFunnelKey}" — expected one of: ${acceptedFunnelKeys().join(", ")}`
-          : `Cannot create a ${resolvedFeatureSlug} campaign without stating its sales funnel — ` +
-            `funnelKey is required (one of: ${acceptedFunnelKeys().join(", ")}) unless both ` +
-            `offerId and legKey are stated`,
+        error: `Cannot create a ${resolvedFeatureSlug} campaign without stating the offer it sells ` +
+          `and the leg it is bought for — offerId and legKey are required`,
       });
     }
 
@@ -230,7 +213,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       }, req.headers).catch(() => {});
     }
 
-    // A campaign is unique on (org, brand, sales funnel, acquisition channel). The WORKFLOW is not
+    // A campaign is unique on (org, brand, offer, leg, acquisition channel). The WORKFLOW is not
     // part of that identity: a campaign changes workflow whenever selection picks a better one, and
     // it is not replaced by a new campaign each time it does. Creating one per workflow is what grew
     // a single brand 137 rows — one per workflow version — each holding a slice of a history nobody
@@ -242,8 +225,8 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     if (createRefusal) return res.status(createRefusal.status).json(createRefusal.body);
 
     const identity = campaignIdentityColumns({ brandIds, featureSlug: resolvedFeatureSlug });
-    // The OFFER is part of the identity too: a customer funds their money per offer, so two offers
-    // worked through one (funnel, channel, leg) are two ceilings and must be able to be two
+    // The OFFER is part of the identity: a customer funds their money per offer, so two offers
+    // worked through one (channel, leg) are two ceilings and must be able to be two
     // campaigns — a create stating a different offer is a NEW campaign, not a restatement of the
     // live one. It is matched in two steps so that widening can only ever LOOSEN: the campaign of
     // THIS offer wins, and only when there is none does an offer-LESS incumbent match, which is
@@ -253,7 +236,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     // AND the row is matched WHATEVER ITS STATUS. A campaign the customer stopped is still their
     // campaign for this identity: creating a second one beside it is how a brand ended up with two
     // identical live campaigns, and how a deliberately-stopped campaign was left invisible while a
-    // twin spent its money. `uniq_campaigns_org_brand_funnel_channel` is partial on `ongoing`, so
+    // twin spent its money. `uniq_campaigns_org_brand_offer_leg_channel` is partial on `ongoing`, so
     // Postgres cannot police that on its own and never will — production carries 663 stopped rows
     // sharing 33 identities from before this was one campaign, and history is never rewritten. So
     // the guard is HERE, and the index stays the backstop for the live case.
@@ -267,10 +250,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           eq(campaigns.orgId, req.orgId!),
           eq(campaigns.brandId, identity.brandId!),
           eq(campaigns.acquisitionChannel, identity.acquisitionChannel!),
-          // The identity includes the funnel: an incumbent is the campaign alive on THIS funnel
-          // (or the funnel-less one, for a feature that sells through no sales funnel).
-          funnelKey ? eq(campaigns.funnelKey, funnelKey) : isNull(campaigns.funnelKey),
-          // ...and the LEG it is bought for. A campaign bought for one leg is not the campaign
+          // The LEG it is bought for. A campaign bought for one leg is not the campaign
           // bought for another, so a create stating a different leg is a NEW campaign rather
           // than a restatement of the live one — which is the only way a brand can work one
           // channel for two legs at once. A create that states NO leg matches the leg-less row
@@ -283,40 +263,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         // stopped rows the most recent is the one the customer last worked with.
         orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
       });
-    // The (offer, leg, channel) incumbent, WHATEVER FUNNEL it states. A create that names no
-    // funnel is asking for the one campaign doing this leg for this offer on this channel, and a
-    // campaign already doing it under a funnel IS that campaign — creating a funnel-less twin
-    // beside it is the duplication this identity exists to end. A create that DOES name a funnel
-    // asks only for the funnel-LESS row here, so a funnel-keyed flow never adopts another funnel's
-    // campaign (its behaviour is unchanged), yet never twins one created without a funnel either.
-    const findOfferLegIncumbent = (anyFunnel: boolean) =>
-      db.query.campaigns.findFirst({
-        where: and(
-          eq(campaigns.orgId, req.orgId!),
-          eq(campaigns.brandId, identity.brandId!),
-          eq(campaigns.acquisitionChannel, identity.acquisitionChannel!),
-          eq(campaigns.offerId, offerId!),
-          eq(campaigns.legKey, legKey!),
-          anyFunnel ? undefined : isNull(campaigns.funnelKey),
-        ),
-        orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
-      });
     const hasIdentity = !!identity.brandId && !!identity.acquisitionChannel;
     let incumbent: Awaited<ReturnType<typeof findIncumbent>> | null = null;
-    // A sales create that states BOTH the offer and the leg names the campaign by (offer, leg,
-    // channel) — with or without a funnel (wave C1: the funnel a caller still sends is stored, never
-    // matched on). The incumbent is the campaign doing that leg for that offer on that channel,
-    // whatever funnel it carries: one leg belongs to several funnels and is ONE campaign. Measured
-    // before shipping (2026-09-25): no (org, brand, channel, offer, leg) is held by campaigns of two
-    // different funnels, at any status, so this adopts nothing a funnel-keyed match would not.
-    const matchesOnOfferLeg = isSalesFunnelFeature(resolvedFeatureSlug) && !!offerId && !!legKey;
-    if (hasIdentity && matchesOnOfferLeg) {
-      incumbent = (await findOfferLegIncumbent(true)) ?? null;
-      // A campaign created before it could state an offer (or a leg) is still this identity's
-      // incumbent when a caller now states them: matched on the funnel it carries, exactly as
-      // before, and it learns the offer from this create. The pre-offer population only.
-      if (!incumbent && funnelKey) incumbent = (await findIncumbent(false)) ?? null;
-    } else if (hasIdentity) {
+    if (hasIdentity) {
       incumbent = (await findIncumbent(true)) ?? null;
       if (!incumbent && offerId) incumbent = (await findIncumbent(false)) ?? null;
     }
@@ -371,7 +320,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         traceEvent(req.runId, {
           service: "campaign-service",
           event: "campaign-workflow-changed",
-          detail: `Campaign ${updated.id} already runs this (brand, funnel, channel) — switched its workflow to "${workflowSlug}" instead of creating a second campaign`,
+          detail: `Campaign ${updated.id} already runs this (brand, offer, leg, channel) — switched its workflow to "${workflowSlug}" instead of creating a second campaign`,
           data: { campaignId: updated.id, workflowSlug, brandId: identity.brandId, acquisitionChannel: identity.acquisitionChannel },
         }, req.headers).catch(() => {});
       }
@@ -412,13 +361,12 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         activeGoalId: activeGoalId ?? null,
         brandProfileId: brandProfileId ?? null,
         audienceId: audienceId ?? null,
-        funnelKey,
         // The offer this campaign sells, as STATED by its creator. Absent → NULL; nothing is
-        // inferred from the funnel, the goal or the workflow.
+        // inferred from the goal or the workflow.
         offerId: offerId ?? null,
-        // The single funnel LEG this campaign is bought for, as STATED by its creator — verbatim,
-        // in features-service's vocabulary. Absent → NULL; nothing is inferred from the funnel,
-        // the channel or the workflow.
+        // The single LEG this campaign is bought for, as STATED by its creator — verbatim, in
+        // features-service's vocabulary. Absent → NULL; nothing is inferred from the channel or
+        // the workflow.
         legKey: legKey ?? null,
         audienceIds: audienceIds ?? null,
         servicesOffered: servicesOffered ?? null,
@@ -475,22 +423,13 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     }
     // Two creates raced the same identity. The loser does not get a second campaign for it — the
     // one that won IS this identity's campaign, so hand that one back rather than an error.
-    if (error?.code === "23505" && constraint === "uniq_campaigns_org_brand_funnel_channel") {
-      const racedOnOfferLeg =
-        isSalesFunnelFeature(req.featureSlug) && !!req.body.offerId && !!req.body.legKey;
-      const racedFunnelKey = isSalesFunnelFeature(req.featureSlug) && !racedOnOfferLeg
-        ? toFunnelKey(req.body.funnelKey)
-        : null;
+    if (error?.code === "23505" && constraint === "uniq_campaigns_org_brand_offer_leg_channel") {
       const winner = await db.query.campaigns.findFirst({
         where: and(
           eq(campaigns.orgId, req.orgId!),
           eq(campaigns.status, "ongoing"),
           eq(campaigns.brandId, (req.body.brandIds as string[])[0]),
-          // A create naming (offer, leg) collided with the ONE live campaign of that identity on
-          // this brand, whatever funnel it carries (wave C1) — the funnel is not matched.
-          racedOnOfferLeg
-            ? undefined
-            : racedFunnelKey ? eq(campaigns.funnelKey, racedFunnelKey) : isNull(campaigns.funnelKey),
+          eq(campaigns.acquisitionChannel, acquisitionChannelForFeature(req.featureSlug)!),
           // The leg is part of the identity that collided, so it is part of finding the winner —
           // otherwise the loser is handed back a campaign bought for a different leg.
           req.body.legKey ? eq(campaigns.legKey, req.body.legKey) : isNull(campaigns.legKey),
@@ -537,29 +476,29 @@ function dispatchFirstRun(
  * brought a campaign into being were onboarding's terminal launch and the staff console, so a
  * customer who funded a channel AFTER signup got a ceiling, no campaign, and no way to ask for one.
  *
- * The caller states only what their own screen knows: which brand, which offer, which sales funnel,
- * which acquisition channel. It cannot state the other three and must not be asked to:
+ * The caller states only what their own screen knows: which brand, which offer, which leg, which
+ * acquisition channel. It cannot state the other three and must not be asked to:
  *
  *   - the WORKFLOW is this service's choice (re-picked every run by the greedy rotation), and a
  *     slug resolved in a browser would go stale the moment the catalogue moves;
  *   - the NAME is derivable from the identity;
- *   - the MONEY is billing's, per (offer x funnel x channel x leg), and is already set. That is
+ *   - the MONEY is billing's, per (offer x leg x channel), and is already set. That is
  *     what "funded" means, and a per-campaign ceiling here would be a second representation of it.
  *     The body is `.strict()`, so a caller reaching for any of the three is told no.
  *
  * A pair that cannot be started is REFUSED in a sentence a person can read, because the dashboard
  * renders it verbatim — "nothing can run that channel yet", "you haven't funded it", "this channel
- * doesn't sell that funnel" are three different answers and a customer is owed the right one.
+ * doesn't perform that step" are three different answers and a customer is owed the right one.
  *
  * A pair that ALREADY has a campaign never gets a second one: the incumbent of the identity is
  * matched whatever its status, exactly as `POST /campaigns` matches it and for the same reason
- * (`uniq_campaigns_org_brand_funnel_channel` is partial on `ongoing` and can never police the
+ * (`uniq_campaigns_org_brand_offer_leg_channel` is partial on `ongoing` and can never police the
  * stopped rows). A live one is handed back untouched; a stopped one is started, because that IS
  * what the person just asked for.
  */
 router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validateBody(StartFundedPairBody), async (req: AuthenticatedRequest, res) => {
   try {
-    const { brandId, offerId: bodyOfferId, funnelKey: bodyFunnelKey, featureSlug, legKey: bodyLegKey } =
+    const { brandId, offerId: bodyOfferId, featureSlug, legKey: bodyLegKey } =
       StartFundedPairBody.parse(req.body);
     const offerId = bodyOfferId ?? null;
 
@@ -579,18 +518,18 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
     if (startRefusal) return res.status(startRefusal.status).json(startRefusal.body);
 
     const resolved = await resolveStartablePair(
-      { brandId, offerId, funnelKey: bodyFunnelKey, featureSlug, legKey: bodyLegKey ?? null },
+      { brandId, offerId, featureSlug, legKey: bodyLegKey ?? null },
       identity,
     );
     if (!resolved.ok) {
       const { status, code, message } = resolved.refusal;
       console.warn(
         `[campaign-service] Not starting funded pair — org=${req.orgId} brand=${brandId} ` +
-        `funnel=${bodyFunnelKey ?? "none"} leg=${bodyLegKey ?? "none"} channel=${featureSlug} offer=${offerId ?? "none"}: ${code}`,
+        `leg=${bodyLegKey ?? "none"} channel=${featureSlug} offer=${offerId ?? "none"}: ${code}`,
       );
       return res.status(status).json({ error: message, reason: code });
     }
-    const { funnelKey, legKey, ceilingCents, workflowSlug } = resolved.pair;
+    const { legKey, ceilingCents, workflowSlug } = resolved.pair;
 
     const identityColumns = campaignIdentityColumns({ brandIds: [brandId], featureSlug });
     const acquisitionChannel = identityColumns.acquisitionChannel!;
@@ -604,18 +543,9 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
         eq(campaigns.orgId, req.orgId!),
         eq(campaigns.brandId, brandId),
         eq(campaigns.acquisitionChannel, acquisitionChannel),
-        // The campaign that NAMES this (offer, leg) is this pair's campaign WHATEVER funnel it
-        // carries (wave C1: one leg belongs to several funnels and is one campaign). A row that
-        // predates the offer or the leg column can only be recognised by the funnel the caller
-        // still names — the pre-offer / pre-leg population, adopted rather than twinned.
-        or(
-          offerId && legKey
-            ? and(eq(campaigns.offerId, offerId), eq(campaigns.legKey, legKey))
-            : sql`false`,
-          funnelKey ? eq(campaigns.funnelKey, funnelKey) : sql`false`,
-        ),
-        offerId ? or(eq(campaigns.offerId, offerId), isNull(campaigns.offerId)) : isNull(campaigns.offerId),
-        legKey ? or(eq(campaigns.legKey, legKey), isNull(campaigns.legKey)) : isNull(campaigns.legKey),
+        // The campaign that NAMES this (offer, leg) is this pair's campaign.
+        eq(campaigns.offerId, offerId!),
+        eq(campaigns.legKey, legKey),
       ),
     });
 
@@ -677,11 +607,10 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
           orgId: req.orgId!,
           createdByUserId: req.userId ?? null,
           parentRunId: req.runId ?? null,
-          name: derivedCampaignName(featureSlug, brandId, funnelKey, offerId, legKey),
+          name: derivedCampaignName(featureSlug, brandId, offerId, legKey),
           workflowSlug,
           brandIds: [brandId],
           featureSlug,
-          funnelKey,
           offerId,
           legKey,
           featureInputs: null,
@@ -708,7 +637,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
     // Two starts raced the same pair. The loser does not get a second campaign for it — whoever
     // won IS this identity's campaign, so hand that one back rather than an error.
     if (error?.code === "23505"
-      && (constraint === "uniq_campaigns_org_name" || constraint === "uniq_campaigns_org_brand_funnel_channel")) {
+      && (constraint === "uniq_campaigns_org_name" || constraint === "uniq_campaigns_org_brand_offer_leg_channel")) {
       const winner = await db.query.campaigns.findFirst({
         where: and(
           eq(campaigns.orgId, req.orgId!),
@@ -717,14 +646,9 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
           eq(campaigns.acquisitionChannel, acquisitionChannelForFeature(req.body.featureSlug)!),
           // The offer and the leg are part of the identity that collided, so they are part of
           // finding the winner — otherwise the loser is handed a campaign selling a different
-          // proposition on different money. The funnel only where the caller named no leg (the
-          // pre-leg population); a (offer, leg) start matches whatever funnel won (wave C1).
-          req.body.legKey
-            ? eq(campaigns.legKey, req.body.legKey)
-            : req.body.funnelKey
-              ? eq(campaigns.funnelKey, toFunnelKey(req.body.funnelKey)!)
-              : undefined,
-          req.body.offerId ? eq(campaigns.offerId, req.body.offerId) : isNull(campaigns.offerId),
+          // proposition on different money.
+          eq(campaigns.legKey, req.body.legKey),
+          eq(campaigns.offerId, req.body.offerId),
         ),
         orderBy: [campaigns.createdAt],
       });
@@ -854,9 +778,9 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     // Restating the leg or the offer can move a campaign onto an identity another live campaign
     // already holds.
     // That is a real conflict and it says so, rather than surfacing as an internal error.
-    if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_brand_funnel_channel") {
+    if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_brand_offer_leg_channel") {
       return res.status(409).json({
-        error: "Another live campaign already runs this (brand, sales funnel, offer, leg, acquisition channel)",
+        error: "Another live campaign already runs this (brand, offer, leg, acquisition channel)",
       });
     }
     console.error("[campaign-service] Update campaign error:", error);

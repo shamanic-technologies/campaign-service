@@ -320,7 +320,7 @@ describe("a person-started run goes through the leg's model rule", () => {
     workflowSlug: INELIGIBLE,
     orgId: "org_activation_test",
     brandIds: [crypto.randomUUID()],
-    funnelKey: "sales_meetings_from_conversation",
+    offerId: "44444444-4444-4444-8444-444444444444",
     legKey: LEG,
   });
   const create = (body: Record<string, unknown>) =>

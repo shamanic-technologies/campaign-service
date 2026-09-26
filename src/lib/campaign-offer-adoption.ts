@@ -18,20 +18,18 @@ import type { ProvisioningIdentity } from "./provisioning-identity.js";
  * (`scripts/backfill-campaign-offer.ts`) ever closed it.
  *
  *   Prod 2026-08-24 — org 100ed4eb / brand fbe3ce77, campaign 16705a37 ongoing since 21:12Z on
- *   sales_meetings_from_conversation, no offer. The pair's ONE offer 231bb036 was created at
+ *   a sales channel, no offer. The pair's ONE offer 231bb036 was created at
  *   20:44Z, 28 minutes BEFORE the campaign. The attribution was resolvable at create time and is
  *   still resolvable now; nothing on this service's own cadence was ever going to state it.
  *
- * So the rule lives on the TICK, exactly as the funnel-less-ancestor adoption does and for the
- * same reason: an invariant a migration can only ever state once is not an invariant. See
- * funnel-ancestor-adoption.ts.
+ * So the rule lives on the TICK: an invariant a migration can only ever state once is not an
+ * invariant.
  *
  * THE RULE, byte-for-byte the one the backfill script states, and it is NOT widened:
  * a campaign carrying no offer is written the offer of its (org, brand) PAIR, and ONLY when that
  * pair resolves to EXACTLY ONE offer. Zero offers, several offers, or an unreadable answer leaves
- * every campaign of the pair exactly as it is. Nothing is ever derived from the funnel, the goal
- * or the workflow — several offers legitimately sell through one funnel, which is the entire
- * reason the dimension exists.
+ * every campaign of the pair exactly as it is. Nothing is ever derived from the goal or the
+ * workflow.
  *
  * NEVER by brand alone. A brand row is claimed by many orgs and carries one offer per claiming
  * org, frequently all named the same thing, so "this brand has an offer" is not a question that
@@ -39,7 +37,7 @@ import type { ProvisioningIdentity } from "./provisioning-identity.js";
  * campaign's own `org_id` as well, so no campaign can be attributed to another org's offer.
  *
  * What it never touches: any campaign that already STATES an offer (this only ever fills an
- * absence), and any column other than `offer_id`. Status, funnel, schedule, budget and history are
+ * absence), and any column other than `offer_id`. Status, leg, schedule, budget and history are
  * untouched — the offer decides no money question, it is the grain the customer reads their
  * campaigns at.
  */
