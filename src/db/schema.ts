@@ -105,12 +105,6 @@ export const campaigns = pgTable(
     // against runs-service *CostInUsdCents and billing's brand dailyBudgetCents — no ×100.
     dailyBudgetCents: integer("daily_budget_cents"),
 
-    // RETIRED, READ-ONLY (wave C2). Nothing in this service reads or writes it and no route accepts
-    // it; the stored value is still served on the campaign row for the readers that have not
-    // migrated off it (lead-service, instantly-service, workflow-service's ai-meeting-booking DAG,
-    // features-service). Dropped once they have — see migration 0058 for what went already.
-    funnelKey: text("funnel_key"),
-
     // The OFFER this campaign sells — a brand-service offer UUID. A campaign is (offer x leg x
     // acquisition channel), which is what billing funds it at. brand-service OWNS the entity; this
     // column carries its id and nothing else. NEVER derived: it is stated by the creator or NULL.

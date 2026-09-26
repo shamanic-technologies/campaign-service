@@ -48,7 +48,6 @@ describe(`migration ${TAG}`, () => {
     const liveSales = await insertTestCampaign(org, {
       status: "ongoing",
       brandId: randomId(),
-      funnelKey: "sales_meetings_from_conversation",
       acquisitionChannel: "cold_email",
       featureSlug: "sales-cold-email-outreach",
       maxBudgetDailyUsd: "10.00",
@@ -58,7 +57,6 @@ describe(`migration ${TAG}`, () => {
     const stoppedSales = await insertTestCampaign(org, {
       status: "stopped",
       brandId: randomId(),
-      funnelKey: "website_purchases",
       acquisitionChannel: "crm_email",
       featureSlug: "sales-crm-email-outreach",
       maxBudgetDailyUsd: "3.00",
