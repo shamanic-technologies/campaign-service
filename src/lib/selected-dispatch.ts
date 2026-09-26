@@ -58,10 +58,8 @@ export async function dispatchSelectedRun(
       featureSlug: campaign.featureSlug,
     },
     fallbackSlug: campaign.workflowSlug,
-    funnelKey: campaign.funnelKey,
     legKey: campaign.legKey,
     campaignId: campaign.id,
-    offerId: campaign.offerId,
     requiredAudienceIds: campaign.audienceIds,
     excludedAudienceIds,
   });

@@ -255,36 +255,26 @@ Billing's `/internal/brands/:id/daily-budget` reads (`gate-check.ts`,
 `transactional-email.ts`) are a different service and already carry `x-org-id` too.
 (Set 2026-08-01.)
 
-## The GOAL is arbitrated by features-service — three levers, and we deduce none of them
+## WAVE C2 — nothing here asks features-service anything keyed on a funnel or a goal
 
-`GET /features/:slug/goal-arbitration?brandId=` answers, in ONE call: which of the goals the brand AUTHORIZES returns the most per dollar, that goal's best workflow, and the pairing's audience rows. `fetchGoalArbitration` consumes it and the two decision points take their share:
+features-service retired its funnel-keyed compatibility surface: `/features/:slug/goal-arbitration`
+(alias `/funnel-ranking`) and `?funnel=` / `?goal=` on `/workflow-projection`. This service was the
+last caller, only for a campaign stating NEITHER a funnel NOR a leg (0 of 20 live on 2026-09-26),
+so the arbitration client, the funnel/goal-keyed projection read and the brand-goal lookup that fed
+it are DELETED. The leg-keyed body (`fetchLegProjectionRows` / `readLegModelEligibility`, `?leg=`
++ `campaignId` + `pricing=net`) is the ONLY projection read left.
 
-```
-TRIGGER   (scheduler)  : elected goal → its elected workflow           ← greedy, features-owned
-START-RUN (internal.ts): elected goal → Thompson over the pairing rows ← explore, ours
-```
+- **A campaign that states NO leg is not priced, and nothing is invented to price it with.** The
+  trigger's selector runs its configured workflow with no audience and says so on `console.error`
+  (`states NO leg`); `/start-run` picks no audience (warns, the run still starts); the `/end-run`
+  stop-guard THROWS (an unaskable question is not a verdict), which the end-run catch already
+  treats as "cannot decide". Such a campaign should not reach selection at all — state its leg.
+- Leg-bearing selection is byte-unchanged. Non-rotating features make no call, as before.
+- `tests/unit/no-legacy.test.ts` fails on `goal-arbitration` / `funnel-ranking`, on a
+  `searchParams.set("funnel"|"goal", …)`, and on the deleted read's name.
+- This service's OWN funnel columns, index word and routes are its own C2, separate.
 
-**Since 2026-08-12 arbitration answers ONLY for a campaign that states NO funnel.** A campaign that
-states one is priced on that funnel (`?funnel=` on `/workflow-projection`, which WINS over `goal`
-there and is the only word separating the two meeting funnels), and which funnel runs is the
-customer's funding decision, not a cost ranking. The gate on that is `campaign.funnelKey`, not the
-legacy `campaign.goal`, which nothing writes any more.
-
-**Why the ranking is not ours to do.** A cost-per-outcome is denominated in each goal's OWN outcome — a click, a reply, a booked meeting — so comparing two goals' cost-per-outcome compares two different things. Only features-service can normalise each goal through its own funnel to the same terminal unit (a paying client's lifetime revenue). Ranking goals here would mean re-deriving their economics. Do NOT add a consumer-side argmin over per-goal calls.
-
-**Both legs elect the SAME goal without threading anything through the DAG.** features-service's election is deterministic (argmax return-per-dollar, canonical tie-break) and both calls hit the same shared evidence snapshot, so the trigger and `/start-run` converge on their own. The elected goal is NOT persisted on the campaign row — it is a per-run decision, not config.
-
-**The rows come back in the SAME `ProjectionRow` shape as `/workflow-projection`** (features-service serves them that way on purpose), so the audience bandit parses them unchanged — `normalizeProjectionRows` is shared by both fetchers precisely so the bandit cannot behave differently depending on which endpoint fed it.
-
-**A campaign that states its OWN `campaign.goal` is NEVER arbitrated.** That is a manual override the customer set on purpose; arbitration only fills the inherit (NULL) case.
-
-**Snapshot drift at `/start-run`**: if the elected workflow is not the DAG actually running (the shared snapshot rolled between trigger and start-run), keep the elected GOAL but re-read the rows for the workflow that IS running. Never Thompson-pick an audience from another workflow's rows.
-
-**Fail-soft, and SILENT on the expected path.** Any arbitration failure → fall back to `campaign.goal ?? brand.currentGoal` and the existing workflow greedy, i.e. exactly the pre-arbitration behaviour: a selection optimization must never block a run. features-service 502s with `reason: "authorized_goals_unavailable"` for as long as brand-service has not declared the brand's authorized set — that is THEIR fail-loud, but for US it is an expected business state that fires on every tick for every campaign of every client, so it is **not logged at all** (per the log-discipline section above). Any OTHER failure still warns. Do not "fix" that silence into a warn.
-
-`hasServeableAudience` (the `/end-run` stop-guard) deliberately does NOT arbitrate: audience membership is goal-independent (every active audience is enumerated per dynasty whatever the goal), so it returns the same set, and if that ever stopped holding the guard would see a SUPERSET — the safe direction for a fail-safe stop.
-
-**Arbitration now only decides for a brand with ONE pot.** A customer who funds each sales funnel separately has decided which funnels run — see the per-funnel section below. A funnel campaign carries the funnel's own goal, so it is a stated-goal campaign and is never arbitrated. (Set 2026-07-31, T4a; scoped 2026-08-02.)
+(Set 2026-09-26.)
 
 ## A test that pins FROZEN history against a GROWING constant fails the day the constant grows
 
@@ -1147,8 +1137,9 @@ states a leg (22 of 22 on 2026-09-25), and for such a campaign:
   NULL funnel. **Step trigger**: `funnelKey` optional; when sent it only narrows the legs out of the
   step, campaigns are matched on (offer, leg). **Predecessor**: walked on (org, brand, offer,
   preceding leg); `campaign_states_no_funnel` is never answered any more.
-- **What still reads a funnel, deliberately, until C2**: a campaign stating NO leg (none live), and a
-  caller that still NAMES one (it narrows the legs, or resolves a pre-leg start exactly as before).
+- **What still reads a funnel, deliberately, until C2**: a caller that still NAMES one (it narrows
+  the legs, or resolves a pre-leg start exactly as before). A campaign stating no leg is no longer
+  priced on one — see WAVE C2 above.
   Responses still echo the stored `funnelKey`. No column, index, route or table was dropped.
 
 (Set 2026-09-25.)
@@ -1620,8 +1611,8 @@ The diagnostic that now works, and did not before:
 ## A brand selling SEVERAL OFFERS does not break the pricing read — it DEGRADES it, and an unpriced grid selects nothing
 
 > **Since v0.73.0** a campaign stating a leg is always priced on the leg-keyed body (see the
-> model-eligibility section), so the substitution described here only matters historically; what
-> survives is the loud `UNPRICED` error for a campaign that states no leg.
+> model-eligibility section), so the substitution described here only matters historically. Since
+> WAVE C2 the funnel-keyed read itself is gone, so none of this is reachable any more.
 
 brand-service refuses a brand-scoped read for a brand selling several offers (409 `SEVERAL_OFFERS`),
 and v0.72.4 named the campaign's own offer on the two reads that 409 — `runtime-context` and the

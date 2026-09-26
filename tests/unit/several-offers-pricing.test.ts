@@ -67,9 +67,7 @@ const baseArgs = {
   primaryBrandId: BRAND_ID,
   identity,
   fallbackSlug: "wf-configured",
-  funnelKey: "website_purchases",
   campaignId: CAMPAIGN_ID,
-  offerId: "832126f3-f3f1-4601-885d-bc8e101e5680",
 };
 
 /** The funnel-keyed body, degraded or priced; the leg-keyed body always priced. */
@@ -132,18 +130,18 @@ describe("a brand selling several offers still gets a PRICED pick", () => {
     });
   });
 
-  it("a campaign stating no leg keeps the PRICED funnel body — its pick does not move", async () => {
+  it("a campaign stating no leg is priced on NOTHING — no read at all, the configured workflow, loudly (wave C2)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const f = routeFetch({ funnelUnresolved: false });
     global.fetch = f as unknown as typeof fetch;
 
     await expect(resolveSelectionForTrigger(baseArgs)).resolves.toEqual({
-      workflowSlug: "funnel-wf",
-      audienceId: "aud-A",
+      workflowSlug: "wf-configured",
+      audienceId: null,
     });
-    const u = new URL(String(f.mock.calls[0]?.[0]));
-    expect(f.mock.calls).toHaveLength(1);
-    expect(u.searchParams.get("funnel")).toBe("website_purchases");
-    expect(u.searchParams.has("pricing")).toBe(false);
+    expect(f).not.toHaveBeenCalled();
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0]?.[0])).toContain("states NO leg");
   });
 
   it("a leg read that FAILS runs the configured workflow, loudly — never the funnel-keyed body (wave C1)", async () => {
@@ -171,20 +169,6 @@ describe("a brand selling several offers still gets a PRICED pick", () => {
     expect(u.searchParams.get("leg")).toBe(LEG);
     expect(u.searchParams.get("campaignId")).toBe(CAMPAIGN_ID);
     expect(u.searchParams.get("pricing")).toBe("net");
-  });
-
-  it("says so LOUDLY when nothing priced it — an unpriced grid is not a channel with no history", async () => {
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    global.fetch = routeFetch({ funnelUnresolved: true }) as unknown as typeof fetch;
-
-    // No leg stated → no leg-keyed body exists to price it, so no workflow is rankable and the
-    // configured one runs. The audience is still drawn (its arms are cold, not absent).
-    await expect(resolveSelectionForTrigger(baseArgs)).resolves.toEqual({
-      workflowSlug: "wf-configured",
-      audienceId: "aud-A",
-    });
-    expect(err).toHaveBeenCalledTimes(1);
-    expect(String(err.mock.calls[0]?.[0])).toContain("UNPRICED");
   });
 
   it("names the unanswerable verdict read at ERROR level — a 409 several_offers is not an outage", async () => {

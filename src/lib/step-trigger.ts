@@ -267,14 +267,11 @@ export async function triggerCampaignsForStep(
           featureSlug: campaign.featureSlug,
         },
         fallbackSlug: campaign.workflowSlug,
-        // Read only for a campaign stating NO leg (none reach here: `responsible` requires one).
-        funnelKey: campaign.funnelKey,
         // The LEG the campaign is bought for — what features-service's model rule is keyed on.
-        // A campaign that states none has no verdict to read and selects exactly as before.
+        // A campaign that states none is not selected: it runs its configured workflow, loudly.
         legKey: campaign.legKey,
         // Names the OFFER every brand-scoped read is priced on — a campaign sells exactly one.
         campaignId: campaign.id,
-        offerId: campaign.offerId,
         requiredAudienceIds: campaign.audienceIds,
         excludedAudienceIds,
       });
