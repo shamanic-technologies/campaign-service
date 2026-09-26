@@ -2,8 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { stopOrgCampaignsWithHistory, TRANSITION_SOURCES } from "./campaign-status-history.js";
-import { readPaymentHold } from "./payment-hold.js";
-import { STOP_REASONS } from "./stop-reason.js";
+import { paymentStopReason, readPaymentHold } from "./payment-hold.js";
 
 /**
  * How often the scheduler asks billing whether an org with live campaigns can still be charged.
@@ -56,7 +55,7 @@ export async function holdPaymentDeclinedOrgs(now: number = Date.now()): Promise
         stopOrgCampaignsWithHistory(
           tx,
           orgId,
-          STOP_REASONS.PAYMENT_DECLINED,
+          paymentStopReason(read.blockedReason),
           and(eq(campaigns.orgId, orgId), eq(campaigns.status, "ongoing")),
           TRANSITION_SOURCES.PAYMENT_HOLD,
         ),

@@ -15,11 +15,12 @@ function everySrcFile(dir: string): string[] {
 }
 
 describe("stop reasons", () => {
-  it("names the reasons a person decided, plus the ONE system stop the owner stated (a declined card)", () => {
+  it("names the reasons a person decided, plus the ONE system stop the owner stated (billing cannot charge: declined card, or no payment method)", () => {
     expect(STOP_REASONS).toEqual({
       MANUAL: "manual",
       ORG_TEARDOWN: "org_teardown",
       PAYMENT_DECLINED: "payment_declined",
+      NO_PAYMENT_METHOD: "no_payment_method",
     });
   });
 

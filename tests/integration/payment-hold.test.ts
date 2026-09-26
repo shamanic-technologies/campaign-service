@@ -97,6 +97,28 @@ describe("a declined card stops its org's campaigns, and nothing starts them unt
     expect(vi.mocked(readPaymentHold).mock.calls.map((c) => c[0]).sort()).toEqual([DECLINED_ORG, HEALTHY_ORG].sort());
   });
 
+  it("stops an org with NO payment method under no_payment_method, and a declined org under payment_declined", async () => {
+    const NO_CARD_ORG = "5f0c2b9e-3a41-4d6e-9b7a-1c2d3e4f5a6b";
+    const declined = await insertTestCampaign(DECLINED_ORG);
+    const noCard = await insertTestCampaign(NO_CARD_ORG);
+    vi.mocked(readPaymentHold).mockImplementation(async (orgId: string) =>
+      orgId === NO_CARD_ORG
+        ? { ok: true, held: true, blockedReason: "no_chargeable_card" }
+        : { ok: true, held: true, blockedReason: "card_declined" },
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(await holdPaymentDeclinedOrgs()).toBe(2);
+
+    const byId = new Map((await db.query.campaigns.findMany()).map((c) => [c.id, c]));
+    expect(byId.get(noCard.id)).toMatchObject({ status: "stopped", stopReason: "no_payment_method" });
+    expect(byId.get(declined.id)).toMatchObject({ status: "stopped", stopReason: "payment_declined" });
+    const transitions = await db.select().from(campaignStatusTransitions).where(eq(campaignStatusTransitions.campaignId, noCard.id));
+    expect(transitions).toContainEqual(
+      expect.objectContaining({ fromStatus: "ongoing", toStatus: "stopped", reason: "no_payment_method", source: "payment_hold" }),
+    );
+  });
+
   it("runs on its own cadence and is idempotent", async () => {
     await insertTestCampaign(DECLINED_ORG);
     billingSays({ [DECLINED_ORG]: true });

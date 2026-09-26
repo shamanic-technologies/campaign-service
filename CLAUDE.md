@@ -32,8 +32,8 @@ Four rules, and every older section is read subject to them:
    partial on `ongoing`, and production carries **663 stopped rows sharing 33 identities** from
    before this was one campaign. History is never rewritten, so a full unique index is
    uncreatable and the guard lives in the LOOKUP; the index stays the backstop for the live case.
-3. **A SYSTEM CONDITION NEVER CHANGES A STATUS** (one owner-stated exception, a declined card —
-   see the `payment_declined` section below). Out of credit, audience exhausted, today's
+3. **A SYSTEM CONDITION NEVER CHANGES A STATUS** (one owner-stated exception, billing cannot charge
+   the org — a declined card or no payment method; see the `payment_declined` section below). Out of credit, audience exhausted, today's
    budget spent, the lifetime `maxBudgetTotalUsd`, the `maxLeads` cap: each of those blocks the
    RUN and nothing else. The campaign stays exactly as the customer left it, does not run this
    tick, and runs again on a later tick once the condition has passed. `autoStopCampaign` is gone
@@ -42,7 +42,7 @@ Four rules, and every older section is read subject to them:
    `NO_SERVEABLE_AUDIENCE_RECHECK_MS` instead of stopping. **Consequently nothing RESUMES
    anything**: `campaign-resume.ts` and `isResumableStopReason` are deleted, because a campaign a
    condition never stopped has nothing to be resumed from. `STOP_REASONS` therefore holds only the
-   two values a PERSON writes — `manual` and `org_teardown`. `audience_exhausted` and
+   two values a PERSON writes — `manual` and `org_teardown` — plus the owner's payment exception (`payment_declined`, `no_payment_method`). `audience_exhausted` and
    `max_leads_reached` are RETIRED; no row in production has ever carried either (2026-09-06: 17
    `manual`, 680 NULL).
 4. **A FUNDED CEILING THAT NAMES NO LEG IS AN ERROR, LOUD AND NAMED.** A customer buys one LEG,
@@ -99,10 +99,16 @@ customer-health board). So:
   what is owed AND a chargeable card is on file — both billing's judgement), the customer presses
   start and it works. The owner accepted manual resume; an auto-resume would be the retired
   resume sweep coming back.
+- **NO CARD AT ALL IS THE SAME STOP, WITH ITS OWN NAME (`no_payment_method`, owner 2026-09-27).**
+  billing answers `charge_blocked` with `blockedReason: no_chargeable_card` for an org with no card
+  it can charge (removed, or never added). Nothing was declined, so saying so would be false:
+  `paymentStopReason` maps that ONE reason to `no_payment_method` — the stop reason AND the 409
+  refusal `reason`, with an "add a payment method" sentence — and every other blocked reason stays
+  `payment_declined`, unchanged. Same sweep, cadence, fail-soft/fail-closed and manual restart.
 - `tests/setup.ts` mocks `lib/payment-hold.js` fleet-wide to "not held" (no test talks to billing);
   `tests/unit/payment-hold.test.ts` reads the real module via `vi.importActual`.
 
-(Set 2026-09-26.)
+(Set 2026-09-26; `no_payment_method` 2026-09-27.)
 
 
 ## MONEY STARTS NOTHING, AND THE CUSTOMER CAN SAY START — `POST /campaigns/start-funded-pair`

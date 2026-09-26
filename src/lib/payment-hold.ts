@@ -21,6 +21,12 @@
  * ongoing at $49/day) and `f74660b1` (card_country_unsupported, both campaigns already stopped by
  * hand). Every other org answered `will_charge`, `no_autopay` or `idle` and is untouched.
  *
+ * TWO KINDS OF HELD (2026-09-27). billing answers `charge_blocked` with `blockedReason:
+ * no_chargeable_card` for an org with no card it can charge (removed, or never added). The stop and
+ * the refusal are the same as a declined card; only the words differ, because nothing was declined.
+ * That reason maps to `no_payment_method` (stop reason AND refusal reason), every other one to
+ * `payment_declined` — see `paymentStopReason`.
+ *
  * THREE ANSWERS, NEVER ONE BOOLEAN. "Billing says this org is held", "billing says it is not" and
  * "billing could not be asked" lead to different actions: the sweep stops nothing on an unreadable
  * answer (a billing outage must not stop every customer's campaigns), while a person pressing start
@@ -28,6 +34,10 @@
  * A 404 is billing saying the org has no billing account at all — such an org has no card to be
  * refused, so it is not held.
  */
+
+import { STOP_REASONS } from "./stop-reason.js";
+
+export type PaymentStopReason = typeof STOP_REASONS.PAYMENT_DECLINED | typeof STOP_REASONS.NO_PAYMENT_METHOD;
 
 export type PaymentHoldRead =
   | { ok: true; held: false }
@@ -60,8 +70,29 @@ export async function readPaymentHold(orgId: string): Promise<PaymentHoldRead> {
   }
 }
 
-/** What a customer reads when their card's state keeps a campaign from starting. */
+/**
+ * billing's `blockedReason` for an org that has NO card it can charge at all — removed, or never
+ * added. Nothing was declined: telling that customer "your card was declined" would be false, so
+ * this one reason gets its own stop reason and its own refusal (owner rule, 2026-09-27). Every
+ * other reason billing names (card_declined, card_unusable, retries_exhausted,
+ * card_country_unsupported, and any it adds later) is a card that was TRIED and refused, and stays
+ * `payment_declined` exactly as before.
+ */
+export const NO_CHARGEABLE_CARD = "no_chargeable_card";
+
+/** Which of the two payment stops a held org's `blockedReason` is. Used by the sweep AND the refusal. */
+export function paymentStopReason(blockedReason: string): PaymentStopReason {
+  return blockedReason === NO_CHARGEABLE_CARD ? STOP_REASONS.NO_PAYMENT_METHOD : STOP_REASONS.PAYMENT_DECLINED;
+}
+
+/** What a customer reads when their payment state keeps a campaign from starting. */
 function heldMessage(blockedReason: string): string {
+  if (blockedReason === NO_CHARGEABLE_CARD) {
+    return (
+      "Your campaigns are paused because there is no payment method on your account. " +
+      "Add a card, then start them again."
+    );
+  }
   if (blockedReason === "card_country_unsupported") {
     return (
       "Your campaigns are paused because your card's issuing country can't be charged automatically. " +
@@ -76,7 +107,7 @@ function heldMessage(blockedReason: string): string {
 
 export type StartRefusal = {
   status: number;
-  body: { error: string; reason: "payment_declined" | "billing_unavailable"; blockedReason?: string };
+  body: { error: string; reason: PaymentStopReason | "billing_unavailable"; blockedReason?: string };
 };
 
 /**
@@ -102,6 +133,6 @@ export async function paymentStartRefusal(orgId: string): Promise<StartRefusal |
   if (!read.held) return null;
   return {
     status: 409,
-    body: { error: heldMessage(read.blockedReason), reason: "payment_declined", blockedReason: read.blockedReason },
+    body: { error: heldMessage(read.blockedReason), reason: paymentStopReason(read.blockedReason), blockedReason: read.blockedReason },
   };
 }

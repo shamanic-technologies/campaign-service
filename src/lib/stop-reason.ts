@@ -4,8 +4,11 @@
  * A campaign's STATUS is the CUSTOMER's statement of intent, and nothing else may change it.
  * So there is exactly one kind of value here: a value written by a person's decision. A system
  * CONDITION — out of credit, audience exhausted, today's budget spent, a lead cap reached — never
- * stops a campaign. ONE exception, stated by the owner: a declined card (`payment_declined`). It stops the campaign RUNNING this tick; the campaign stays exactly as the
- * customer left it and runs again on a later tick once the condition has passed.
+ * stops a campaign: it stops the campaign RUNNING this tick; the campaign stays exactly as the
+ * customer left it and runs again on a later tick once the condition has passed. ONE exception,
+ * stated by the owner: billing cannot charge the org — a declined card (`payment_declined`) or no
+ * payment method at all (`no_payment_method`). Both stop every campaign of the org, and a person
+ * restarts them once billing clears it.
  *
  * That is why there is nothing here for exhaustion or a lead cap any more, and why nothing
  * resumes a campaign either: a campaign a condition never stopped has nothing to be resumed from.
@@ -26,6 +29,13 @@ export const STOP_REASONS = {
    * the campaign again — nothing resumes it automatically.
    */
   PAYMENT_DECLINED: "payment_declined",
+  /**
+   * Same stop, same refusal, same manual restart as `payment_declined`, for the case where nothing
+   * was declined: the org has NO card billing can charge (the customer removed it, or never added
+   * one — billing's `blockedReason: no_chargeable_card`). Its own value so the dashboard can say
+   * "add a payment method" instead of "your card was declined" (owner rule, 2026-09-27).
+   */
+  NO_PAYMENT_METHOD: "no_payment_method",
 } as const;
 
 export type StopReason = (typeof STOP_REASONS)[keyof typeof STOP_REASONS];
