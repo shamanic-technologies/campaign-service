@@ -224,7 +224,7 @@ describe("wave C1: a tick writes NO funnel onto a funnel-less ancestor", () => {
     // existing-campaign lookup. Ordered on creation date alone, a stopped ancestor created AFTER
     // the incumbent is returned instead of it, and the resume path then brings it back next to a
     // campaign it now collides with on uniq_campaigns_org_brand_funnel_channel — a 23505 raised
-    // inside planFunnelTurns, which fail-closes and holds the brand every tick, forever.
+    // inside planBrandTurns, which fail-closes and holds the brand every tick, forever.
     const brandId = crypto.randomUUID();
     const live = await salesCampaign(brandId, orgId);
     // The incumbent is the OLDER row, so "the newest campaign of this pair" is the wrong answer.

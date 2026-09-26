@@ -2,9 +2,8 @@ import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type 
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
-import { isSalesFunnelFeature } from "./sales-outreach-campaign.js";
-import { channelCeilingCents, fetchFunnelBudgets, legCeilingCents, offerCeilingCents, offerLegCeilingCents } from "./funnel-budget-client.js";
-import { toFunnelKey } from "./sales-funnel-vocabulary.js";
+import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
+import { campaignCeilingCents, fetchCampaignBudgets } from "./campaign-budget-client.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 
 // THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
@@ -22,10 +21,10 @@ const STALE_THRESHOLD_MS = RUN_LIVENESS_THRESHOLD_MS;
 // cleaned on a later pass once the newer ones finish.
 const RUNNING_RUNS_LIMIT = 200;
 
-// The sales-outreach feature family (every acquisition channel that sells a sales funnel) is
-// paced by the brand daily budget (billing-service brand_daily_budgets) and held on brand pause.
+// The sales feature family (every acquisition channel funded per (offer, leg, channel)) is paced
+// by billing's per-campaign ceilings.
 // Every other feature is paced by the campaign's own budget windows and runs through a pause.
-// See isSalesFunnelFeature (sales-outreach-campaign.ts) for membership.
+// See isSalesFamilyFeature (sales-outreach-campaign.ts) for membership.
 
 export interface GateCheckInput {
   campaignId: string;
@@ -48,20 +47,9 @@ export interface GateCheckInput {
   // THIS campaign on its OWN committed spend today vs this ceiling (two campaigns under one
   // brand pace independently). NULL = no own budget → fall back to the brand daily budget.
   dailyBudgetCents: number | null;
-  // The sales funnel this campaign works (brand-service vocabulary), or null when the campaign
-  // is not funnel-scoped. When set, the sales gate paces THIS campaign on THAT funnel's own
-  // daily ceiling read from billing — so a brand funding two funnels has each worked up to its
-  // own ceiling, and the brand's total for the day cannot exceed the sum.
-  funnelKey: string | null;
-  // The OFFER this campaign sells — brand-service's id, carried and never derived. When billing
-  // scopes any of this brand's money to an offer, the ceiling that binds this campaign is its own
-  // offer's, not the (funnel, channel) SUM that also contains a sibling offer's ceiling. NULL is
-  // the pre-offer population and paces exactly as it always did.
+  // The OFFER this campaign sells and the single LEG it was bought for — carried, never derived.
+  // With the channel (`featureSlug`) they are what billing states the campaign's ceiling at.
   offerId: string | null;
-  // The single funnel LEG this campaign was bought for — features-service's identifier, carried
-  // and never derived. When billing scopes any of this brand's money to a leg, the ceiling that
-  // binds this campaign is its own leg's, not the (funnel, channel, offer) SUM that also contains
-  // a sibling leg's ceiling. NULL is the pre-leg population and paces exactly as it always did.
   legKey: string | null;
   maxLeads: number | null;
 }
@@ -142,7 +130,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // paced by the brand daily budget (block 3c below) instead. For non-sales campaigns the
   // campaign's own configured caps govern at their cadence: daily (today's spend, resets at day
   // rollover), weekly, monthly, and total (one-off — auto-stops the campaign when hit).
-  const isSalesFeature = isSalesFunnelFeature(campaign.featureSlug);
+  const isSalesFeature = isSalesFamilyFeature(campaign.featureSlug);
 
   if (!isSalesFeature) {
     const budgetLimits: Array<{ limit: string; label: string; nextRunAt?: Date }> = [];
@@ -216,12 +204,9 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   //       its cap does NOT stop the other. Not a terminal stop: no nextRunAt, so internal.ts
   //       backs it off ~15min; the day rollover resets today's spend and re-opens the cap.
   //
-  //   (b) No own budget (dailyBudgetCents == null): fall back to the BRAND daily budget
-  //       (billing-service brand_daily_budgets), paced on the brand's committed spend today
-  //       (brandId + featureSlug keyed) — byte-identical to the pre-per-campaign behaviour, so
-  //       anything unset behaves exactly as before. This is also why NO deploy backfill is
-  //       needed: an existing running campaign keeps null and its EFFECTIVE ceiling is the
-  //       brand's CURRENT number, live-read here (never a stale copied value).
+  //   (b) No own budget (dailyBudgetCents == null): the campaign's own (offer, leg, channel)
+  //       ceiling from billing, live-read here (never a stale copied value) — or, for a brand
+  //       whose money is one pot, the BRAND daily budget paced on the brand's committed spend.
   //
   // Units: dailyBudgetCents (campaign + brand) and runs *CostInUsdCents are BOTH cents →
   // compared directly (NO ×100, unlike the maxBudget*Usd columns above which are USD).
@@ -250,168 +235,42 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       if (spentCents >= campaign.dailyBudgetCents) {
         return { allowed: false, reason: "Campaign daily budget reached" };
       }
-    } else if (campaign.legKey) {
-      // (a3) A campaign that states its LEG is identified by (OFFER, LEG, CHANNEL) — whatever
-      // funnel it may still carry, because the leg is what the customer bought and one leg belongs
-      // to several funnels (wave C1: nothing here reads the funnel of a campaign that states a
-      // leg). It is paced on that leg's own money (`offerLegCeilingCents`), read fail-CLOSED like
-      // every grain below — the same answer `campaignFunding` gives the turn planner. A brand whose money names no leg at all has nothing to say at this
-      // grain, so the campaign paces on the brand pot exactly as (b) below would pace it.
-      const campaignSpend = await getStatsBudget({
-        orgId: campaign.orgId,
-        campaignId: campaign.campaignId,
-        featureSlug: campaign.featureSlug,
-        windows: [{ label: "today", since: startOfToday().toISOString() }],
-      });
-      const today = campaignSpend.windows.find(w => w.label === "today");
-      const spentCents = today
-        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
-        : 0;
-
-      for (const brandId of campaign.brandIds) {
-        const budgets = await fetchFunnelBudgets(brandId, identity);
-        if (!budgets.ok) {
-          return { allowed: false, reason: "Funnel daily budget unavailable" };
-        }
-        const leg = offerLegCeilingCents(budgets, campaign.featureSlug, campaign.offerId, campaign.legKey);
-        if (leg.grain === "none") {
-          const blocked = await brandDailyBudgetBlock(campaign, identity, brandId);
-          if (blocked) return blocked;
-          continue;
-        }
-        if (leg.cents === null || leg.cents <= 0) {
-          return { allowed: false, reason: "Leg not funded" };
-        }
-        if (spentCents >= leg.cents) {
-          return { allowed: false, reason: "Leg daily budget reached" };
-        }
-      }
-    } else if (campaign.funnelKey) {
-      // (a2) The pre-leg population only (a campaign stating a funnel and NO leg — none live on
-      // 2026-09-25), kept until wave C2. The campaign works ONE sales funnel: pace it on THAT funnel's own daily ceiling
-      // (billing-service brand_funnel_budgets), not on the brand-level total. The brand total
-      // is still exactly the SUM of those ceilings, so a brand funding two funnels has both
-      // worked, neither exceeds its own ceiling, and the day's total cannot exceed the sum.
-      //
-      // The funnel's spend today IS this campaign's spend today: one campaign per funnel, and
-      // the cost ledger is already keyed on campaignId — no per-funnel spend figure is invented
-      // here. Read once (campaign-scoped), then compared against each in-scope brand's ceiling.
-      const campaignSpend = await getStatsBudget({
-        orgId: campaign.orgId,
-        campaignId: campaign.campaignId,
-        featureSlug: campaign.featureSlug,
-        windows: [{ label: "today", since: startOfToday().toISOString() }],
-      });
-      const today = campaignSpend.windows.find(w => w.label === "today");
-      const spentCents = today
-        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
-        : 0;
-
-      for (const brandId of campaign.brandIds) {
-        const budgets = await fetchFunnelBudgets(brandId, identity);
-        // Fail-CLOSED, same stance as the brand ceiling below: an unreadable cap must never be
-        // read as "unbounded".
-        if (!budgets.ok) {
-          return { allowed: false, reason: "Funnel daily budget unavailable" };
-        }
-        // This brand funds NO funnel separately. Every campaign states the funnel it runs so no
-        // consumer has to infer it from a goal — but for a brand with one pot that statement is
-        // a LABEL, not a ceiling: the money is still the brand-level daily budget, and this
-        // campaign paces on it exactly as it did before it stated a funnel. Nothing about how a
-        // FUNDED funnel's ceiling is enforced changes.
-        if (budgets.funnels.length === 0) {
-          const blocked = await brandDailyBudgetBlock(campaign, identity, brandId);
-          if (blocked) return blocked;
-          continue;
-        }
-        // Both sides are canonicalised — billing still names these funnels the pre-rename way and
-        // a campaign row written before migration 0043 does too, so comparing raw tokens would
-        // find no ceiling for a funnel that is fully funded and block it as unfunded.
-        const funnelKey = toFunnelKey(campaign.funnelKey);
-
-        // (a2') A funnel can be worked through two ACQUISITION CHANNELS at once — the straight
-        // sales pitch and the feedback-request pitch — and each is funded separately. So the
-        // ceiling that binds this campaign is its own (funnel, channel) pair's whenever billing
-        // states one, never the funnel total: pacing both campaigns on the total is exactly how
-        // one offer spends the money the other was funded for. A funnel billing states no pair for
-        // falls through to the funnel figure below, which is every brand funding one channel per
-        // funnel — unchanged.
-        // (a2'') And one grain below the pair: the same funnel and the same channel can be worked
-        // for two OFFERS at once, and billing serves the pair figure as their SUM — so pacing both
-        // campaigns on it lets each spend what the other was funded for. A campaign that states no
-        // offer, or a brand whose stored ceilings name none, falls through to the pair figure
-        // below, unchanged.
-        // (a2''') And one grain below the offer: what a customer BUYS is a LEG of a funnel, and
-        // one (funnel, channel, offer) can be worked for two legs at once — billing serves the
-        // offer figure as their SUM, so pacing both campaigns on it lets each spend what the other
-        // was funded for. A campaign that states no leg, or a brand whose stored ceilings name
-        // none, falls through to the offer figure below, unchanged.
-        if (funnelKey) {
-          const leg = legCeilingCents(
-            budgets,
-            funnelKey,
-            campaign.featureSlug,
-            campaign.offerId,
-            campaign.legKey,
-          );
-          if (leg.grain === "leg") {
-            // This brand's money is scoped to legs and none of it is this leg's — a deliberate
-            // customer decision, so never a fallback to the offer, pair, funnel or brand total.
-            if (leg.cents === null || leg.cents <= 0) {
-              return { allowed: false, reason: "Leg not funded" };
-            }
-            if (spentCents >= leg.cents) {
-              return { allowed: false, reason: "Leg daily budget reached" };
-            }
-            continue;
-          }
-
-          const offer = offerCeilingCents(budgets, funnelKey, campaign.featureSlug, campaign.offerId);
-          if (offer.grain === "offer") {
-            // This brand's money is scoped to offers and none of it is this one's — a deliberate
-            // customer decision, so never a fallback to the pair, funnel or brand total.
-            if (offer.cents === null || offer.cents <= 0) {
-              return { allowed: false, reason: "Funnel not funded for this offer" };
-            }
-            if (spentCents >= offer.cents) {
-              return { allowed: false, reason: "Funnel daily budget reached" };
-            }
-            continue;
-          }
-
-          const pair = channelCeilingCents(budgets, funnelKey, campaign.featureSlug);
-          if (pair.grain === "pair") {
-            // Funded through OTHER channels but not this one, or funded at zero: a deliberate
-            // customer decision, so never a fallback to the funnel or brand total.
-            if (pair.cents === null || pair.cents <= 0) {
-              return { allowed: false, reason: "Funnel not funded for this channel" };
-            }
-            if (spentCents >= pair.cents) {
-              return { allowed: false, reason: "Funnel daily budget reached" };
-            }
-            continue;
-          }
-        }
-
-        const ceilingCents = funnelKey
-          ? budgets.funnels.find(f => f.funnelKey === funnelKey)?.dailyBudgetCents ?? null
-          : null;
-        // A funnel funded at zero — or no longer funded at all — is never run. That is a
-        // deliberate customer decision, not a missing value, so it is not a fallback to the
-        // brand total: falling back would let an unfunded funnel spend another funnel's money.
-        if (ceilingCents === null || ceilingCents <= 0) {
-          return { allowed: false, reason: "Funnel not funded" };
-        }
-        if (spentCents >= ceilingCents) {
-          return { allowed: false, reason: "Funnel daily budget reached" };
-        }
-      }
     } else {
-      // (b) Fall back to the per-brand daily budget. Multi-brand tick: blocked if ANY in-scope
-      // brand has reached its ceiling (most campaigns are solo-brand).
+      // (a2) The campaign's own (OFFER, LEG, CHANNEL) ceiling — the grain a customer funds, read
+      // from billing fail-CLOSED, the same answer `campaignFunding` gives the turn planner. A brand
+      // whose money is not split per campaign at all has one pot, and the campaign paces on it
+      // exactly as (b) does.
+      const campaignSpend = await getStatsBudget({
+        orgId: campaign.orgId,
+        campaignId: campaign.campaignId,
+        featureSlug: campaign.featureSlug,
+        windows: [{ label: "today", since: startOfToday().toISOString() }],
+      });
+      const today = campaignSpend.windows.find(w => w.label === "today");
+      const spentCents = today
+        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
+        : 0;
+
       for (const brandId of campaign.brandIds) {
-        const blocked = await brandDailyBudgetBlock(campaign, identity, brandId);
-        if (blocked) return blocked;
+        const budgets = await fetchCampaignBudgets(brandId, identity);
+        if (!budgets.ok) {
+          return { allowed: false, reason: "Campaign daily budget unavailable" };
+        }
+        const ceiling = campaignCeilingCents(budgets, campaign);
+        if (ceiling.grain === "brand") {
+          // (b) One pot: paced on the brand's committed spend, exactly as before.
+          const blocked = await brandDailyBudgetBlock(campaign, identity, brandId);
+          if (blocked) return blocked;
+          continue;
+        }
+        // The brand's money IS split per campaign and none of it (or zero) is this one's — a
+        // deliberate customer decision, so never a fallback to the brand total.
+        if (ceiling.cents === null || ceiling.cents <= 0) {
+          return { allowed: false, reason: "Campaign not funded" };
+        }
+        if (spentCents >= ceiling.cents) {
+          return { allowed: false, reason: "Campaign daily budget reached" };
+        }
       }
     }
   }

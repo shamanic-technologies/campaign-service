@@ -1,5 +1,5 @@
 /**
- * A campaign's IDENTITY: (org, brand, sales funnel, acquisition channel).
+ * A campaign's IDENTITY: (org, brand, offer, leg, acquisition channel).
  *
  * Nothing else is part of it. In particular the WORKFLOW is not: a campaign changes workflow over
  * time — selection re-picks one every run — and it does not get replaced by a new campaign each
@@ -7,7 +7,7 @@
  * rows, one per workflow version (`Aurora`, `Aurora V2`, `V3`, `Hassium` x12, `Tributary` x5 …),
  * each holding a slice of the history nobody could read as one campaign.
  *
- * Two of the four were not stored facts before this module:
+ * Two of these were not stored facts before this module:
  *
  *   - the BRAND was an ARRAY (`brand_ids`), which no unique index can span, so Postgres could not
  *     enforce anything. The reality is one brand per campaign; `brand_id` states it.
@@ -24,36 +24,36 @@
  * Named per FEATURE FAMILY rather than per medium alone, and that is deliberate: `cold_email`
  * would make a brand's PR cold-email campaign and its SALES cold-email campaign the same identity
  * while they sell different things, so a legitimate second campaign would collide with the first.
- * The sales funnels — the only campaigns that state a funnel — get the plain medium name, and
- * every other product family names its own channel.
+ * The sales family gets the plain medium name, and every other product family names its own
+ * channel.
  *
  * Total by construction: a feature absent from this map yields its own slug with `-` as `_`, so a
  * feature shipped after this file can never silently share another one's identity.
  */
 const CHANNEL_BY_FEATURE: Readonly<Record<string, string>> = Object.freeze({
-  // The sales funnels. `cold_email` and `crm_email` are the two mediums a sales funnel is worked
-  // through today; a brand may fund the same funnel on both, and those are two campaigns.
+  // The sales family. `cold_email` and `crm_email` are two mediums a leg is worked through; a brand
+  // may fund the same leg on both, and those are two campaigns.
   "sales-cold-email-outreach": "cold_email",
   "sales-crm-email-outreach": "crm_email",
   // The feedback-request offer. Same medium as `cold_email` and deliberately NOT the same channel
-  // token: a brand may work one funnel through both offers at once, and those are two campaigns,
+  // token: a brand may work one leg through both offers at once, and those are two campaigns,
   // so they must hold two identities or the unique index would let only one of them exist.
   "feedback-request-cold-email-outreach": "feedback_request_email",
   // Paid reach. Bought impressions rather than an outbound message, so it shares no identity with
-  // any cold-email channel and a brand may work one funnel through both at once. Stated
+  // any cold-email channel and a brand may work one leg through both at once. Stated
   // explicitly rather than left to the fallback below: the fallback is total by construction, so
   // an upstream RENAME of this slug would file the campaign under a channel nothing else uses,
   // silently, with no error and no failing test.
   "google-ads": "google_ads",
   // Answers a lead who already replied — it books the meeting out of a stated sales interest
   // rather than reaching a new person. Its own token, not shared with any cold-email channel: a
-  // brand works one funnel through both at once and those are two campaigns, so they must hold
+  // brand works one leg through both at once and those are two campaigns, so they must hold
   // two identities. Stated explicitly rather than left to the fallback below, for the same reason
   // as google-ads: the fallback is total by construction, so an upstream RENAME would file the
   // campaign under a channel nothing else uses, silently and with no failing test.
   "ai-meeting-booking": "ai_meeting_booking",
   // Earned media — a journalist quotes the brand and the published article carries the link a
-  // buyer arrives on. Its own token, shared with no other channel: a brand works one funnel
+  // buyer arrives on. Its own token, shared with no other channel: a brand works one leg
   // through this AND through cold email at once and those are two campaigns, so they must hold
   // two identities. The token is `expert_quote_outreach` and stays that way whatever family the
   // feature belongs to — 37 stopped rows in production already carry it, and re-tokenising a
@@ -62,14 +62,14 @@ const CHANNEL_BY_FEATURE: Readonly<Record<string, string>> = Object.freeze({
   // so an upstream RENAME would file the campaign under a channel nothing else uses, silently.
   "pr-expert-quote-outreach": "expert_quote_outreach",
 
-  // Everything else. A sales funnel is not something these run — their funnel stays NULL — but
-  // they still carry a channel so the identity key is enforceable for them too.
+  // Everything else. They are not funded per (offer, leg), but they still carry a channel so the
+  // identity key is enforceable for them too.
   "pr-cold-email-outreach": "pr_cold_email",
   "hiring-cold-email-outreach": "hiring_cold_email",
   "vc-cold-email-outreach": "vc_cold_email",
   // The RETIRED spelling of `pr-expert-quote-outreach` — features-service states the rename on
   // the current slug. It keeps its own token so the 39 stopped rows that carry it keep their
-  // identity, and it is deliberately NOT a member of the funnel-funded family: only the current
+  // identity, and it is deliberately NOT a member of the sales family: only the current
   // slug is funded, and two names for one channel is what this service keeps deleting.
   "pr-expert-quote-opportunities": "expert_quote_opportunities",
   "ai-visibility-scoring": "ai_visibility",
@@ -108,27 +108,17 @@ export function campaignIdentityColumns(input: {
  * The NAME a campaign is given when its creator did not state one.
  *
  * `POST /campaigns` takes a name from its caller; the customer starting a funded pair states only
- * the identity, so the name is derived from it. It is byte-identical to what the deleted
- * per-funnel provisioning produced, so a brand whose campaign was provisioned before 2026-09-06
- * and stopped keeps the name it has always had.
- *
+ * the identity, so the name is derived from it. *
  * The name is also the only uniqueness Postgres can enforce on an INSERT here (`brand_ids` is a
- * `text[]`), so it has to separate everything a campaign IS. The OFFER and the LEG are appended
- * only when the campaign states one: an offer-less, leg-less campaign keeps the same name it would
- * have had before either field existed. Two offers of one (funnel, channel, leg) would otherwise
- * collide on `uniq_campaigns_org_name` and the second insert would be swallowed as a race — the
- * funded-and-never-started failure, one layer down.
+ * `text[]`), so it has to separate everything a campaign IS: the OFFER and the LEG are appended.
  */
 export function derivedCampaignName(
   featureSlug: string,
   brandId: string,
-  funnelKey: string | null,
   offerId?: string | null,
   legKey?: string | null,
 ): string {
-  // A campaign started by (offer, leg, channel) alone states no funnel, and its name carries none
-  // (wave C1); the offer and the leg below still separate it from every sibling.
-  let name = funnelKey ? `${featureSlug} - ${brandId} - ${funnelKey}` : `${featureSlug} - ${brandId}`;
+  let name = `${featureSlug} - ${brandId}`;
   if (offerId) name = `${name} - ${offerId}`;
   if (legKey) name = `${name} - ${legKey}`;
   return name;

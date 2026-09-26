@@ -34,7 +34,7 @@ vi.mock("../../src/lib/scheduler.js", () => ({
   hasLiveRunForCampaign: mockLiveCampaign,
   STUCK_RUN_FRESHNESS_THRESHOLD_MS: 900_000,
 }));
-vi.mock("../../src/lib/funnel-campaigns.js", () => ({
+vi.mock("../../src/lib/brand-turns.js", () => ({
   hasLiveRunForBrandCohort: mockLiveCohort,
   serializationCohort: (slug: string) => `cohort:${slug}`,
 }));

@@ -6,7 +6,7 @@ import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { listRuns, updateRun } from "@distribute/runs-client";
-import { planFunnelTurns } from "./funnel-campaigns.js";
+import { planBrandTurns } from "./brand-turns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { reportCampaignRecovery } from "./recovery-event.js";
@@ -131,7 +131,7 @@ export async function reRunDueCampaigns(): Promise<number> {
   // funded funnel of each brand, holds the brand to ONE run in flight, and hands the turn to the
   // funded funnel with the lowest spent-today/ceiling ratio. Campaigns absent from the map fire
   // as they always have — every non-sales campaign is untouched.
-  const funnelDefers = await planFunnelTurns(dueCampaigns, now);
+  const funnelDefers = await planBrandTurns(dueCampaigns, now);
 
   for (const campaign of dueCampaigns) {
     try {

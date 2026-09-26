@@ -82,14 +82,14 @@ vi.stubGlobal("fetch", mockFetch);
 
 import { SALES_FUNNEL_KEYS } from "../../src/lib/sales-funnel-vocabulary.js";
 import {
-  planFunnelTurns,
+  planBrandTurns,
   selectLowestFillRatio,
   serializationCohort,
   resetLegKeylessCeilingReports,
-  FUNNEL_TURN_DEFER_MS,
+  TURN_DEFER_MS,
   FUNDING_RECHECK_MS,
-  type ClaimedFunnelCampaign,
-} from "../../src/lib/funnel-campaigns.js";
+  type ClaimedSalesCampaign,
+} from "../../src/lib/brand-turns.js";
 
 const SALES = "sales-cold-email-outreach";
 const FEEDBACK = "feedback-request-cold-email-outreach";
@@ -111,7 +111,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // The brand's alive campaigns, as the sales-scoped liveness check reads them.
 let aliveBrandCampaigns: Array<{ id: string; featureSlug: string | null }> = [];
-function claimed(overrides: Partial<ClaimedFunnelCampaign> = {}): ClaimedFunnelCampaign {
+function claimed(overrides: Partial<ClaimedSalesCampaign> = {}): ClaimedSalesCampaign {
   return {
     id: "campaign-1",
     orgId: "org-1",
@@ -275,7 +275,7 @@ describe("serializationCohort", () => {
   });
 });
 
-describe("planFunnelTurns", () => {
+describe("planBrandTurns", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // clearAllMocks does NOT drop queued `...Once` values, so an unconsumed one from a previous
@@ -305,7 +305,7 @@ describe("planFunnelTurns", () => {
   });
 
   it("leaves non-sales campaigns entirely alone", async () => {
-    const deferred = await planFunnelTurns([claimed({ featureSlug: "pr-media-pitch-v1" })]);
+    const deferred = await planBrandTurns([claimed({ featureSlug: "pr-media-pitch-v1" })]);
     expect(deferred.size).toBe(0);
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -313,21 +313,21 @@ describe("planFunnelTurns", () => {
   it("a brand with ONE funded pot and no per-funnel ceilings runs exactly as it always did", async () => {
     mockFunnelBudgets([], "5000");
     mockSpend("0");
-    const deferred = await planFunnelTurns([claimed()]);
+    const deferred = await planBrandTurns([claimed()]);
     expect(deferred.size).toBe(0);
   });
 
   it("HOLDS a brand that funds nothing — no funnel ceiling and no pot", async () => {
     mockFunnelBudgets([], null);
     const now = new Date("2026-08-16T10:00:00Z");
-    const deferred = await planFunnelTurns([claimed()], now);
+    const deferred = await planBrandTurns([claimed()], now);
     expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
   });
 
   it("HOLDS the brand when the ceilings cannot be read (fail-CLOSED)", async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
     const now = new Date("2026-08-16T10:00:00Z");
-    const deferred = await planFunnelTurns([claimed()], now);
+    const deferred = await planBrandTurns([claimed()], now);
     expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
   });
 
@@ -349,7 +349,7 @@ describe("planFunnelTurns", () => {
     );
     mockSpend("0");
     // The brand runs ONE campaign; the second funded pair has none and must stay that way.
-    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation", legKey: ENTRY_LEG })]);
+    await planBrandTurns([claimed({ funnelKey: "sales_meetings_from_conversation", legKey: ENTRY_LEG })]);
     expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
@@ -358,7 +358,7 @@ describe("planFunnelTurns", () => {
     // planner writes no status at all.
     mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }], "2000");
     mockSpend("0");
-    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+    await planBrandTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
     for (const call of mockUpdateSet.mock.calls) {
       expect(call[0]).not.toHaveProperty("status");
       expect(call[0]).not.toHaveProperty("stopReason");
@@ -369,7 +369,7 @@ describe("planFunnelTurns", () => {
     // Those reads existed only to decide whether a funded ceiling should get a campaign.
     mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }], "2000");
     mockSpend("0");
-    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
+    await planBrandTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })]);
     const urls = mockFetch.mock.calls.map((c) => String(c[0]));
     expect(urls).toHaveLength(1);
     expect(urls[0]).toContain("/funnel-budgets");
@@ -391,7 +391,7 @@ describe("planFunnelTurns", () => {
     );
     mockSpend("0");
     const said = captureErrors();
-    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation", legKey: ENTRY_LEG })]);
+    await planBrandTurns([claimed({ funnelKey: "sales_meetings_from_conversation", legKey: ENTRY_LEG })]);
     const text = said();
     expect(text).toContain("FUNDED CEILING STATES NO LEG");
     expect(text).toContain("brand-1");
@@ -409,7 +409,7 @@ describe("planFunnelTurns", () => {
     );
     mockSpend("0");
     const said = captureErrors();
-    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation", legKey: ENTRY_LEG })]);
+    await planBrandTurns([claimed({ funnelKey: "sales_meetings_from_conversation", legKey: ENTRY_LEG })]);
     expect(said()).toBe("");
   });
 
@@ -425,7 +425,7 @@ describe("planFunnelTurns", () => {
     );
     mockSpend("0");
     const said = captureErrors();
-    const deferred = await planFunnelTurns([
+    const deferred = await planBrandTurns([
       claimed({ funnelKey: "sales_meetings_from_conversation", legKey: ENTRY_LEG }),
     ]);
     expect(said()).toContain("FUNDED CEILING STATES NO LEG");
@@ -444,10 +444,10 @@ describe("planFunnelTurns", () => {
     const said = captureErrors();
     budgets();
     mockSpend("0");
-    await planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })], now);
+    await planBrandTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })], now);
     budgets();
     mockSpend("0");
-    await planFunnelTurns(
+    await planBrandTurns(
       [claimed({ funnelKey: "sales_meetings_from_conversation" })],
       new Date(now.getTime() + 60_000),
     );
@@ -465,7 +465,7 @@ describe("planFunnelTurns", () => {
     ]);
     mockSpend("0");
     const now = new Date("2026-08-16T10:00:00Z");
-    const deferred = await planFunnelTurns(
+    const deferred = await planBrandTurns(
       [
         claimed({ id: "c-reply", funnelKey: "sales_meetings_from_conversation" }),
         claimed({ id: "c-visit", funnelKey: "sales_meetings_from_website" }),
@@ -484,14 +484,14 @@ describe("planFunnelTurns", () => {
     mockSpend("900"); // c-reply is nearly full
     mockSpend("100"); // c-visit is nearly empty → takes the turn
     const now = new Date("2026-08-16T10:00:00Z");
-    const deferred = await planFunnelTurns(
+    const deferred = await planBrandTurns(
       [
         claimed({ id: "c-reply", funnelKey: "sales_meetings_from_conversation" }),
         claimed({ id: "c-visit", funnelKey: "sales_meetings_from_website" }),
       ],
       now,
     );
-    expect(deferred.get("c-reply")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
+    expect(deferred.get("c-reply")?.getTime()).toBe(now.getTime() + TURN_DEFER_MS);
     expect(deferred.has("c-visit")).toBe(false);
   });
 
@@ -510,7 +510,7 @@ describe("planFunnelTurns", () => {
       { id: "c-email", featureSlug: SALES },
       { id: "c-ads", featureSlug: GOOGLE_ADS },
     ];
-    await planFunnelTurns([
+    await planBrandTurns([
       claimed({ id: "c-email", funnelKey: "sales_meetings_from_conversation", featureSlug: SALES }),
       claimed({ id: "c-ads", funnelKey: "sales_meetings_from_conversation", featureSlug: GOOGLE_ADS }),
     ]);
@@ -524,11 +524,11 @@ describe("planFunnelTurns", () => {
     mockSpend("0");
     mockListRuns.mockResolvedValue({ runs: [{ id: "run-1" }] });
     const now = new Date("2026-08-16T10:00:00Z");
-    const deferred = await planFunnelTurns(
+    const deferred = await planBrandTurns(
       [claimed({ funnelKey: "sales_meetings_from_conversation" })],
       now,
     );
-    expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
+    expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + TURN_DEFER_MS);
   });
 
   it("a live cold-email run does NOT hold a funded Google Ads campaign", async () => {
@@ -543,7 +543,7 @@ describe("planFunnelTurns", () => {
     mockSpend("0");
     aliveBrandCampaigns = [{ id: "c-email", featureSlug: SALES }];
     mockListRuns.mockResolvedValue({ runs: [{ id: "run-1" }] });
-    const deferred = await planFunnelTurns([
+    const deferred = await planBrandTurns([
       claimed({ id: "c-ads", funnelKey: "sales_meetings_from_conversation", featureSlug: GOOGLE_ADS }),
     ]);
     expect(deferred.has("c-ads")).toBe(false);
@@ -553,7 +553,7 @@ describe("planFunnelTurns", () => {
     mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "1000" }]);
     mockSpend("1000"); // at its ceiling
     const now = new Date("2026-08-23T14:00:00Z");
-    const deferred = await planFunnelTurns(
+    const deferred = await planBrandTurns(
       [claimed({ funnelKey: "sales_meetings_from_conversation" })],
       now,
     );
@@ -563,7 +563,7 @@ describe("planFunnelTurns", () => {
   it("ranks a campaign row still on a pre-rename key on its funnel's real ceiling", async () => {
     mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }]);
     mockSpend("0");
-    const deferred = await planFunnelTurns([claimed({ funnelKey: "reply_meeting" })]);
+    const deferred = await planBrandTurns([claimed({ funnelKey: "reply_meeting" })]);
     expect(deferred.size).toBe(0);
   });
 });
@@ -576,7 +576,7 @@ describe("planFunnelTurns", () => {
 // ever emitted and nothing was logged. From `run_events` alone, a campaign correctly parked at
 // its ceiling was indistinguishable from one that had silently died — which is exactly what
 // campaign 38ba8069 looked like for five hours on 2026-09-17.
-describe("planFunnelTurns — the hold is stated on the run ledger", () => {
+describe("planBrandTurns — the hold is stated on the run ledger", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetch.mockReset();
@@ -618,7 +618,7 @@ describe("planFunnelTurns — the hold is stated on the run ledger", () => {
     mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "400" }]);
     mockSpend("428");
     const now = new Date("2026-09-17T05:33:27Z");
-    const deferred = await planFunnelTurns(
+    const deferred = await planBrandTurns(
       [claimed({ funnelKey: "sales_meetings_from_conversation" })],
       now,
     );
@@ -639,7 +639,7 @@ describe("planFunnelTurns — the hold is stated on the run ledger", () => {
 
   it("says WHY a campaign the customer funds nothing for is not running", async () => {
     mockFunnelBudgets([], null);
-    const deferred = await planFunnelTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
+    const deferred = await planBrandTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
     expect(deferred.size).toBe(1);
     const hold = holdFor("campaign-1");
     expect(hold?.payload.data.reason).toBe("unfunded");
@@ -648,7 +648,7 @@ describe("planFunnelTurns — the hold is stated on the run ledger", () => {
 
   it("says WHY a brand whose ceilings cannot be read is held, and WARNS — that one is a fault", async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
-    await planFunnelTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
+    await planBrandTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
     const hold = holdFor("campaign-1");
     expect(hold?.payload.data.reason).toBe("budgets_unreadable");
     expect(hold?.payload.level).toBe("warn");
@@ -664,14 +664,14 @@ describe("planFunnelTurns — the hold is stated on the run ledger", () => {
     mockSpend("900");
     mockSpend("100");
     const now = new Date("2026-09-17T05:33:27Z");
-    const deferred = await planFunnelTurns(
+    const deferred = await planBrandTurns(
       [
         claimed({ id: "c-reply", funnelKey: "sales_meetings_from_conversation" }),
         claimed({ id: "c-visit", funnelKey: "sales_meetings_from_website" }),
       ],
       now,
     );
-    expect(deferred.get("c-reply")?.getTime()).toBe(now.getTime() + FUNNEL_TURN_DEFER_MS);
+    expect(deferred.get("c-reply")?.getTime()).toBe(now.getTime() + TURN_DEFER_MS);
     expect(mockTraceEvent).not.toHaveBeenCalled();
   });
 
@@ -679,7 +679,7 @@ describe("planFunnelTurns — the hold is stated on the run ledger", () => {
     mockFunnelBudgets([{ funnelKey: "reply_meeting", dailyBudgetCents: "2000" }]);
     mockSpend("0");
     mockListRuns.mockResolvedValue({ runs: [{ id: "run-1" }] });
-    await planFunnelTurns(
+    await planBrandTurns(
       [claimed({ funnelKey: "sales_meetings_from_conversation" })],
       new Date("2026-09-17T05:33:27Z"),
     );
@@ -689,7 +689,7 @@ describe("planFunnelTurns — the hold is stated on the run ledger", () => {
   it("never invents a run id for a campaign that has no ancestor run", async () => {
     mockFunnelBudgets([], null);
     const said = captureWarnings();
-    await planFunnelTurns([claimed({ parentRunId: null })], new Date("2026-09-17T05:33:27Z"));
+    await planBrandTurns([claimed({ parentRunId: null })], new Date("2026-09-17T05:33:27Z"));
     expect(mockTraceEvent).not.toHaveBeenCalled();
     expect(said()).toContain("no ancestor run");
   });
@@ -700,7 +700,7 @@ describe("planFunnelTurns — the hold is stated on the run ledger", () => {
     mockTraceEvent.mockRejectedValue(new Error("runs-service unreachable"));
     const now = new Date("2026-09-17T05:33:27Z");
     await expect(
-      planFunnelTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })], now),
+      planBrandTurns([claimed({ funnelKey: "sales_meetings_from_conversation" })], now),
     ).resolves.toBeInstanceOf(Map);
   });
 });

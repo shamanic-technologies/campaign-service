@@ -97,8 +97,8 @@ vi.mock("../../src/lib/brand-pause.js", () => ({
 // Per-funnel turn-taking has its own suite (tests/unit/funnel-campaigns.test.ts). Here it is a
 // no-op so these campaigns (a non-sales-outreach feature slug) keep the pre-funnel behaviour the
 // assertions below were written for.
-vi.mock("../../src/lib/funnel-campaigns.js", () => ({
-  planFunnelTurns: vi.fn(async () => new Map()),
+vi.mock("../../src/lib/brand-turns.js", () => ({
+  planBrandTurns: vi.fn(async () => new Map()),
 }));
 
 // The resume sweep has its own suite (tests/integration/campaign-resume.test.ts) and needs a real

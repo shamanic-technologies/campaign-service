@@ -42,7 +42,7 @@ import { campaigns, brandPauseTransitions } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { reRunDueCampaigns, claimStuckCampaigns } from "../../src/lib/scheduler.js";
 import { SALES_OUTREACH_FEATURE_SLUG } from "../../src/lib/sales-outreach-campaign.js";
-import { FUNDING_RECHECK_MS } from "../../src/lib/funnel-campaigns.js";
+import { FUNDING_RECHECK_MS } from "../../src/lib/brand-turns.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const orgId = "funding-eligibility-org";
