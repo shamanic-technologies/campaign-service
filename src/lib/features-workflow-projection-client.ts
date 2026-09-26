@@ -34,6 +34,10 @@ export interface ProjectionRow {
   // Null when this row carries no audience-grain evidence (brand-level row, or a floored
   // audience with zero audience-level spend under this workflow).
   audienceEvidence: ProjectionAudienceEvidence | null;
+  // How many people this row's audience can still be served, as human-service counts them
+  // (features-service#1035). 0 = served out; null = features-service could not read it, which is
+  // UNKNOWN and never excludes anything. Always null on the brand-level row.
+  availableToContactCount?: number | null;
   resolved: {
     // Finest grain at which THIS row's evidence resolved (provenance only — the workflow
     // pick ignores it): "audience" → "brand" → "crossOrg".
@@ -63,6 +67,7 @@ interface RawProjectionRow {
     };
   };
   resolved: { grain: string; costPerOutcomeUsd: number | null };
+  availableToContactCount?: number | null;
 }
 
 // A FUNNEL- or GOAL-keyed read of a brand selling SEVERAL OFFERS does NOT fail: features-service
@@ -184,6 +189,8 @@ function normalizeProjectionRows(rows: RawProjectionRow[]): ProjectionRow[] {
             resolvedOutcomeCount: r.estimatesByGrain?.audience?.resolvedOutcomeCount ?? null,
           }
         : null,
+      availableToContactCount:
+        typeof r.availableToContactCount === "number" ? r.availableToContactCount : null,
       resolved: r.resolved,
     };
   });
@@ -597,6 +604,31 @@ function poolArmsByAudience(rows: ProjectionRow[]): Map<string, Arm> {
  * Returns the chosen audienceId, or null when the grid enumerates no audience the campaign may
  * be served.
  */
+/**
+ * Audience ids features-service states are SERVED OUT (availableToContactCount === 0) — known to have
+ * nobody left to contact before any serve is spent finding out (features-service#1035). An unknown
+ * count (null) is never in this set.
+ */
+function servedOutAudienceIds(rows: ProjectionRow[]): Set<string> {
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (r.audienceId != null && r.availableToContactCount === 0) out.add(r.audienceId);
+  }
+  return out;
+}
+
+/**
+ * Drop served-out audiences from a pick — but ONLY while another candidate still has people (or an
+ * unknown count). When EVERY candidate is served out the list is returned untouched: the run then
+ * probes one, the serve comes back exhausted, and the existing exhaustion → auto-stop /
+ * extend-audience path fires exactly as before. Never an empty list manufactured here.
+ */
+function preferAudiencesWithPeople<T>(candidates: T[], idOf: (c: T) => string, servedOut: Set<string>): T[] {
+  if (servedOut.size === 0) return candidates;
+  const withPeople = candidates.filter((c) => !servedOut.has(idOf(c)));
+  return withPeople.length > 0 ? withPeople : candidates;
+}
+
 export function selectAudiencePooled(
   rows: ProjectionRow[],
   opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[]; rng?: Rng } = {},
@@ -612,6 +644,7 @@ export function selectAudiencePooled(
     entries = entries.filter(([id]) => !excluded.has(id));
   }
   if (entries.length === 0) return null;
+  entries = preferAudiencesWithPeople(entries, ([id]) => id, servedOutAudienceIds(rows));
 
   const idx = thompsonArgminCost(entries.map(([, arm]) => arm), opts.rng);
   return idx === null ? null : entries[idx][0];
@@ -723,6 +756,7 @@ export function selectAudienceFromProjection(
   }
 
   if (candidates.length === 0) return null;
+  candidates = preferAudiencesWithPeople(candidates, (r) => r.audienceId!, servedOutAudienceIds(rows));
   const idx = thompsonArgminCost(
     candidates.map((r) => toArm(r.audienceEvidence)),
     opts.rng,
