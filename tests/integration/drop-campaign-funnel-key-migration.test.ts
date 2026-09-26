@@ -8,7 +8,7 @@ import { cleanTestData, closeDb, insertTestCampaign, randomId } from "../helpers
  * Wave C3 drops `campaigns.funnel_key`. The schema no longer declares the column, so each test
  * re-adds it to reproduce the shape production holds, then applies the migration file itself.
  */
-const TAG = "0059_drop_campaign_funnel_key";
+const TAG = "0060_drop_campaign_funnel_key";
 const MIGRATION = readFileSync(join(process.cwd(), "drizzle", `${TAG}.sql`), "utf8");
 const SNAPSHOT = "campaigns_funnel_key_snapshot_20260926";
 
@@ -52,50 +52,18 @@ describe(`migration ${TAG}`, () => {
     expect(await hasFunnelColumn()).toBe(true);
   });
 
-  it("gives a stopped leg-less row the ONE leg its same-funnel sibling states, then drops the column", async () => {
-    const org = randomId();
-    const brand = randomId();
-    const offer = randomId();
-    const identity = { brandId: brand, offerId: offer, acquisitionChannel: "cold_email" };
-
-    const ancestor = await insertTestCampaign(org, { ...identity, status: "stopped" });
-    const live = await insertTestCampaign(org, { ...identity, status: "ongoing", legKey: "start_to_website_visit" });
-    await setFunnel(ancestor.id, "form_magnet");
-    await setFunnel(live.id, "form_magnet");
-
-    // Siblings that DISAGREE on the leg: nothing is picked.
-    const brand2 = randomId();
-    const ambiguous = await insertTestCampaign(org, { brandId: brand2, offerId: offer, acquisitionChannel: "cold_email", status: "stopped" });
-    const a = await insertTestCampaign(org, { brandId: brand2, offerId: offer, acquisitionChannel: "cold_email", status: "stopped", legKey: "start_to_conversation" });
-    const b = await insertTestCampaign(org, { brandId: brand2, offerId: offer, acquisitionChannel: "cold_email", status: "stopped", legKey: "start_to_website_visit" });
-    for (const id of [ambiguous.id, a.id, b.id]) await setFunnel(id, "sales_meetings_from_conversation");
-
-    // A sibling on ANOTHER funnel is not evidence.
-    const brand3 = randomId();
-    const otherFunnel = await insertTestCampaign(org, { brandId: brand3, offerId: offer, acquisitionChannel: "cold_email", status: "stopped" });
-    const sibling3 = await insertTestCampaign(org, { brandId: brand3, offerId: offer, acquisitionChannel: "cold_email", status: "stopped", legKey: "start_to_conversation" });
-    await setFunnel(otherFunnel.id, "form_magnet");
-    await setFunnel(sibling3.id, "sales_meetings_from_conversation");
-
-    // A leg already stated is never overwritten.
-    const brand4 = randomId();
-    const stated = await insertTestCampaign(org, { brandId: brand4, offerId: offer, acquisitionChannel: "cold_email", status: "stopped", legKey: "conversation_to_meeting_booked" });
-    const sibling4 = await insertTestCampaign(org, { brandId: brand4, offerId: offer, acquisitionChannel: "cold_email", status: "stopped", legKey: "start_to_website_visit" });
-    await setFunnel(stated.id, "form_magnet");
-    await setFunnel(sibling4.id, "form_magnet");
+  it("drops a populated column once its snapshot exists, and a replay is a no-op", async () => {
+    const row = await insertTestCampaign(randomId(), { status: "stopped", brandId: randomId(), acquisitionChannel: "cold_email", legKey: "start_to_website_visit" });
+    await setFunnel(row.id, "form_magnet");
 
     await sql.unsafe(`CREATE TABLE ${SNAPSHOT} AS SELECT id, funnel_key, leg_key FROM campaigns WHERE funnel_key IS NOT NULL`);
     await sql.unsafe(MIGRATION);
 
-    expect(await legOf(ancestor.id)).toBe("start_to_website_visit");
-    expect(await legOf(ambiguous.id)).toBeNull();
-    expect(await legOf(otherFunnel.id)).toBeNull();
-    expect(await legOf(stated.id)).toBe("conversation_to_meeting_booked");
     expect(await hasFunnelColumn()).toBe(false);
+    expect(await legOf(row.id)).toBe("start_to_website_visit");
 
-    // Idempotent: a second run finds no column and changes nothing.
     await sql.unsafe(MIGRATION);
-    expect(await legOf(ambiguous.id)).toBeNull();
+    expect(await hasFunnelColumn()).toBe(false);
   });
 
   it("drops an empty column without needing a snapshot", async () => {
