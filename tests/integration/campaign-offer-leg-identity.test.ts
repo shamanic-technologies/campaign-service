@@ -65,7 +65,7 @@ describe("Campaign identified by (offer, leg, channel)", () => {
     const offerId = crypto.randomUUID();
 
     const created = await create(body("Offer x leg", brandId, { offerId, legKey: LEG })).expect(201);
-    expect(created.body.campaign.funnelKey).toBeNull();
+    expect(created.body.campaign).not.toHaveProperty("funnelKey");
     expect(created.body.campaign.offerId).toBe(offerId);
     expect(created.body.campaign.legKey).toBe(LEG);
     expect(created.body.campaign.acquisitionChannel).toBe("cold_email");

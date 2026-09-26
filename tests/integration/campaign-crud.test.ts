@@ -453,7 +453,7 @@ describe("Campaign CRUD", () => {
         "org_test_crud",
         SALES,
       ).expect(201);
-      expect(res.body.campaign.funnelKey).toBeNull();
+      expect(res.body.campaign).not.toHaveProperty("funnelKey");
     });
 
     it("a non-sales feature states neither, and is not asked for either", async () => {

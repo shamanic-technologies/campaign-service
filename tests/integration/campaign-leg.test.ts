@@ -96,7 +96,7 @@ describe("Campaign leg", () => {
 
     expect(created.body.campaign.legKey).toBe(ENTRY_LEG);
     // No funnel had to be named for the statement to identify one leg.
-    expect(created.body.campaign.funnelKey).toBeNull();
+    expect(created.body.campaign).not.toHaveProperty("funnelKey");
   });
 
   it("two campaigns on ONE channel buying two DIFFERENT legs are distinguishable, with no funnel", async () => {
@@ -117,8 +117,8 @@ describe("Campaign leg", () => {
     expect(attended.body.campaign.id).not.toBe(booked.body.campaign.id);
     expect(booked.body.campaign.legKey).toBe(BOOKED_FROM_CONVERSATION);
     expect(attended.body.campaign.legKey).toBe(ATTENDED_FROM_BOOKED);
-    expect(booked.body.campaign.funnelKey).toBeNull();
-    expect(attended.body.campaign.funnelKey).toBeNull();
+    expect(booked.body.campaign).not.toHaveProperty("funnelKey");
+    expect(attended.body.campaign).not.toHaveProperty("funnelKey");
     // And the same two legs land on steps that a funnel-derived answer could confuse: both of
     // these are meeting legs. The identifier separates them on its own.
     expect(booked.body.campaign.legKey).not.toBe(attended.body.campaign.legKey);
@@ -155,7 +155,7 @@ describe("Campaign leg", () => {
     expect(created.body.campaign.workflowSlug).toBe("sales-email-cold-outreach");
     expect(created.body.campaign.brandIds).toEqual(body.brandIds);
     expect(created.body.campaign.status).toBe("ongoing");
-    expect(created.body.campaign.funnelKey).toBeNull();
+    expect(created.body.campaign).not.toHaveProperty("funnelKey");
 
     const readBack = await read(created.body.campaign.id).expect(200);
     expect(readBack.body.campaign.legKey).toBeNull();
