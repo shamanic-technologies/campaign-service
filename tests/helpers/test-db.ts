@@ -43,14 +43,13 @@ export async function insertTestCampaign(
     parentRunId?: string;
     // WHY it stopped — only `audience_exhausted` is resumable (src/lib/stop-reason.ts).
     stopReason?: string | null;
-    funnelKey?: string | null;
     /** The offer the campaign sells — brand-service's id, carried and never derived. */
     offerId?: string | null;
     /** The single funnel LEG it is bought for — features-service's id, carried and never derived. */
     legKey?: string | null;
     // The two identity columns the partial unique index is built on. Written at creation by
     // campaignIdentityColumns in the routes; stated explicitly here so a test can build the
-    // (org, brand, funnel, channel) collision the resume must refuse.
+    // (org, brand, offer, leg, channel) collision the resume must refuse.
     brandId?: string | null;
     acquisitionChannel?: string | null;
     updatedAt?: Date;
@@ -83,7 +82,6 @@ export async function insertTestCampaign(
       createdByUserId: data.createdByUserId || null,
       parentRunId: data.parentRunId || null,
       stopReason: data.stopReason ?? null,
-      funnelKey: data.funnelKey ?? null,
       offerId: data.offerId ?? null,
       legKey: data.legKey ?? null,
       brandId: data.brandId ?? null,

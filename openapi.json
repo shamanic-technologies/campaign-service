@@ -117,10 +117,6 @@
             "type": "integer",
             "nullable": true
           },
-          "funnelKey": {
-            "type": "string",
-            "nullable": true
-          },
           "offerId": {
             "type": "string",
             "nullable": true
@@ -193,7 +189,6 @@
           "maxBudgetMonthlyUsd",
           "maxBudgetTotalUsd",
           "dailyBudgetCents",
-          "funnelKey",
           "offerId",
           "legKey",
           "maxLeads",

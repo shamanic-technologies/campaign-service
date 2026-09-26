@@ -269,15 +269,11 @@ describe('No Legacy Patterns - CRITICAL', () => {
     expect(dbSchema).toMatch(/goal:\s*text\("goal"\)/);
   });
 
-  it('wave C2: no CODE in src stores, reads, serves or accepts a sales funnel', () => {
+  it('wave C3: no CODE in src stores, reads, serves or accepts a sales funnel', () => {
     // The funnel left campaign-service's model: a campaign is (offer x leg x channel) and billing
-    // funds it at that grain. The ONLY survivors are the `funnel_key` column and its echo on the
-    // campaign row (schema.ts / CampaignSchema), kept READ-ONLY for the services that still read
-    // `campaign.funnelKey` off a campaign. Comments may explain the removal; code may not use it.
-    const allowed = new Set([
-      'db/schema.ts::funnelKey: text("funnel_key"),',
-      'schemas.ts::funnelKey: z.string().nullable(),',
-    ]);
+    // funds it at that grain. Wave C3 dropped the last survivor, the read-only `funnel_key` column
+    // and its `funnelKey` echo on the campaign row (migration 0059). Comments may explain the
+    // removal; code may not use it.
     const offenders: string[] = [];
     for (const file of getAllTsFiles(srcDir)) {
       const rel = path.relative(srcDir, file);
@@ -285,7 +281,6 @@ describe('No Legacy Patterns - CRITICAL', () => {
         const code = line.trim();
         if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return;
         if (!/funnel/i.test(code)) return;
-        if (allowed.has(`${rel}::${code}`)) return;
         offenders.push(`${rel}:${i + 1}  ${code.slice(0, 100)}`);
       });
     }
