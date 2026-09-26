@@ -1,5 +1,17 @@
 import { beforeAll, afterAll, vi } from "vitest";
 
+// Every start path asks billing whether the org's card can be charged (src/lib/payment-hold.ts).
+// No test talks to billing, so the fleet default here is "not held"; the payment-hold tests
+// override it per case, and its own unit test reads the real module via vi.importActual.
+vi.mock("../src/lib/payment-hold.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/payment-hold.js")>();
+  return {
+    ...original,
+    readPaymentHold: vi.fn().mockResolvedValue({ ok: true, held: false }),
+    paymentStartRefusal: vi.fn().mockResolvedValue(null),
+  };
+});
+
 process.env.NODE_ENV = "test";
 process.env.CAMPAIGN_SERVICE_DATABASE_URL = process.env.CAMPAIGN_SERVICE_DATABASE_URL || "postgresql://test:test@localhost/campaign_test";
 process.env.SERVICE_SECRET_KEY = "test-service-secret";

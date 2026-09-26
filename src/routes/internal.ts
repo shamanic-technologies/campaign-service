@@ -12,7 +12,7 @@ import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
 import { markAudienceExhausted, resolveAudienceExhaustion, getFreshExhaustedAudienceIds, hasExhaustedAudience, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../lib/audience-exhaustion.js";
 import { recordAudienceAvailability } from "../lib/campaign-audience-availability.js";
-import { stopOrgCampaignsWithHistory } from "../lib/campaign-status-history.js";
+import { stopOrgCampaignsWithHistory, TRANSITION_SOURCES } from "../lib/campaign-status-history.js";
 import { NO_WORK_RECHECK_MS } from "../lib/idle-run.js";
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
@@ -787,6 +787,7 @@ router.delete("/internal/campaigns/by-org/:orgId", requireApiKey, async (req, re
             isNotNull(campaigns.nextRunAt),
           ),
         ),
+        TRANSITION_SOURCES.ORG_TEARDOWN,
       );
 
       const deletedBrandPauseTransitions = await tx
