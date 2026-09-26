@@ -1,5 +1,4 @@
 import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-headers.js";
-import { fetchBrandRuntimeContext, type RuntimeGoal } from "./brand-runtime-client.js";
 import { thompsonArgminCost, type Arm, type Rng } from "./bandit.js";
 import { isOutboundSalesFeature } from "./sales-outreach-campaign.js";
 
@@ -70,110 +69,8 @@ interface RawProjectionRow {
   availableToContactCount?: number | null;
 }
 
-// A FUNNEL- or GOAL-keyed read of a brand selling SEVERAL OFFERS does NOT fail: features-service
-// serves 200 and states, here, that it could not resolve which offer's declared funnels to price
-// through. The VOLUME half of the body is unaffected (spend is a measured fact about this brand);
-// the PROJECTED half — every `resolved.costPerOutcomeUsd`, i.e. the one number both argmins rank
-// on — reads null. So the body parses, the rows are all there, and NOTHING is rankable: the pick
-// silently collapses to the campaign's configured workflow. This block is the only thing that
-// tells that apart from a channel with no history, which is why it is read rather than ignored.
-interface DeclaredFunnelsUnresolved {
-  reason: string;
-  message?: string;
-  offers?: Array<{ offerId: string; name: string | null }>;
-}
-
-interface WorkflowProjectionResponse {
-  rows: RawProjectionRow[];
-  declaredFunnelsUnresolved?: DeclaredFunnelsUnresolved | null;
-}
-
-/** A priced body, plus features-service's statement that it could NOT price it. */
-export interface WorkflowProjection {
-  rows: ProjectionRow[];
-  /** Set only when the brand sells several offers and this read named none — see above. */
-  declaredFunnelsUnresolved: DeclaredFunnelsUnresolved | null;
-}
-
-interface FetchWorkflowProjectionInput {
-  featureSlug: string;
-  brandId: string;
-  /**
-   * The SALES FUNNEL to price on — what a sales campaign STATES on its own row. Wins over `goal`
-   * at features-service and is the only word that separates a meeting bought with a positive reply
-   * from one bought with a click onto the site.
-   */
-  funnelKey?: string | null;
-  /**
-   * The brand's optimization goal, for a campaign that states no funnel — i.e. a feature that
-   * sells through no sales funnel (PR, hiring, VC, AI-visibility). features-service reads an
-   * ABSENT goal as "default to meeting-booked", so one of the two MUST be given: pricing on a
-   * silent default is exactly the wrong answer quietly.
-   */
-  goal?: RuntimeGoal | null;
-  identity: DownstreamIdentity;
-}
-
-// Pull the (audience × workflow) evidence rows from features-service's reshaped
-// /workflow-projection endpoint. Sends brandId + either the funnel (a sales campaign) or the goal
-// (a feature with no sales funnel). brandProfileId is not a parameter — the endpoint derives
-// economics from brandId alone.
-export async function fetchWorkflowProjectionRows(
-  input: FetchWorkflowProjectionInput,
-): Promise<ProjectionRow[]> {
-  return (await fetchWorkflowProjection(input)).rows;
-}
-
-// The same read, with features-service's own statement about whether it could PRICE it. A caller
-// that ranks on the figures reads this form; `fetchWorkflowProjectionRows` is the rows-only
-// wrapper every other caller keeps using, byte-identically.
-export async function fetchWorkflowProjection({
-  featureSlug,
-  brandId,
-  funnelKey,
-  goal,
-  identity,
-}: FetchWorkflowProjectionInput): Promise<WorkflowProjection> {
-  const baseUrl = process.env.FEATURES_SERVICE_URL;
-  const apiKey = process.env.FEATURES_SERVICE_API_KEY;
-  if (!baseUrl || !apiKey) {
-    throw new Error("[campaign-service] FEATURES_SERVICE_URL or FEATURES_SERVICE_API_KEY not configured");
-  }
-
-  const url = new URL(`${baseUrl.replace(/\/$/, "")}/features/${encodeURIComponent(featureSlug)}/workflow-projection`);
-  url.searchParams.set("brandId", brandId);
-  // The funnel is the finer word and features-service prices on it in preference to a goal, so a
-  // campaign that states one is never priced through a goal that cannot tell its funnel apart.
-  if (funnelKey) url.searchParams.set("funnel", funnelKey);
-  else if (goal) url.searchParams.set("goal", goal);
-  else {
-    throw new Error(
-      "[campaign-service] workflow-projection needs the funnel the campaign states or, for a " +
-      "feature with no sales funnel, the brand's goal — features-service silently defaults to " +
-      "meeting-booked when neither is sent",
-    );
-  }
-
-  const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`[campaign-service] FeatureService workflow-projection failed (${res.status}): ${body}`);
-  }
-
-  const body = await res.json() as WorkflowProjectionResponse;
-  if (!Array.isArray(body.rows)) {
-    throw new Error("[campaign-service] FeatureService workflow-projection returned an invalid rows payload");
-  }
-  return {
-    rows: normalizeProjectionRows(body.rows),
-    declaredFunnelsUnresolved: body.declaredFunnelsUnresolved ?? null,
-  };
-}
-
 // Fold the audience-grain raw evidence into `audienceEvidence` so the selection code reads a
-// flat shape and never depends on the estimatesByGrain nesting. Shared by /workflow-projection
-// and /goal-arbitration — both serve the SAME row shape, so both normalize identically and the
-// audience bandit cannot behave differently depending on which endpoint fed it.
+// flat shape and never depends on the estimatesByGrain nesting.
 function normalizeProjectionRows(rows: RawProjectionRow[]): ProjectionRow[] {
   return rows.map((r): ProjectionRow => {
     const ev = r.estimatesByGrain?.audience?.evidence;
@@ -219,8 +116,9 @@ function normalizeProjectionRows(rows: RawProjectionRow[]): ProjectionRow[] {
 // outcome (for `start_to_conversation`, a positive reply), a funnel in the funnel's terminal one
 // (a booked meeting). A campaign bought for a leg is bought for that leg's outcome, and the
 // dashboard's campaign Workflows page ranks on exactly this body — so the selector ranks on it
-// too, and the page and the pick cannot disagree about which workflow is best. The funnel-keyed
-// body is read only for a campaign that states no leg, or when the leg read gave us nothing.
+// too, and the page and the pick cannot disagree about which workflow is best. It is the ONLY
+// body this service reads (wave C2): the funnel- and goal-keyed reads and the goal arbitration
+// are gone, and a campaign that states no leg is not priced at all.
 //
 // THE FILTER IS APPLIED ONCE, TO THE ROWS, BEFORE EITHER ARGMIN. Both legs of the pick must see
 // the same restricted grid or the first one is judged on evidence the second can never serve: an
@@ -239,8 +137,7 @@ function normalizeProjectionRows(rows: RawProjectionRow[]): ProjectionRow[] {
 
 /**
  * The raw leg-keyed row. It is the SAME row shape the pricing read serves (one endpoint, one
- * body), carrying the verdict block on top — so it can be normalized like any other row when the
- * funnel-keyed read could not be priced. See `legRows` below for when that happens.
+ * body), carrying the verdict block on top — so it is normalized like any other row.
  */
 interface RawEligibilityRow extends RawProjectionRow {
   modelEligibility?: {
@@ -412,91 +309,6 @@ export function restrictToEligibleWorkflows(
     );
   }
   return kept;
-}
-
-// ── Goal arbitration (features-service GET /features/:slug/goal-arbitration) ────────────────
-//
-// The GOAL is the third selection lever, and it is arbitrated by features-service, not here.
-// It answers, in ONE call: which of the goals the brand AUTHORIZES returns the most per dollar,
-// that goal's best workflow, and the pairing's audience rows (same `ProjectionRow` shape the
-// audience bandit already parses). campaign-service greedily takes the first two and
-// Thompson-samples the third — it decides none of them and never issues one request per goal.
-//
-// Why features-service and not us: a cost-per-outcome is denominated in each goal's OWN outcome
-// (a click, a reply, a booked meeting), so comparing two goals' cost-per-outcome compares two
-// different things. Only features-service can normalise each goal through its own funnel to the
-// same terminal unit. Ranking goals here would be re-deriving their economics.
-export interface GoalArbitration {
-  /** The elected goal, canonical camel spelling — forwarded verbatim, never rewritten. */
-  goal: RuntimeGoal;
-  /** The elected goal's best workflow dynasty slug. */
-  workflowSlug: string;
-  /** The winning (goal × workflow) pairing's rows, for the audience Thompson. */
-  rows: ProjectionRow[];
-}
-
-interface RawGoalArbitrationResponse {
-  arbitration?: { status?: string; goal?: string | null };
-  workflow?: { workflowDynastySlug?: string } | null;
-  rows?: RawProjectionRow[];
-}
-
-// features-service 502s with this reason for as long as brand-service has not declared the
-// brand's authorized goal set. That is their fail-loud (they refuse to substitute a default
-// set), but for US it is an EXPECTED business state, not a fault: it means "this brand has no
-// arbitration yet", and it fires on EVERY tick for EVERY campaign of EVERY client until
-// brand-service ships. Per the log discipline in CLAUDE.md that is exactly the routine
-// high-frequency event that must not be logged at all — a warn here would bury real signal
-// fleet-wide. Any OTHER failure is a genuine anomaly and still warns.
-const EXPECTED_NO_ARBITRATION_REASON = "authorized_goals_unavailable";
-
-/**
- * Ask features-service to elect the goal (and its best workflow) for this brand.
- *
- * Returns null when nothing could be elected — the brand authorizes no set yet, every
- * authorized goal is unrankable, or features-service is unreachable. The caller then paces on
- * the campaign's own goal or the brand's goal, i.e. exactly the pre-arbitration behaviour: a
- * selection optimization must never block a campaign from running.
- */
-export async function fetchGoalArbitration({
-  featureSlug,
-  brandId,
-  identity,
-}: {
-  featureSlug: string;
-  brandId: string;
-  identity: DownstreamIdentity;
-}): Promise<GoalArbitration | null> {
-  const baseUrl = process.env.FEATURES_SERVICE_URL;
-  const apiKey = process.env.FEATURES_SERVICE_API_KEY;
-  if (!baseUrl || !apiKey) {
-    throw new Error("[campaign-service] FEATURES_SERVICE_URL or FEATURES_SERVICE_API_KEY not configured");
-  }
-
-  const url = new URL(`${baseUrl.replace(/\/$/, "")}/features/${encodeURIComponent(featureSlug)}/goal-arbitration`);
-  url.searchParams.set("brandId", brandId);
-
-  const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
-  if (!res.ok) {
-    const body = await res.text();
-    if (body.includes(EXPECTED_NO_ARBITRATION_REASON)) return null;
-    throw new Error(`[campaign-service] FeatureService goal-arbitration failed (${res.status}): ${body}`);
-  }
-
-  const body = await res.json() as RawGoalArbitrationResponse;
-  // "unrankable" is a real 200 answer, not an error: the brand authorizes an empty set, or every
-  // goal it authorizes has no defined return. Nothing to elect → the caller keeps its own goal.
-  if (body.arbitration?.status !== "resolved") return null;
-
-  const goal = body.arbitration.goal;
-  const workflowSlug = body.workflow?.workflowDynastySlug;
-  if (!goal || !workflowSlug) {
-    throw new Error(
-      "[campaign-service] FeatureService goal-arbitration returned status=resolved without a goal or workflow",
-    );
-  }
-
-  return { goal, workflowSlug, rows: normalizeProjectionRows(body.rows ?? []) };
 }
 
 // Per-run WORKFLOW selection: GREEDY — pick the workflow with the cheapest
@@ -854,54 +666,22 @@ export interface TriggerSelection {
  * first to the workflows features-service says that leg's model rule allows, applied before
  * either argmin and never re-derived here. A verdict that could not be read excludes nothing, loudly; a leg
  * that excludes EVERY workflow leaves nothing to select and resolves through the same
- * configured-workflow fallback as any other unrankable grid. The GOAL-ARBITRATED leg above is
- * untouched on purpose: features-service elects both the goal and its workflow there, which is
- * its answer and not a cell of a grid we may re-argmin.
+ * configured-workflow fallback as any other unrankable grid. A campaign that states NO leg is
+ * not selected at all: it runs its configured workflow, loudly (see below).
  *
  * Falls back to the campaign's configured slug and NO chosen audience when there is no evidence
  * yet OR features-service is unavailable — a selection optimization must never block a run.
  */
-/**
- * The funnel-keyed body's rows, said out loud when features-service could not PRICE them.
- *
- * Only a campaign that states no leg — or whose leg read gave us nothing — ranks on this body. A
- * brand selling several offers degrades it to a 200 whose every `resolved.costPerOutcomeUsd` is
- * null (see `declaredFunnelsUnresolved`), so nothing is rankable and the cell pick collapses to the
- * configured workflow. That is invisible from here (no row is missing, no call failed), so it is
- * stated on `console.error`: an unpriced grid and a grid with no history must not look the same.
- */
-function funnelRows(
-  projection: WorkflowProjection,
-  context: { brandId: string; featureSlug: string; legKey?: string | null },
-): ProjectionRow[] {
-  const unresolved = projection.declaredFunnelsUnresolved;
-  if (!unresolved) return projection.rows;
-
-  const offers = unresolved.offers?.map((o) => o.name ?? o.offerId).join(", ") ?? "unstated";
-  console.error(
-    `[campaign-service] ${context.featureSlug} is UNPRICED for brand ${context.brandId} ` +
-      `(${unresolved.reason}: ${offers}) and no leg-keyed body priced it` +
-      (context.legKey ? " (the leg read failed)" : " (the campaign states no leg)") +
-      " — every cell reads null, so the pick falls back to the campaign's configured workflow.",
-  );
-  return projection.rows;
-}
-
 export async function resolveSelectionForTrigger(args: {
   featureSlug: string;
   primaryBrandId: string;
   identity: DownstreamIdentity;
   fallbackSlug: string;
-  // The SALES FUNNEL the campaign states. Set → the pick is priced on that funnel and the
-  // campaign is NEVER goal-arbitrated: the customer funds the funnel, so the customer's funding
-  // decides which funnel runs. Null → a feature that sells through no sales funnel, which is
-  // arbitrated exactly as before and otherwise paces on the brand goal.
-  funnelKey?: string | null;
   /**
    * The single funnel LEG the campaign is bought for — features-service's identifier, carried and
-   * NEVER parsed. Set → the leg's model rule is read and the grid is restricted to the workflows
-   * it allows, before either argmin. Null (every campaign older than the leg column) → no verdict
-   * exists to read, no extra call is made, and the selection is exactly what it was.
+   * NEVER parsed. The pick is priced on the leg-keyed body and restricted to the workflows the
+   * leg's model rule allows. Null → the campaign cannot be priced at all (no funnel- or goal-keyed
+   * read exists any more, wave C2): it runs its configured workflow and says so on console.error.
    */
   legKey?: string | null;
   /** The campaign the read is FOR. Naming it names the OFFER the read is priced on (a campaign
@@ -909,9 +689,6 @@ export async function resolveSelectionForTrigger(args: {
    * with 409 `SEVERAL_OFFERS` for a brand selling several. Null (the pre-offer population)
    * keeps the brand-scoped read, which fails loud on a multi-offer brand rather than guessing. */
   campaignId?: string | null;
-  /** The campaign's own OFFER (brand-service's id, carried and never derived). Names whose
-   * confirmed profile words the runtime-context read carries. */
-  offerId?: string | null;
   /** The campaign's HARD targeting subset — the audience pick may only ever land inside it. */
   requiredAudienceIds?: string[] | null;
   /** The campaign's freshly-exhausted audiences — never chosen. */
@@ -922,67 +699,48 @@ export async function resolveSelectionForTrigger(args: {
     primaryBrandId,
     identity,
     fallbackSlug,
-    funnelKey,
     legKey,
     campaignId,
-    offerId,
     requiredAudienceIds,
     excludedAudienceIds,
   } = args;
   // Rotation is feature-scoped: non-rotating features keep their configured workflow.
   if (!isWorkflowRotationEnabled(featureSlug)) return { workflowSlug: fallbackSlug, audienceId: null };
+  // A campaign that states NO LEG has nothing to be priced on. The funnel- and goal-keyed reads
+  // (and the goal arbitration) are gone fleet-wide (wave C2), and inventing a goal or a funnel to
+  // ask with would be pricing on a guess. Such a campaign should not reach selection at all, so it
+  // is said loudly and runs the workflow the customer configured — never a re-picked one.
+  if (!legKey) {
+    console.error(
+      `[campaign-service] campaign ${campaignId ?? "(unknown)"} of ${featureSlug} on brand ${primaryBrandId} ` +
+        `states NO leg — it cannot be priced (no funnel- or goal-keyed read exists), so no workflow ` +
+        `or audience is selected; running the configured workflow ${fallbackSlug}. State the ` +
+        `campaign's legKey.`,
+    );
+    return { workflowSlug: fallbackSlug, audienceId: null };
+  }
   try {
-    // A campaign that STATES A FUNNEL is never arbitrated: the customer funds each funnel
-    // separately, and that funding — not a cost ranking — decides which funnel is worked.
-    // Arbitration only answers for a campaign that sells through no sales funnel.
-    // A campaign that states a LEG is a sales campaign bought for that leg (wave C1: the leg, not
-    // the funnel, is what says so), so it is never arbitrated either — whatever funnel it carries.
-    if (!funnelKey && !legKey) {
-      const arbitration = await fetchGoalArbitration({ featureSlug, brandId: primaryBrandId, identity });
-      // The elected goal already determined this workflow — features-service ranked the goal's
-      // workflows itself, and which goal a brand optimizes for is its answer, not a cell of a
-      // grid we may re-argmin. So this leg is untouched: no audience is chosen here and
-      // /start-run picks one over the elected pairing's rows exactly as it always has.
-      // Null → no arbitration for this brand yet, fall through to the brand goal.
-      if (arbitration) return { workflowSlug: arbitration.workflowSlug, audienceId: null };
-    }
     // A campaign bought for a LEG is ranked on that leg's own outcome — the leg-keyed body, which
     // carries the model verdict too and is exactly what the dashboard's campaign Workflows page
     // ranks on. Naming the campaign names its offer, so a multi-offer brand is priced as well.
-    const eligibility = legKey
-      ? await readLegModelEligibility({ featureSlug, brandId: primaryBrandId, legKey, campaignId, identity })
-      : null;
-    let rows: ProjectionRow[];
-    if (legKey) {
-      // A LEG campaign is ranked on the leg-keyed body and on nothing else — never the funnel it
-      // may still carry (wave C1). A read that failed (it already said why) or enumerated nothing
-      // leaves the pick on the campaign's configured workflow, the same fail-soft every other
-      // failure of this read takes: a selection optimization never blocks a run.
-      if (!eligibility || eligibility.rows.length === 0) {
-        console.warn(
-          `[campaign-service] leg-keyed workflow-projection for brand ${primaryBrandId} leg ` +
-            `${legKey} ${eligibility ? "enumerated NO rows" : "could not be read"} — running the ` +
-            `configured workflow ${fallbackSlug}.`,
-        );
-        return { workflowSlug: fallbackSlug, audienceId: null };
-      }
-      rows = eligibility.rows;
-    } else {
-      // No leg (the pre-leg population, and every feature that sells through no sales funnel):
-      // rank on the funnel-keyed body exactly as before. Only a campaign with no funnel needs a
-      // goal, and only the brand can answer it.
-      const goal: RuntimeGoal | null = funnelKey
-        ? null
-        : (await fetchBrandRuntimeContext(primaryBrandId, identity, offerId)).currentGoal;
-      const projection = await fetchWorkflowProjection({
-        featureSlug,
-        brandId: primaryBrandId,
-        funnelKey,
-        goal,
-        identity,
-      });
-      rows = funnelRows(projection, { brandId: primaryBrandId, featureSlug, legKey });
+    const eligibility = await readLegModelEligibility({
+      featureSlug,
+      brandId: primaryBrandId,
+      legKey,
+      campaignId,
+      identity,
+    });
+    // A read that failed (it already said why) or enumerated nothing leaves the pick on the
+    // campaign's configured workflow: a selection optimization never blocks a run.
+    if (!eligibility || eligibility.rows.length === 0) {
+      console.warn(
+        `[campaign-service] leg-keyed workflow-projection for brand ${primaryBrandId} leg ` +
+          `${legKey} ${eligibility ? "enumerated NO rows" : "could not be read"} — running the ` +
+          `configured workflow ${fallbackSlug}.`,
+      );
+      return { workflowSlug: fallbackSlug, audienceId: null };
     }
+    const rows = eligibility.rows;
     // Applied to the ROWS, so the pooled audience column and the cell argmin are computed over the
     // SAME set — an audience must never be judged on evidence produced by a workflow that can
     // never be served to it.

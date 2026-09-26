@@ -211,16 +211,12 @@ export async function reRunDueCampaigns(): Promise<number> {
           },
           // The claim above filters out the workflow-less rows, so this is always a real slug.
           fallbackSlug: campaign.workflowSlug!,
-          // Price the pick on the funnel the campaign STATES — the only word that separates the
-          // two meeting funnels. A campaign that states one is never goal-arbitrated.
-          funnelKey: campaign.funnelKey,
           // The LEG the campaign is bought for — what features-service's model rule is keyed on.
-          // A campaign that states none has no verdict to read and selects exactly as before.
+          // A campaign that states none is not selected: it runs its configured workflow, loudly.
           legKey: campaign.legKey,
           // Names the OFFER every brand-scoped read is priced on — a campaign sells exactly one.
           // Null on the pre-offer population keeps the brand-scoped read.
           campaignId: campaign.id,
-          offerId: campaign.offerId,
           requiredAudienceIds: campaign.audienceIds,
           excludedAudienceIds,
         });

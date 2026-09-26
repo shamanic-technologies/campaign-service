@@ -1,17 +1,15 @@
 import type { Campaign } from "../db/schema.js";
 import type { DownstreamIdentity } from "./downstream-headers.js";
-import { fetchBrandRuntimeContext } from "./brand-runtime-client.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import {
   fetchLegProjectionRows,
-  fetchWorkflowProjectionRows,
   serveableAudienceIdsInProjection,
 } from "./features-workflow-projection-client.js";
 
 /** The campaign fields the serveable-audience read needs. */
 export type ServeableAudienceCampaign = Pick<
   Campaign,
-  "id" | "orgId" | "funnelKey" | "offerId" | "legKey" | "audienceIds"
+  "id" | "orgId" | "legKey" | "audienceIds"
 >;
 
 /**
@@ -29,8 +27,8 @@ export type ServeableAudienceCampaign = Pick<
  *
  * Deliberately does NOT arbitrate, unlike /start-run. Audience MEMBERSHIP does not depend on what
  * the campaign sells (features-service enumerates every active audience of the brand per dynasty
- * either way; the funnel/goal only changes the cost metric attached to each row), so asking on the
- * campaign's own funnel returns the same set. If that ever stopped holding this would see a SUPERSET,
+ * either way; the leg only changes the cost metric attached to each row), so asking on the
+ * campaign's own leg returns the same set. If that ever stopped holding this would see a SUPERSET,
  * which is the safe direction for both callers: it can only keep a campaign alive or bring one
  * back, never stop one wrongly.
  *
@@ -43,30 +41,23 @@ export async function serveableAudienceIdsForCampaign(
   identity: DownstreamIdentity,
 ): Promise<string[]> {
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
-  // A campaign that states its LEG reads the leg-keyed body — never the funnel it may still carry
-  // (wave C1). Membership is the same set either way (every active audience per dynasty); only the
-  // cost attached to each row differs, and this read ignores cost. The body is UNFILTERED by the
-  // leg's model rule, so the guard still sees the superset.
-  const rows = campaign.legKey
-    ? await fetchLegProjectionRows({
-        featureSlug,
-        brandId: identity.brandId,
-        legKey: campaign.legKey,
-        campaignId: campaign.id,
-        identity,
-      })
-    : await fetchWorkflowProjectionRows({
-        featureSlug,
-        brandId: identity.brandId,
-        funnelKey: campaign.funnelKey,
-        // A campaign that states its funnel is priced on it; only one that states none needs a
-        // goal, and only the brand can answer that. The campaign's OFFER names whose profile words
-        // the snapshot carries.
-        goal: campaign.funnelKey
-          ? null
-          : (await fetchBrandRuntimeContext(identity.brandId, identity, campaign.offerId)).currentGoal,
-        identity,
-      });
+  // The leg-keyed body is the only read left (wave C2). Membership is every active audience per
+  // dynasty whatever the leg prices on, and this read ignores cost; the body is UNFILTERED by the
+  // leg's model rule, so the guard still sees the superset. A campaign that states NO leg has no
+  // read to ask — that is not a verdict either way, so it THROWS like any unreadable answer.
+  if (!campaign.legKey) {
+    throw new Error(
+      `[campaign-service] campaign ${campaign.id} states NO leg — no funnel- or goal-keyed read ` +
+        "exists (wave C2), so whether it has a serveable audience cannot be asked",
+    );
+  }
+  const rows = await fetchLegProjectionRows({
+    featureSlug,
+    brandId: identity.brandId,
+    legKey: campaign.legKey,
+    campaignId: campaign.id,
+    identity,
+  });
   return serveableAudienceIdsInProjection(rows, {
     requiredAudienceIds: campaign.audienceIds ?? undefined,
     excludedAudienceIds,
