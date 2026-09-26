@@ -83,10 +83,11 @@ export const CampaignSchema = z.object({
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),
   status: z.string(),
-  // WHY the campaign stopped: audience_exhausted | max_leads_reached | manual | org_teardown.
+  // WHY the campaign stopped: manual (a person stopped it) | org_teardown | payment_declined
+  // (billing cannot charge the org's card — the customer must pay what is owed and add a working
+  // card, then start it again; until then every start is refused with reason payment_declined).
   // Null on an ongoing campaign, and on every campaign stopped before the reason was recorded.
-  // A campaign that stopped because it ran out of people to contact (audience_exhausted) comes
-  // back by itself once the brand has somebody to contact again; no other reason does.
+  // Nothing restarts a stopped campaign automatically.
   stopReason: z.string().nullable(),
   nextRunAt: z.string().nullable(),
   notifyFrequency: z.string().nullable(),
