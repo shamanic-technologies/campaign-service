@@ -30,7 +30,7 @@ export const campaigns = pgTable(
 
     // The brand this campaign works — HALF THE IDENTITY KEY, and the reason it exists beside the
     // array above: no unique index can span a `text[]`, so Postgres could not police
-    // one-campaign-per-(org, brand, funnel, channel) at all while the brand was only ever an array.
+    // one-campaign-per-(org, brand, offer, leg, channel) at all while the brand was only ever an array.
     // The reality is one brand per campaign; this states it. Written once at creation from
     // brandIds[0] (see campaignIdentityColumns) — the historical multi-brand rows are all stopped.
     brandId: text("brand_id"),
@@ -105,83 +105,21 @@ export const campaigns = pgTable(
     // against runs-service *CostInUsdCents and billing's brand dailyBudgetCents — no ×100.
     dailyBudgetCents: integer("daily_budget_cents"),
 
-    // The sales funnel this campaign works — the ONE word for what this campaign sells, in
-    // brand-service's canonical vocabulary (sales_meetings_from_conversation |
-    // sales_meetings_from_website | website_purchases | form_magnet). A consumer reads what a
-    // campaign buys HERE and needs no translation table: `goal` above cannot tell a meeting won
-    // from a reply apart from one won on the website, and that is why the goal set was retired.
-    //
-    // A customer funds each of a brand's funnels separately (billing-service
-    // brand_funnel_budgets), so a funded funnel gets its OWN campaign: the cost ledger is already
-    // keyed on campaignId, which makes "how much did this funnel spend today" answerable without
-    // a new attribution dimension.
-    //
-    // NULL = not funnel-scoped. Every campaign that predates per-funnel funding keeps NULL and
-    // paces exactly as before (own dailyBudgetCents, else the brand-level daily budget — which
-    // billing still answers as the SUM of the per-funnel ceilings). A brand that never declares
-    // per-funnel ceilings never grows funnel campaigns.
-    //
-    // A funnel campaign also carries that funnel's goal in `goal` — a legacy alias of the same
-    // statement, for consumers that have not migrated — which is why it is never goal-arbitrated:
-    // the customer's funding decided which funnel runs, so features-service is asked only for the
-    // best workflow and the audience evidence.
-    //
-    // Values are canonical past migration 0043; `toFunnelKey` in sales-funnel-vocabulary.ts still
-    // resolves the pre-rename spellings, because billing-service emits them to this day.
+    // RETIRED, READ-ONLY (wave C2). Nothing in this service reads or writes it and no route accepts
+    // it; the stored value is still served on the campaign row for the readers that have not
+    // migrated off it (lead-service, instantly-service, workflow-service's ai-meeting-booking DAG,
+    // features-service). Dropped once they have — see migration 0058 for what went already.
     funnelKey: text("funnel_key"),
 
-    // The OFFER this campaign sells — a brand-service offer UUID.
-    //
-    // An offer is one distinct thing a brand sells: its value proposition plus the sales funnels
-    // it sells through. A brand selling a $200 self-serve plan and a $20k enterprise contract has
-    // two offers, and without this column its two campaigns — same funnel, same channel — are the
-    // same row to every reader, in the data, in the money attribution and on the customer's
-    // screen. It is the dimension that separates them.
-    //
-    // brand-service OWNS the entity; this column carries its id and nothing else. No offer
-    // vocabulary, table or enum exists here and none is to be introduced — the same posture this
-    // service holds for the goal and the acquisition channel.
-    //
-    // NEVER derived. A funnel does not name an offer (several offers legitimately sell through
-    // one funnel, which is the entire reason this dimension exists), and neither does the goal or
-    // the workflow. It is stated by the creator or it is NULL.
-    //
-    // NULL = the campaign states no offer, and behaves exactly as it did before this column
-    // existed: nothing reads it for pacing, funding, selection or identity. Stating an offer is
-    // optional on create while callers migrate; it becomes required in a later wave, and only
-    // then, because requiring it now would break every live caller.
+    // The OFFER this campaign sells — a brand-service offer UUID. A campaign is (offer x leg x
+    // acquisition channel), which is what billing funds it at. brand-service OWNS the entity; this
+    // column carries its id and nothing else. NEVER derived: it is stated by the creator or NULL.
     offerId: text("offer_id"),
 
-    // The single funnel LEG this campaign is bought for — features-service's canonical leg id.
-    //
-    // A sales funnel is a chain of steps and the thing a customer BUYS is one of its LEGS: the leg
-    // that takes a lead sitting at one step and moves it to the next. Until now a campaign stated a
-    // FUNNEL and the leg it performs was derived downstream, by intersecting that funnel with the
-    // legs its acquisition channel can produce. That derivation cannot survive the funnel leaving a
-    // campaign's identity: two DIFFERENT legs can land on the SAME step (a booked meeting is
-    // reached from a positive reply and from a website visit), so the step a leg lands on does not
-    // identify the leg. This column is what identifies it, on its own, with no funnel to
-    // disambiguate it.
-    //
-    // features-service OWNS the vocabulary and MINTS the identifier (its `lib/funnel-legs.ts`,
-    // published on `GET /public/channels` as `legs[].legKey`). This column carries that value and
-    // nothing else. No leg vocabulary, enum or list exists here and none is to be introduced — the
-    // same posture this service holds for the goal, the offer and the acquisition channel.
-    //
-    // OPAQUE, and never PARSED. The two steps a leg connects ride BESIDE the identifier on the
-    // catalogue (`fromStep` / `toStep`), so a consumer that wants them reads them there. Splitting
-    // the string is how a second, drifting vocabulary starts. An ENTRY leg — one that starts a
-    // funnel, where the lead was on no funnel before — carries a plain identifier like every other
-    // one, so there is no special case to write here either.
-    //
-    // NEVER derived. Not from the funnel (several legs sell one funnel and one leg belongs to
-    // several funnels, which is the whole reason this word exists), not from the channel, not from
-    // the workflow. It is stated by the creator or it is NULL.
-    //
-    // NULL = the campaign states no leg and behaves exactly as it did before this column existed:
-    // nothing reads it for pacing, funding, provisioning, scheduling, serialization or identity.
-    // Stating one is optional while callers migrate; the funnel is NOT removed and the uniqueness
-    // index is NOT widened by the ship that added this — a later one does both, together.
+    // The single LEG this campaign is bought for — features-service's canonical leg id (published
+    // on `GET /public/channels` as `legs[].legKey`): the move a lead makes from one step to the
+    // next. OPAQUE and never parsed (the two steps ride beside it on the catalogue), never derived.
+    // Stated by the creator or NULL; required at create for the sales family.
     legKey: text("leg_key"),
 
     // Volume limit (optional, total leads across all runs)
@@ -221,7 +159,6 @@ export const campaigns = pgTable(
   (table) => [
     index("idx_campaigns_org").on(table.orgId),
     uniqueIndex("uniq_campaigns_org_name").on(table.orgId, table.name),
-    index("idx_campaigns_org_feature_funnel").on(table.orgId, table.featureSlug, table.funnelKey),
     // Serves "what did this offer buy" — the per-offer attribution read the column exists for.
     // Partial: a campaign that states no offer is not part of any offer's answer.
     index("idx_campaigns_org_offer")
@@ -237,25 +174,14 @@ export const campaigns = pgTable(
     index("idx_campaigns_resumable")
       .on(table.stopReason, table.updatedAt)
       .where(sql`${table.status} = 'stopped' and ${table.stopReason} is not null`),
-    // A campaign is unique on (org, brand, sales funnel, OFFER, LEG, acquisition channel) —
-    // migration 0044, widened by 0055 (leg) and 0056 (offer). Scoped to `ongoing`: a stopped row is
-    // history, not a competitor for the brand's turn. The leg is part of it because a campaign
-    // bought for one leg is not the campaign bought for another; the OFFER is part of it for the
-    // same reason one level up — a customer funds their money per offer (billing keys its daily
-    // ceiling on the offer), so two offers worked through the same (funnel, channel, leg) are two
-    // ceilings and must be able to be two campaigns. Without it the second offer is funded and
-    // never provisioned, silently.
-    // `coalesce(..., '')` is load-bearing on ALL THREE — Postgres treats NULLs as distinct, so
-    // without it a brand could grow unlimited funnel-less (or leg-less, or offer-less) campaigns on
-    // one channel. It also makes each widening a pure loosening: every row that states no offer or
-    // no leg keys byte-identically to the way it did before the column existed. The NAME still says
-    // funnel_channel on purpose — the funnel is still part of this identity, and the ship that
-    // removes it renames the index.
-    uniqueIndex("uniq_campaigns_org_brand_funnel_channel")
+    // A campaign is unique on (org, brand, OFFER, LEG, acquisition channel) — migration 0058.
+    // Scoped to `ongoing`: a stopped row is history, not a competitor for the brand's turn.
+    // `coalesce(..., '')` is load-bearing — Postgres treats NULLs as distinct, so without it a
+    // brand could grow unlimited offer-less or leg-less campaigns on one channel.
+    uniqueIndex("uniq_campaigns_org_brand_offer_leg_channel")
       .on(
         table.orgId,
         table.brandId,
-        sql`coalesce(${table.funnelKey}, '')`,
         sql`coalesce(${table.offerId}, '')`,
         sql`coalesce(${table.legKey}, '')`,
         table.acquisitionChannel,
@@ -419,31 +345,3 @@ export type CampaignAudienceAvailability = typeof campaignAudienceAvailability.$
 export type NewCampaignAudienceAvailability = typeof campaignAudienceAvailability.$inferInsert;
 
 
-// The funnel a campaign runs is a stored fact, derived from what the campaign itself said. When
-// what it said names no single funnel — a brand selling through several under one `combinedSales`
-// goal — the funnel stays NULL rather than being guessed, and only the OWNER can answer it.
-//
-// This table is the record of those answers: one row per campaign an owner decision wrote, holding
-// the value it replaced. It is what makes such a write auditable and reversible — an operator reads
-// back exactly which rows a decision touched and can restore `previous_funnel_key` — and what makes
-// re-running one a no-op. Nothing in the runtime reads it: the funnel itself lives on the campaign
-// row, as it does for every other campaign.
-export const campaignFunnelOwnerDecisions = pgTable(
-  "campaign_funnel_owner_decisions",
-  {
-    campaignId: text("campaign_id").primaryKey(),
-    orgId: text("org_id").notNull(),
-    brandId: text("brand_id"),
-    previousFunnelKey: text("previous_funnel_key"),
-    funnelKey: text("funnel_key").notNull(),
-    decidedBy: text("decided_by").notNull(),
-    decidedOn: date("decided_on").notNull(),
-    // The migration (or script) that applied the decision — the handle an operator undoes by.
-    source: text("source").notNull(),
-    appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [index("idx_cfod_source").on(table.source)]
-);
-
-export type CampaignFunnelOwnerDecision = typeof campaignFunnelOwnerDecisions.$inferSelect;
-export type NewCampaignFunnelOwnerDecision = typeof campaignFunnelOwnerDecisions.$inferInsert;

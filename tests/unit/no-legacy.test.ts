@@ -269,18 +269,27 @@ describe('No Legacy Patterns - CRITICAL', () => {
     expect(dbSchema).toMatch(/goal:\s*text\("goal"\)/);
   });
 
-  it('should emit only the canonical funnel vocabulary from the funnel map', () => {
-    // The pre-rename spellings are ACCEPTED forever on the way in (billing still sends them) and
-    // never emitted. A canonical key is what gets stored and what a consumer reads.
-    const vocab = fs.readFileSync(path.join(srcDir, 'lib/sales-funnel-vocabulary.ts'), 'utf-8');
-    const canonical = vocab.slice(
-      vocab.indexOf('export const SALES_FUNNEL_KEYS'),
-      vocab.indexOf('const LEGACY_FUNNEL_KEYS'),
-    );
-
-    for (const preRename of ['visit_form', 'reply_meeting', 'visit_meeting', 'visit_signup']) {
-      expect(canonical).not.toContain(preRename);
+  it('wave C2: no CODE in src stores, reads, serves or accepts a sales funnel', () => {
+    // The funnel left campaign-service's model: a campaign is (offer x leg x channel) and billing
+    // funds it at that grain. The ONLY survivors are the `funnel_key` column and its echo on the
+    // campaign row (schema.ts / CampaignSchema), kept READ-ONLY for the services that still read
+    // `campaign.funnelKey` off a campaign. Comments may explain the removal; code may not use it.
+    const allowed = new Set([
+      'db/schema.ts::funnelKey: text("funnel_key"),',
+      'schemas.ts::funnelKey: z.string().nullable(),',
+    ]);
+    const offenders: string[] = [];
+    for (const file of getAllTsFiles(srcDir)) {
+      const rel = path.relative(srcDir, file);
+      fs.readFileSync(file, 'utf-8').split('\n').forEach((line, i) => {
+        const code = line.trim();
+        if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return;
+        if (!/funnel/i.test(code)) return;
+        if (allowed.has(`${rel}::${code}`)) return;
+        offenders.push(`${rel}:${i + 1}  ${code.slice(0, 100)}`);
+      });
     }
+    expect(offenders, `Funnel code left in src:\n${offenders.join('\n')}`).toEqual([]);
   });
 
   it('should NOT have brandUrl query parameter filtering in routes', () => {

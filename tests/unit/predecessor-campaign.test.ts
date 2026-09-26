@@ -44,7 +44,6 @@ const OTHER_OFFER = "9f0d1c22-0000-4000-8000-000000000004";
 const ENTRY_LEG = "start_to_" + "conversation";
 const CONTINUING_LEG = "conversation" + "_to_" + ["meeting", "booked"].join("_");
 const LATER_LEG = ["meeting", "booked"].join("_") + "_to_" + ["meeting", "attended"].join("_");
-const FUNNEL = "sales_meetings_from_conversation";
 
 function campaign(over: Record<string, unknown> = {}) {
   return {
@@ -54,7 +53,6 @@ function campaign(over: Record<string, unknown> = {}) {
     brandId: BRAND,
     brandIds: [BRAND],
     offerId: OFFER,
-    funnelKey: FUNNEL,
     legKey: CONTINUING_LEG,
     acquisitionChannel: "ai_meeting_booking",
     featureSlug: "ai-meeting-booking",
@@ -87,19 +85,16 @@ function catalogueAnswers() {
         legKey: ENTRY_LEG,
         fromStepKey: null,
         toStepKey: "conversation",
-        funnelKeys: new Set([FUNNEL, "sales_from_conversation"]),
       },
       {
         legKey: CONTINUING_LEG,
         fromStepKey: "conversation",
         toStepKey: "meeting_booked",
-        funnelKeys: new Set([FUNNEL]),
       },
       {
         legKey: LATER_LEG,
         fromStepKey: "meeting_booked",
         toStepKey: "meeting_attended",
-        funnelKeys: new Set([FUNNEL, "sales_meetings_from_website"]),
       },
     ],
   });
@@ -152,7 +147,7 @@ describe("resolvePredecessorCampaign", () => {
     expect(out.predecessor?.status).toBe("stopped");
   });
 
-  it("answers a named ABSENCE for a campaign at the first leg of its funnel", async () => {
+  it("answers a named ABSENCE for a campaign at the first leg of a journey", async () => {
     mockFindFirst.mockResolvedValue(campaign({ legKey: ENTRY_LEG }));
 
     const out = await resolvePredecessorCampaign("f7b1b610-0000-4000-8000-000000000011");
@@ -172,29 +167,12 @@ describe("resolvePredecessorCampaign", () => {
     expect(out.precedingLegKeys).toEqual([ENTRY_LEG]);
   });
 
-  it("hands back the sibling of this offer whatever funnel it carries — the chain is walked on (offer, leg) (wave C1)", async () => {
+  it("never serves a funnel", async () => {
     mockFindFirst.mockResolvedValue(campaign());
-    mockFindMany.mockResolvedValue([sibling({ funnelKey: "website_purchases" })]);
+    mockFindMany.mockResolvedValue([sibling()]);
 
     const out = await resolvePredecessorCampaign("8c748ddd-0000-4000-8000-000000000010");
-    expect(out.predecessor?.campaignId).toBe("f7b1b610-0000-4000-8000-000000000011");
-    expect(out.absence).toBeNull();
-  });
-
-  it("resolves a campaign that states NO funnel exactly like one that does", async () => {
-    mockFindFirst.mockResolvedValue(campaign({ funnelKey: null }));
-    mockFindMany.mockResolvedValue([sibling({ funnelKey: null })]);
-
-    const out = await resolvePredecessorCampaign("8c748ddd-0000-4000-8000-000000000010");
-    expect(out.predecessor?.campaignId).toBe("f7b1b610-0000-4000-8000-000000000011");
-  });
-
-  it("canonicalizes the funnel on BOTH sides, so a pre-rename spelling still matches", async () => {
-    mockFindFirst.mockResolvedValue(campaign({ funnelKey: "reply_meeting" }));
-    mockFindMany.mockResolvedValue([sibling({ funnelKey: FUNNEL })]);
-
-    const out = await resolvePredecessorCampaign("8c748ddd-0000-4000-8000-000000000010");
-    expect(out.funnelKey).toBe(FUNNEL);
+    expect(out).not.toHaveProperty("funnelKey");
     expect(out.predecessor?.campaignId).toBe("f7b1b610-0000-4000-8000-000000000011");
   });
 

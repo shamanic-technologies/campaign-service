@@ -15,7 +15,7 @@ const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const BRAND = "11111111-1111-4111-8111-111111111111";
 const BRAND_2 = "22222222-2222-4222-8222-222222222222";
 
-/** billing-service's per-funnel budget read, as it comes off the wire. */
+/** billing-service's per-campaign budget read, as it comes off the wire. */
 function billingPayload(body: unknown) {
   return { ok: true, json: async () => body } as unknown as Response;
 }
@@ -37,11 +37,11 @@ describe("Brand spendable budget", () => {
     await closeDb();
   });
 
-  it("reports configured money with nothing running when the funded funnel has no campaign", async () => {
+  it("reports configured money with nothing running when the funded ceiling has no campaign", async () => {
     fetchMock.mockResolvedValue(billingPayload({
       brandId: BRAND,
       dailyBudgetCents: "5000",
-      funnels: [{ funnelKey: "reply_meeting", dailyBudgetCents: "5000" }],
+      campaigns: [{ offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "5000" }],
     }));
 
     const res = await request(app)
@@ -55,14 +55,15 @@ describe("Brand spendable budget", () => {
     expect(res.body.campaigns).toEqual([]);
   });
 
-  it("counts only the funnel whose campaign is ongoing", async () => {
+  it("counts only the ceiling whose campaign is ongoing", async () => {
     const orgId = "org-partly-running";
     await insertTestCampaign(orgId, {
       brandIds: [BRAND],
       brandId: BRAND,
       featureSlug: "sales-cold-email-outreach",
       acquisitionChannel: "cold_email",
-      funnelKey: "sales_meetings_from_conversation",
+      offerId: "33333333-3333-4333-8333-333333333333",
+      legKey: "start_to_conversation",
       status: "ongoing",
     });
     await insertTestCampaign(orgId, {
@@ -70,16 +71,17 @@ describe("Brand spendable budget", () => {
       brandId: BRAND,
       featureSlug: "sales-cold-email-outreach",
       acquisitionChannel: "cold_email",
-      funnelKey: "website_purchases",
+      offerId: "33333333-3333-4333-8333-333333333333",
+      legKey: "start_to_website_visit",
       status: "stopped",
     });
 
     fetchMock.mockResolvedValue(billingPayload({
       brandId: BRAND,
       dailyBudgetCents: "9000",
-      funnels: [
-        { funnelKey: "reply_meeting", dailyBudgetCents: "4000" },
-        { funnelKey: "visit_signup", dailyBudgetCents: "5000" },
+      campaigns: [
+        { offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "4000" },
+        { offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_website_visit", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "5000" },
       ],
     }));
 
@@ -119,7 +121,8 @@ describe("Brand spendable budget", () => {
       brandId: BRAND,
       featureSlug: "sales-cold-email-outreach",
       acquisitionChannel: "cold_email",
-      funnelKey: "sales_meetings_from_conversation",
+      offerId: "33333333-3333-4333-8333-333333333333",
+      legKey: "start_to_conversation",
       status: "ongoing",
     });
 
@@ -128,12 +131,12 @@ describe("Brand spendable budget", () => {
       if (orgId === orgA) {
         return billingPayload({
           dailyBudgetCents: "4000",
-          funnels: [{ funnelKey: "reply_meeting", dailyBudgetCents: "4000" }],
+          campaigns: [{ offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "4000" }],
         });
       }
       return billingPayload({
         dailyBudgetCents: "3000",
-        funnels: [{ funnelKey: "reply_meeting", dailyBudgetCents: "3000" }],
+        campaigns: [{ offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" }],
       });
     });
 

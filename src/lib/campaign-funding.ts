@@ -1,36 +1,23 @@
 import type { IdentityHeaders } from "@distribute/runs-client";
 import {
-  channelCeilingCents,
-  legCeilingCents,
-  fetchFunnelBudgets,
-  offerCeilingCents,
-  offerLegCeilingCents,
-  type FunnelBudgetsRead,
-} from "./funnel-budget-client.js";
-import { toFunnelKey } from "./sales-funnel-vocabulary.js";
+  campaignCeilingCents,
+  fetchCampaignBudgets,
+  type CampaignBudgetsRead,
+} from "./campaign-budget-client.js";
 
 /**
  * THE definition of "is this campaign funded" — the ONE place the platform answers it.
  *
- * A campaign is eligible to run when the customer's money says so, and nowhere else. There used
- * to be a second answer: `brand_pause.paused`, a brand-wide flag this service stored and the
- * scheduler joined against. The customer surface that wrote it was deleted months ago (a customer
- * stops a funnel by dropping its ceiling to zero), so it became a source of truth nobody could
- * change: 27 brands sat stored-paused, 10 of them funded, holding 11 ongoing campaigns that could
- * never be claimed and had no API path back. Two representations of one fact is what produced
- * that, so there is one now, and it is billing's.
+ * A campaign is eligible to run when the customer's money says so, and nowhere else. billing
+ * states that money per campaign — (offer x leg x acquisition channel) — and this reads it.
  *
- * The precedence is gate-check's, exactly — the campaign's OWN daily budget, else its own (funnel,
- * acquisition channel, offer) triple's ceiling, else its (funnel, acquisition channel) pair's, else
- * its funnel's, else the brand's daily budget —
- * because a campaign the gate would refuse to let spend must not be handed a turn, and a campaign
- * the gate WOULD let spend must not be held.
+ * The precedence is gate-check's, exactly — the campaign's OWN daily budget, else its own
+ * (offer, leg, channel) ceiling, else (a brand whose money is not split per campaign at all) the
+ * brand's pot — because a campaign the gate would refuse to let spend must not be handed a turn,
+ * and a campaign the gate WOULD let spend must not be held.
  *
- * A ceiling that was never stated is NOT "unbounded", it is "unfunded". That is the one place
- * this differs from what the gate used to do: `brandDailyBudgetBlock` read a null brand budget as
- * "no cap this tick" and let the campaign run, which is how two brands funding nothing at all
- * kept sending against no ceiling. Funding is what makes a campaign eligible; the absence of
- * funding cannot be the thing that removes the limit.
+ * A ceiling that was never stated is NOT "unbounded", it is "unfunded". Funding is what makes a
+ * campaign eligible; the absence of funding cannot be the thing that removes the limit.
  */
 export type FundingVerdict =
   | { funded: true; ceilingCents: number }
@@ -43,168 +30,51 @@ export type FundingVerdict =
 export function fundingFromBudgets(
   campaign: {
     dailyBudgetCents?: number | null;
-    funnelKey?: string | null;
-    /** The acquisition CHANNEL this campaign works its funnel through — a feature slug. */
+    /** The acquisition CHANNEL this campaign works — a feature slug. */
     featureSlug?: string | null;
-    /**
-     * The OFFER this campaign sells — brand-service's id, carried and never derived. Null is the
-     * pre-offer population and paces on the pair figure exactly as it always did.
-     */
+    /** The OFFER this campaign sells — brand-service's id, carried and never derived. */
     offerId?: string | null;
-    /**
-     * The single funnel LEG this campaign was bought for — features-service's identifier, carried
-     * and never derived. Null is the pre-leg population and paces on the offer figure exactly as
-     * it always did.
-     */
+    /** The single LEG this campaign was bought for — features-service's id, carried and never derived. */
     legKey?: string | null;
   },
-  budgets: Extract<FunnelBudgetsRead, { ok: true }>,
+  budgets: Extract<CampaignBudgetsRead, { ok: true }>,
 ): FundingVerdict {
-  // The campaign's own figure is a MIRROR of its funnel's ceiling (gate-check is the first node
-  // of every run and cannot read billing hot), so when it is stated it is the answer.
+  // The campaign's own figure, when stated, is the answer (gate-check is the first node of every
+  // run and reads the same column).
   if (campaign.dailyBudgetCents !== null && campaign.dailyBudgetCents !== undefined) {
     return campaign.dailyBudgetCents > 0
       ? { funded: true, ceilingCents: campaign.dailyBudgetCents }
       : { funded: false, reason: "its own daily budget is zero" };
   }
 
-  // A campaign that states its LEG is identified by (offer, leg, channel), and that is what it is
-  // paced on — whatever funnel it may still carry. The funnel is leaving the model (wave C1): a
-  // leg belongs to several funnels, so the funnel cannot say which money is this campaign's, and
-  // nothing here reads it for a campaign that can say more. Measured on every live campaign
-  // (2026-09-25, 22 of 22): the same verdict AND the same ceiling as the funnel-keyed precedence.
-  // A brand whose money names no leg at all falls through to the brand pot below, exactly as the
-  // funnel precedence did for a brand funding nothing per funnel.
-  if (campaign.legKey) {
-    const leg = offerLegCeilingCents(budgets, campaign.featureSlug, campaign.offerId, campaign.legKey);
-    if (leg.grain === "offer_leg") {
-      if (leg.cents === null) {
-        return {
-          funded: false,
-          reason: `leg ${campaign.legKey} is not funded for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
-        };
-      }
-      return leg.cents > 0
-        ? { funded: true, ceilingCents: leg.cents }
-        : {
-            funded: false,
-            reason: `leg ${campaign.legKey} is funded at zero for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
-          };
-    }
+  const ceiling = campaignCeilingCents(budgets, campaign);
+  if (ceiling.grain === "brand") {
+    if (ceiling.cents === null) return { funded: false, reason: "the brand has no daily budget set" };
+    return ceiling.cents > 0
+      ? { funded: true, ceilingCents: ceiling.cents }
+      : { funded: false, reason: "the brand's daily budget is zero" };
   }
 
-  // The pre-leg population only (no live campaign, 2026-09-25): a campaign that states no leg is
-  // still paced on the funnel it states, until wave C2 retires both.
-  if (campaign.funnelKey && budgets.funnels.length > 0) {
-    // Both sides canonicalised — billing still emits the pre-rename spellings, so comparing raw
-    // tokens would read a fully funded funnel as unfunded and hold a campaign the customer pays
-    // for.
-    const funnelKey = toFunnelKey(campaign.funnelKey);
-
-    // The ceiling that binds THIS campaign is its own (funnel, channel) pair's, whenever billing
-    // states one: a funnel worked through two offers funds each separately, and holding both
-    // against the funnel TOTAL would let one spend the other's money. A funnel billing states no
-    // pair for falls through to the funnel figure below — that is every brand funding one channel
-    // per funnel, unchanged.
-    if (funnelKey) {
-      // And the ceiling that binds it before THAT is its own OFFER's, whenever billing scopes any
-      // of this brand's money to an offer: one funnel worked through one channel for two offers is
-      // served as a single summed pair figure, so pacing both campaigns on it hands each the money
-      // the other was funded for. A campaign stating no offer, or a brand whose ceilings name
-      // none, answers `none` here and falls through to the pair figure unchanged.
-      // And one grain below the offer: what the customer BUYS is a LEG, and one (funnel, channel,
-      // offer) can be worked for two legs at once — billing serves the offer figure as their SUM,
-      // so pacing both campaigns on it hands each the money the other was funded for. A campaign
-      // stating no leg, or a brand whose ceilings name none, answers `none` here and falls through
-      // to the offer figure unchanged.
-      const leg = legCeilingCents(
-        budgets,
-        funnelKey,
-        campaign.featureSlug,
-        campaign.offerId,
-        campaign.legKey,
-      );
-      if (leg.grain === "leg") {
-        if (leg.cents === null) {
-          return {
-            funded: false,
-            reason: `leg ${campaign.legKey} is not funded on channel ${campaign.featureSlug ?? "none"}`,
-          };
-        }
-        return leg.cents > 0
-          ? { funded: true, ceilingCents: leg.cents }
-          : {
-              funded: false,
-              reason: `leg ${campaign.legKey} is funded at zero on channel ${campaign.featureSlug ?? "none"}`,
-            };
-      }
-
-      const offer = offerCeilingCents(budgets, funnelKey, campaign.featureSlug, campaign.offerId);
-      if (offer.grain === "offer") {
-        if (offer.cents === null) {
-          return {
-            funded: false,
-            reason: `funnel ${campaign.funnelKey} is not funded for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
-          };
-        }
-        return offer.cents > 0
-          ? { funded: true, ceilingCents: offer.cents }
-          : {
-              funded: false,
-              reason: `funnel ${campaign.funnelKey} is funded at zero for offer ${campaign.offerId ?? "none"} on channel ${campaign.featureSlug ?? "none"}`,
-            };
-      }
-
-      const pair = channelCeilingCents(budgets, funnelKey, campaign.featureSlug);
-      if (pair.grain === "pair") {
-        if (pair.cents === null) {
-          return {
-            funded: false,
-            reason: `funnel ${campaign.funnelKey} is not funded for channel ${campaign.featureSlug ?? "none"}`,
-          };
-        }
-        return pair.cents > 0
-          ? { funded: true, ceilingCents: pair.cents }
-          : {
-              funded: false,
-              reason: `funnel ${campaign.funnelKey} is funded at zero for channel ${campaign.featureSlug ?? "none"}`,
-            };
-      }
-    }
-
-    const ceilingCents = funnelKey
-      ? budgets.funnels.find((f) => f.funnelKey === funnelKey)?.dailyBudgetCents ?? null
-      : null;
-    if (ceilingCents === null) return { funded: false, reason: `funnel ${campaign.funnelKey} is not funded` };
-    return ceilingCents > 0
-      ? { funded: true, ceilingCents }
-      : { funded: false, reason: `funnel ${campaign.funnelKey} is funded at zero` };
-  }
-
-  // A brand with ONE pot — and a funnel campaign of a brand billing reports no per-funnel
-  // ceilings for, which paces on that same pot. Stamping the funnel fleet-wide must not turn a
-  // brand that never split its budget into an unfunded one.
-  const brandCents = budgets.brandDailyBudgetCents;
-  if (brandCents === null) return { funded: false, reason: "the brand has no daily budget set" };
-  return brandCents > 0
-    ? { funded: true, ceilingCents: brandCents }
-    : { funded: false, reason: "the brand's daily budget is zero" };
+  const scope =
+    `offer ${campaign.offerId ?? "none"}, leg ${campaign.legKey ?? "none"}, channel ${campaign.featureSlug ?? "none"}`;
+  if (ceiling.cents === null) return { funded: false, reason: `campaign (${scope}) is not funded` };
+  return ceiling.cents > 0
+    ? { funded: true, ceilingCents: ceiling.cents }
+    : { funded: false, reason: `campaign (${scope}) is funded at zero` };
 }
 
 /**
  * Read the ceilings and decide, for ONE campaign.
  *
  * Fail-CLOSED: billing not answering leaves the campaign held. That is the same stance the gate
- * takes on the same read ("Funnel daily budget unavailable"), so firing a run during a billing
- * outage could only burn a run that the gate is about to refuse anyway.
+ * takes on the same read, so firing a run during a billing outage could only burn a run that the
+ * gate is about to refuse anyway.
  */
 export async function campaignFunding(
   campaign: {
     dailyBudgetCents?: number | null;
-    funnelKey?: string | null;
     featureSlug?: string | null;
     offerId?: string | null;
-    /** The LEG it was bought for — the finest grain billing stores, so the first one asked. */
     legKey?: string | null;
   },
   brandId: string,
@@ -217,7 +87,7 @@ export async function campaignFunding(
       : { funded: false, reason: "its own daily budget is zero" };
   }
 
-  const budgets = await fetchFunnelBudgets(brandId, identity);
+  const budgets = await fetchCampaignBudgets(brandId, identity);
   if (!budgets.ok) return { funded: false, reason: "billing did not answer the brand's budget" };
   return fundingFromBudgets(campaign, budgets);
 }
@@ -225,14 +95,10 @@ export async function campaignFunding(
 /**
  * Is this brand HELD — i.e. is there nothing the customer funds for it?
  *
- * This is what `GET /brands/:brandId/pause` now answers. A brand is held when no sales funnel of
- * it carries a positive ceiling AND its brand-level pot is not positive either. Funding any one
- * funnel releases it, with no other step.
+ * This is what `GET /brands/:brandId/pause` answers. A brand is held when no campaign ceiling of it
+ * is positive AND its brand-level pot is not positive either. Funding any one campaign releases it.
  */
-export function brandHeldFromBudgets(budgets: Extract<FunnelBudgetsRead, { ok: true }>): boolean {
-  // Any positive ceiling at ANY grain billing serves funds the brand. Every coarser grain is a sum
-  // of the finer rows, so this is the same answer the funnel sums gave, read without the funnel.
-  const rows = [...budgets.funnels, ...budgets.channels, ...budgets.offers, ...(budgets.legs ?? [])];
-  if (rows.some((r) => r.dailyBudgetCents > 0)) return false;
+export function brandHeldFromBudgets(budgets: Extract<CampaignBudgetsRead, { ok: true }>): boolean {
+  if (budgets.campaigns.some((e) => e.dailyBudgetCents > 0)) return false;
   return !(budgets.brandDailyBudgetCents !== null && budgets.brandDailyBudgetCents > 0);
 }

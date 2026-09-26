@@ -1,8 +1,4 @@
-import {
-  toFunnelKey,
-  type SalesFunnelKey,
-} from "./sales-funnel-vocabulary.js";
-import type { FunnelBudgetsRead } from "./funnel-budget-client.js";
+import { ceilingEntriesOf, type CampaignBudgetsRead } from "./campaign-budget-client.js";
 
 /**
  * "Of the money this brand has CONFIGURED, how much is attached to a campaign that is actually
@@ -10,66 +6,46 @@ import type { FunnelBudgetsRead } from "./funnel-budget-client.js";
  *
  * Nobody could answer that from one service: billing-service knows what every ceiling is worth and
  * campaign-service is the only place that knows whether a campaign exists for it and whether that
- * campaign is ongoing. Every consumer was therefore reading billing's brand daily-budget figure —
- * the SUM of every configured ceiling regardless of whether anything is running behind it — so the
- * staff MRR figure read ~28% high (measured 2026-08-27: $138/day configured across 9 brands, ~$25
- * of it on funnels whose campaign is stopped or was never created, two brands with no campaign at
- * all), and "is this account active" was decided by a brand-level pause flag with no writer since
- * July. The dashboard patched it by fetching the campaign list and the per-funnel budgets and
- * joining them in the browser — duplicated in one app, absent in the other, unreachable from
- * features-service. The join belongs here.
+ * campaign is ongoing. The join belongs here.
  *
  * BOTH figures are served, never one. A campaign's own settings screen must still show the amount
  * the customer set even while it is paused, or it reads as zero and looks like the setting was
  * lost.
  *
  * NOTHING IS LEFT FOR A CONSUMER TO SUM. The brand total, each offer's total and each campaign's
- * total are all stated, alongside the individual ceiling rows that produced them — so a consumer
- * answers the same question for one offer or one campaign out of the SAME response, and can say
- * which campaigns contributed and which did not.
+ * total are all stated, alongside the individual ceiling entries that produced them.
  */
 
 /** A campaign of the (org, brand) pair, as this computation needs it. */
 export interface SpendableCampaign {
   id: string;
   status: string;
-  funnelKey: string | null;
   featureSlug: string | null;
   offerId: string | null;
-  /** The single funnel LEG this campaign was bought for — the grain it is funded at. */
+  /** The single LEG this campaign was bought for — the grain it is funded at. */
   legKey: string | null;
   createdAt: Date;
 }
 
 /**
- * WHICH billing grain the figures were computed at.
- *
- * billing serves the same money at five widths — per (funnel, channel, offer, LEG), per (funnel,
- * channel, offer), per (funnel, channel), per funnel, and one brand pot — and the coarser four are
- * SUMS of the finer, so exactly ONE of them may be counted or the same dollar is counted twice.
- * The finest one billing actually states is chosen, once, here.
- *
- * The LEG is the finest and it is the grain a campaign is BOUGHT at: one (funnel, channel, offer)
- * worked for two legs is TWO campaigns, so counting at the offer grain would find one campaign for
- * a row that funds two and report the other as running on nothing.
+ * WHICH billing grain the figures were computed at: `campaign` when billing states ceilings per
+ * (offer, leg, channel), `brand` when the brand has only its one pot, `none` when nothing was ever
+ * configured.
  */
-export type SpendableGrain = "leg" | "offer" | "channel" | "funnel" | "brand" | "none";
+export type SpendableGrain = "campaign" | "brand" | "none";
 
 /** One configured ceiling, and the campaign (if any) standing behind it. */
 export interface SpendableRow {
-  /** Canonical funnel key, or null at brand grain (one undifferentiated pot). */
-  funnelKey: SalesFunnelKey | null;
   /** The acquisition channel this ceiling funds — a features-service feature slug — or null. */
   featureSlug: string | null;
   /** The offer billing SCOPED this ceiling to, or null for a ceiling written before offers. */
   offerId: string | null;
-  /** The funnel LEG billing scoped this ceiling to, or null for a ceiling written before legs. */
+  /** The LEG billing scoped this ceiling to, or null for a ceiling written before legs. */
   legKey: string | null;
   /**
    * The offer this money actually works for: billing's when it states one, else the offer of the
-   * campaign standing behind it. Production still carries ceilings written before the offer level
-   * while every running campaign carries an offer, so grouping on `offerId` alone would file real,
-   * running money under "no offer" and it would appear on nobody's offer page.
+   * campaign standing behind it — so money written before the offer level is filed under the
+   * offer that spends it, not under "no offer".
    */
   resolvedOfferId: string | null;
   dailyBudgetCents: number;
@@ -84,10 +60,9 @@ export interface SpendableCampaignLine {
   campaignId: string;
   status: string;
   running: boolean;
-  funnelKey: string | null;
   featureSlug: string | null;
   offerId: string | null;
-  /** The single funnel LEG this campaign was bought for, or null when it states none. */
+  /** The single LEG this campaign was bought for, or null when it states none. */
   legKey: string | null;
   configuredDailyBudgetCents: number;
   runningDailyBudgetCents: number;
@@ -104,7 +79,7 @@ export interface SpendableBudget {
   orgId: string;
   brandId: string;
   grain: SpendableGrain;
-  /** Everything the customer has configured for this brand, at `grain`. */
+  /** Everything the customer has configured for this brand. */
   configuredDailyBudgetCents: number;
   /** The part of it attached to a campaign that is ongoing right now. */
   runningDailyBudgetCents: number;
@@ -114,7 +89,6 @@ export interface SpendableBudget {
 }
 
 interface RawRow {
-  funnelKey: SalesFunnelKey | null;
   featureSlug: string | null;
   offerId: string | null;
   legKey: string | null;
@@ -122,100 +96,11 @@ interface RawRow {
 }
 
 /**
- * The finest grain billing actually states, and its rows. Exactly one grain is ever counted — the
- * coarser fields are billing's own sums of the finer ones, so mixing them double-counts.
- */
-function rowsAtFinestGrain(
-  budgets: Extract<FunnelBudgetsRead, { ok: true }>,
-): { grain: SpendableGrain; rows: RawRow[] } {
-  // The LEG grain first: it is the finest billing stores and the one a campaign is bought at.
-  const legs = budgets.legs ?? [];
-  if (legs.length > 0) {
-    return {
-      grain: "leg",
-      rows: legs.map((l) => ({
-        funnelKey: l.funnelKey,
-        featureSlug: l.featureSlug,
-        offerId: l.offerId,
-        legKey: l.legKey,
-        dailyBudgetCents: l.dailyBudgetCents,
-      })),
-    };
-  }
-
-  const offers = budgets.offers ?? [];
-  if (offers.length > 0) {
-    return {
-      grain: "offer",
-      rows: offers.map((o) => ({
-        funnelKey: o.funnelKey,
-        featureSlug: o.featureSlug,
-        offerId: o.offerId,
-        legKey: null,
-        dailyBudgetCents: o.dailyBudgetCents,
-      })),
-    };
-  }
-
-  const channels = budgets.channels ?? [];
-  if (channels.length > 0) {
-    return {
-      grain: "channel",
-      rows: channels.map((c) => ({
-        funnelKey: c.funnelKey,
-        featureSlug: c.featureSlug,
-        offerId: null,
-        legKey: null,
-        dailyBudgetCents: c.dailyBudgetCents,
-      })),
-    };
-  }
-
-  if (budgets.funnels.length > 0) {
-    return {
-      grain: "funnel",
-      rows: budgets.funnels.map((f) => ({
-        funnelKey: f.funnelKey,
-        featureSlug: null,
-        offerId: null,
-        legKey: null,
-        dailyBudgetCents: f.dailyBudgetCents,
-      })),
-    };
-  }
-
-  if (budgets.brandDailyBudgetCents !== null) {
-    return {
-      grain: "brand",
-      rows: [
-        {
-          funnelKey: null,
-          featureSlug: null,
-          offerId: null,
-          legKey: null,
-          dailyBudgetCents: budgets.brandDailyBudgetCents,
-        },
-      ],
-    };
-  }
-
-  return { grain: "none", rows: [] };
-}
-
-/**
- * The campaign standing behind ONE ceiling, or null.
+ * The campaign standing behind ONE ceiling entry, or null.
  *
- * The matching rules are billing's own, mirrored from `channelCeilingCents` / `offerCeilingCents`
- * so that a campaign counts as running here exactly when the gate would let it spend that ceiling:
- *
- *   - the funnel must match (canonicalised on both sides — billing still emits the pre-rename
- *     spellings to this day, so comparing raw tokens reads a fully funded funnel as unfunded);
- *   - the channel must match, EXCEPT where the funnel is worked through exactly one channel, which
- *     binds whatever feature the campaign states;
- *   - a ceiling that NAMES an offer belongs to that offer's campaign; an UNSCOPED ceiling (every
- *     ceiling written before offers existed, and most of production today) belongs to the campaign
- *     on its (funnel, channel) whatever offer that campaign states — dropping those would report a
- *     running figure of zero for brands that are demonstrably spending.
+ * A campaign stands behind an entry exactly when that entry is among the ceilings it is PACED on
+ * (`ceilingEntriesOf`, billing's own rule) — so a campaign counts as running here exactly when the
+ * gate would let it spend that money. At brand grain every campaign draws on the one pot.
  *
  * An ONGOING campaign always wins over a stopped one, whatever their creation dates: the stopped
  * row is history, the ongoing one is what spends the money. Ties break on the oldest campaign so
@@ -224,59 +109,15 @@ function rowsAtFinestGrain(
 function campaignForRow(
   row: RawRow,
   all: SpendableCampaign[],
-  rowsOfGrain: RawRow[],
+  budgets: Extract<CampaignBudgetsRead, { ok: true }>,
   grain: SpendableGrain,
 ): SpendableCampaign | null {
-  const byFunnel = all.filter((c) => {
-    if (grain === "brand") return true; // one pot, every campaign draws on it
-    // The (offer, leg, channel) grain: a campaign that states its LEG — whatever funnel it may
-    // still carry (wave C1) — and a ceiling stating no funnel are matched on the leg and the exact
-    // channel: the same rows `offerLegCeilingCents` paces that campaign on, so the running figure
-    // here agrees with what the gate lets it spend.
-    if (row.funnelKey === null || c.legKey) {
-      if (c.featureSlug !== row.featureSlug) return false;
-      if (row.legKey) return c.legKey === row.legKey;
-      // LEG-LESS money, claimed by a leg campaign only where `offerLegCeilingCents` lets it spend
-      // it: no ceiling of the brand names a leg, and this offer's leg-less rows on this channel
-      // sit under exactly ONE funnel.
-      if (!c.legKey) return false;
-      if (rowsOfGrain.some((r) => r.legKey !== null)) return false;
-      const sameOfferChannel = rowsOfGrain.filter(
-        (r) => r.featureSlug === row.featureSlug && (r.offerId === null || r.offerId === c.offerId),
-      );
-      return new Set(sameOfferChannel.map((r) => r.funnelKey)).size === 1;
-    }
-    return toFunnelKey(c.funnelKey) === row.funnelKey;
-  });
-  if (byFunnel.length === 0) return null;
-
-  let candidates = byFunnel;
-  if (row.featureSlug) {
-    const exact = byFunnel.filter((c) => c.featureSlug === row.featureSlug);
-    if (exact.length > 0) {
-      candidates = exact;
-    } else {
-      // billing's sole-channel rule: a funnel funded through exactly one channel binds whatever
-      // feature the campaign states. A funnel SPLIT across channels funds only what it names.
-      const channelsOfFunnel = new Set(
-        rowsOfGrain.filter((r) => r.funnelKey === row.funnelKey).map((r) => r.featureSlug),
-      );
-      if (channelsOfFunnel.size !== 1) return null;
-    }
-  }
-
-  if (row.offerId) {
-    candidates = candidates.filter((c) => c.offerId === row.offerId);
-  }
-  // The LEG is what the campaign was BOUGHT for, so a ceiling that names one belongs to the
-  // campaign of THAT leg and to no other. Without this, two campaigns of one (funnel, channel,
-  // offer) both match both of its leg rows and the older one is reported as running the money
-  // funded for the other.
-  if (row.legKey) {
-    candidates = candidates.filter((c) => c.legKey === row.legKey);
-  }
+  const candidates = grain === "brand"
+    ? all
+    : all.filter((c) => ceilingEntriesOf(budgets, c).some(
+      (e) => e.featureSlug === row.featureSlug && e.offerId === row.offerId && e.legKey === row.legKey,
+    ));
   if (candidates.length === 0) return null;
-
   const rank = (c: SpendableCampaign) => (c.status === "ongoing" ? 0 : 1);
   return [...candidates].sort(
     (a, b) => rank(a) - rank(b) || a.createdAt.getTime() - b.createdAt.getTime(),
@@ -293,17 +134,28 @@ function campaignForRow(
 export function computeSpendableBudget(
   orgId: string,
   brandId: string,
-  budgets: Extract<FunnelBudgetsRead, { ok: true }>,
+  budgets: Extract<CampaignBudgetsRead, { ok: true }>,
   campaigns: SpendableCampaign[],
 ): SpendableBudget {
-  const { grain, rows: rawRows } = rowsAtFinestGrain(budgets);
+  let grain: SpendableGrain;
+  let rawRows: RawRow[];
+  if (budgets.campaigns.length > 0) {
+    grain = "campaign";
+    rawRows = budgets.campaigns.map((e) => ({ ...e }));
+  } else if (budgets.brandDailyBudgetCents !== null) {
+    grain = "brand";
+    rawRows = [{ featureSlug: null, offerId: null, legKey: null, dailyBudgetCents: budgets.brandDailyBudgetCents }];
+  } else {
+    grain = "none";
+    rawRows = [];
+  }
 
   const configuredByCampaign = new Map<string, number>();
   const runningByCampaign = new Map<string, number>();
   const seenCampaign = new Map<string, SpendableCampaign>();
 
   const rows: SpendableRow[] = rawRows.map((raw) => {
-    const campaign = campaignForRow(raw, campaigns, rawRows, grain);
+    const campaign = campaignForRow(raw, campaigns, budgets, grain);
     const running = campaign?.status === "ongoing";
     if (campaign) {
       seenCampaign.set(campaign.id, campaign);
@@ -319,7 +171,6 @@ export function computeSpendableBudget(
       }
     }
     return {
-      funnelKey: raw.funnelKey,
       featureSlug: raw.featureSlug,
       offerId: raw.offerId,
       legKey: raw.legKey,
@@ -344,7 +195,6 @@ export function computeSpendableBudget(
       campaignId: c.id,
       status: c.status,
       running: c.status === "ongoing",
-      funnelKey: c.funnelKey,
       featureSlug: c.featureSlug,
       offerId: c.offerId,
       legKey: c.legKey,

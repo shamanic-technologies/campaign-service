@@ -112,7 +112,6 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       maxBudgetMonthlyUsd: campaign.maxBudgetMonthlyUsd,
       maxBudgetTotalUsd: campaign.maxBudgetTotalUsd,
       dailyBudgetCents: campaign.dailyBudgetCents,
-      funnelKey: campaign.funnelKey,
       offerId: campaign.offerId,
       legKey: campaign.legKey,
       maxLeads: campaign.maxLeads,
@@ -129,10 +128,9 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       const benignBlock = result.reason === "Insufficient credits" ||
                           result.reason === "Brand daily budget reached" ||
                           result.reason === "Campaign daily budget reached" ||
-                          // A funnel hitting its own ceiling — or the customer having funded it
-                          // at zero — is an expected pacing outcome, not a fault.
-                          result.reason === "Funnel daily budget reached" ||
-                          result.reason === "Funnel not funded" ||
+                          // The customer having funded this campaign at zero (or not at all) is
+                          // an expected pacing outcome, not a fault.
+                          result.reason === "Campaign not funded" ||
                           result.reason === "Brand paused";
       // A run allowed because billing could NOT be asked is a fail-OPEN anomaly, not an
       // authorization — exactly the class this service warns on. It rides the event that is
@@ -259,9 +257,8 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       preRunIdentity,
       campaign.offerId,
     );
-    // What this run is PRICED on: the LEG the campaign states, and nothing else. The funnel- and
-    // goal-keyed reads and the goal arbitration are gone (wave C2), so a campaign that states no
-    // leg has no audience picked here and says so below.
+    // What this run is PRICED on: the LEG the campaign states, and nothing else. A campaign that
+    // states no leg has no audience picked here and says so below.
     const legKey: string | null = campaign.legKey;
     // Cost-aware Thompson sampling over the chosen workflow's audiences, straight from
     // features-service /workflow-projection — which enumerates EVERY active audience of the
@@ -298,7 +295,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
         // picked, loudly, and nothing is invented to ask with.
         if (!legKey) {
           throw new Error(
-            `campaign ${campaignId} states NO leg — no funnel- or goal-keyed read exists (wave C2), ` +
+            `campaign ${campaignId} states NO leg — nothing prices it, ` +
               "so no audience can be picked. State the campaign's legKey.",
           );
         }
@@ -379,9 +376,6 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       // Campaign v2 own config — the campaign's raw own goal (null = paced on brand goal),
       // its targeted audience subset, its services, its click-destination.
       goal: campaign.goal ?? null,
-      // The sales funnel this campaign works (null = not funnel-scoped). Exposed so the run's
-      // downstream nodes and any reader can see which funnel's money this execution spends.
-      funnelKey: campaign.funnelKey ?? null,
       // The offer this campaign sells (null = pre-offer campaign). A brand holding several
       // offers refuses brand-scoped reads (SEVERAL_OFFERS), so downstream nodes that read
       // brand-service (e.g. extract-fields) scope their call on this — never guessing one.
@@ -797,7 +791,7 @@ router.delete("/internal/campaigns/by-org/:orgId", requireApiKey, async (req, re
  * waiting for that campaign's next tick. A prospect who says "yes, interested" and hears nothing
  * for a day is the whole problem the leg they bought exists to solve.
  *
- * The caller names the scope (brand, offer, funnel) and the step reached; the leg is
+ * The caller names the scope (brand, offer) and the step reached; the leg is
  * features-service's statement and the campaign is the one already stating that leg. See
  * `lib/step-trigger.ts` for why the scope fails LOUD while the answer is very often an ordinary,
  * named nothing — and for why the affordability gate is reached exactly as a scheduled run reaches
@@ -805,19 +799,18 @@ router.delete("/internal/campaigns/by-org/:orgId", requireApiKey, async (req, re
  *
  * Returns:
  *   200 — what was triggered and what was skipped, each skip naming its reason
- *   400 — no org, a malformed body, a funnel naming none of the four, a step nobody publishes
+ *   400 — no org, a malformed body, a step nobody publishes
  *   401 — bad api key
  *   502 — the acquisition-channel catalogue could not be read
  *   500 — internal error
  */
 router.post("/internal/campaigns/trigger-for-step", requireApiKey, serviceAuth, validateBody(TriggerForStepBody), async (req: AuthenticatedRequest, res) => {
   try {
-    const { brandId, offerId, funnelKey, step } = req.body;
+    const { brandId, offerId, step } = req.body;
     const outcome = await triggerCampaignsForStep({
       orgId: req.orgId!,
       brandId,
       offerId,
-      funnelKey,
       step,
     });
     res.json(outcome);
@@ -933,8 +926,7 @@ router.post(
 /**
  * GET /internal/campaigns/:campaignId/predecessor
  *
- * WHICH CAMPAIGN RAN THE LEG THAT ENDS WHERE THIS ONE BEGINS — same org, same brand, same offer,
- * same funnel.
+ * WHICH CAMPAIGN RAN THE LEG THAT ENDS WHERE THIS ONE BEGINS — same org, same brand, same offer.
  *
  * A campaign bought for a leg that CONTINUES another needs to find what it is continuing: the
  * person, the thread and the record of what we owe them are filed under the campaign that ran the

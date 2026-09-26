@@ -1,18 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 import { resolveStartablePair } from "../../src/lib/startable-pair.js";
 import type { ChannelCatalogueRead } from "../../src/lib/channel-operator-client.js";
-import type { FunnelBudgetsRead } from "../../src/lib/funnel-budget-client.js";
+import type { CampaignBudgetEntry, CampaignBudgetsRead } from "../../src/lib/campaign-budget-client.js";
 
 /**
- * CAN THE CUSTOMER START THE CAMPAIGN FOR A PAIR THEY FUND?
+ * CAN THE CUSTOMER START THE CAMPAIGN FOR AN (OFFER, LEG, CHANNEL) THEY FUND?
  *
- * The four things that must never happen here: a workflow chosen by the caller, a ceiling accepted
- * from the caller, a leg invented from the funnel, and a refusal a person cannot read.
+ * The things that must never happen here: a workflow chosen by the caller, a ceiling accepted from
+ * the caller, a leg invented, and a refusal a person cannot read.
  */
 
 const CHANNEL = "sales-cold-email-outreach";
-const FUNNEL = "sales_meetings_from_conversation";
-const OTHER_FUNNEL = "website_purchases";
 const ENTRY_LEG = "start_to_conversation";
 const SECOND_LEG = "conversation_to_meeting_booked";
 const OFFER = "11111111-1111-1111-1111-111111111111";
@@ -28,277 +26,111 @@ const IDENTITY = {
 function catalogue(overrides: Partial<{
   operator: "platform" | "customer";
   channelLegs: string[];
-  legs: Array<{ legKey: string; funnelKeys: string[] }>;
 }> = {}): ChannelCatalogueRead {
   const channelLegs = overrides.channelLegs ?? [ENTRY_LEG, SECOND_LEG];
-  const legs = overrides.legs ?? [
-    { legKey: ENTRY_LEG, funnelKeys: [FUNNEL] },
-    { legKey: SECOND_LEG, funnelKeys: [FUNNEL] },
-  ];
   return {
     ok: true,
     operatorBySlug: new Map([[CHANNEL, overrides.operator ?? "platform"]]),
     legsBySlug: new Map([[CHANNEL, new Set(channelLegs)]]),
-    legs: legs.map((l) => ({
-      legKey: l.legKey,
-      fromStepKey: null,
-      funnelKeys: new Set(l.funnelKeys),
-    })),
+    legs: channelLegs.map((legKey) => ({ legKey, fromStepKey: null, toStepKey: null })),
     stepKeys: new Set<string>(),
   };
 }
 
-function budgets(rows: Partial<Extract<FunnelBudgetsRead, { ok: true }>> = {}): FunnelBudgetsRead {
-  return {
-    ok: true,
-    brandDailyBudgetCents: null,
-    funnels: [],
-    channels: [],
-    offers: [],
-    legs: [],
-    ...rows,
-  } as FunnelBudgetsRead;
+function budgets(
+  campaigns: CampaignBudgetEntry[] = [],
+  brandDailyBudgetCents: number | null = null,
+): CampaignBudgetsRead {
+  return { ok: true, brandDailyBudgetCents, campaigns };
 }
+
+const FUNDED: CampaignBudgetEntry = { offerId: OFFER, legKey: ENTRY_LEG, featureSlug: CHANNEL, dailyBudgetCents: 1500 };
 
 function deps(over: {
   catalogue?: ChannelCatalogueRead;
-  budgets?: FunnelBudgetsRead;
+  budgets?: CampaignBudgetsRead;
   workflow?: unknown;
 } = {}) {
   return {
     catalogue: async () => over.catalogue ?? catalogue(),
-    budgets: async () => over.budgets ?? budgets(),
+    budgets: async () => over.budgets ?? budgets([FUNDED]),
     workflow: (over.workflow as any) ?? (async () => ({ ok: true as const, workflowSlug: "aurora" })),
   };
 }
 
 function start(input: Partial<Parameters<typeof resolveStartablePair>[0]> = {}, over = {}) {
   return resolveStartablePair(
-    { brandId: BRAND, offerId: OFFER, funnelKey: FUNNEL, featureSlug: CHANNEL, ...input },
+    { brandId: BRAND, offerId: OFFER, legKey: ENTRY_LEG, featureSlug: CHANNEL, ...input },
     IDENTITY,
     deps(over) as any,
   );
 }
 
 describe("resolveStartablePair", () => {
-  it("refuses a sales funnel no catalogue names, in words a person can read", async () => {
-    const result = await start({ funnelKey: "meetings_maybe" });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("unknown_funnel");
-    expect(result.refusal.status).toBe(400);
-    expect(result.refusal.message).toMatch(/don't recognise the sales funnel/);
+  it("resolves a funded (offer, leg, channel) to its ceiling and the channel's workflow", async () => {
+    const read = await start();
+    expect(read).toEqual({
+      ok: true,
+      pair: { legKey: ENTRY_LEG, ceilingCents: 1500, workflowSlug: "aurora" },
+    });
   });
 
-  it("refuses a channel whose ceiling this service does not pace", async () => {
-    const result = await start({ featureSlug: "ai-visibility-scoring" });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("channel_not_paced_here");
+  it("refuses a start that states no leg or no offer, in words a person can read", async () => {
+    for (const input of [{ legKey: null }, { offerId: null }]) {
+      const read = await start(input);
+      expect(read.ok).toBe(false);
+      if (!read.ok) {
+        expect(read.refusal).toMatchObject({ status: 400, code: "leg_required" });
+        expect(read.refusal.message).not.toMatch(/funnel/i);
+      }
+    }
   });
 
-  it("says try again rather than no when the catalogue cannot be read", async () => {
-    const result = await start({}, { catalogue: { ok: false, detail: "HTTP 503" } });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("catalogue_unavailable");
-    expect(result.refusal.status).toBe(502);
-    expect(result.refusal.message).toMatch(/try again/i);
+  it("refuses a channel outside the sales family — its money is not paced here", async () => {
+    const read = await start({ featureSlug: "pr-cold-email-outreach" });
+    expect(read.ok || read.refusal.code).toBe("channel_not_paced_here");
   });
 
   it("refuses a channel the catalogue does not publish", async () => {
-    const result = await start({ featureSlug: "sales-crm-email-outreach" });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("unknown_channel");
+    const read = await start({ featureSlug: "google-ads" });
+    expect(read.ok || read.refusal.code).toBe("unknown_channel");
   });
 
-  it("refuses a funnel this channel does not sell", async () => {
-    const result = await start({ funnelKey: OTHER_FUNNEL });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("channel_does_not_sell_funnel");
+  it("refuses a leg the channel does not perform rather than stamping it", async () => {
+    const read = await start({}, { catalogue: catalogue({ channelLegs: [SECOND_LEG] }) });
+    expect(read.ok || read.refusal.code).toBe("leg_not_performed");
   });
 
-  it("says try again rather than no when billing cannot be read", async () => {
-    const result = await start({}, { budgets: { ok: false } });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("billing_unavailable");
-    expect(result.refusal.status).toBe(502);
+  it("refuses an unfunded campaign with a 409", async () => {
+    const read = await start({}, { budgets: budgets([{ ...FUNDED, legKey: SECOND_LEG }]) });
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.refusal).toMatchObject({ status: 409, code: "not_funded" });
   });
 
-  it("refuses a pair the customer funds nothing for", async () => {
-    const result = await start({}, {
-      budgets: budgets({
-        funnels: [{ funnelKey: FUNNEL, dailyBudgetCents: 0 } as any],
-        channels: [{ funnelKey: FUNNEL, featureSlug: CHANNEL, dailyBudgetCents: 0 } as any],
-      }),
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("not_funded");
-    expect(result.refusal.status).toBe(409);
-    expect(result.refusal.message).toMatch(/daily budget/);
+  it("an unreadable catalogue is a 502, never a refusal about the channel", async () => {
+    const read = await start({}, { catalogue: { ok: false, detail: "HTTP 503" } });
+    expect(read.ok || read.refusal).toMatchObject({ status: 502, code: "catalogue_unavailable" });
   });
 
-  it("states NO leg when the customer's money for the pair names none", async () => {
-    // The pre-leg population: a leg is never fabricated for it, and the campaign paces on the
-    // offer figure exactly as it always has.
-    const result = await start({}, {
-      budgets: budgets({
-        funnels: [{ funnelKey: FUNNEL, dailyBudgetCents: 4000 } as any],
-        channels: [{ funnelKey: FUNNEL, featureSlug: CHANNEL, dailyBudgetCents: 4000 } as any],
-        offers: [{ funnelKey: FUNNEL, featureSlug: CHANNEL, offerId: OFFER, dailyBudgetCents: 4000 } as any],
-      }),
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.pair.legKey).toBeNull();
-    expect(result.pair.ceilingCents).toBe(4000);
-    expect(result.pair.workflowSlug).toBe("aurora");
+  it("an unreadable billing is a 502, never `not funded`", async () => {
+    const read = await start({}, { budgets: { ok: false } });
+    expect(read.ok || read.refusal).toMatchObject({ status: 502, code: "billing_unavailable" });
   });
 
-  it("takes the leg from the MONEY, and paces on that leg's own ceiling", async () => {
-    const result = await start({}, {
-      budgets: budgets({
-        funnels: [{ funnelKey: FUNNEL, dailyBudgetCents: 4000 } as any],
-        channels: [{ funnelKey: FUNNEL, featureSlug: CHANNEL, dailyBudgetCents: 4000 } as any],
-        offers: [{ funnelKey: FUNNEL, featureSlug: CHANNEL, offerId: OFFER, dailyBudgetCents: 4000 } as any],
-        legs: [
-          { funnelKey: FUNNEL, featureSlug: CHANNEL, offerId: OFFER, legKey: ENTRY_LEG, dailyBudgetCents: 2500 } as any,
-        ],
-      }),
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.pair.legKey).toBe(ENTRY_LEG);
-    // NOT 4000: the offer figure is the SUM, and spending it would take a sibling leg's money.
-    expect(result.pair.ceilingCents).toBe(2500);
-  });
-
-  it("refuses to guess when TWO legs of the pair are funded, and takes the caller's answer", async () => {
-    const twoLegs = budgets({
-      funnels: [{ funnelKey: FUNNEL, dailyBudgetCents: 4000 } as any],
-      channels: [{ funnelKey: FUNNEL, featureSlug: CHANNEL, dailyBudgetCents: 4000 } as any],
-      offers: [{ funnelKey: FUNNEL, featureSlug: CHANNEL, offerId: OFFER, dailyBudgetCents: 4000 } as any],
-      legs: [
-        { funnelKey: FUNNEL, featureSlug: CHANNEL, offerId: OFFER, legKey: ENTRY_LEG, dailyBudgetCents: 2500 } as any,
-        { funnelKey: FUNNEL, featureSlug: CHANNEL, offerId: OFFER, legKey: SECOND_LEG, dailyBudgetCents: 1500 } as any,
-      ],
-    });
-
-    const ambiguous = await start({}, { budgets: twoLegs });
-    expect(ambiguous.ok).toBe(false);
-    if (ambiguous.ok) return;
-    expect(ambiguous.refusal.code).toBe("several_funded_legs");
-
-    const answered = await start({ legKey: SECOND_LEG }, { budgets: twoLegs });
-    expect(answered.ok).toBe(true);
-    if (!answered.ok) return;
-    expect(answered.pair.legKey).toBe(SECOND_LEG);
-    expect(answered.pair.ceilingCents).toBe(1500);
-  });
-
-  it("refuses a stated leg the channel does not perform", async () => {
-    const result = await start({ legKey: "meeting_booked_to_deal_closed" });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("leg_not_performed");
-  });
-
-  it("never falls back to the offer figure when the money IS leg-scoped and this leg is not funded", async () => {
-    const result = await start({ legKey: SECOND_LEG }, {
-      budgets: budgets({
-        funnels: [{ funnelKey: FUNNEL, dailyBudgetCents: 2500 } as any],
-        channels: [{ funnelKey: FUNNEL, featureSlug: CHANNEL, dailyBudgetCents: 2500 } as any],
-        offers: [{ funnelKey: FUNNEL, featureSlug: CHANNEL, offerId: OFFER, dailyBudgetCents: 2500 } as any],
-        legs: [
-          { funnelKey: FUNNEL, featureSlug: CHANNEL, offerId: OFFER, legKey: ENTRY_LEG, dailyBudgetCents: 2500 } as any,
-        ],
-      }),
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("not_funded");
-  });
-
-  const funded = () => budgets({
-    funnels: [{ funnelKey: FUNNEL, dailyBudgetCents: 4000 } as any],
-    channels: [{ funnelKey: FUNNEL, featureSlug: CHANNEL, dailyBudgetCents: 4000 } as any],
-  });
-
-  it("refuses a channel nothing can run yet, and says so as a different answer from an outage", async () => {
-    const result = await start({}, {
-      budgets: funded(),
-      workflow: async () => ({ ok: true, workflowSlug: null }),
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("no_workflow");
-    expect(result.refusal.status).toBe(409);
-  });
-
-  it("says try again when workflow-service could not be read", async () => {
-    const result = await start({}, {
-      budgets: funded(),
-      workflow: async () => ({ ok: false, detail: "HTTP 500" }),
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.refusal.code).toBe("workflow_unavailable");
-    expect(result.refusal.status).toBe(502);
-  });
-
-  it("gives a CUSTOMER-operated channel no workflow, and asks workflow-service nothing", async () => {
-    const workflow = vi.fn(async () => ({ ok: true as const, workflowSlug: "aurora" }));
-    const result = await start({}, {
-      catalogue: catalogue({ operator: "customer" }),
-      budgets: funded(),
-      workflow,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.pair.workflowSlug).toBeNull();
+  it("a channel the CUSTOMER operates starts with NO workflow, and workflow-service is never asked", async () => {
+    const workflow = vi.fn();
+    const read = await start({}, { catalogue: catalogue({ operator: "customer" }), workflow });
+    expect(read).toEqual({ ok: true, pair: { legKey: ENTRY_LEG, ceilingCents: 1500, workflowSlug: null } });
     expect(workflow).not.toHaveBeenCalled();
   });
 
-  it("accepts a pre-rename funnel spelling and answers in the canonical one", async () => {
-    const result = await start({ funnelKey: "reply_meeting" }, { budgets: funded() });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.pair.funnelKey).toBe(FUNNEL);
-  });
-});
-
-describe("wave C1 — a pair started by (offer, leg, channel), no funnel named", () => {
-  const legMoney = budgets({
-    legs: [{ funnelKey: null, featureSlug: CHANNEL, offerId: OFFER, legKey: ENTRY_LEG, dailyBudgetCents: 700 }],
+  it("a platform channel with no active workflow is refused — nothing could run it", async () => {
+    const read = await start({}, { workflow: async () => ({ ok: true, workflowSlug: null }) });
+    expect(read.ok || read.refusal).toMatchObject({ status: 409, code: "no_workflow" });
   });
 
-  it("resolves on the (offer, leg, channel) money and states no funnel", async () => {
-    const out = await start({ funnelKey: undefined, legKey: ENTRY_LEG }, { budgets: legMoney });
-    expect(out).toEqual({
-      ok: true,
-      pair: { funnelKey: null, legKey: ENTRY_LEG, ceilingCents: 700, workflowSlug: "aurora" },
-    });
-  });
-
-  it("refuses with leg_required when neither a funnel nor the leg is named", async () => {
-    const out = await start({ funnelKey: undefined, legKey: null }, { budgets: legMoney });
-    expect(out).toMatchObject({ ok: false, refusal: { status: 400, code: "leg_required" } });
-  });
-
-  it("refuses a leg the channel does not perform", async () => {
-    const out = await start(
-      { funnelKey: undefined, legKey: SECOND_LEG },
-      { budgets: legMoney, catalogue: catalogue({ channelLegs: [ENTRY_LEG] }) },
-    );
-    expect(out).toMatchObject({ ok: false, refusal: { status: 400, code: "leg_not_performed" } });
-  });
-
-  it("refuses not_funded when the leg carries no money", async () => {
-    const out = await start({ funnelKey: undefined, legKey: SECOND_LEG }, { budgets: legMoney });
-    expect(out).toMatchObject({ ok: false, refusal: { status: 409, code: "not_funded" } });
+  it("an unreadable workflow statement is a 502", async () => {
+    const read = await start({}, { workflow: async () => ({ ok: false, detail: "HTTP 500" }) });
+    expect(read.ok || read.refusal).toMatchObject({ status: 502, code: "workflow_unavailable" });
   });
 });

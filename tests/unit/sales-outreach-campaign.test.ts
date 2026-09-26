@@ -4,7 +4,7 @@ import {
   GOOGLE_ADS_FEATURE_SLUG,
   PR_EXPERT_QUOTE_FEATURE_SLUG,
   isOutboundSalesFeature,
-  isSalesFunnelFeature,
+  isSalesFamilyFeature,
   MAX_BUDGET_FIELDS,
   salesMaxBudgetRefusal,
   SALES_CRM_FEATURE_SLUG,
@@ -58,20 +58,20 @@ function mutation(returned: Campaign[]) {
   };
 }
 
-describe("isSalesFunnelFeature", () => {
+describe("isSalesFamilyFeature", () => {
   it("includes every acquisition channel that sells a sales funnel — paid reach included", () => {
     // Membership is a MONEY statement, not a medium one: this campaign's ceiling is billing's,
     // per (funnel, channel, offer). Google Ads answers that identically to a cold email.
-    expect(isSalesFunnelFeature(GOOGLE_ADS_FEATURE_SLUG)).toBe(true);
-    expect(isSalesFunnelFeature("google-ads")).toBe(true);
+    expect(isSalesFamilyFeature(GOOGLE_ADS_FEATURE_SLUG)).toBe(true);
+    expect(isSalesFamilyFeature("google-ads")).toBe(true);
   });
 
   it("includes ai-meeting-booking — its ceiling is billing's like every other funded pair", () => {
     // It answers a lead who already replied instead of reaching a new person, but the MONEY
     // question is identical: billing states its per-(funnel, channel, offer, leg) ceiling and the
     // campaign paces on it, so it is a member of this family and not a mechanism of its own.
-    expect(isSalesFunnelFeature(AI_MEETING_BOOKING_FEATURE_SLUG)).toBe(true);
-    expect(isSalesFunnelFeature("ai-meeting-booking")).toBe(true);
+    expect(isSalesFamilyFeature(AI_MEETING_BOOKING_FEATURE_SLUG)).toBe(true);
+    expect(isSalesFamilyFeature("ai-meeting-booking")).toBe(true);
   });
 
   it("includes pr-expert-quote-outreach — earned media is funded like every other channel", () => {
@@ -79,37 +79,37 @@ describe("isSalesFunnelFeature", () => {
     // workflow-service holds eight active dynasties for it, so it can run; billing states its
     // per-(funnel, channel, offer, leg) ceiling, so it is paced here. That is the whole of
     // membership: a MONEY statement, not a medium one.
-    expect(isSalesFunnelFeature(PR_EXPERT_QUOTE_FEATURE_SLUG)).toBe(true);
-    expect(isSalesFunnelFeature("pr-expert-quote-outreach")).toBe(true);
+    expect(isSalesFamilyFeature(PR_EXPERT_QUOTE_FEATURE_SLUG)).toBe(true);
+    expect(isSalesFamilyFeature("pr-expert-quote-outreach")).toBe(true);
   });
 
   it("does NOT include the SUPERSEDED pr-expert-quote-opportunities spelling", () => {
     // features-service carries `superseded_by_slug` onto the current slug. Only the current one
     // is funded, and two names for one channel is how a brand grows two identities for one offer.
-    expect(isSalesFunnelFeature("pr-expert-quote-opportunities")).toBe(false);
+    expect(isSalesFamilyFeature("pr-expert-quote-opportunities")).toBe(false);
   });
 
   it("does NOT sweep in the rest of the published paid-reach catalogue", () => {
     // Published by features-service, executable by nothing — a campaign for one would sit ongoing
     // and produce nothing forever.
     for (const slug of ["meta-ads", "linkedin-ads", "tiktok-ads", "bing-ads", "cold-call-outreach"]) {
-      expect(isSalesFunnelFeature(slug)).toBe(false);
+      expect(isSalesFamilyFeature(slug)).toBe(false);
     }
   });
 
   it("includes both cold and CRM sales-outreach features (full parity)", () => {
-    expect(isSalesFunnelFeature(SALES_OUTREACH_FEATURE_SLUG)).toBe(true);
-    expect(isSalesFunnelFeature(SALES_CRM_FEATURE_SLUG)).toBe(true);
-    expect(isSalesFunnelFeature("sales-cold-email-outreach")).toBe(true);
-    expect(isSalesFunnelFeature("sales-crm-email-outreach")).toBe(true);
+    expect(isSalesFamilyFeature(SALES_OUTREACH_FEATURE_SLUG)).toBe(true);
+    expect(isSalesFamilyFeature(SALES_CRM_FEATURE_SLUG)).toBe(true);
+    expect(isSalesFamilyFeature("sales-cold-email-outreach")).toBe(true);
+    expect(isSalesFamilyFeature("sales-crm-email-outreach")).toBe(true);
   });
 
   it("excludes non-sales features and empty/nullish slugs", () => {
-    expect(isSalesFunnelFeature("pr-cold-email-outreach")).toBe(false);
-    expect(isSalesFunnelFeature("hiring-cold-email-outreach")).toBe(false);
-    expect(isSalesFunnelFeature("")).toBe(false);
-    expect(isSalesFunnelFeature(null)).toBe(false);
-    expect(isSalesFunnelFeature(undefined)).toBe(false);
+    expect(isSalesFamilyFeature("pr-cold-email-outreach")).toBe(false);
+    expect(isSalesFamilyFeature("hiring-cold-email-outreach")).toBe(false);
+    expect(isSalesFamilyFeature("")).toBe(false);
+    expect(isSalesFamilyFeature(null)).toBe(false);
+    expect(isSalesFamilyFeature(undefined)).toBe(false);
   });
 });
 
@@ -163,7 +163,7 @@ describe("salesMaxBudgetRefusal", () => {
         const message = salesMaxBudgetRefusal(slug, { [field]: "10.00" });
         expect(message).toContain(field);
         expect(message).toContain("billing");
-        expect(message).toMatch(/funnel/i);
+        expect(message).toMatch(/offer, leg/i);
       }
     }
   });

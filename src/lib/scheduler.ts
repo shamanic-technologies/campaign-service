@@ -6,7 +6,7 @@ import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { listRuns, updateRun } from "@distribute/runs-client";
-import { planFunnelTurns } from "./funnel-campaigns.js";
+import { planBrandTurns } from "./brand-turns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { reportCampaignRecovery } from "./recovery-event.js";
@@ -48,7 +48,7 @@ const ORPHANED_RUNS_LIMIT = 20;
  * the campaign-service parent run is an ephemeral ~2s marker (start-run → end-run
  * within seconds), NOT an enclosing span. The real work — lead-service buffer/next —
  * runs up to ~12min in a separate `lead-service/lead-serve` run that is NOT linked
- * under the marker (no parent_run_id funnel). Scoping the inflight check to the marker
+ * under the marker (no parent_run_id link). Scoping the inflight check to the marker
  * saw a corpse and re-fired mid-fill, colliding with the still-running buffer/next
  * → lead-service rejects the duplicate with 409 → windmill job hard-fails. Scoping to
  * campaignId + running + freshness sees the genuinely-live descendant instead.
@@ -114,34 +114,30 @@ export async function reRunDueCampaigns(): Promise<number> {
       // The HARD targeting subset. It constrained the audience pick when that pick happened
       // inside the DAG; the pick moved to the trigger, so the constraint moves with it.
       audienceIds: campaigns.audienceIds,
-      funnelKey: campaigns.funnelKey,
       dailyBudgetCents: campaigns.dailyBudgetCents,
-      // The offer this campaign sells. The turn planner asks brand-service for the funnels of THAT
-      // offer — the only grain with one answer on a brand selling several.
+      // The offer this campaign sells — part of the (offer, leg, channel) its ceiling is set at.
       offerId: campaigns.offerId,
-      // The single funnel LEG this campaign was bought for. The ceiling that binds it is its own
-      // leg's whenever the customer funds at that grain — the coarser figures are SUMS.
+      // The single LEG this campaign was bought for — the other part of that grain.
       legKey: campaigns.legKey,
     });
 
   if (dueCampaigns.length === 0) return 0;
 
-  // Per-funnel funding + turn-taking. HOLDS every sales campaign the customer funds nothing for
-  // (the only hold there is now that `brand_pause` is gone), provisions a campaign for every
-  // funded funnel of each brand, holds the brand to ONE run in flight, and hands the turn to the
-  // funded funnel with the lowest spent-today/ceiling ratio. Campaigns absent from the map fire
+  // Per-campaign funding + turn-taking. HOLDS every sales campaign the customer funds nothing for,
+  // holds each brand cohort to ONE run in flight, and hands the turn to the funded campaign with
+  // the lowest spent-today/ceiling ratio. Campaigns absent from the map fire
   // as they always have — every non-sales campaign is untouched.
-  const funnelDefers = await planFunnelTurns(dueCampaigns, now);
+  const turnDefers = await planBrandTurns(dueCampaigns, now);
 
   for (const campaign of dueCampaigns) {
     try {
-      const funnelDefer = funnelDefers.get(campaign.id);
-      if (funnelDefer) {
+      const turnDefer = turnDefers.get(campaign.id);
+      if (turnDefer) {
         await db
           .update(campaigns)
-          .set({ nextRunAt: funnelDefer, updatedAt: new Date() })
+          .set({ nextRunAt: turnDefer, updatedAt: new Date() })
           .where(eq(campaigns.id, campaign.id));
-        // Not logged: this fires every tick for every funnel that did not take its brand's
+        // Not logged: this fires every tick for every campaign that did not take its brand's
         // turn, across every client. The decision is observable in the persisted nextRunAt.
         continue;
       }

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 vi.mock("../../src/lib/sales-outreach-campaign.js", () => ({
   SALES_OUTREACH_FEATURE_SLUG: "sales-cold-email-outreach",
   SALES_CRM_FEATURE_SLUG: "sales-crm-email-outreach",
-  isSalesFunnelFeature: (s?: string | null) =>
+  isSalesFamilyFeature: (s?: string | null) =>
     s === "sales-cold-email-outreach" || s === "sales-crm-email-outreach" || s === "google-ads",
   // OUTBOUND only: this email asks for more PEOPLE to contact, which means nothing to a channel
   // that buys impressions.

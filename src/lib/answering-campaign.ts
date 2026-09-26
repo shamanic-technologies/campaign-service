@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { resolvePredecessorCampaign, PredecessorScopeError } from "./predecessor-campaign.js";
-import { SALES_FUNNEL_FEATURE_SLUGS } from "./sales-outreach-campaign.js";
+import { SALES_FAMILY_FEATURE_SLUGS } from "./sales-outreach-campaign.js";
 
 /**
  * WHO ANSWERS THE PEOPLE THIS CAMPAIGN IS HOLDING — the inverse of `/predecessor`, and nothing else.
@@ -180,7 +180,7 @@ export async function resolveAnsweringCampaign(
     .filter((leg) => leg.legKey !== ownLeg.legKey && leg.fromStepKey === toStepKey)
     .map((leg) => leg.legKey);
   const continuing = new Set(continuingLegKeys);
-  const startableFeatureSlugs = [...SALES_FUNNEL_FEATURE_SLUGS].filter((slug) => {
+  const startableFeatureSlugs = [...SALES_FAMILY_FEATURE_SLUGS].filter((slug) => {
     const performed = catalogue.legsBySlug.get(slug);
     return performed ? [...performed].some((leg) => continuing.has(leg)) : false;
   });

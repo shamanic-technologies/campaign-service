@@ -1,7 +1,7 @@
 /**
  * Backfill: every campaign that CAN be attributed states the OFFER it sells.
  *
- * A campaign is (offer x sales funnel x acquisition channel). Migration 0050 adds `offer_id` and
+ * A campaign is (offer x leg x acquisition channel). Migration 0050 adds `offer_id` and
  * backfills NOTHING, because resolving a campaign's brand to its offer is a brand-service READ and
  * SQL cannot make one. This script makes it.
  *
@@ -24,9 +24,8 @@
  * stay unattributed until their own pair gets an offer, and a re-run picks them up when it does.
  *
  * Where a pair does not resolve to exactly one offer, the campaign is LEFT ALONE and REPORTED.
- * Nothing is ever inferred from the funnel, the goal or the workflow: several offers legitimately
- * sell through one funnel, which is the whole reason the dimension exists, so picking one would
- * invent an attribution.
+ * Nothing is ever inferred from the goal or the workflow: picking an offer would invent an
+ * attribution.
  *
  * Idempotent: it only ever selects and writes rows whose `offer_id` is still NULL, and the UPDATE
  * re-states that guard, so a second run writes nothing and a run racing a live create cannot
@@ -98,8 +97,7 @@ export interface BackfillResult {
  * brand) pair. Naming the org is what stops brand-service answering for somebody else's offer.
  *
  * THERE IS NO `active` ON AN OFFER, and this used to filter on one. An offer is a proposition
- * a brand states; it is the FUNNELS underneath it that are switched on and off, which is why
- * brand-service's own funnel read is the one that says "active only". Filtering here on a field
+ * a brand states. Filtering here on a field
  * that is never sent read as a deliberate liveness check while doing nothing — the dangerous
  * kind of dead code, because the day brand-service adds an unrelated `active` it would start
  * silently dropping offers. An offer's existence IS the answer.

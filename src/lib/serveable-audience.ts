@@ -47,7 +47,7 @@ export async function serveableAudienceIdsForCampaign(
   // read to ask — that is not a verdict either way, so it THROWS like any unreadable answer.
   if (!campaign.legKey) {
     throw new Error(
-      `[campaign-service] campaign ${campaign.id} states NO leg — no funnel- or goal-keyed read ` +
+      `[campaign-service] campaign ${campaign.id} states NO leg — no other read ` +
         "exists (wave C2), so whether it has a serveable audience cannot be asked",
     );
   }
