@@ -646,4 +646,20 @@ describe('No Legacy Patterns - CRITICAL', () => {
       .sort();
     expect(callers).toEqual(['lib/scheduler.ts', 'lib/selected-dispatch.ts', 'lib/step-trigger.ts']);
   });
+
+  it('must NOT read anything from features-service keyed on a sales funnel or a goal (wave C2)', () => {
+    // features-service retired its funnel-keyed compatibility surface: /goal-arbitration (alias
+    // /funnel-ranking) and `?funnel=` / `?goal=` on its reads. The leg-keyed body is the only
+    // pricing read left, and a campaign that states no leg is not priced at all — never on an
+    // invented goal or funnel. A call here would keep a route alive nobody else uses.
+    const offenders: string[] = [];
+    for (const file of getAllTsFiles(srcDir)) {
+      const content = fs.readFileSync(file, 'utf-8');
+      const rel = path.relative(srcDir, file);
+      if (/goal-arbitration|funnel-ranking|fetchGoalArbitration/.test(content)) offenders.push(`${rel}: goal arbitration`);
+      if (/searchParams\.(set|append)\(\s*["'`](funnel|goal)["'`]/.test(content)) offenders.push(`${rel}: ?funnel=/?goal= query`);
+      if (/fetchWorkflowProjectionRows|fetchWorkflowProjection\b/.test(content)) offenders.push(`${rel}: funnel/goal-keyed projection read`);
+    }
+    expect(offenders).toEqual([]);
+  });
 });

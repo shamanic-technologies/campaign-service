@@ -9,7 +9,6 @@ const {
   mockGateChecks,
   mockFetchBrandRuntimeContext,
   mockFetchCandidates,
-  mockFetchArbitration,
 } = vi.hoisted(() => ({
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
@@ -18,7 +17,6 @@ const {
   mockGateChecks: vi.fn(),
   mockFetchBrandRuntimeContext: vi.fn(),
   mockFetchCandidates: vi.fn(),
-  mockFetchArbitration: vi.fn(),
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -48,8 +46,8 @@ vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOri
   const original = await importOriginal<typeof import("../../src/lib/features-workflow-projection-client.js")>();
   return {
     ...original, // keep the real pure selectAudienceFromProjection / hasServeableAudienceInProjection
-    fetchWorkflowProjectionRows: mockFetchCandidates,
-    fetchGoalArbitration: mockFetchArbitration,
+    // The leg-keyed body is the only projection read left (wave C2).
+    fetchLegProjectionRows: mockFetchCandidates,
   };
 });
 
@@ -58,7 +56,14 @@ import { db } from "../../src/db/index.js";
 import { campaigns, campaignAudienceExhaustion } from "../../src/db/schema.js";
 import { eq, and } from "drizzle-orm";
 import { NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../../src/lib/audience-exhaustion.js";
-import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
+import { cleanTestData, closeDb, insertTestCampaign as insertCampaignRow } from "../helpers/test-db.js";
+
+// Every live campaign states the LEG it is bought for, and the leg-keyed body is the only thing a
+// run is priced on (wave C2). A test that means a leg-less campaign says `legKey: null`.
+const TEST_LEG = "start_to_conversation";
+function insertTestCampaign(...[orgId, data]: Parameters<typeof insertCampaignRow>) {
+  return insertCampaignRow(orgId, { legKey: TEST_LEG, ...(data ?? {}) });
+}
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 
@@ -132,9 +137,6 @@ describe("Pipeline routes", () => {
       brandProfile: { ...defaultBrandProfile, brandId: brandIds[0] },
     });
     mockFetchCandidates.mockResolvedValue(defaultRows);
-    // No arbitration by default: brand-service has not declared an authorized goal set, so every
-    // existing expectation keeps the pre-arbitration behaviour (campaign goal, else brand goal).
-    mockFetchArbitration.mockResolvedValue(null);
   });
 
   afterAll(async () => {
@@ -464,7 +466,8 @@ describe("Pipeline routes", () => {
         expect.objectContaining({
           featureSlug: "sales-cold-email-v1",
           brandId: brandIds[0],
-          goal: "signup",
+          legKey: TEST_LEG,
+          campaignId: campaign.id,
           identity: expect.objectContaining({ runId: "parent-run-1" }),
         }),
       );
@@ -516,7 +519,6 @@ describe("Pipeline routes", () => {
       // would run it against a different audience — the exact mismatch the cell pick ends.
       expect(res.body.audienceId).toBe("aud-chosen-at-trigger");
       expect(mockFetchCandidates).not.toHaveBeenCalled();
-      expect(mockFetchArbitration).not.toHaveBeenCalled();
       // The run is attributed to the consumed audience, so every downstream cost is too.
       expect(mockCreateRun).toHaveBeenCalledWith(
         expect.objectContaining({ audienceId: "aud-chosen-at-trigger" }),
@@ -566,13 +568,12 @@ describe("Pipeline routes", () => {
 
     // === Campaign v2: per-campaign own config ===
 
-    it("should price on the FUNNEL the campaign states, not on any goal", async () => {
-      // The brand's goal is 'signup' (mock default) and it is irrelevant here: the campaign states
-      // the funnel it sells, which is the only word that separates a meeting bought with a positive
-      // reply from one bought with a click onto the site.
+    it("prices on the LEG the campaign states — never on a funnel or a goal", async () => {
+      // The row still carries a funnel and a legacy goal; neither is read (wave C2).
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         funnelKey: "sales_meetings_from_website",
+        goal: "positiveReply",
       });
 
       await request(app)
@@ -580,134 +581,30 @@ describe("Pipeline routes", () => {
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      expect(mockFetchCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ funnelKey: "sales_meetings_from_website", goal: null }),
-      );
+      expect(mockFetchCandidates).toHaveBeenCalledTimes(1);
+      const arg = mockFetchCandidates.mock.calls[0]![0] as Record<string, unknown>;
+      expect(arg.legKey).toBe(TEST_LEG);
+      expect(arg).not.toHaveProperty("funnelKey");
+      expect(arg).not.toHaveProperty("goal");
     });
 
-    it("should pace on the BRAND goal (inherit) when the campaign sets no own goal", async () => {
-      const campaign = await insertTestCampaign(orgId, { brandIds });
-
-      await request(app)
-        .post("/start-run")
-        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
-        .expect(200);
-
-      // Mock brand runtime-context returns currentGoal 'signup'.
-      expect(mockFetchCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ goal: "signup" }),
-      );
-    });
-
-    // The goal vocabulary is brand-service's, not ours. brand-service's own check constraint
-    // already allows values this service never had a name for; a campaign paces on whatever
-    // the brand says, forwarded verbatim, and features-service is the one that fails loud on
-    // a goal it cannot resolve.
-    it("should forward a brand goal this service has no enum for, verbatim", async () => {
-      mockFetchBrandRuntimeContext.mockResolvedValueOnce({
-        brand: { id: brandIds[0] },
-        currentGoal: "combinedSales",
-        brandProfile: null,
-      });
-      const campaign = await insertTestCampaign(orgId, { brandIds });
-
-      await request(app)
-        .post("/start-run")
-        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
-        .expect(200);
-
-      expect(mockFetchCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ goal: "combinedSales" }),
-      );
-    });
-
-    it("should ignore a legacy goal still stored on the row — the funnel is what it sells", async () => {
-      // A row written before the goal stopped being written still carries one. It changes nothing:
-      // pricing follows the funnel when there is one, and the brand's goal when there is not.
-      const campaign = await insertTestCampaign(orgId, { brandIds, goal: "positiveReply" });
-
-      await request(app)
-        .post("/start-run")
-        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
-        .expect(200);
-
-      expect(mockFetchCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ funnelKey: null, goal: "signup" }),
-      );
-    });
-
-    // === Goal arbitration: features-service elects the goal, we do not deduce it ===
-
-    it("should use the ARBITRATED goal's rows when its workflow is the one running", async () => {
-      mockFetchArbitration.mockResolvedValueOnce({
-        goal: "formSubmission",
-        workflowSlug: DEFAULT_WORKFLOW_SLUG,
-        rows: [projectionRow("aud-arbitrated")],
-      });
-      const campaign = await insertTestCampaign(orgId, { brandIds });
+    it("a campaign stating NO leg picks no audience and makes no projection call — the run still starts", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const campaign = await insertTestCampaign(orgId, { brandIds, legKey: null });
 
       const res = await request(app)
         .post("/start-run")
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .expect(200);
 
-      // One answer carried both the goal and the rows → no second projection call.
       expect(mockFetchCandidates).not.toHaveBeenCalled();
-      expect(res.body.audienceId).toBe("aud-arbitrated");
+      expect(res.body.audienceId).toBeNull();
+      expect(String(warn.mock.calls.flat().join(" "))).toContain("states NO leg");
+      warn.mockRestore();
     });
 
-    it("should keep the arbitrated GOAL but re-read rows when the elected workflow is not the one running", async () => {
-      // The shared evidence snapshot rolled between the trigger and now, so the elected workflow
-      // is no longer the DAG that is executing. Picking an audience from those rows would pick
-      // for the wrong workflow.
-      mockFetchArbitration.mockResolvedValueOnce({
-        goal: "formSubmission",
-        workflowSlug: "some-other-dynasty",
-        rows: [projectionRow("aud-stale", "some-other-dynasty")],
-      });
-      const campaign = await insertTestCampaign(orgId, { brandIds });
-
-      const res = await request(app)
-        .post("/start-run")
-        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
-        .expect(200);
-
-      expect(mockFetchCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ goal: "formSubmission" }),
-      );
-      expect(res.body.audienceId).toBe(DEFAULT_AUDIENCE_ID);
-    });
-
-    it("should NOT arbitrate a campaign that STATES ITS FUNNEL — the customer's funding decided it", async () => {
-      const campaign = await insertTestCampaign(orgId, { brandIds, funnelKey: "form_magnet" });
-
-      await request(app)
-        .post("/start-run")
-        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
-        .expect(200);
-
-      expect(mockFetchArbitration).not.toHaveBeenCalled();
-      expect(mockFetchCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ funnelKey: "form_magnet", goal: null }),
-      );
-    });
-
-    it("should fall back to the brand goal when nothing is arbitrated", async () => {
-      const campaign = await insertTestCampaign(orgId, { brandIds });
-
-      await request(app)
-        .post("/start-run")
-        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
-        .expect(200);
-
-      expect(mockFetchArbitration).toHaveBeenCalled();
-      expect(mockFetchCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ goal: "signup" }),
-      );
-    });
-
-    it("should still start the run when arbitration throws", async () => {
-      mockFetchArbitration.mockRejectedValueOnce(new Error("features-service unavailable"));
+    it("should still start the run when the leg read throws", async () => {
+      mockFetchCandidates.mockRejectedValueOnce(new Error("features-service unavailable"));
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
@@ -1382,13 +1279,16 @@ describe("Pipeline routes", () => {
       expect(updated!.status).toBe("ongoing");
       expect(updated!.nextRunAt).not.toBeNull();
 
-      // The stop-guard's brand read names the campaign's org: per-brand configuration is
-      // per (org, brand), so a brand several orgs claim is only answerable with an org.
-      expect(mockFetchBrandRuntimeContext).toHaveBeenCalledWith(
-        brandIds[0],
-        expect.objectContaining({ orgId }),
-        null,
+      // The stop-guard reads the LEG-keyed body under the campaign's own org and names the
+      // campaign — no brand-service goal read and no funnel/goal-keyed projection (wave C2).
+      expect(mockFetchCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({
+          legKey: TEST_LEG,
+          campaignId: campaign.id,
+          identity: expect.objectContaining({ orgId }),
+        }),
       );
+      expect(mockFetchBrandRuntimeContext).not.toHaveBeenCalled();
     });
 
     it("stopCampaign=true NEVER stops the campaign, even when every audience is exhausted", async () => {

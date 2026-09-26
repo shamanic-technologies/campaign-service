@@ -298,7 +298,6 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     primaryBrandId: BRAND_ID,
     identity,
     fallbackSlug: "wf-configured",
-    funnelKey: "sales_meetings_from_conversation",
   };
 
   beforeEach(() => {
@@ -344,13 +343,16 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     });
   }
 
-  it("DIVERGES on the leg: the same grid picks the cheap workflow without one and the strong one with", async () => {
-    // No leg stated → no verdict read at all, and the cheapest cell wins as it always did.
+  it("DIVERGES on the leg: no leg selects nothing, a leg picks the eligible strong workflow", async () => {
+    // No leg stated → nothing to price on (wave C2): no read at all, the configured workflow runs.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = routeFetch({ legRows: [] }) as unknown as typeof fetch;
-    await expect(resolveSelectionForTrigger(baseArgs)).resolves.toMatchObject({
-      workflowSlug: "cheap-wf",
+    await expect(resolveSelectionForTrigger(baseArgs)).resolves.toEqual({
+      workflowSlug: "wf-configured",
+      audienceId: null,
     });
-    expect((global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    expect((global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    err.mockRestore();
 
     // Leg stated, cheap-wf excluded → the leg body yields the strong workflow.
     const withLeg = routeFetch({
@@ -371,14 +373,13 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     expect(urls[0]?.searchParams.has("funnel")).toBe(false);
   });
 
-  it("threads the campaign's campaignId and offerId so multi-offer brands answer instead of 409ing", async () => {
+  it("threads the campaign's campaignId so multi-offer brands answer instead of 409ing", async () => {
     const withLeg = routeFetch({ legRows: [] });
     global.fetch = withLeg as unknown as typeof fetch;
     await resolveSelectionForTrigger({
       ...baseArgs,
       legKey: LEG,
       campaignId: "647572d9-729e-4731-9456-28fa351be92c",
-      offerId: "832126f3-f3f1-4601-885d-bc8e101e5680",
     });
     const urls = withLeg.mock.calls.map((c) => new URL(String(c[0])));
     // The verdict read names the campaign (→ its offer, transitively).
