@@ -1202,6 +1202,29 @@ offer `d5ecba00` / funnel `sales_meetings_from_conversation`, past a stopped
 
 (Set 2026-09-21.)
 
+## WHO ANSWERS THE PEOPLE A CAMPAIGN HOLDS — the inverse of `/predecessor`, and "nobody" is named
+
+A prospect who asks for a meeting is owed an answer in lead-service's follow-up queue under the
+cold-email campaign that reached them; only a LIVE campaign on a leg starting where that one ends,
+whose `/predecessor` resolves to it, ever claims them. When a brand never started that leg, the row
+sits "due now" forever and the lead page promised a follow-up nobody would send (#485, measured
+2026-09-26: five people, up to 20 days, three orgs with no answering-leg campaign at all).
+
+- **`GET /internal/campaigns/:id/answerer` + batch `POST /internal/campaigns/answerers`**
+  (`src/lib/answering-campaign.ts`) answer it. The verdict is the claim path's OWN: candidates on
+  the continuing legs are enumerated, and each is judged by `resolvePredecessorCampaign` — never a
+  second rule that could drift from who actually claims.
+- **Nobody is always named**: `no_answering_campaign` (+ `startableFeatureSlugs`, the family
+  channels that perform a continuing leg — what the customer's start control needs),
+  `answering_campaign_stopped`, `answering_campaign_serves_another` (a live answerer claims a
+  sibling's people: a stopped or leg-less row of the same offer is never reached),
+  `no_leg_continues`, `campaign_states_no_leg|offer|brand`. Unreadable catalogue = 502, never null.
+- **Nothing is started, funded or provisioned.** Owner rule 1: money starts nothing and no system
+  condition starts a campaign. The fix for #485 is that the customer SEES it (lead-service puts it
+  on the lead history's follow-up event, the dashboard renders it) and chooses to start the leg.
+
+(Set 2026-09-26.)
+
 ## A lead reaching a STEP runs the campaign bought for the leg OUT of it, NOW — an event entry point beside the clock
 
 Everything this service schedules is on a clock: the tick claims what is due, `/end-run` reschedules

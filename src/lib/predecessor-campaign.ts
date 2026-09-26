@@ -1,7 +1,7 @@
 import { and, arrayContains, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
-import { fetchChannelCatalogue } from "./channel-operator-client.js";
+import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { toFunnelKey } from "./sales-funnel-vocabulary.js";
 
 /**
@@ -112,7 +112,14 @@ export class PredecessorScopeError extends Error {
   }
 }
 
-export async function resolvePredecessorCampaign(campaignId: string): Promise<PredecessorOutcome> {
+/**
+ * `catalogueRead` lets a caller resolving several campaigns in one pass (the answering-campaign
+ * read) share ONE catalogue read. Absent, the catalogue is read here exactly as before.
+ */
+export async function resolvePredecessorCampaign(
+  campaignId: string,
+  catalogueRead?: ChannelCatalogueRead,
+): Promise<PredecessorOutcome> {
   const campaign = await db.query.campaigns.findFirst({
     where: eq(campaigns.id, campaignId),
   });
@@ -147,7 +154,7 @@ export async function resolvePredecessorCampaign(campaignId: string): Promise<Pr
   if (!campaign.offerId) return answer(PREDECESSOR_ABSENCES.NO_OFFER);
   if (!brandId) return answer(PREDECESSOR_ABSENCES.NO_BRAND);
 
-  const catalogue = await fetchChannelCatalogue();
+  const catalogue = catalogueRead ?? (await fetchChannelCatalogue());
   if (!catalogue.ok) {
     // Fail LOUD. "The catalogue is down" and "this leg starts the funnel" are different answers
     // and collapsing them is how an outage looks like a one-leg chain.
