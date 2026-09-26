@@ -501,7 +501,6 @@ describe("Pipeline routes", () => {
     it("consumes the audience supplied on the execute call and makes NO projection call", async () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
-        funnelKey: "sales_meetings_from_website",
       });
 
       const res = await request(app)
@@ -572,7 +571,6 @@ describe("Pipeline routes", () => {
       // The row still carries a funnel and a legacy goal; neither is read (wave C2).
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
-        funnelKey: "sales_meetings_from_website",
         goal: "positiveReply",
       });
 

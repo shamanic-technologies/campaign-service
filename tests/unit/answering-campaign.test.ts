@@ -50,7 +50,6 @@ function held(over: Record<string, unknown> = {}) {
     brandId: BRAND,
     brandIds: [BRAND],
     offerId: OFFER,
-    funnelKey: "sales_meetings_from_conversation",
     legKey: ENTRY_LEG,
     acquisitionChannel: "cold_email",
     featureSlug: "sales-cold-email-outreach",

@@ -280,14 +280,15 @@ reader here; wave C2 (2026-09-26) deleted the rest. What is true now:
   drop a populated table whose snapshot `campaign_funnel_owner_decisions_funnel_snapshot_20260926`
   does not exist). Renamed: `funnel-campaigns.ts` → `brand-turns.ts` (`planBrandTurns`),
   `SALES_FUNNEL_FEATURE_SLUGS` → `SALES_FAMILY_FEATURE_SLUGS` (`isSalesFamilyFeature`).
-- **KEPT, READ-ONLY: `campaigns.funnel_key` and its echo `funnelKey` on the campaign row.** Nothing
-  here reads or writes it. It stays because four services still read `campaign.funnelKey` off
-  `GET /campaigns[/:id]` in production: lead-service (`campaign-funnel-client.ts`, step statements),
-  instantly-service (`funnelStopsOnClick`, campaign identity), workflow-service's active
-  ai-meeting-booking DAG (picks the booking URL by it), features-service (revenue attribution). Drop
-  the column once they have moved; every campaign created since C1 already carries NULL.
-- `tests/unit/no-legacy.test.ts` fails on any non-comment src line mentioning a funnel other than
-  those two retained declarations.
+- **DROPPED (wave C3, migration 0060): `campaigns.funnel_key` and its `funnelKey` echo on the campaign
+  row.** It was kept read-only through C2 for lead-service, instantly-service, workflow-service's
+  ai-meeting-booking DAG and features-service; the column was dropped only once none of them read
+  it in production. Before the drop (0059, shipped first), a STOPPED row stating a funnel but no leg
+  took the ONE leg its same-funnel sibling on the same (org, brand, offer, channel) states (5 rows
+  in prod), never an inference from the funnel. Prod snapshot: `campaigns_funnel_key_snapshot_20260926` (id,
+  funnel_key, leg_key before the backfill) + a pg_dump under `/root/distribute/backups/`; the
+  migration refuses to drop a populated column whose snapshot table does not exist.
+- `tests/unit/no-legacy.test.ts` fails on any non-comment src line mentioning a funnel.
 
 Sections further down that describe per-funnel funding, funnel-keyed identity or funnel
 narrowing were DELETED with this wave; a sentence still mentioning a funnel elsewhere is history.

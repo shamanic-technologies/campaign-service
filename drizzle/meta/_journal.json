@@ -421,6 +421,13 @@
       "when": 1778400000000,
       "tag": "0059_backfill_leg_from_funnel_sibling",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1778500000000,
+      "tag": "0060_drop_campaign_funnel_key",
+      "breakpoints": true
     }
   ]
 }

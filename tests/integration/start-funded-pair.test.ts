@@ -90,7 +90,7 @@ describe("POST /campaigns/start-funded-pair", () => {
 
     const campaign = res.body.campaign;
     expect(campaign.status).toBe("ongoing");
-    expect(campaign.funnelKey).toBeNull();
+    expect(campaign).not.toHaveProperty("funnelKey");
     expect(campaign.offerId).toBe(OFFER);
     expect(campaign.legKey).toBe(LEG);
     expect(campaign.featureSlug).toBe(CHANNEL);

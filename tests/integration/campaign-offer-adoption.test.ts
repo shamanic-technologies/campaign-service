@@ -63,7 +63,6 @@ describe("campaign offer adoption (integration)", () => {
       brandId: BRAND,
       brandIds: [BRAND],
       acquisitionChannel: "cold_email",
-      funnelKey: "sales_meetings_from_conversation",
       featureSlug: "sales-cold-email-outreach",
     });
     brandServiceHolds({ [ORG]: [OFFER] });

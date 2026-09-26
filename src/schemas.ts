@@ -52,12 +52,6 @@ export const CampaignSchema = z.object({
   maxBudgetTotalUsd: z.string().nullable(),
   // Per-campaign daily budget for the sales feature (cents). Null = fall back to brand daily budget.
   dailyBudgetCents: z.number().int().nullable(),
-  // RETIRED, READ-ONLY. The sales funnel is gone from this service's model (wave C2): nothing here
-  // reads it, and no route accepts it. The stored value is still SERVED on the campaign row for the
-  // readers that have not migrated off it yet (lead-service step statements, instantly-service
-  // stop-on-click, workflow-service's ai-meeting-booking booking link, features-service revenue).
-  // The column is dropped once they have. Null on every campaign created since wave C1.
-  funnelKey: z.string().nullable(),
   // The OFFER this campaign sells — a brand-service offer UUID. A campaign is (offer x leg x
   // acquisition channel). Never derived from the goal or the workflow. Null = the campaign states
   // no offer (every campaign created before it could be stated).
