@@ -581,6 +581,68 @@ export const PredecessorCampaignResponse = z.object({
 }).openapi("PredecessorCampaignResponse");
 
 /**
+ * WHO ANSWERS THE PEOPLE THIS CAMPAIGN HOLDS — the inverse of the predecessor lookup.
+ *
+ * A campaign that ran a leg ending at a step (a prospect asked for a meeting) holds the people owed
+ * the next action; the campaign on the leg that continues from that step answers them, by resolving
+ * its predecessor and claiming on exactly that id. This answers, for the held campaign, which live
+ * campaign that is — derived from the predecessor resolver itself, so it cannot disagree with the
+ * claim — or names why there is none. `absence` is non-null exactly when `answeredBy` is null.
+ */
+const AnsweringCampaignSchema = z.object({
+  campaignId: z.string(),
+  legKey: z.string(),
+  status: z.string(),
+  featureSlug: z.string().nullable(),
+  acquisitionChannel: z.string().nullable(),
+  /** Null for a channel the customer operates: a person answers, no workflow claims. */
+  workflowSlug: z.string().nullable(),
+});
+
+export const AnsweringCampaignResponse = z.object({
+  campaignId: z.string(),
+  legKey: z.string().nullable(),
+  offerId: z.string().nullable(),
+  brandId: z.string().nullable(),
+  /** The step this campaign's leg takes a lead INTO — where an answering leg must start. */
+  toStepKey: z.string().nullable(),
+  /** Every published leg starting at that step, as features-service names them. */
+  continuingLegKeys: z.array(z.string()),
+  /** Sales-family features whose channel performs one of those legs: what the customer could start. */
+  startableFeatureSlugs: z.array(z.string()),
+  answeredBy: AnsweringCampaignSchema.nullable(),
+  /**
+   * `campaign_states_no_leg` | `campaign_states_no_offer` | `campaign_states_no_brand` |
+   * `no_leg_continues` | `no_answering_campaign` | `answering_campaign_stopped` |
+   * `answering_campaign_serves_another`
+   */
+  absence: z.string().nullable(),
+  /** The campaign on the continuing leg behind `answering_campaign_stopped` / `_serves_another`. */
+  candidate: AnsweringCampaignSchema.nullable(),
+  /** For `answering_campaign_serves_another`: whose people that candidate answers instead. */
+  candidateAnswersCampaignId: z.string().nullable(),
+}).openapi("AnsweringCampaignResponse");
+
+export const AnsweringCampaignsBody = z.object({
+  /** Bounded: a consumer asks for the campaigns holding one lead's or one page's owed answers. */
+  campaignIds: z.array(z.string().min(1)).min(1).max(200),
+}).openapi("AnsweringCampaignsBody");
+
+export const AnsweringCampaignsResponse = z.object({
+  /** One entry per requested id, in the order asked. `ok: false` names why that one could not be resolved. */
+  campaigns: z.array(z.union([
+    AnsweringCampaignResponse.extend({ ok: z.literal(true) }),
+    z.object({
+      ok: z.literal(false),
+      campaignId: z.string(),
+      status: z.number(),
+      reason: z.string(),
+      error: z.string(),
+    }),
+  ])),
+}).openapi("AnsweringCampaignsResponse");
+
+/**
  * WAS THIS CAMPAIGN EARNING, day by day — the request and the answer.
  *
  * A day is a UTC calendar day and is evaluated at its END (or at now, for a day still running):

@@ -6,7 +6,7 @@ import { requireApiKey, requirePipelineHeaders, serviceAuth, trackingHeaders, ty
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
-import { EarningHistoryBody, EarningHistoryQuery, EndRunBody, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
+import { AnsweringCampaignsBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext, type RuntimeGoal } from "../lib/brand-runtime-client.js";
@@ -19,6 +19,11 @@ import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
 import { triggerCampaignsForStep, StepTriggerScopeError } from "../lib/step-trigger.js";
 import { resolvePredecessorCampaign, PredecessorScopeError } from "../lib/predecessor-campaign.js";
+import {
+  resolveAnsweringCampaign,
+  resolveAnsweringCampaigns,
+  AnsweringScopeError,
+} from "../lib/answering-campaign.js";
 import { earningHistory, utcDaysBetween } from "../lib/earning-history.js";
 import {
   fetchLegProjectionRows,
@@ -990,5 +995,68 @@ router.get("/internal/campaigns/:campaignId/predecessor", requireApiKey, async (
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+
+/**
+ * GET /internal/campaigns/:campaignId/answerer
+ *
+ * WHO ANSWERS THE PEOPLE THIS CAMPAIGN HOLDS — the live campaign on the leg that continues where
+ * this one ends AND whose predecessor resolves to this campaign (the claim path's own rule), or a
+ * named absence. See `lib/answering-campaign.ts`. Nothing is written, started or funded.
+ *
+ * Returns:
+ *   200 — `answeredBy`, or `answeredBy: null` with `absence` naming why nobody answers
+ *   401 — bad api key
+ *   404 — no such campaign
+ *   409 — a leg features-service does not publish, or a candidate whose predecessor is ambiguous
+ *   502 — the acquisition-channel catalogue could not be read
+ *   500 — internal error
+ */
+router.get("/internal/campaigns/:campaignId/answerer", requireApiKey, async (req, res) => {
+  try {
+    res.json(await resolveAnsweringCampaign(req.params.campaignId));
+  } catch (error) {
+    if (error instanceof AnsweringScopeError) {
+      console.warn(
+        `[campaign-service] ${error.status} on /internal/campaigns/${req.params.campaignId}/answerer — ${error.message}`,
+      );
+      return res.status(error.status).json({ error: error.message, reason: error.reason });
+    }
+    console.error("[campaign-service] answerer lookup error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/campaigns/answerers
+ *
+ * The batch form: one catalogue read for every campaign asked, one entry per id in the order asked.
+ * An id that could not be resolved comes back `ok: false` naming why — never dropped.
+ *
+ * Returns:
+ *   200 — one entry per requested campaign
+ *   400 — empty or oversized id list
+ *   401 — bad api key
+ *   502 — the acquisition-channel catalogue could not be read
+ *   500 — internal error
+ */
+router.post(
+  "/internal/campaigns/answerers",
+  requireApiKey,
+  validateBody(AnsweringCampaignsBody),
+  async (req, res) => {
+    try {
+      const { campaignIds } = req.body as { campaignIds: string[] };
+      res.json({ campaigns: await resolveAnsweringCampaigns(campaignIds) });
+    } catch (error) {
+      if (error instanceof AnsweringScopeError) {
+        console.warn(`[campaign-service] ${error.status} on /internal/campaigns/answerers — ${error.message}`);
+        return res.status(error.status).json({ error: error.message, reason: error.reason });
+      }
+      console.error("[campaign-service] answerers batch error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
 
 export default router;

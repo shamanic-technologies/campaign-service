@@ -34,6 +34,9 @@ import {
   EarningHistoryResponse,
   TriggerForStepResponse,
   PredecessorCampaignResponse,
+  AnsweringCampaignResponse,
+  AnsweringCampaignsBody,
+  AnsweringCampaignsResponse,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -475,6 +478,47 @@ registry.registerPath({
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     404: { description: "No such campaign", content: { "application/json": { schema: ErrorResponse } } },
     409: { description: "A leg features-service does not publish, or two live siblings on the preceding leg", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/campaigns/{campaignId}/answerer",
+  tags: ["Internal"],
+  summary: "Which campaign answers the people this campaign holds",
+  description:
+    "The inverse of /predecessor. A campaign whose leg ends at a step (a prospect asked for a meeting) holds the people owed the next action in lead-service's follow-up queue; they are answered only by a LIVE campaign on a leg that starts at that step (features-service's own statement, GET /public/channels -> legs[]) whose predecessor resolves to THIS campaign — the claim path's own rule, applied through the same resolver, so this cannot disagree with who actually claims. When nobody does, `answeredBy` is null and `absence` names why: `no_answering_campaign` (nobody bought one on this offer — `startableFeatureSlugs` lists the sales-family channels that could), `answering_campaign_stopped`, `answering_campaign_serves_another` (a live one answers a different campaign's people — `candidate` + `candidateAnswersCampaignId` name them), `no_leg_continues`, or `campaign_states_no_leg`/`_no_offer`/`_no_brand`. Nothing is written, started or funded: money starts nothing, and starting the answering leg stays the customer's decision. An unreadable catalogue is a 502 and a leg the catalogue does not publish is a 409 — never a null.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ campaignId: z.string() }),
+  },
+  responses: {
+    200: { description: "The answering campaign, or a named absence", content: { "application/json": { schema: AnsweringCampaignResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    404: { description: "No such campaign", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "A leg features-service does not publish, or a candidate whose own predecessor is ambiguous", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/campaigns/answerers",
+  tags: ["Internal"],
+  summary: "Which campaign answers the people each of these campaigns holds",
+  description:
+    "The batch form of /answerer: one catalogue read for every campaign asked, one entry per id in the order asked. An id that could not be resolved (no such campaign, a leg the catalogue does not publish) comes back `ok: false` with its status and reason — never dropped, since a missing entry would read as answered. An unreadable catalogue fails the whole batch with a 502.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    body: { content: { "application/json": { schema: AnsweringCampaignsBody } } },
+  },
+  responses: {
+    200: { description: "One entry per requested campaign", content: { "application/json": { schema: AnsweringCampaignsResponse } } },
+    400: { description: "Empty or oversized id list", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },

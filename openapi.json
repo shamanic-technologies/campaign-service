@@ -1335,6 +1335,216 @@
           "absence"
         ]
       },
+      "AnsweringCampaignResponse": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string"
+          },
+          "legKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "offerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "brandId": {
+            "type": "string",
+            "nullable": true
+          },
+          "toStepKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "continuingLegKeys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "startableFeatureSlugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "answeredBy": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "campaignId": {
+                "type": "string"
+              },
+              "legKey": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "featureSlug": {
+                "type": "string",
+                "nullable": true
+              },
+              "acquisitionChannel": {
+                "type": "string",
+                "nullable": true
+              },
+              "workflowSlug": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "campaignId",
+              "legKey",
+              "status",
+              "featureSlug",
+              "acquisitionChannel",
+              "workflowSlug"
+            ]
+          },
+          "absence": {
+            "type": "string",
+            "nullable": true
+          },
+          "candidate": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "campaignId": {
+                "type": "string"
+              },
+              "legKey": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "featureSlug": {
+                "type": "string",
+                "nullable": true
+              },
+              "acquisitionChannel": {
+                "type": "string",
+                "nullable": true
+              },
+              "workflowSlug": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "campaignId",
+              "legKey",
+              "status",
+              "featureSlug",
+              "acquisitionChannel",
+              "workflowSlug"
+            ]
+          },
+          "candidateAnswersCampaignId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "campaignId",
+          "legKey",
+          "offerId",
+          "brandId",
+          "toStepKey",
+          "continuingLegKeys",
+          "startableFeatureSlugs",
+          "answeredBy",
+          "absence",
+          "candidate",
+          "candidateAnswersCampaignId"
+        ]
+      },
+      "AnsweringCampaignsResponse": {
+        "type": "object",
+        "properties": {
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/AnsweringCampaignResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ok": {
+                          "type": "boolean",
+                          "enum": [
+                            true
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "campaignId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "campaignId",
+                    "status",
+                    "reason",
+                    "error"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "campaigns"
+        ]
+      },
+      "AnsweringCampaignsBody": {
+        "type": "object",
+        "properties": {
+          "campaignIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "maxItems": 200
+          }
+        },
+        "required": [
+          "campaignIds"
+        ]
+      },
       "EarningHistoryResponse": {
         "type": "object",
         "properties": {
@@ -3234,6 +3444,167 @@
           },
           "409": {
             "description": "A leg features-service does not publish, or two live siblings on the preceding leg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The acquisition-channel catalogue could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/campaigns/{campaignId}/answerer": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Which campaign answers the people this campaign holds",
+        "description": "The inverse of /predecessor. A campaign whose leg ends at a step (a prospect asked for a meeting) holds the people owed the next action in lead-service's follow-up queue; they are answered only by a LIVE campaign on a leg that starts at that step (features-service's own statement, GET /public/channels -> legs[]) whose predecessor resolves to THIS campaign — the claim path's own rule, applied through the same resolver, so this cannot disagree with who actually claims. When nobody does, `answeredBy` is null and `absence` names why: `no_answering_campaign` (nobody bought one on this offer — `startableFeatureSlugs` lists the sales-family channels that could), `answering_campaign_stopped`, `answering_campaign_serves_another` (a live one answers a different campaign's people — `candidate` + `candidateAnswersCampaignId` name them), `no_leg_continues`, or `campaign_states_no_leg`/`_no_offer`/`_no_brand`. Nothing is written, started or funded: money starts nothing, and starting the answering leg stays the customer's decision. An unreadable catalogue is a 502 and a leg the catalogue does not publish is a 409 — never a null.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "campaignId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The answering campaign, or a named absence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnsweringCampaignResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such campaign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A leg features-service does not publish, or a candidate whose own predecessor is ambiguous",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The acquisition-channel catalogue could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/campaigns/answerers": {
+      "post": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Which campaign answers the people each of these campaigns holds",
+        "description": "The batch form of /answerer: one catalogue read for every campaign asked, one entry per id in the order asked. An id that could not be resolved (no such campaign, a leg the catalogue does not publish) comes back `ok: false` with its status and reason — never dropped, since a missing entry would read as answered. An unreadable catalogue fails the whole batch with a 502.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnsweringCampaignsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One entry per requested campaign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnsweringCampaignsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or oversized id list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
