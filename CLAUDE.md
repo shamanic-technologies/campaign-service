@@ -946,6 +946,27 @@ The diagnostic that now works, and did not before:
 
 (Set 2026-09-17.)
 
+## A BRAND TRANSFER moves every org-tied row of the brand, with its history — `POST /internal/transfer-brand`
+
+Fleet contract (brand-service fans out to every service registering it). `src/lib/brand-transfer.ts`
+is the ONE place it is implemented, in ONE transaction, idempotent:
+
+- **What moves**: `campaigns` (naming the brand ALONE, matched on `brand_id` OR a single-element
+  `brand_ids`), `campaign_status_transitions` + `campaign_audience_availability` (through the
+  campaign), `brand_pause_transitions`, and the two migration rollback snapshots
+  (`*_snapshot_20260926`, moved only where they exist — they are not in schema.ts).
+  `campaign_audience_exhaustion` has no org column and follows the campaign id, which never changes.
+- **A NEW table carrying `org_id` (directly, or through a campaign of the brand) must be added
+  there and to `tests/integration/transfer-brand.test.ts`**, or a transfer leaves it behind silently.
+- **The brand id is rewritten only on rows now under the TARGET org.** A brand row is a shared
+  global identity (Doc Dinners is claimed by two orgs in prod); the April 2026 version rewrote every
+  org's campaigns of the brand, which is gone.
+- **Co-branded campaigns (two+ brands) stay put** and are counted in `coBrandedSkipped`.
+- **History, not money**: no status, budget, schedule or configuration changes. A campaign-name
+  collision in the target org is a **409** and nothing moves.
+
+(Set 2026-09-27.)
+
 ## A `POST /campaigns` PROBE against a real org is a WRITE — it matches the incumbent and RESTARTS it
 
 This route is documented to match the incumbent of an identity WHATEVER ITS STATUS and hand it back
