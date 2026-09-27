@@ -14,6 +14,7 @@ import { markAudienceExhausted, resolveAudienceExhaustion, getFreshExhaustedAudi
 import { recordAudienceAvailability } from "../lib/campaign-audience-availability.js";
 import { stopOrgCampaignsWithHistory, TRANSITION_SOURCES } from "../lib/campaign-status-history.js";
 import { NO_WORK_RECHECK_MS } from "../lib/idle-run.js";
+import { transferBrand } from "../lib/brand-transfer.js";
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
@@ -675,59 +676,33 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
 /**
  * POST /internal/transfer-brand
  *
- * Transfers all solo-brand campaigns from one org to another.
- * Solo-brand = brand_ids array contains exactly one element matching sourceBrandId.
- * Skips co-branding rows (multiple brand IDs).
- *
- * Two-step process:
- *   Step 1: UPDATE org_id WHERE brand_ids = [sourceBrandId] AND org_id = sourceOrgId
- *   Step 2 (when targetBrandId present): UPDATE brand_ids WHERE brand_ids = [sourceBrandId] (no org filter)
- *
- * Idempotent: re-running with same params is a no-op.
+ * Moves everything this service holds for a brand from one org to another, with its history
+ * (campaigns, their status history and audience availability, the brand's pause history, and the
+ * migration rollback snapshots), rewriting the brand id to targetBrandId when given. One
+ * transaction, idempotent. See src/lib/brand-transfer.ts for the table map and the rules.
  */
 router.post("/internal/transfer-brand", requireApiKey, validateBody(TransferBrandBody), async (req, res) => {
+  const { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId } = req.body;
   try {
-    const { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId } = req.body;
+    const result = await transferBrand({ sourceBrandId, sourceOrgId, targetOrgId, targetBrandId });
 
-    // Step 1: Move matching rows to target org
-    const step1 = await db.execute(
-      sql`WITH updated AS (
-            UPDATE campaigns
-            SET org_id = ${targetOrgId},
-                updated_at = NOW()
-            WHERE org_id = ${sourceOrgId}
-              AND brand_ids = ARRAY[${sourceBrandId}]::text[]
-            RETURNING id
-          )
-          SELECT count(*)::int AS cnt FROM updated`
-    );
-
-    const movedCount = Number((step1 as unknown as Array<{ cnt: number }>)[0]?.cnt ?? 0);
-
-    // Step 2: Rewrite brand_ids (no org filter — catches all rows with sourceBrandId)
-    let remappedCount = 0;
-    if (targetBrandId) {
-      const step2 = await db.execute(
-        sql`WITH updated AS (
-              UPDATE campaigns
-              SET brand_ids = ARRAY[${targetBrandId}]::text[],
-                  updated_at = NOW()
-              WHERE brand_ids = ARRAY[${sourceBrandId}]::text[]
-              RETURNING id
-            )
-            SELECT count(*)::int AS cnt FROM updated`
-      );
-      remappedCount = Number((step2 as unknown as Array<{ cnt: number }>)[0]?.cnt ?? 0);
+    if (result.coBrandedSkipped > 0) {
+      console.warn(`[campaign-service] transfer-brand: ${result.coBrandedSkipped} co-branded campaign(s) of org ${sourceOrgId} name brand ${sourceBrandId} AND another brand — left in the source org`);
     }
+    console.log(`[campaign-service] transfer-brand: sourceBrandId=${sourceBrandId} targetBrandId=${targetBrandId ?? "none"} ${sourceOrgId} -> ${targetOrgId} ${JSON.stringify(result.updatedTables)}`);
 
-    const totalCount = Math.max(movedCount, remappedCount);
-
-    console.log(`[campaign-service] transfer-brand: moved ${movedCount}, remapped ${remappedCount} campaigns (sourceBrandId=${sourceBrandId}, targetBrandId=${targetBrandId ?? "none"}, ${sourceOrgId} -> ${targetOrgId})`);
-
-    res.json({
-      updatedTables: [{ tableName: "campaigns", count: totalCount }],
-    });
-  } catch (error) {
+    res.json(result);
+  } catch (error: any) {
+    // A campaign NAME is unique per org: the target org already holds a campaign with the same
+    // name as one being moved. Nothing moved (one transaction); say which constraint refused it.
+    if (error?.code === "23505") {
+      console.error(`[campaign-service] transfer-brand refused by ${error.constraint_name ?? error.constraint}: ${error.detail}`);
+      return res.status(409).json({
+        error: "The target org already holds a campaign that collides with one being moved; nothing was moved",
+        constraint: error.constraint_name ?? error.constraint ?? null,
+        detail: error.detail ?? null,
+      });
+    }
     console.error("[campaign-service] transfer-brand error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
