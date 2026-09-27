@@ -407,8 +407,8 @@ registry.registerPath({
   method: "post",
   path: "/internal/transfer-brand",
   tags: ["Internal"],
-  summary: "Transfer solo-brand campaigns from one org to another",
-  description: "Updates org_id on all campaigns where brand_ids contains exactly one element matching brandId and org_id matches sourceOrgId. Skips co-branding rows. Idempotent.",
+  summary: "Move everything this service holds for a brand from one org to another, with its history",
+  description: "One transaction, idempotent. Moves to targetOrgId every row tied to sourceBrandId under sourceOrgId: campaigns naming that brand alone, their status transitions and audience-availability periods, the brand's pause transitions, and the migration rollback snapshots. When targetBrandId is given, the brand id is rewritten on the moved rows only (never on another org's rows). Co-branded campaigns (two or more brands) are left in place and counted in coBrandedSkipped. campaign_audience_exhaustion has no org column and follows its campaign id, which never changes. 409 when a moved campaign's name collides with one the target org already holds (nothing is moved).",
   security: [{ [apiKeyAuth.name]: [] }],
   request: {
     body: { content: { "application/json": { schema: TransferBrandBody } } },
@@ -417,6 +417,7 @@ registry.registerPath({
     200: { description: "Transfer result", content: { "application/json": { schema: TransferBrandResponse } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "A moved campaign collides with one the target org already holds; nothing moved", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 

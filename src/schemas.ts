@@ -362,6 +362,7 @@ export const TransferBrandResponse = z.object({
     tableName: z.string(),
     count: z.number().int(),
   })),
+  coBrandedSkipped: z.number().int().describe("Campaigns of the source org naming the source brand AND another brand: left in place, never moved"),
 }).openapi("TransferBrandResponse");
 
 // --- Internal: Org Teardown ---
