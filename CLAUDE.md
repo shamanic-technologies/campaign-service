@@ -974,6 +974,42 @@ The diagnostic that now works, and did not before:
 
 (Set 2026-09-17.)
 
+## GLOBAL sales-budget mode — one daily budget per brand, put behind the best-ROI sales path (`src/lib/global-sales-budget.ts`)
+
+billing-service (v0.81.21) serves a brand's funding MODE at `GET /internal/brands/:id/sales-budget`:
+`campaigns` (default, no stored row) or `global` (ONE daily sales budget). The turn planner reads it
+once per brand per tick (`brand-sales-budget-client.ts`), after the ceilings.
+
+- **`campaigns` mode is byte-identical to before.** `tests/unit/brand-turns.test.ts` is the gate: it
+  mocks the mode read at `campaigns` and every assertion in it is unchanged. The catalogue and the
+  sales paths are never read in this mode.
+- **An unreadable mode holds the brand** (`budgets_unreadable`, fail-closed), exactly like an
+  unreadable ceiling: a mode we cannot read is a cap we cannot read.
+- **Global mode caps PROACTIVE spend only.** A campaign is REACTIVE when its leg leaves a step
+  (catalogue `fromStepKey` non-null); a leg the catalogue does not name reads PROACTIVE (the capped,
+  conservative side). Reactive legs are never held on the global budget, and their spend never counts
+  toward it; they keep their own ceilings.
+- **Brand-wide proactive spend** sums every sales campaign of the brand that is ongoing or was touched
+  today — including the one in flight, which is never among the claimed. ANY unreadable spend holds
+  the proactive campaigns (fail-closed): the cap is never judged on a guessed zero.
+- **At or over the budget (or a $0 budget)**: every proactive campaign is parked
+  (`global_sales_budget_reached`, `info`) until the rollover or ten minutes, whichever is first — the
+  ceiling park's bound, so a raise lands within ten minutes.
+- **Under it**: features-service `GET /offers/:id/sales-paths` per offer; every `ok` path is flattened
+  into ONE order (ROI desc across the brand, null ROI last, then rank). The budget goes to the
+  campaign whose (offer, leg = `entryLegKey`, channel = `entryChannelSlug`) matches the first path
+  that can run; it spills only when that path has no live funded campaign or it is at its OWN ceiling.
+  A campaign no path names — or of an offer whose paths could not be read / are not `ok` — is the last
+  resort, on the fill ratio (logged loud). Only that ONE proactive campaign enters the cohort ranking
+  (beside every reactive one); the other proactive ones yield their turn silently (60s).
+- **Campaign ceilings are untouched and still bind**: gate-check paces every run on them, so a
+  proactive campaign must be funded on its own ceiling to take the global budget. Making gate-check
+  honour a campaign-less global budget is a separate phase.
+- Granularity: the cap is checked BEFORE a run, so one run may carry the brand a little past it —
+  the same granularity the per-campaign ceiling already has.
+
+(Set 2026-09-29.)
+
 ## A BRAND TRANSFER moves every org-tied row of the brand, with its history — `POST /internal/transfer-brand`
 
 Fleet contract (brand-service fans out to every service registering it). `src/lib/brand-transfer.ts`

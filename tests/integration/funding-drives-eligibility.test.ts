@@ -77,6 +77,13 @@ function billingAnswers(entries: Entry[], brandDailyBudgetCents: string | null) 
         }),
       };
     }
+    // The brand's funding mode: no stored global sales budget IS campaigns mode (billing's default).
+    if (String(url).includes("/sales-budget")) {
+      return {
+        ok: true,
+        json: async () => ({ brandId: "b", orgId, mode: "campaigns", dailyBudgetCents: null, updatedAt: null }),
+      };
+    }
     // The brand pot, read by the gate for a brand with no per-campaign ceilings.
     if (String(url).includes("/daily-budget")) {
       return { ok: true, json: async () => ({ brandId: "b", dailyBudgetCents: brandDailyBudgetCents, updatedAt: null }) };
