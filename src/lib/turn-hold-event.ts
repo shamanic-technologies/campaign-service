@@ -24,7 +24,12 @@ export type TurnHoldReason =
   /** Funded, and it has already spent its whole ceiling today. Re-opens on a raise or the rollover. */
   | "daily_ceiling_reached"
   /** Planning threw. The brand is held; the gate would refuse these runs anyway. */
-  | "planning_failed";
+  | "planning_failed"
+  /**
+   * GLOBAL mode: the brand's one daily sales budget is spent (or stated at zero). Every PROACTIVE
+   * campaign waits for a raise or the rollover; reactive legs are untouched.
+   */
+  | "global_sales_budget_reached";
 
 /** The campaign fields an event needs to be attributable. A structural subset of a claimed row. */
 export interface TurnHoldCampaign {

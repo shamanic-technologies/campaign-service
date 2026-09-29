@@ -35,6 +35,13 @@ vi.mock("@distribute/runs-client", () => ({
 
 vi.mock("../../src/lib/trace-event.js", () => ({ traceEvent: mockTraceEvent }));
 
+// Every brand in this file is in CAMPAIGNS mode — billing's default, and every brand in prod until
+// one states a global sales budget. Mocking the mode read (rather than queueing one more fetch)
+// leaves every assertion below byte-identical: this file IS the campaigns-mode regression gate.
+vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({
+  fetchBrandSalesBudget: vi.fn().mockResolvedValue({ ok: true, mode: "campaigns" }),
+}));
+
 vi.mock("../../src/db/index.js", () => ({
   db: {
     query: { campaigns: { findFirst: mockFindFirst, findMany: mockFindMany } },

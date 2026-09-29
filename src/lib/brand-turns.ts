@@ -12,6 +12,16 @@ import { acquisitionChannelForFeature } from "./campaign-identity.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
 import { adoptOfferForPairSafely } from "./campaign-offer-adoption.js";
 import { reportTurnHolds, type TurnHold } from "./turn-hold-event.js";
+import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
+import { fetchOfferSalesPaths, type SalesPathEntry } from "./offer-sales-paths-client.js";
+import { fetchChannelCatalogue, type CatalogueLeg } from "./channel-operator-client.js";
+import {
+  isGlobalBudgetExhausted,
+  isReactiveLeg,
+  rankEntryTargets,
+  selectByPathRoi,
+  type GlobalCandidate,
+} from "./global-sales-budget.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
 // re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
@@ -233,6 +243,26 @@ async function planOneBrand(
   // would stop the brand's live campaigns for a fault that is not theirs.
   reportLegKeylessCeilings(orgId, brandId, legKeylessFundedCeilings(budgets), now);
 
+  // The brand's funding MODE. `campaigns` (every brand until one states a global sales budget) is
+  // today's planner, byte-identical. Fail-CLOSED exactly like an unreadable ceiling: a mode we
+  // cannot read is a cap we cannot read.
+  const salesBudget = await fetchBrandSalesBudget(brandId, identity);
+  if (!salesBudget.ok) {
+    console.error(
+      `[campaign-service] brand ${brandId} (org ${orgId}): billing's sales-budget mode could not be read (${salesBudget.detail}) — holding the brand (fail-closed).`,
+    );
+    for (const c of group) {
+      deferred.set(c.id, heldAt);
+      holds.push({
+        campaign: c,
+        reason: "budgets_unreadable",
+        detail: `Campaign not run — billing's sales-budget mode for brand ${brandId} could not be read (${salesBudget.detail}), so whether a brand-wide sales budget caps this campaign is unknown. Held rather than spent (fail-closed); re-checked at ${heldAt.toISOString()}.`,
+        nextRunAt: heldAt,
+      });
+    }
+    return;
+  }
+
   // Attribution only — it creates no campaign, starts none, and changes no status. Nothing about
   // money reaches it: it states which OFFER a campaign already running sells, so its history lands
   // in the totals the customer reads. Fail-soft, and a no-op on an ordinary tick.
@@ -248,8 +278,11 @@ async function planOneBrand(
   //
   // EVERY funded campaign of the brand is in the running, every tick: each is ranked on what IT has already spent today
   // against the ceiling that actually binds IT, so nothing starves and nothing overspends.
-  const candidates: TurnCandidate[] = [];
+  let candidates: TurnCandidate[] = [];
   const cohortOf = new Map<string, string>();
+  // Strict per-campaign spend (null = unreadable). Only GLOBAL mode reads it: the brand-wide cap
+  // must not treat an unreadable spend as zero. Campaigns mode keeps the lenient 0 it always had.
+  const strictSpent = new Map<string, number | null>();
   for (const c of group) {
     const verdict = fundingFromBudgets(c, budgets);
     if (!verdict.funded) {
@@ -269,12 +302,35 @@ async function planOneBrand(
       // The campaign's OWN feature, never the seed's: the spend read filters on it, so asking
       // runs-service for a Google Ads campaign's spend under the seed's cold-email slug answers
       // ZERO — the ad campaign then reads as perfectly empty and takes every turn, forever.
-      spentCents: await spentTodayCents(orgId, c.id, c.featureSlug ?? featureSlug),
+      spentCents: await (async () => {
+        const strict = await readSpentTodayCents(orgId, c.id, c.featureSlug ?? featureSlug);
+        strictSpent.set(c.id, strict);
+        return strict ?? 0;
+      })(),
       ceilingCents: verdict.ceilingCents,
     });
   }
 
   if (candidates.length === 0) return;
+
+  const byId = new Map(group.map((c) => [c.id, c]));
+
+  if (salesBudget.mode === "global") {
+    candidates = await allocateGlobalBudget({
+      orgId,
+      brandId,
+      featureSlug,
+      budgetCents: salesBudget.dailyBudgetCents,
+      candidates,
+      byId,
+      strictSpent,
+      provisioning,
+      now,
+      deferred,
+      holds,
+    });
+    if (candidates.length === 0) return;
+  }
 
   // Serial WITHIN A COHORT, and a cohort is what actually shares something: the outbound
   // cold-email channels share the brand's lead population and its sending accounts, so two of
@@ -295,10 +351,197 @@ async function planOneBrand(
     else cohorts.set(key, [c]);
   }
 
-  const byId = new Map(group.map((c) => [c.id, c]));
   for (const [cohort, members] of cohorts) {
     await planOneCohort(orgId, brandId, cohort, members, byId, now, deferred, holds);
   }
+}
+
+interface GlobalAllocationInput {
+  orgId: string;
+  brandId: string;
+  featureSlug: string;
+  budgetCents: number;
+  candidates: TurnCandidate[];
+  byId: Map<string, ClaimedSalesCampaign>;
+  strictSpent: Map<string, number | null>;
+  provisioning: Awaited<ReturnType<typeof buildProvisioningIdentity>>;
+  now: Date;
+  deferred: Map<string, Date>;
+  holds: TurnHold[];
+}
+
+/**
+ * GLOBAL MODE: the brand stated ONE daily sales budget. Returns the candidates that stay in the
+ * running for this tick's cohort ranking — every REACTIVE candidate (never held on the global
+ * budget) plus AT MOST ONE proactive campaign, the one the global budget goes to. Every other
+ * proactive candidate is deferred here.
+ *
+ *   - Brand-wide proactive spend today >= the global budget (or a $0 budget): every proactive
+ *     candidate is parked until a raise or the rollover — the same bound the ceiling park uses.
+ *   - Spend unreadable: proactive candidates are held (fail-closed); the cap cannot be judged.
+ *   - Otherwise the budget goes to the best-ROI sales path that can run (`selectByPathRoi`); an
+ *     offer whose paths cannot be read, or are not `ok`, falls back to fill-ratio pacing — loudly —
+ *     still inside the global cap.
+ *
+ * Per-campaign ceilings are untouched: gate-check still paces every run on them, so a proactive
+ * campaign at its own ceiling cannot take the global budget and the next path gets it.
+ */
+async function allocateGlobalBudget(input: GlobalAllocationInput): Promise<TurnCandidate[]> {
+  const { orgId, brandId, featureSlug, budgetCents, candidates, byId, strictSpent, provisioning, now, deferred, holds } = input;
+
+  const catalogue = await fetchChannelCatalogue();
+  let legs: readonly CatalogueLeg[] = [];
+  if (catalogue.ok) {
+    legs = catalogue.legs;
+  } else {
+    // Conservative: with no catalogue every leg reads PROACTIVE, i.e. capped by the global budget.
+    console.error(
+      `[campaign-service] brand ${brandId} (org ${orgId}) is in GLOBAL sales-budget mode but the channel catalogue could not be read (${catalogue.detail}) — treating every leg as proactive (capped by the global budget).`,
+    );
+  }
+
+  const reactive: TurnCandidate[] = [];
+  const proactive: TurnCandidate[] = [];
+  for (const c of candidates) {
+    if (isReactiveLeg(byId.get(c.campaignId)?.legKey ?? null, legs)) reactive.push(c);
+    else proactive.push(c);
+  }
+  if (proactive.length === 0) return reactive;
+
+  // Only the PROACTIVE candidates' spend counts toward the cap — a reactive leg's never does.
+  const proactiveKnown = new Map<string, number | null>(
+    proactive.map((c) => [c.campaignId, strictSpent.get(c.campaignId) ?? null]),
+  );
+  const spent = await brandProactiveSpentTodayCents(orgId, brandId, featureSlug, legs, proactiveKnown);
+  const recheck = new Date(now.getTime() + FUNDING_RECHECK_MS);
+
+  if (spent === null) {
+    console.error(
+      `[campaign-service] brand ${brandId} (org ${orgId}): brand-wide proactive spend today could not be read — holding its proactive campaigns rather than spending past a global sales budget of ${budgetCents} cents (fail-closed).`,
+    );
+    for (const c of proactive) {
+      deferred.set(c.campaignId, recheck);
+      const campaign = byId.get(c.campaignId);
+      if (!campaign) continue;
+      holds.push({
+        campaign,
+        reason: "budgets_unreadable",
+        detail: `Campaign not run — the brand's spend today could not be read, so its global daily sales budget of ${budgetCents} cents cannot be judged. Held rather than spent (fail-closed); re-checked at ${recheck.toISOString()}.`,
+        nextRunAt: recheck,
+      });
+    }
+    return reactive;
+  }
+
+  if (isGlobalBudgetExhausted(spent, budgetCents)) {
+    const reset = new Date(Math.min(nextDayStart(now).getTime(), recheck.getTime()));
+    for (const c of proactive) {
+      deferred.set(c.campaignId, reset);
+      const campaign = byId.get(c.campaignId);
+      if (!campaign) continue;
+      holds.push({
+        campaign,
+        reason: "global_sales_budget_reached",
+        detail: `Campaign not run — the brand's global daily sales budget is ${budgetCents} cents and ${spent.toFixed(0)} cents of proactive sales spend is already committed today. It runs again when the budget is raised or the day rolls over; re-checked at ${reset.toISOString()}.`,
+        nextRunAt: reset,
+        data: { spentCents: spent, globalBudgetCents: budgetCents },
+      });
+    }
+    return reactive;
+  }
+
+  // Rank the paths of every offer the proactive candidates sell.
+  const pathsByOffer = new Map<string, SalesPathEntry[]>();
+  const offers = new Set<string>();
+  for (const c of proactive) {
+    const offerId = byId.get(c.campaignId)?.offerId;
+    if (offerId) offers.add(offerId);
+  }
+  for (const offerId of offers) {
+    if (!provisioning) {
+      console.error(
+        `[campaign-service] brand ${brandId} (org ${orgId}), offer ${offerId}: no identity to read its sales paths with — falling back to fill-ratio pacing inside the global sales budget.`,
+      );
+      continue;
+    }
+    const read = await fetchOfferSalesPaths(offerId, brandId, provisioning);
+    if (!read.ok) {
+      console.error(
+        `[campaign-service] brand ${brandId} (org ${orgId}), offer ${offerId}: sales paths could not be read (${read.detail}) — falling back to fill-ratio pacing inside the global sales budget.`,
+      );
+      continue;
+    }
+    if (read.status !== "ok") {
+      console.error(
+        `[campaign-service] brand ${brandId} (org ${orgId}), offer ${offerId}: sales paths status is ${read.status} — falling back to fill-ratio pacing inside the global sales budget.`,
+      );
+      continue;
+    }
+    pathsByOffer.set(offerId, read.paths);
+  }
+
+  const globalCandidates: GlobalCandidate[] = proactive.map((c) => {
+    const row = byId.get(c.campaignId);
+    return {
+      campaignId: c.campaignId,
+      offerId: row?.offerId ?? null,
+      legKey: c.legKey,
+      featureSlug: row?.featureSlug ?? null,
+      spentCents: c.spentCents,
+      ceilingCents: c.ceilingCents,
+    };
+  });
+  const pick = selectByPathRoi(globalCandidates, rankEntryTargets(pathsByOffer));
+
+  // Nobody can run: every proactive candidate is at its own ceiling. Hand them all to the cohort
+  // ranking unchanged, which parks them on the ceiling exactly as campaigns mode does.
+  if (!pick) return [...reactive, ...proactive];
+
+  for (const c of proactive) {
+    if (c.campaignId === pick.campaignId) continue;
+    // Yielding the brand's budget to a better path is a turn, not a hold: silent, on the turn cadence.
+    deferred.set(c.campaignId, new Date(now.getTime() + TURN_DEFER_MS));
+  }
+  return [...reactive, ...proactive.filter((c) => c.campaignId === pick.campaignId)];
+}
+
+/**
+ * Committed spend today across EVERY proactive sales campaign of the brand — not only the ones
+ * claimed this tick: the one running right now is precisely the one NOT claimed (its nextRunAt is
+ * null while in flight), and one paused this afternoon already spent its share of today.
+ *
+ * Returns null when ANY campaign's spend cannot be read: the cap is fail-closed.
+ */
+async function brandProactiveSpentTodayCents(
+  orgId: string,
+  brandId: string,
+  fallbackFeatureSlug: string,
+  legs: readonly CatalogueLeg[],
+  known: Map<string, number | null>,
+): Promise<number | null> {
+  const rows = await db.query.campaigns.findMany({
+    where: and(eq(campaigns.orgId, orgId), arrayContains(campaigns.brandIds, [brandId])),
+    columns: { id: true, featureSlug: true, legKey: true, status: true, updatedAt: true },
+  });
+  const dayStart = startOfToday().getTime();
+  const ids = new Map<string, string>();
+  for (const r of rows ?? []) {
+    if (!isSalesFamilyFeature(r.featureSlug)) continue;
+    if (isReactiveLeg(r.legKey, legs)) continue;
+    const touchedToday = r.updatedAt instanceof Date ? r.updatedAt.getTime() >= dayStart : true;
+    if (r.status !== "ongoing" && !touchedToday) continue;
+    ids.set(r.id, r.featureSlug ?? fallbackFeatureSlug);
+  }
+  // Claimed candidates are always counted, whatever the DB read returned.
+  for (const id of known.keys()) if (!ids.has(id)) ids.set(id, fallbackFeatureSlug);
+
+  let total = 0;
+  for (const [id, slug] of ids) {
+    const cents = known.has(id) ? known.get(id)! : await readSpentTodayCents(orgId, id, slug);
+    if (cents === null) return null;
+    total += cents;
+  }
+  return total;
 }
 
 /**
@@ -381,7 +624,7 @@ async function planOneCohort(
  * failed read reports 0 so an unreadable spend never silently parks a campaign; the gate is what
  * refuses to spend past an unreadable ceiling.
  */
-async function spentTodayCents(orgId: string, campaignId: string, featureSlug: string): Promise<number> {
+async function readSpentTodayCents(orgId: string, campaignId: string, featureSlug: string): Promise<number | null> {
   try {
     const budget = await getStatsBudget({
       orgId,
@@ -391,9 +634,10 @@ async function spentTodayCents(orgId: string, campaignId: string, featureSlug: s
     });
     const today = budget.windows.find((w) => w.label === "today");
     if (!today) return 0;
-    return parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0;
+    const cents = parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents);
+    return Number.isFinite(cents) ? cents : null;
   } catch {
-    return 0;
+    return null;
   }
 }
 
