@@ -32,6 +32,8 @@ import {
   EarningHistoryQuery,
   EarningHistoryBody,
   EarningHistoryResponse,
+  RecurringStatusQuery,
+  RecurringStatusResponse,
   TriggerForStepResponse,
   PredecessorCampaignResponse,
   AnsweringCampaignResponse,
@@ -560,6 +562,24 @@ registry.registerPath({
     200: { description: "One entry per requested campaign", content: { "application/json": { schema: EarningHistoryResponse } } },
     400: { description: "Malformed or oversized range or id list", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/campaigns/recurring-status",
+  tags: ["Internal"],
+  summary: "Which campaigns of a brand or org count toward recurring daily spend right now",
+  description:
+    "One row per campaign of the brand (`brandId`) or org (`orgId`, both may be combined; at least one is required), stopped ones included. Each row carries the campaign identity (offer, leg, channel), whether it is running (`status = ongoing`), whether it is platform-executed (a campaign with no workflow is customer-operated: never scheduled, never spends), whether it is PROACTIVE (bought for an entry leg that starts from nothing, as published by features-service's catalogue) or REACTIVE (a leg that fires from a step a lead already reached), and whether ALL its audiences are exhausted right now, read from the campaign's current audience-availability period (the verdict /end-run records and the scheduler reschedules on). `not_recorded` is never collapsed to available: `allAudiencesExhausted` is null then. `recurring` = running AND platform-executed AND proactive AND not exhausted; it is null only when the answer turns on an unknown axis, naming it. No money figure and no payment state: both are billing-service's. Nothing is written.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { query: RecurringStatusQuery },
+  responses: {
+    200: { description: "One row per campaign", content: { "application/json": { schema: RecurringStatusResponse } } },
+    400: { description: "Neither orgId nor brandId stated", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
