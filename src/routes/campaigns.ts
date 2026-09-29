@@ -285,6 +285,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         toStatus: "ongoing",
         reason: null,
         source: TRANSITION_SOURCES.CREATE_RESTART,
+        actor: { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null },
         fields: {
           workflowSlug,
           nextRunAt: new Date(),
@@ -590,6 +591,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
         toStatus: "ongoing",
         reason: null,
         source: TRANSITION_SOURCES.START_FUNDED_PAIR,
+        actor: { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null },
         fields: { ...learned, workflowSlug, nextRunAt: new Date() },
       }))!;
 
@@ -743,6 +745,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         toStatus: statusMap[requestedStatus] ?? requestedStatus,
         reason: requestedStatus === "stop" ? STOP_REASONS.MANUAL : null,
         source: TRANSITION_SOURCES.PATCH,
+        actor: { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null },
         fields: bodyFields,
       }))!;
     } else {
