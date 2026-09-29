@@ -634,3 +634,41 @@ export const CampaignEarningHistorySchema = z.object({
 export const EarningHistoryResponse = z.object({
   campaigns: z.array(CampaignEarningHistorySchema),
 }).openapi("EarningHistoryResponse");
+
+/**
+ * WHICH CAMPAIGNS COUNT TOWARD RECURRING DAILY SPEND RIGHT NOW — per brand or per org, one call.
+ * See `lib/recurring-status.ts`. No money and no payment state: those are billing's.
+ */
+export const RecurringStatusQuery = z.object({
+  orgId: z.string().min(1).optional(),
+  brandId: z.string().min(1).optional(),
+}).openapi("RecurringStatusQuery");
+
+export const RecurringCampaignStatusSchema = z.object({
+  campaignId: z.string(),
+  orgId: z.string(),
+  brandId: z.string().nullable(),
+  offerId: z.string().nullable(),
+  legKey: z.string().nullable(),
+  featureSlug: z.string().nullable(),
+  acquisitionChannel: z.string().nullable(),
+  status: z.string(),
+  running: z.boolean(),
+  /** False = a customer-operated channel with no DAG: never scheduled, never spends. */
+  executedByPlatform: z.boolean(),
+  /** proactive = an ENTRY leg (no step before it); reactive = fires from a step a lead reached. */
+  kind: z.enum(["proactive", "reactive"]).nullable(),
+  kindUnknownReason: z.enum(["campaign_states_no_leg", "leg_not_published"]).optional(),
+  /** The current audience-availability period /end-run records. `not_recorded` is never `available`. */
+  audience: z.enum(["available", "exhausted", "not_recorded"]),
+  allAudiencesExhausted: z.boolean().nullable(),
+  audienceSince: z.string().nullable(),
+  audienceLastObservedAt: z.string().nullable(),
+  /** running AND platform-executed AND proactive AND not exhausted; null only when it turns on an unknown. */
+  recurring: z.boolean().nullable(),
+  recurringUnknownReason: z.enum(["kind_unknown", "audience_not_recorded"]).optional(),
+}).openapi("RecurringCampaignStatus");
+
+export const RecurringStatusResponse = z.object({
+  campaigns: z.array(RecurringCampaignStatusSchema),
+}).openapi("RecurringStatusResponse");

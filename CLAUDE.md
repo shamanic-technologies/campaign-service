@@ -902,6 +902,26 @@ revived for this and must not be.
 
 (Set 2026-09-12.)
 
+## WHICH CAMPAIGNS COUNT TOWARD RECURRING SPEND NOW — `GET /internal/campaigns/recurring-status?orgId=&brandId=`
+
+billing-service computes "how much will this org spend per day on a recurring basis" (MRR). Owner
+rules: only PROACTIVE campaigns (an ENTRY leg: starts from nothing, spends a daily budget), only
+while RUNNING, only while at least one audience still has people. `src/lib/recurring-status.ts`
+answers the three axes per campaign in ONE read (orgId and/or brandId; stopped rows included):
+
+- `running` = `status === 'ongoing'`, verbatim. `executedByPlatform` = `workflow_slug IS NOT NULL`
+  (a no-DAG campaign is never scheduled and never spends).
+- `kind` = `proactive` ⟺ the catalogue publishes the leg with NO `fromStep` (same read
+  `/predecessor` answers `entry_leg` from), else `reactive`. Never parsed from the identifier.
+  No leg / unpublished leg → `null` + `kindUnknownReason`. Unreadable catalogue → **502**.
+- `audience` = the CURRENT `campaign_audience_availability` period (what `/end-run` records and
+  reschedules on). No period → `not_recorded`, `allAudiencesExhausted: null`, never "available".
+- `recurring` = running ∧ platform-executed ∧ proactive ∧ not exhausted; `null` + reason only when
+  the answer turns on an unknown axis.
+- No money, no payment state (billing's). A READ: no stop, hold, gate or schedule reads it. The
+  past is `earning-history`'s. Prod 2026-09-29: 6 of 18 ongoing rows read `not_recorded` — all
+  unfunded holds that have not run since the availability record began (2026-09-12).
+
 ## A PERSON pausing or restarting a mission tells billing, which emails staff (`lib/mission-status-notification.ts`)
 
 Pausing a mission moves the brand's real daily spend exactly as lowering its ceiling does, and staff already get ONE email for budget changes, composed by billing-service. Owner rule: same email, one composition. So after a status write COMMITS, `setCampaignStatus` fires `signalMissionStatusChanged` → billing `POST /internal/brands/:brandId/mission-status-changed` `{campaignId, featureSlug, offerId, legKey, fromStatus, toStatus}` (x-org-id, x-user-id, x-run-id, x-email). billing writes the words.

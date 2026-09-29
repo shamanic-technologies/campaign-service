@@ -6,7 +6,8 @@ import { requireApiKey, requirePipelineHeaders, serviceAuth, trackingHeaders, ty
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
-import { AnsweringCampaignsBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
+import { AnsweringCampaignsBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
+import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchBrandRuntimeContext } from "../lib/brand-runtime-client.js";
@@ -814,6 +815,44 @@ function earningRangeRefusal(from: string, to: string): string | null {
   }
   return null;
 }
+
+/**
+ * GET /internal/campaigns/recurring-status?orgId=&brandId=
+ *
+ * WHICH CAMPAIGNS COUNT TOWARD RECURRING DAILY SPEND RIGHT NOW: every campaign of the brand or org
+ * with its identity, running, proactive/reactive and all-audiences-exhausted. Registered BEFORE
+ * the `:campaignId` routes so the literal path is never read as an id. See
+ * `lib/recurring-status.ts`. Nothing is written.
+ *
+ * Returns:
+ *   200 — one row per campaign
+ *   400 — neither orgId nor brandId stated
+ *   401 — bad api key
+ *   502 — the acquisition-channel catalogue could not be read
+ *   500 — internal error
+ */
+router.get(
+  "/internal/campaigns/recurring-status",
+  requireApiKey,
+  validateQuery(RecurringStatusQuery),
+  async (req, res) => {
+    try {
+      const orgId = typeof req.query.orgId === "string" ? req.query.orgId : undefined;
+      const brandId = typeof req.query.brandId === "string" ? req.query.brandId : undefined;
+      if (!orgId && !brandId) {
+        return res.status(400).json({ error: "state an orgId, a brandId, or both" });
+      }
+      res.json({ campaigns: await recurringCampaignStatuses({ orgId, brandId }) });
+    } catch (error) {
+      if (error instanceof RecurringStatusCatalogueError) {
+        console.warn(`[campaign-service] 502 on /internal/campaigns/recurring-status — ${error.message}`);
+        return res.status(error.status).json({ error: error.message, reason: error.reason });
+      }
+      console.error("[campaign-service] recurring-status error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
 
 /**
  * GET /internal/campaigns/:campaignId/earning-history?from=YYYY-MM-DD&to=YYYY-MM-DD
