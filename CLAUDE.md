@@ -902,6 +902,14 @@ revived for this and must not be.
 
 (Set 2026-09-12.)
 
+## A PERSON pausing or restarting a mission tells billing, which emails staff (`lib/mission-status-notification.ts`)
+
+Pausing a mission moves the brand's real daily spend exactly as lowering its ceiling does, and staff already get ONE email for budget changes, composed by billing-service. Owner rule: same email, one composition. So after a status write COMMITS, `setCampaignStatus` fires `signalMissionStatusChanged` → billing `POST /internal/brands/:brandId/mission-status-changed` `{campaignId, featureSlug, offerId, legKey, fromStatus, toStatus}` (x-org-id, x-user-id, x-run-id, x-email). billing writes the words.
+
+- **Only a person's real move**: sources `patch`, `create_restart`, `start_funded_pair` (the call sites pass `actor`), and only when `fromStatus !== toStatus` and not a birth. The payment-hold sweep and org teardown write statuses too and never signal (see `stop-reason.ts`: status is the customer's statement).
+- **Fire-and-forget**: never awaited, every failure logged and swallowed; the route's response, status and latency owe it nothing.
+- The source set is spelled as string literals because `campaign-status-history.ts` imports this module (a value import back is a cycle that leaves `TRANSITION_SOURCES` undefined at load); the unit test pins them against `TRANSITION_SOURCES`.
+
 ## A CAMPAIGN THAT IS DELIBERATELY NOT RUNNING SAYS SO — the turn planner's early returns are the one place a campaign could go silent with no artifact anywhere
 
 Everything a campaign does reaches `run_events` because it reaches `gate-check`, the first node of

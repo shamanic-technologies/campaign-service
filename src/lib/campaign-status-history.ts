@@ -1,6 +1,7 @@
 import { and, eq, type SQL } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, campaignStatusTransitions, type NewCampaignStatusTransition } from "../db/schema.js";
+import { signalMissionStatusChanged, type StatusActor } from "./mission-status-notification.js";
 
 /** The transaction handle `db.transaction` hands its callback. */
 export type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -55,6 +56,11 @@ type StatusWrite = {
   source: TransitionSource;
   /** Everything else the same write sets — nextRunAt, workflowSlug, the caller's own fields. */
   fields?: Record<string, unknown>;
+  /**
+   * The person who made this move, when a person did. After the write commits, a person's real
+   * move is signalled to billing-service for the staff email (lib/mission-status-notification.ts).
+   */
+  actor?: StatusActor;
 };
 
 /**
@@ -64,7 +70,7 @@ type StatusWrite = {
  * means; nothing is recorded for a campaign that was not there).
  */
 export async function setCampaignStatus(write: StatusWrite) {
-  return db.transaction(async (tx) => {
+  const updated = await db.transaction(async (tx) => {
     const [updated] = await tx
       .update(campaigns)
       .set({
@@ -89,6 +95,23 @@ export async function setCampaignStatus(write: StatusWrite) {
 
     return updated;
   });
+
+  // After the commit, never awaited: the staff email must not touch this write's outcome.
+  if (updated && write.actor) {
+    void signalMissionStatusChanged({
+      source: write.source,
+      orgId: write.orgId,
+      campaignId: write.campaignId,
+      brandIds: updated.brandIds ?? null,
+      featureSlug: updated.featureSlug ?? null,
+      offerId: updated.offerId ?? null,
+      legKey: updated.legKey ?? null,
+      fromStatus: write.fromStatus,
+      toStatus: write.toStatus,
+      actor: write.actor,
+    });
+  }
+  return updated;
 }
 
 /**
