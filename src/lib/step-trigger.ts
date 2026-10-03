@@ -12,6 +12,7 @@ import {
   serializationCohort,
 } from "./brand-turns.js";
 import { hasLiveRunForCampaign, STUCK_RUN_FRESHNESS_THRESHOLD_MS } from "./scheduler.js";
+import { globalSalesPotBlock } from "./global-sales-pot.js";
 
 /**
  * A LEAD JUST REACHED A STEP — RUN THE CAMPAIGN THAT WAS BOUGHT TO TAKE THEM OUT OF IT, NOW.
@@ -74,6 +75,11 @@ export const STEP_TRIGGER_SKIPS = {
   UNFUNDED: "unfunded",
   /** A run of this campaign is already in flight. The event is already being answered. */
   RUN_IN_FLIGHT: "run_in_flight",
+  /**
+   * GLOBAL mode: the brand's ONE daily sales pot is spent (or cannot be judged). The lead is NOT
+   * dropped: it stays due in lead-service's queue and the first run the pot can pay for works it.
+   */
+  GLOBAL_SALES_BUDGET_REACHED: "global_sales_budget_reached",
   /** A run of a campaign it shares leads and sending accounts with is in flight. */
   COHORT_RUN_IN_FLIGHT: "cohort_run_in_flight",
   /** The row states no brand, owner or feature, so no execution could be identified. */
@@ -203,6 +209,21 @@ export async function triggerCampaignsForStep(
     const funding = await campaignFunding(campaign, brandIds[0], { orgId: req.orgId });
     if (!funding.funded) {
       skip(STEP_TRIGGER_SKIPS.UNFUNDED, funding.reason);
+      continue;
+    }
+
+    // Same pot gate-check binds on: firing a run it is about to refuse would only burn the run.
+    const pot = await globalSalesPotBlock({
+      orgId: req.orgId,
+      brandId: brandIds[0],
+      featureSlug: campaign.featureSlug,
+      identity: { orgId: req.orgId, userId: campaign.createdByUserId, campaignId: campaign.id, brandId: brandIds[0] },
+    });
+    if (pot) {
+      skip(
+        STEP_TRIGGER_SKIPS.GLOBAL_SALES_BUDGET_REACHED,
+        `${pot.detail}; the lead stays due and is worked by the first run the budget can pay for (next check ${pot.nextRunAt.toISOString()})`,
+      );
       continue;
     }
 

@@ -47,6 +47,8 @@ vi.mock("../../src/lib/audience-exhaustion.js", () => ({
   getFreshExhaustedAudienceIds: mockExhausted,
 }));
 vi.mock("../../src/lib/workflows.js", () => ({ executeCampaignWorkflow: mockExecute }));
+const { mockPotBlock } = vi.hoisted(() => ({ mockPotBlock: vi.fn() }));
+vi.mock("../../src/lib/global-sales-pot.js", () => ({ globalSalesPotBlock: mockPotBlock }));
 
 import {
   triggerCampaignsForStep,
@@ -124,6 +126,7 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     mockResolveSlug.mockResolvedValue({ workflowSlug: "aurora-v3", audienceId: null });
     mockExhausted.mockResolvedValue([]);
     mockExecute.mockResolvedValue(undefined);
+    mockPotBlock.mockResolvedValue(null);
   });
 
   it("executes the campaign of that (brand, offer) stating that leg", async () => {
@@ -258,6 +261,34 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     expect(outcome.triggered).toEqual([]);
     // Nothing is even looked up: no leg means no campaign can be responsible.
     expect(mockFindMany).not.toHaveBeenCalled();
+  });
+
+  describe("GLOBAL mode: a spent pot holds the lead, never drops it", () => {
+    it("does not fire when the brand's pot is spent, and names the skip (the lead stays due)", async () => {
+      mockFindMany.mockResolvedValue([campaign({ featureSlug: "ai-meeting-booking" })]);
+      mockPotBlock.mockResolvedValue({
+        reason: "Global sales budget reached",
+        detail: "brand has committed 1000 of its 1000 cents",
+        nextRunAt: new Date("2026-10-04T00:00:00Z"),
+      });
+
+      const outcome = await triggerCampaignsForStep(request);
+
+      expect(mockExecute).not.toHaveBeenCalled();
+      expect(outcome.triggered).toEqual([]);
+      expect(outcome.skipped).toEqual([
+        expect.objectContaining({ campaignId: CAMPAIGN, reason: STEP_TRIGGER_SKIPS.GLOBAL_SALES_BUDGET_REACHED }),
+      ]);
+      expect(outcome.skipped[0].detail).toMatch(/stays due/);
+      expect(mockPotBlock).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG, brandId: BRAND }));
+    });
+
+    it("fires while the pot has money", async () => {
+      mockFindMany.mockResolvedValue([campaign()]);
+      mockPotBlock.mockResolvedValue(null);
+      const outcome = await triggerCampaignsForStep(request);
+      expect(outcome.triggered).toHaveLength(1);
+    });
   });
 
   describe("a scope that cannot be resolved fails LOUD", () => {

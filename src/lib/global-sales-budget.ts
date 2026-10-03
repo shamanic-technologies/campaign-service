@@ -5,17 +5,26 @@ import type { SalesPathEntry } from "./offer-sales-paths-client.js";
  * GLOBAL MODE — a brand stated ONE daily sales budget, and this service decides where it goes.
  *
  * Pure rules only (no I/O), so every one of them carries a real unit test. The planner
- * (`brand-turns.ts`) does the reads and applies these.
+ * (`brand-turns.ts`) and the pot reads (`global-sales-pot.ts`) apply these.
  *
- * Owner-decided 2026-09-29:
- *   - The global budget caps the brand's PROACTIVE sales spend — the campaigns bought for an
- *     ENTRY leg (a leg from nothing, fired on the daily-budget clock).
- *   - It goes to the best-ROI sales path first (features-service ranks them, per offer); it spills
- *     to the next path only when the better one cannot run (no matching live funded campaign, or
- *     that campaign is at its own ceiling). A path with no ROI still gets money if nothing better
- *     can run.
- *   - REACTIVE legs (a leg OUT of a step, fired when a lead reaches it) are NEVER held on the
- *     global budget. They keep their own caps, exactly as today.
+ * Owner-decided 2026-10-03 (ONE pot, bottom of the funnel first), replacing the 2026-09-29 rule
+ * that capped only proactive spend:
+ *   - The global budget is the ONE pot for EVERY sales campaign of the brand, proactive AND
+ *     reactive. What a reactive leg (a leg OUT of a step a lead reaches) spends today comes out of
+ *     it, and so does what an entry leg spends. Per-campaign ceilings stay an upper bound; the pot
+ *     is the binding limit.
+ *   - Bottom first: a reactive leg runs whenever the pot has money and a lead is waiting, and it
+ *     takes its cohort's turn before an entry leg does. Entry legs get only what is left of the pot
+ *     after everything already spent today, and stop as soon as brand-wide spend reaches it.
+ *   - No step takes more than it needs: a reactive leg spends only when a lead reached its step; an
+ *     entry leg stops at the pot.
+ *   - Pot spent: EVERY sales campaign of the brand is held until the rollover (or a raise). A lead
+ *     that reached a reactive step is never dropped: it stays due in lead-service's queue and is
+ *     worked by the first run the pot can pay for.
+ *   - Among entry legs the money goes to the best-ROI sales path first (features-service ranks
+ *     them, per offer); it spills to the next path only when the better one cannot run (no matching
+ *     live funded campaign, or that campaign is at its own ceiling). A path with no ROI still gets
+ *     money if nothing better can run.
  */
 
 /**
@@ -23,8 +32,7 @@ import type { SalesPathEntry } from "./offer-sales-paths-client.js";
  *
  * Read from the catalogue features-service publishes (`fromStep` null = entry). A leg the catalogue
  * does not name, or a campaign stating no leg, is treated as PROACTIVE: the conservative side,
- * because a proactive campaign is capped by the global budget and a reactive one is not. An
- * unknown leg must never be the reason money is spent past what the customer stated.
+ * because only a reactive leg takes its turn ahead of the entry legs. Both draw on the same pot.
  */
 export function isReactiveLeg(legKey: string | null | undefined, legs: readonly CatalogueLeg[]): boolean {
   if (!legKey) return false;
@@ -32,9 +40,17 @@ export function isReactiveLeg(legKey: string | null | undefined, legs: readonly 
   return leg !== undefined && leg.fromStepKey !== null;
 }
 
-/** A global budget of zero, or one already spent, holds every proactive campaign of the brand. */
+/**
+ * What is left of the pot today, in cents: the budget minus EVERYTHING the brand's sales campaigns
+ * already committed today (reactive included). Never negative.
+ */
+export function potLeftCents(spentCents: number, budgetCents: number): number {
+  return Math.max(0, budgetCents - spentCents);
+}
+
+/** A global budget of zero, or one already spent, holds every sales campaign of the brand. */
 export function isGlobalBudgetExhausted(spentCents: number, budgetCents: number): boolean {
-  return !(budgetCents > 0) || spentCents >= budgetCents;
+  return !(budgetCents > 0) || potLeftCents(spentCents, budgetCents) <= 0;
 }
 
 /** One ENTRY (offer, leg, channel) a sales path buys, in the order money goes to it. */
