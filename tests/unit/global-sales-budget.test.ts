@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   isGlobalBudgetExhausted,
   isReactiveLeg,
+  potLeftCents,
   rankEntryTargets,
   selectByPathRoi,
   type GlobalCandidate,
@@ -44,8 +45,17 @@ describe("isGlobalBudgetExhausted", () => {
     expect(isGlobalBudgetExhausted(1000, 1000)).toBe(true);
     expect(isGlobalBudgetExhausted(1200, 1000)).toBe(true);
   });
-  it("a $0 global budget holds everything proactive", () => {
+  it("a $0 global budget holds everything", () => {
     expect(isGlobalBudgetExhausted(0, 0)).toBe(true);
+  });
+});
+
+describe("potLeftCents", () => {
+  it("AC: a $10 pot with $4 of reactive spend leaves $6 for the entry legs", () => {
+    expect(potLeftCents(400, 1000)).toBe(600);
+  });
+  it("never negative once in-flight spend overshoots", () => {
+    expect(potLeftCents(1050, 1000)).toBe(0);
   });
 });
 
@@ -294,26 +304,112 @@ describe("planBrandTurns — GLOBAL sales-budget mode", () => {
     expect(holdsOf()[0].reason).toBe("global_sales_budget_reached");
   });
 
-  it("never holds a REACTIVE leg on the global budget — exhausted or $0", async () => {
+  // ── ONE pot, bottom of the funnel first (owner, 2026-10-03) ──────────────────────────────────
+
+  it("AC: budget $10, reactive spent $4 → entry legs get at most the $6 left", async () => {
+    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 1000 });
+    // Entry has spent $5.90: $9.90 of $10 is out of the pot, so it may still run.
+    let claimed = setup([
+      { id: "email", featureSlug: SALES, legKey: ENTRY_REPLY, ceiling: 1000, spent: 590 },
+      { id: "booker", featureSlug: AI_MEETING, legKey: REPLY_TO_MEETING, ceiling: 1000, spent: 400 },
+    ]);
+    let deferred = await planBrandTurns(claimed, NOW);
+    expect(deferred.has("email")).toBe(false);
+
+    // Entry has spent its $6: the pot is spent, entry stops although its own ceiling has room.
+    vi.clearAllMocks();
+    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 1000 });
+    claimed = setup([
+      { id: "email", featureSlug: SALES, legKey: ENTRY_REPLY, ceiling: 1000, spent: 600 },
+      { id: "booker", featureSlug: AI_MEETING, legKey: REPLY_TO_MEETING, ceiling: 1000, spent: 400 },
+    ]);
+    deferred = await planBrandTurns(claimed, NOW);
+    expect(deferred.get("email")).toEqual(new Date(NOW.getTime() + FUNDING_RECHECK_MS));
+    expect(holdsOf().find((h) => h.campaign.id === "email")?.reason).toBe("global_sales_budget_reached");
+  });
+
+  it("a reactive leg's spend comes out of the pot: it alone can spend it and hold the entry legs", async () => {
+    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 1000 });
+    const claimed = setup(
+      [{ id: "email", featureSlug: SALES, legKey: ENTRY_REPLY, ceiling: 5000, spent: 0 }],
+      // The reply handler, in flight (not claimed), already spent the whole pot.
+      [{ id: "booker", featureSlug: AI_MEETING, legKey: REPLY_TO_MEETING, spent: 1000 }],
+    );
+    const deferred = await planBrandTurns(claimed, NOW);
+    expect(deferred.has("email")).toBe(true);
+    expect(holdsOf().map((h) => h.reason)).toEqual(["global_sales_budget_reached"]);
+  });
+
+  it("reactive legs keep working leads while the pot has money", async () => {
+    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 1000 });
+    const claimed = setup([
+      { id: "email", featureSlug: SALES, legKey: ENTRY_REPLY, ceiling: 1000, spent: 300 },
+      { id: "booker", featureSlug: AI_MEETING, legKey: REPLY_TO_MEETING, ceiling: 1000, spent: 600 },
+    ]);
+    const deferred = await planBrandTurns(claimed, NOW);
+    expect(deferred.has("booker")).toBe(false);
+    expect(deferred.has("email")).toBe(false);
+  });
+
+  it("pot spent → the reactive leg is HELD (not stopped) and works the waiting lead the next day", async () => {
+    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 1000 });
+    let claimed = setup([
+      { id: "email", featureSlug: SALES, legKey: ENTRY_REPLY, ceiling: 1000, spent: 700 },
+      { id: "booker", featureSlug: AI_MEETING, legKey: REPLY_TO_MEETING, ceiling: 1000, spent: 300 },
+    ]);
+    // 23:55 local: the rollover is nearer than the 10-minute re-check, so it is the re-check.
+    const lateNight = new Date(2026, 8, 29, 23, 55, 0);
+    let deferred = await planBrandTurns(claimed, lateNight);
+    const tomorrow = new Date(2026, 8, 30, 0, 0, 0);
+    expect(deferred.get("booker")).toEqual(tomorrow);
+    expect(deferred.get("email")).toEqual(tomorrow);
+    const bookerHold = holdsOf().find((h) => h.campaign.id === "booker") as { reason: string; detail: string } | undefined;
+    expect(bookerHold?.reason).toBe("global_sales_budget_reached");
+    expect(bookerHold?.detail).toMatch(/not dropped/);
+
+    // The next day: nothing spent yet, the same reactive campaign runs (its waiting lead is worked).
+    vi.clearAllMocks();
+    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 1000 });
+    claimed = setup([
+      { id: "email", featureSlug: SALES, legKey: ENTRY_REPLY, ceiling: 1000, spent: 0 },
+      { id: "booker", featureSlug: AI_MEETING, legKey: REPLY_TO_MEETING, ceiling: 1000, spent: 0 },
+    ]);
+    deferred = await planBrandTurns(claimed, new Date(2026, 8, 30, 0, 1, 0));
+    expect(deferred.has("booker")).toBe(false);
+  });
+
+  it("a $0 pot holds every sales campaign, reactive included", async () => {
     mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 0 });
     const claimed = setup([
       { id: "email", featureSlug: SALES, legKey: ENTRY_REPLY, ceiling: 1000, spent: 0 },
       { id: "booker", featureSlug: AI_MEETING, legKey: REPLY_TO_MEETING, ceiling: 1000, spent: 0 },
     ]);
     const deferred = await planBrandTurns(claimed, NOW);
-    expect(deferred.has("booker")).toBe(false);
+    expect(deferred.has("booker")).toBe(true);
     expect(deferred.has("email")).toBe(true);
   });
 
-  it("a reactive leg's spend does not count toward the global budget", async () => {
-    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 1000 });
+  it("bottom first: in a shared cohort the reactive leg takes the turn ahead of the entry leg", async () => {
+    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 5000 });
     const claimed = setup([
-      { id: "email", featureSlug: SALES, legKey: ENTRY_REPLY, ceiling: 5000, spent: 100 },
-      { id: "booker", featureSlug: AI_MEETING, legKey: REPLY_TO_MEETING, ceiling: 5000, spent: 4000 },
+      // Emptier entry leg — the campaigns-mode ranking would pick it.
+      { id: "email", featureSlug: SALES, legKey: ENTRY_REPLY, ceiling: 1000, spent: 0 },
+      { id: "replies", featureSlug: SALES, legKey: REPLY_TO_MEETING, ceiling: 1000, spent: 800 },
+    ]);
+    const deferred = await planBrandTurns(claimed, NOW);
+    expect(deferred.has("replies")).toBe(false);
+    expect(deferred.get("email")).toEqual(new Date(NOW.getTime() + TURN_DEFER_MS));
+  });
+
+  it("bottom first yields when the reactive leg is at its own ceiling", async () => {
+    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 5000 });
+    const claimed = setup([
+      { id: "email", featureSlug: SALES, legKey: ENTRY_REPLY, ceiling: 1000, spent: 0 },
+      { id: "replies", featureSlug: SALES, legKey: REPLY_TO_MEETING, ceiling: 1000, spent: 1000 },
     ]);
     const deferred = await planBrandTurns(claimed, NOW);
     expect(deferred.has("email")).toBe(false);
-    expect(deferred.has("booker")).toBe(false);
+    expect(deferred.has("replies")).toBe(true);
   });
 
   it("sales-paths failure falls back to fill-ratio pacing, still inside the global cap, and says so", async () => {
@@ -340,7 +436,7 @@ describe("planBrandTurns — GLOBAL sales-budget mode", () => {
     expect(deferred.has("email")).toBe(false);
   });
 
-  it("an unreadable brand spend holds the proactive campaigns (fail-closed), not the reactive ones", async () => {
+  it("an unreadable brand spend holds every sales campaign (fail-closed): the pot cannot be judged", async () => {
     mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 5000 });
     const claimed = setup(
       [
@@ -351,8 +447,8 @@ describe("planBrandTurns — GLOBAL sales-budget mode", () => {
     );
     const deferred = await planBrandTurns(claimed, NOW);
     expect(deferred.has("email")).toBe(true);
-    expect(deferred.has("booker")).toBe(false);
-    expect(holdsOf().map((h) => h.reason)).toEqual(["budgets_unreadable"]);
+    expect(deferred.has("booker")).toBe(true);
+    expect(holdsOf().map((h) => h.reason)).toEqual(["budgets_unreadable", "budgets_unreadable"]);
   });
 
   it("an unreadable sales-budget MODE holds the whole brand (fail-closed, like an unreadable ceiling)", async () => {

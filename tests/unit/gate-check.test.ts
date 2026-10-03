@@ -37,6 +37,11 @@ vi.mock("drizzle-orm", () => ({
   eq: vi.fn(),
 }));
 
+// The global-mode pot has its own reads (billing's mode, brand-wide spend) and its own unit test
+// (global-sales-pot.test.ts). Here it is "not in global mode" unless a test says otherwise.
+const { mockPotBlock } = vi.hoisted(() => ({ mockPotBlock: vi.fn() }));
+vi.mock("../../src/lib/global-sales-pot.js", () => ({ globalSalesPotBlock: mockPotBlock }));
+
 // Mock fetch for lead stats
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -148,6 +153,7 @@ describe("Gate Check", () => {
     mockRuns();
     mockGetStatsBudget.mockResolvedValue({ windows: [] });
     mockUpdateRun.mockResolvedValue({});
+    mockPotBlock.mockResolvedValue(null);
   });
 
   it("should block if campaign is not ongoing", async () => {
@@ -1288,6 +1294,49 @@ describe("Gate Check", () => {
       expect(result.getDate()).toBe(1);
       expect(result.getHours()).toBe(0);
       expect(result.getTime()).toBeGreaterThan(Date.now());
+    });
+  });
+
+  describe("GLOBAL mode: the brand's ONE sales pot binds every sales run", () => {
+    beforeEach(() => {
+      mockPotBlock.mockResolvedValue(null);
+      mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "0" }]));
+    });
+
+    it("refuses a sales run whose brand pot is spent, and re-checks at the pot's time (not the 15-min backoff)", async () => {
+      const nextRunAt = new Date(Date.now() + 10 * 60_000);
+      mockPotBlock.mockResolvedValue({ reason: "Global sales budget reached", detail: "spent", nextRunAt });
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], dailyBudgetCents: 5000 }));
+      expect(result).toMatchObject({ allowed: false, reason: "Global sales budget reached", nextRunAt });
+      expect(mockPotBlock).toHaveBeenCalledWith(
+        expect.objectContaining({ orgId: "org-1", brandId: "brand-1", featureSlug: "sales-cold-email-outreach" }),
+      );
+    });
+
+    it("binds a REACTIVE leg's run too: the pot is not asked about the leg", async () => {
+      mockPotBlock.mockResolvedValue({ reason: "Global sales budget reached", detail: "spent", nextRunAt: new Date() });
+      const result = await runGateChecks(
+        makeCampaign({ brandIds: ["brand-1"], dailyBudgetCents: 5000, featureSlug: "ai-meeting-booking", legKey: "conversation_to_meeting_booked" }),
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Global sales budget reached");
+    });
+
+    it("an unreadable pot refuses (fail-closed)", async () => {
+      mockPotBlock.mockResolvedValue({ reason: "Global sales budget unavailable", detail: "HTTP 500", nextRunAt: new Date() });
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], dailyBudgetCents: 5000 }));
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Global sales budget unavailable");
+    });
+
+    it("a pot with money left lets the run through", async () => {
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], dailyBudgetCents: 5000 }));
+      expect(result.allowed).toBe(true);
+    });
+
+    it("a non-sales feature never asks the pot", async () => {
+      await runGateChecks(makeCampaign({ brandIds: ["brand-1"], featureSlug: NON_SALES_FEATURE }));
+      expect(mockPotBlock).not.toHaveBeenCalled();
     });
   });
 });

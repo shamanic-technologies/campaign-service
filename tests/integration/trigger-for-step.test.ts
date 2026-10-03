@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 
-const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug } = vi.hoisted(() => ({
+const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockSalesBudget, mockGetStatsBudget } = vi.hoisted(() => ({
+  mockSalesBudget: vi.fn(),
+  mockGetStatsBudget: vi.fn(),
   mockExecute: vi.fn(),
   mockCatalogue: vi.fn(),
   mockFunding: vi.fn(),
@@ -13,8 +15,11 @@ vi.mock("@distribute/runs-client", () => ({
   createRun: vi.fn(),
   updateRun: vi.fn(),
   listRuns: mockListRuns,
-  getStatsBudget: vi.fn(),
+  getStatsBudget: mockGetStatsBudget,
 }));
+
+// billing's sales-budget MODE: "campaigns" (no global pot) unless a test says otherwise.
+vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({ fetchBrandSalesBudget: mockSalesBudget }));
 
 vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
@@ -73,6 +78,7 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
     mockListRuns.mockResolvedValue({ runs: [] });
     mockResolveSlug.mockResolvedValue({ workflowSlug: "aurora-v3", audienceId: null });
     mockExecute.mockResolvedValue(undefined);
+    mockSalesBudget.mockResolvedValue({ ok: true, mode: "campaigns" });
   });
 
   afterAll(async () => {
@@ -125,6 +131,34 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
       { campaignId: campaign.id, legKey: LEG_OUT, workflowSlug: "aurora-v3" },
     ]);
     expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("GLOBAL mode, pot spent: the reply handler is not run and the skip says the lead stays due", async () => {
+    mockSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 1000 });
+    mockGetStatsBudget.mockResolvedValue({
+      windows: [{ label: "today", totalCostInUsdCents: "1000", netTotalCostInUsdCents: "1000" }],
+    });
+    const campaign = await insertTestCampaign(ORG, {
+      brandIds: [BRAND],
+      brandId: BRAND,
+      status: "ongoing",
+      featureSlug: "ai-meeting-booking",
+      workflowSlug: "aurora-v3",
+      createdByUserId: "user-1",
+      parentRunId: "9f0d1c22-0000-4000-8000-000000000009",
+      offerId: OFFER,
+      legKey: LEG_OUT,
+    });
+
+    const res = await post(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.triggered).toEqual([]);
+    expect(res.body.skipped).toEqual([
+      expect.objectContaining({ campaignId: campaign.id, reason: "global_sales_budget_reached" }),
+    ]);
+    expect(res.body.skipped[0].detail).toMatch(/stays due/);
+    expect(mockExecute).not.toHaveBeenCalled();
   });
 
   it("answers a scope with no such campaign as an ordinary, empty 200", async () => {

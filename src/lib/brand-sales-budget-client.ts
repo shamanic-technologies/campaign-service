@@ -8,9 +8,9 @@ import type { IdentityHeaders } from "@distribute/runs-client";
  *
  * - `campaigns` (the default, and every brand before 2026-09-29): each (offer, leg, channel)
  *   campaign is paced on its own ceiling. The turn planner behaves exactly as it always did.
- * - `global`: the brand stated ONE daily amount for SALES. This service decides where it goes —
- *   behind the best-ROI sales path features-service ranks — and runs the reactive legs whenever
- *   the customer authorised them. billing only stores and serves the amount.
+ * - `global`: the brand stated ONE daily amount for SALES, the one pot every sales campaign of the
+ *   brand draws on (reactive legs first, entry legs on what is left, behind the best-ROI sales path
+ *   features-service ranks). billing only stores and serves the amount.
  *
  * billing never fabricates a mode: no stored row IS `campaigns`.
  */

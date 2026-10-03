@@ -26,8 +26,9 @@ export type TurnHoldReason =
   /** Planning threw. The brand is held; the gate would refuse these runs anyway. */
   | "planning_failed"
   /**
-   * GLOBAL mode: the brand's one daily sales budget is spent (or stated at zero). Every PROACTIVE
-   * campaign waits for a raise or the rollover; reactive legs are untouched.
+   * GLOBAL mode: the brand's one daily sales pot is spent (or stated at zero). EVERY sales campaign
+   * of the brand, reactive included, waits for a raise or the rollover; a lead waiting at a reactive
+   * step stays due and is worked then.
    */
   | "global_sales_budget_reached";
 
