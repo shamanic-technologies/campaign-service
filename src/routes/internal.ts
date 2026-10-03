@@ -133,7 +133,9 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
                           // The customer having funded this campaign at zero (or not at all) is
                           // an expected pacing outcome, not a fault.
                           result.reason === "Campaign not funded" ||
-                          result.reason === "Brand paused";
+                          result.reason === "Brand paused" ||
+                          // The brand's ONE global sales pot is spent for today: pacing, not a fault.
+                          result.reason === "Global sales budget reached";
       // A run allowed because billing could NOT be asked is a fail-OPEN anomaly, not an
       // authorization — exactly the class this service warns on. It rides the event that is
       // already emitted once per gate check, so it adds no log volume at all, and it is the

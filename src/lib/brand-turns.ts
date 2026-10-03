@@ -1,5 +1,5 @@
 import { and, arrayContains, eq } from "drizzle-orm";
-import { getStatsBudget, listRuns, type IdentityHeaders } from "@distribute/runs-client";
+import { listRuns, type IdentityHeaders } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import {
@@ -22,6 +22,7 @@ import {
   selectByPathRoi,
   type GlobalCandidate,
 } from "./global-sales-budget.js";
+import { brandSalesSpentTodayCents, potRecheckAt, readSpentTodayCents } from "./global-sales-pot.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
 // re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
@@ -315,8 +316,11 @@ async function planOneBrand(
 
   const byId = new Map(group.map((c) => [c.id, c]));
 
+  // Bottom of the funnel first (global mode only): a reactive candidate takes its cohort's turn
+  // ahead of an entry leg.
+  let firstServed = new Set<string>();
   if (salesBudget.mode === "global") {
-    candidates = await allocateGlobalBudget({
+    const allocation = await allocateGlobalBudget({
       orgId,
       brandId,
       featureSlug,
@@ -329,6 +333,8 @@ async function planOneBrand(
       deferred,
       holds,
     });
+    candidates = allocation.candidates;
+    firstServed = allocation.reactiveIds;
     if (candidates.length === 0) return;
   }
 
@@ -352,7 +358,7 @@ async function planOneBrand(
   }
 
   for (const [cohort, members] of cohorts) {
-    await planOneCohort(orgId, brandId, cohort, members, byId, now, deferred, holds);
+    await planOneCohort(orgId, brandId, cohort, members, byId, now, deferred, holds, firstServed);
   }
 }
 
@@ -370,23 +376,33 @@ interface GlobalAllocationInput {
   holds: TurnHold[];
 }
 
+interface GlobalAllocation {
+  /** The candidates that stay in the running for this tick's cohort ranking. */
+  candidates: TurnCandidate[];
+  /** Which of them are REACTIVE: they take their cohort's turn first (bottom of the funnel first). */
+  reactiveIds: Set<string>;
+}
+
 /**
- * GLOBAL MODE: the brand stated ONE daily sales budget. Returns the candidates that stay in the
- * running for this tick's cohort ranking — every REACTIVE candidate (never held on the global
- * budget) plus AT MOST ONE proactive campaign, the one the global budget goes to. Every other
- * proactive candidate is deferred here.
+ * GLOBAL MODE: the brand stated ONE daily sales budget, and it is the ONE pot for every sales
+ * campaign of the brand, reactive and proactive (owner, 2026-10-03; see global-sales-budget.ts).
+ * Returns the candidates that stay in the running for this tick's cohort ranking — every REACTIVE
+ * candidate plus AT MOST ONE proactive campaign, the one the rest of the pot goes to. Every other
+ * candidate is deferred here.
  *
- *   - Brand-wide proactive spend today >= the global budget (or a $0 budget): every proactive
- *     candidate is parked until a raise or the rollover — the same bound the ceiling park uses.
- *   - Spend unreadable: proactive candidates are held (fail-closed); the cap cannot be judged.
- *   - Otherwise the budget goes to the best-ROI sales path that can run (`selectByPathRoi`); an
- *     offer whose paths cannot be read, or are not `ok`, falls back to fill-ratio pacing — loudly —
- *     still inside the global cap.
+ *   - Brand-wide spend today (ALL legs, reactive included) >= the pot, or a $0 pot: EVERY candidate
+ *     is parked until a raise or the rollover. A reactive one loses no lead: the lead stays due in
+ *     lead-service's queue and the first run the pot can pay for works it.
+ *   - Spend unreadable: every candidate is held (fail-closed); the pot cannot be judged.
+ *   - Otherwise reactive candidates run (only when a lead is waiting: their DAG ends idle
+ *     otherwise), and what is left of the pot goes to the best-ROI sales path that can run
+ *     (`selectByPathRoi`); an offer whose paths cannot be read, or are not `ok`, falls back to
+ *     fill-ratio pacing — loudly — still inside the pot.
  *
- * Per-campaign ceilings are untouched: gate-check still paces every run on them, so a proactive
- * campaign at its own ceiling cannot take the global budget and the next path gets it.
+ * Per-campaign ceilings are untouched: gate-check still paces every run on them, and on the pot
+ * itself (`globalSalesPotBlock`), so a run dispatched by the step trigger is bound too.
  */
-async function allocateGlobalBudget(input: GlobalAllocationInput): Promise<TurnCandidate[]> {
+async function allocateGlobalBudget(input: GlobalAllocationInput): Promise<GlobalAllocation> {
   const { orgId, brandId, featureSlug, budgetCents, candidates, byId, strictSpent, provisioning, now, deferred, holds } = input;
 
   const catalogue = await fetchChannelCatalogue();
@@ -394,9 +410,10 @@ async function allocateGlobalBudget(input: GlobalAllocationInput): Promise<TurnC
   if (catalogue.ok) {
     legs = catalogue.legs;
   } else {
-    // Conservative: with no catalogue every leg reads PROACTIVE, i.e. capped by the global budget.
+    // Conservative: with no catalogue every leg reads PROACTIVE, i.e. no leg jumps the queue. The
+    // pot binds every leg either way.
     console.error(
-      `[campaign-service] brand ${brandId} (org ${orgId}) is in GLOBAL sales-budget mode but the channel catalogue could not be read (${catalogue.detail}) — treating every leg as proactive (capped by the global budget).`,
+      `[campaign-service] brand ${brandId} (org ${orgId}) is in GLOBAL sales-budget mode but the channel catalogue could not be read (${catalogue.detail}) — treating every leg as proactive (no leg served first).`,
     );
   }
 
@@ -406,20 +423,18 @@ async function allocateGlobalBudget(input: GlobalAllocationInput): Promise<TurnC
     if (isReactiveLeg(byId.get(c.campaignId)?.legKey ?? null, legs)) reactive.push(c);
     else proactive.push(c);
   }
-  if (proactive.length === 0) return reactive;
+  const reactiveIds = new Set(reactive.map((c) => c.campaignId));
 
-  // Only the PROACTIVE candidates' spend counts toward the cap — a reactive leg's never does.
-  const proactiveKnown = new Map<string, number | null>(
-    proactive.map((c) => [c.campaignId, strictSpent.get(c.campaignId) ?? null]),
-  );
-  const spent = await brandProactiveSpentTodayCents(orgId, brandId, featureSlug, legs, proactiveKnown);
+  // EVERY leg's spend comes out of the pot — reactive included.
+  const known = new Map<string, number | null>(candidates.map((c) => [c.campaignId, strictSpent.get(c.campaignId) ?? null]));
+  const spent = await brandSalesSpentTodayCents(orgId, brandId, featureSlug, known);
   const recheck = new Date(now.getTime() + FUNDING_RECHECK_MS);
 
   if (spent === null) {
     console.error(
-      `[campaign-service] brand ${brandId} (org ${orgId}): brand-wide proactive spend today could not be read — holding its proactive campaigns rather than spending past a global sales budget of ${budgetCents} cents (fail-closed).`,
+      `[campaign-service] brand ${brandId} (org ${orgId}): brand-wide sales spend today could not be read — holding its sales campaigns rather than spending past a global sales budget of ${budgetCents} cents (fail-closed).`,
     );
-    for (const c of proactive) {
+    for (const c of candidates) {
       deferred.set(c.campaignId, recheck);
       const campaign = byId.get(c.campaignId);
       if (!campaign) continue;
@@ -430,25 +445,30 @@ async function allocateGlobalBudget(input: GlobalAllocationInput): Promise<TurnC
         nextRunAt: recheck,
       });
     }
-    return reactive;
+    return { candidates: [], reactiveIds };
   }
 
   if (isGlobalBudgetExhausted(spent, budgetCents)) {
-    const reset = new Date(Math.min(nextDayStart(now).getTime(), recheck.getTime()));
-    for (const c of proactive) {
+    const reset = potRecheckAt(now);
+    for (const c of candidates) {
       deferred.set(c.campaignId, reset);
       const campaign = byId.get(c.campaignId);
       if (!campaign) continue;
+      const leadNote = reactiveIds.has(c.campaignId)
+        ? " A lead waiting at this step is not dropped: it stays due and is worked by the first run the budget can pay for."
+        : "";
       holds.push({
         campaign,
         reason: "global_sales_budget_reached",
-        detail: `Campaign not run — the brand's global daily sales budget is ${budgetCents} cents and ${spent.toFixed(0)} cents of proactive sales spend is already committed today. It runs again when the budget is raised or the day rolls over; re-checked at ${reset.toISOString()}.`,
+        detail: `Campaign not run — the brand's global daily sales budget is ${budgetCents} cents and ${spent.toFixed(0)} cents of sales spend (every leg) is already committed today.${leadNote} It runs again when the budget is raised or the day rolls over; re-checked at ${reset.toISOString()}.`,
         nextRunAt: reset,
         data: { spentCents: spent, globalBudgetCents: budgetCents },
       });
     }
-    return reactive;
+    return { candidates: [], reactiveIds };
   }
+
+  if (proactive.length === 0) return { candidates: reactive, reactiveIds };
 
   // Rank the paths of every offer the proactive candidates sell.
   const pathsByOffer = new Map<string, SalesPathEntry[]>();
@@ -495,53 +515,14 @@ async function allocateGlobalBudget(input: GlobalAllocationInput): Promise<TurnC
 
   // Nobody can run: every proactive candidate is at its own ceiling. Hand them all to the cohort
   // ranking unchanged, which parks them on the ceiling exactly as campaigns mode does.
-  if (!pick) return [...reactive, ...proactive];
+  if (!pick) return { candidates: [...reactive, ...proactive], reactiveIds };
 
   for (const c of proactive) {
     if (c.campaignId === pick.campaignId) continue;
     // Yielding the brand's budget to a better path is a turn, not a hold: silent, on the turn cadence.
     deferred.set(c.campaignId, new Date(now.getTime() + TURN_DEFER_MS));
   }
-  return [...reactive, ...proactive.filter((c) => c.campaignId === pick.campaignId)];
-}
-
-/**
- * Committed spend today across EVERY proactive sales campaign of the brand — not only the ones
- * claimed this tick: the one running right now is precisely the one NOT claimed (its nextRunAt is
- * null while in flight), and one paused this afternoon already spent its share of today.
- *
- * Returns null when ANY campaign's spend cannot be read: the cap is fail-closed.
- */
-async function brandProactiveSpentTodayCents(
-  orgId: string,
-  brandId: string,
-  fallbackFeatureSlug: string,
-  legs: readonly CatalogueLeg[],
-  known: Map<string, number | null>,
-): Promise<number | null> {
-  const rows = await db.query.campaigns.findMany({
-    where: and(eq(campaigns.orgId, orgId), arrayContains(campaigns.brandIds, [brandId])),
-    columns: { id: true, featureSlug: true, legKey: true, status: true, updatedAt: true },
-  });
-  const dayStart = startOfToday().getTime();
-  const ids = new Map<string, string>();
-  for (const r of rows ?? []) {
-    if (!isSalesFamilyFeature(r.featureSlug)) continue;
-    if (isReactiveLeg(r.legKey, legs)) continue;
-    const touchedToday = r.updatedAt instanceof Date ? r.updatedAt.getTime() >= dayStart : true;
-    if (r.status !== "ongoing" && !touchedToday) continue;
-    ids.set(r.id, r.featureSlug ?? fallbackFeatureSlug);
-  }
-  // Claimed candidates are always counted, whatever the DB read returned.
-  for (const id of known.keys()) if (!ids.has(id)) ids.set(id, fallbackFeatureSlug);
-
-  let total = 0;
-  for (const [id, slug] of ids) {
-    const cents = known.has(id) ? known.get(id)! : await readSpentTodayCents(orgId, id, slug);
-    if (cents === null) return null;
-    total += cents;
-  }
-  return total;
+  return { candidates: [...reactive, ...proactive.filter((c) => c.campaignId === pick.campaignId)], reactiveIds };
 }
 
 /**
@@ -566,6 +547,7 @@ async function planOneCohort(
   now: Date,
   deferred: Map<string, Date>,
   holds: TurnHold[],
+  firstServed: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (await hasLiveRunForBrandCohort(orgId, brandId, cohort, now)) {
     for (const c of candidates) {
@@ -574,7 +556,12 @@ async function planOneCohort(
     return;
   }
 
-  const winner = selectLowestFillRatio(candidates);
+  // Bottom of the funnel first (global mode): a reactive candidate under its ceiling takes the turn
+  // before any entry leg. It only holds the turn while a lead is waiting — a reactive run with
+  // nobody due ends idle and waits NO_WORK_RECHECK_MS — so it cannot starve the entry legs.
+  const winner =
+    selectLowestFillRatio(candidates.filter((c) => firstServed.has(c.campaignId))) ??
+    selectLowestFillRatio(candidates);
   // Every funded pair is at its ceiling. What re-opens it is NOT only the day rollover: a customer
   // who raises a ceiling at 14:57 has bought headroom that exists the moment they buy it. The defer
   // is written ONCE, from the ceiling current at this instant, and nothing else looks at an ongoing
@@ -615,31 +602,6 @@ async function planOneCohort(
   }
 }
 
-
-/**
- * Committed spend today for ONE campaign. The cost ledger is already keyed on campaignId, so no
- * spend figure is invented here.
- *
- * Same net-committed basis the gate paces on: actual + provisioned, post-usage-discount. A
- * failed read reports 0 so an unreadable spend never silently parks a campaign; the gate is what
- * refuses to spend past an unreadable ceiling.
- */
-async function readSpentTodayCents(orgId: string, campaignId: string, featureSlug: string): Promise<number | null> {
-  try {
-    const budget = await getStatsBudget({
-      orgId,
-      campaignId,
-      featureSlug,
-      windows: [{ label: "today", since: startOfToday().toISOString() }],
-    });
-    const today = budget.windows.find((w) => w.label === "today");
-    if (!today) return 0;
-    const cents = parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents);
-    return Number.isFinite(cents) ? cents : null;
-  } catch {
-    return null;
-  }
-}
 
 // Same "alive" definition the per-campaign guard uses (any running run within the freshness
 // window, whichever service owns it), widened from the campaign to the brand's SALES campaigns.
@@ -736,12 +698,6 @@ export function reportLegKeylessCeilings(
       `[campaign-service] FUNDED CEILING STATES NO LEG — org ${orgId}, brand ${brandId}, channel ${c.featureSlug}, offer ${c.offerId ?? "(none stated)"}, ${c.dailyBudgetCents} cents/day. A campaign is bought for ONE leg, so money that names none is matched only through billing's "no other leg on this channel" rule: restate it at the leg it was bought for. Nothing is created or started from this ceiling.`,
     );
   }
-}
-
-function startOfToday(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
 }
 
 function nextDayStart(now: Date): Date {

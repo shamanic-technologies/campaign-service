@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { campaignCeilingCents, fetchCampaignBudgets } from "./campaign-budget-client.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
+import { globalSalesPotBlock } from "./global-sales-pot.js";
 
 // THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
 // hours here against fifteen minutes there, and that gap is a full stop: the sweep re-fires a
@@ -277,6 +278,22 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         if ((await campaignSpentToday()) >= ceiling.cents) {
           return { allowed: false, reason: "Campaign daily budget reached" };
         }
+      }
+    }
+
+    // (c) GLOBAL mode: the brand's ONE pot binds every sales run, reactive legs included, whatever
+    // dispatched it (scheduler or step trigger). Fail-CLOSED. A refused reactive run loses no lead:
+    // the DAG claims its lead only AFTER this node, so the lead stays due and the next run the pot
+    // can pay for works it. See global-sales-pot.ts.
+    for (const brandId of campaign.brandIds) {
+      const pot = await globalSalesPotBlock({
+        orgId: campaign.orgId,
+        brandId,
+        featureSlug: campaign.featureSlug ?? "",
+        identity,
+      });
+      if (pot) {
+        return { allowed: false, reason: pot.reason, nextRunAt: pot.nextRunAt };
       }
     }
   }
