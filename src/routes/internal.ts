@@ -1,11 +1,23 @@
 import { Router } from "express";
-import { eq, and, sql, or, ne, isNotNull } from "drizzle-orm";
+import { eq, and, sql, or, ne, isNotNull, gt, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { brandPauseTransitions, campaigns } from "../db/schema.js";
 import { requireApiKey, requirePipelineHeaders, serviceAuth, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
+import {
+  FAILING_ALERT_COOLDOWN_MS,
+  FAILING_ALERT_THRESHOLD,
+  FAILURE_RETRY_BASE_MS,
+  FAILURE_RETRY_CEILING_MS,
+  FAILURES_AT_BASE_CADENCE,
+  runHealthOf,
+  notifyFailingCampaign,
+  recordRunFailure,
+  recordRunSuccess,
+  type RecordedFailure,
+} from "../lib/run-failure-backoff.js";
 import { AnsweringCampaignsBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
 import { wakeScheduler } from "../lib/scheduler.js";
@@ -611,6 +623,17 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
     // Schedule re-trigger via nextRunAt — the scheduler picks it up on the next tick.
     // This prevents exponential cascades when downstream services are down.
     try {
+      // The failure streak (src/lib/run-failure-backoff.ts). A successful run ends it whatever the
+      // campaign's status; a failed run extends it only on a campaign that will retry. Fail-SOFT:
+      // an unwritable streak falls back to the base failure cadence, never blocks the reschedule.
+      if (status !== "failed") {
+        try {
+          await recordRunSuccess(campaignId);
+        } catch (err) {
+          console.error(`[campaign-service] could not reset the failure streak of campaign ${campaignId}:`, err);
+        }
+      }
+
       const freshCampaign = await db.query.campaigns.findFirst({
         where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
       });
@@ -618,7 +641,22 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         return;
       }
 
-      // Failed runs get a 60s backoff; completed runs re-run after a short grace
+      let failure: RecordedFailure | null = null;
+      if (status === "failed") {
+        try {
+          failure = await recordRunFailure(campaignId);
+        } catch (err) {
+          console.error(`[campaign-service] could not record the failure streak of campaign ${campaignId}:`, err);
+        }
+        if (failure?.alertClaimedAt) {
+          // Once per failing episode (the claim is atomic and latched on the row). Fire-and-forget:
+          // staff email must never delay run finalization.
+          void notifyFailingCampaign({ campaign: freshCampaign, failure, runId: req.runId });
+        }
+      }
+
+      // Failed runs back off on the streak (60s for the first few, widening to a ceiling — see
+      // run-failure-backoff.ts); completed runs re-run after a short grace
       // (RERUN_GRACE_MS) so the wrapping workflow run finishes teardown before the
       // re-run tick — otherwise the in-flight guard sees it alive and forces +60s.
       // A campaign waiting for somebody to contact waits on that reason's cadence — it is not
@@ -631,7 +669,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       const delayMs = waitingForAudience
         ? NO_SERVEABLE_AUDIENCE_RECHECK_MS
         : status === "failed"
-          ? 60_000
+          ? (failure?.retryDelayMs ?? FAILURE_RETRY_BASE_MS)
           : idle
             ? NO_WORK_RECHECK_MS
             : RERUN_GRACE_MS;
@@ -642,7 +680,12 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
           service: "campaign-service",
           event: "re-trigger-scheduled",
           detail: `Scheduled re-trigger for campaign ${campaignId} via nextRunAt=${nextRunAt.toISOString()} (delay=${delayMs}ms)`,
-          data: { campaignId, nextRunAt: nextRunAt.toISOString(), delayMs },
+          data: {
+            campaignId,
+            nextRunAt: nextRunAt.toISOString(),
+            delayMs,
+            ...(failure ? { consecutiveFailures: failure.consecutiveFailures, failingSince: failure.failingSince.toISOString() } : {}),
+          },
         }, req.headers).catch(() => {});
       }
 
@@ -659,7 +702,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         // generic reschedule line under it is the third of the three lines that were filling
         // the logs.
       } else if (status === "failed") {
-        console.warn(`[campaign-service] Run failed — rescheduled campaign ${campaignId} in ${delayMs}ms (nextRunAt=${nextRunAt.toISOString()})`);
+        console.warn(`[campaign-service] Run failed — rescheduled campaign ${campaignId} in ${delayMs}ms (nextRunAt=${nextRunAt.toISOString()}, consecutiveFailures=${failure?.consecutiveFailures ?? "unknown"})`);
       } else if (idle) {
         // Expected business state, not a fault, and it fires on the idle cadence rather than once
         // per run — which is the whole point of this branch.
@@ -817,6 +860,46 @@ function earningRangeRefusal(from: string, to: string): string | null {
   }
   return null;
 }
+
+/**
+ * GET /internal/campaigns/failing
+ *
+ * EVERY ONGOING CAMPAIGN WHOSE LAST RUN FAILED, fleet-wide, with its run health (state, streak,
+ * since when, current retry interval, last staff alert) and the thresholds that produced it.
+ * Healthy campaigns are not listed. For the morning brief and staff dashboards. Registered BEFORE
+ * the `:campaignId` routes so the literal path is never read as an id. Nothing is written.
+ */
+router.get("/internal/campaigns/failing", requireApiKey, async (_req, res) => {
+  try {
+    const rows = await db
+      .select()
+      .from(campaigns)
+      .where(and(eq(campaigns.status, "ongoing"), gt(campaigns.consecutiveRunFailures, 0)))
+      .orderBy(desc(campaigns.consecutiveRunFailures));
+    res.json({
+      thresholds: {
+        failuresAtBaseCadence: FAILURES_AT_BASE_CADENCE,
+        baseRetryMs: FAILURE_RETRY_BASE_MS,
+        retryCeilingMs: FAILURE_RETRY_CEILING_MS,
+        failingAlertThreshold: FAILING_ALERT_THRESHOLD,
+        alertCooldownMs: FAILING_ALERT_COOLDOWN_MS,
+      },
+      campaigns: rows.map((c) => ({
+        id: c.id,
+        orgId: c.orgId,
+        name: c.name,
+        brandIds: c.brandIds ?? null,
+        featureSlug: c.featureSlug ?? null,
+        status: c.status,
+        nextRunAt: c.nextRunAt ? c.nextRunAt.toISOString() : null,
+        runHealth: runHealthOf(c),
+      })),
+    });
+  } catch (error) {
+    console.error("[campaign-service] failing-campaigns error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 /**
  * GET /internal/campaigns/recurring-status?orgId=&brandId=

@@ -142,6 +142,14 @@ export const campaigns = pgTable(
 
     nextRunAt: timestamp("next_run_at", { withTimezone: true }),
 
+    // RUN-FAILURE STREAK (migration 0061, src/lib/run-failure-backoff.ts). Written only by
+    // `/end-run`: a failed run increments, a successful one resets. Drives the widening retry
+    // interval and the once-per-episode staff alert. NEVER changes a status.
+    consecutiveRunFailures: integer("consecutive_run_failures").notNull().default(0),
+    failingSince: timestamp("failing_since", { withTimezone: true }),
+    lastRunFailureAt: timestamp("last_run_failure_at", { withTimezone: true }),
+    failureAlertedAt: timestamp("failure_alerted_at", { withTimezone: true }),
+
     // Notifications (legacy - to be replaced by reportingFrequency)
     notifyFrequency: text("notify_frequency"),  // 'daily', 'weekly', 'per_reply'
     notifyChannel: text("notify_channel"),      // 'email', 'webhook'

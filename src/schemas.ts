@@ -75,6 +75,14 @@ export const CampaignSchema = z.object({
   // Nothing restarts a stopped campaign automatically.
   stopReason: z.string().nullable(),
   nextRunAt: z.string().nullable(),
+  // RUN-FAILURE STREAK (written only by /end-run). Failed runs in a row since the last success,
+  // when the streak started, the latest failure, and the last staff alert for this campaign.
+  // 0 / null = healthy. A streak widens the retry interval and alerts staff once per episode;
+  // it never changes the status. See GET /internal/campaigns/failing for the derived state.
+  consecutiveRunFailures: z.number().int(),
+  failingSince: z.string().nullable(),
+  lastRunFailureAt: z.string().nullable(),
+  failureAlertedAt: z.string().nullable(),
   notifyFrequency: z.string().nullable(),
   notifyChannel: z.string().nullable(),
   notifyDestination: z.string().nullable(),
@@ -672,3 +680,36 @@ export const RecurringCampaignStatusSchema = z.object({
 export const RecurringStatusResponse = z.object({
   campaigns: z.array(RecurringCampaignStatusSchema),
 }).openapi("RecurringStatusResponse");
+
+// --- Internal: failing campaigns ---
+
+export const RunHealthSchema = z.object({
+  state: z.enum(["healthy", "retrying", "failing"]).openapi({
+    description: "healthy: no failed run since the last success. retrying: the last run(s) failed, fewer than the alert threshold in a row. failing: the alert threshold or more in a row; staff were told.",
+  }),
+  consecutiveFailures: z.number().int(),
+  failingSince: z.string().nullable(),
+  lastFailureAt: z.string().nullable(),
+  retryIntervalMs: z.number().int().nullable().openapi({ description: "The delay applied after the latest failure; null when healthy" }),
+  alertedAt: z.string().nullable().openapi({ description: "The last staff alert for this campaign; survives a reset" }),
+}).openapi("RunHealth");
+
+export const FailingCampaignsResponse = z.object({
+  thresholds: z.object({
+    failuresAtBaseCadence: z.number().int(),
+    baseRetryMs: z.number().int(),
+    retryCeilingMs: z.number().int(),
+    failingAlertThreshold: z.number().int(),
+    alertCooldownMs: z.number().int(),
+  }),
+  campaigns: z.array(z.object({
+    id: z.string(),
+    orgId: z.string(),
+    name: z.string(),
+    brandIds: z.array(z.string()).nullable(),
+    featureSlug: z.string().nullable(),
+    status: z.string(),
+    nextRunAt: z.string().nullable(),
+    runHealth: RunHealthSchema,
+  })),
+}).openapi("FailingCampaignsResponse");

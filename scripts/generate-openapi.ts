@@ -33,6 +33,7 @@ import {
   EarningHistoryBody,
   EarningHistoryResponse,
   RecurringStatusQuery,
+  FailingCampaignsResponse,
   RecurringStatusResponse,
   TriggerForStepResponse,
   PredecessorCampaignResponse,
@@ -580,6 +581,21 @@ registry.registerPath({
     400: { description: "Neither orgId nor brandId stated", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/campaigns/failing",
+  tags: ["Internal"],
+  summary: "Every ongoing campaign whose last run failed, with its run health",
+  description:
+    "Fleet-wide. One row per ONGOING campaign with at least one failed run since its last success, ordered by streak length. `runHealth.state` is `retrying` below the alert threshold and `failing` at or above it (staff were alerted once for the episode). `retryIntervalMs` is the delay /end-run applied after the latest failure: 60s for the first few failures, doubling to a ceiling. `thresholds` states the constants that produced it. A failing campaign is never stopped by this and the customer is never emailed by it. Nothing is written.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  responses: {
+    200: { description: "Failing and retrying campaigns", content: { "application/json": { schema: FailingCampaignsResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
