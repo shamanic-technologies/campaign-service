@@ -115,6 +115,37 @@ export async function setCampaignStatus(write: StatusWrite) {
 }
 
 /**
+ * A person created a campaign (its birth committed): signal it like any other person's move, so
+ * billing re-prices on a budget turned ON. Call AFTER the inserting transaction commits; never
+ * awaited by the route, never throws.
+ */
+export function signalCampaignBirth(
+  inserted: {
+    id: string;
+    orgId: string;
+    status: string;
+    brandIds: string[] | null;
+    featureSlug: string | null;
+    offerId: string | null;
+    legKey: string | null;
+  },
+  actor: StatusActor,
+): void {
+  void signalMissionStatusChanged({
+    source: TRANSITION_SOURCES.CREATE,
+    orgId: inserted.orgId,
+    campaignId: inserted.id,
+    brandIds: inserted.brandIds ?? null,
+    featureSlug: inserted.featureSlug ?? null,
+    offerId: inserted.offerId ?? null,
+    legKey: inserted.legKey ?? null,
+    fromStatus: null,
+    toStatus: inserted.status,
+    actor,
+  });
+}
+
+/**
  * Stop every campaign an org holds, recording one transition each — inside a transaction the
  * caller already owns (the teardown does more than campaigns in the same atomic step). The caller
  * names which path it is (org teardown, payment hold) so the ledger says why.

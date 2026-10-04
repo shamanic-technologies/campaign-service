@@ -31,9 +31,11 @@ describe("shouldSignalStatusMove — a person's real move only", () => {
     expect(shouldSignalStatusMove(signal({ source: TRANSITION_SOURCES.CREATE_RESTART, fromStatus: "stopped", toStatus: "ongoing" }))).toBe(true);
     expect(shouldSignalStatusMove(signal({ source: TRANSITION_SOURCES.START_FUNDED_PAIR, fromStatus: "stopped", toStatus: "ongoing" }))).toBe(true);
   });
-  it("a no-op, a birth or a system stop sends nothing", () => {
+  it("a person creating a campaign ongoing signals (a budget turned ON, billing re-prices)", () => {
+    expect(shouldSignalStatusMove(signal({ source: TRANSITION_SOURCES.CREATE, fromStatus: null, toStatus: "ongoing" }))).toBe(true);
+  });
+  it("a no-op or a system stop sends nothing", () => {
     expect(shouldSignalStatusMove(signal({ fromStatus: "ongoing", toStatus: "ongoing" }))).toBe(false);
-    expect(shouldSignalStatusMove(signal({ fromStatus: null, toStatus: "ongoing" }))).toBe(false);
     expect(shouldSignalStatusMove(signal({ source: TRANSITION_SOURCES.PAYMENT_HOLD }))).toBe(false);
     expect(shouldSignalStatusMove(signal({ source: TRANSITION_SOURCES.ORG_TEARDOWN }))).toBe(false);
   });
@@ -65,6 +67,12 @@ describe("signalMissionStatusChanged", () => {
       fromStatus: "ongoing",
       toStatus: "stopped",
     });
+  });
+
+  it("a birth posts fromStatus null with the offer", async () => {
+    await signalMissionStatusChanged(signal({ source: TRANSITION_SOURCES.CREATE, fromStatus: null, toStatus: "ongoing" }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ fromStatus: null, toStatus: "ongoing", offerId: "e59646e4-e351-462d-a8a7-618098e7e5c1" });
   });
 
   it("a no-op sends nothing", async () => {

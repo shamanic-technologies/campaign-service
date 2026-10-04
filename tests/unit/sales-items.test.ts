@@ -70,6 +70,7 @@ function item(o: Partial<SalesItem> = {}): SalesItem {
     period: "day",
     periodStart: null,
     periodEnd: null,
+    role: null,
     managed: true,
     ...o,
   };
@@ -80,14 +81,14 @@ const KEY = { offerId: "offer-1", legKey: ENTRY, featureSlug: SALES };
 
 // ── Pure rules ──────────────────────────────────────────────────────────────────────────────────
 
-describe("itemsOf — an item funds exactly its (offer, leg, channel), and only a channel we run", () => {
+describe("itemsOf — an item names exactly its (offer, leg, channel)", () => {
   it("matches exactly, never a sibling leg, channel or offer", () => {
     const items = [item(), item({ legKey: REACTIVE }), item({ featureSlug: AI_MEETING }), item({ offerId: "offer-2" })];
     expect(itemsOf(items, KEY)).toEqual([item()]);
   });
 
-  it("an item on a channel we do not run (managed: false) funds nothing", () => {
-    expect(itemsOf([item({ managed: false })], KEY)).toEqual([]);
+  it("offer ids match case-insensitively (billing stores them lowercased)", () => {
+    expect(itemsOf([item({ offerId: "abcdef" })], { ...KEY, offerId: "ABCDEF" })).toHaveLength(1);
   });
 
   it("a campaign stating no offer or no leg is funded by no item", () => {
@@ -106,6 +107,26 @@ describe("itemPace", () => {
 
   it("no item = not funded (an expected state, not a fault)", () => {
     expect(pace({ items: [] })).toMatchObject({ ok: false, reason: "no_item" });
+  });
+
+  it("an item on a channel we do not run (managed: false) funds nothing: unfunded, not a fault", () => {
+    expect(pace({ items: [item({ managed: false })] })).toMatchObject({ ok: false, reason: "unmanaged" });
+  });
+
+  it("managed: null (billing could not say) holds the campaign as a fault", () => {
+    expect(pace({ items: [item({ managed: null })] })).toMatchObject({ ok: false, reason: "managed_unknown" });
+  });
+
+  it("billing's stated role wins over our catalogue read; null falls back to it", () => {
+    const spentToday = { spentTodayCents: 600, spentInPeriodCents: 2000 };
+    // Stated reactive, catalogue says proactive: a MAX on the period (9900 - 1400 left before today).
+    const r = pace({ items: [monthly({ role: "reactive" })], reactive: false, ...spentToday });
+    expect(r).toMatchObject({ ok: true, reactive: true, capCents: 8500 });
+    // Stated proactive, catalogue says reactive: paced.
+    const p = pace({ items: [monthly({ role: "proactive" })], reactive: true, ...spentToday });
+    expect(p.ok && p.capCents).toBeCloseTo(8500 / 21);
+    // No stated role: our catalogue read decides.
+    expect(pace({ items: [monthly()], reactive: true, ...spentToday })).toMatchObject({ ok: true, reactive: true, capCents: 8500 });
   });
 
   it("two items for one campaign is a fault, never summed by guess", () => {
@@ -164,22 +185,30 @@ describe("boundedCap / underCap", () => {
 });
 
 describe("parseSalesItems — billing's item list, refused whole when one item is unreadable", () => {
-  const raw = { offerId: "offer-1", legKey: ENTRY, featureSlug: SALES, budgetCents: "990.00", period: "day", periodStart: null, periodEnd: null };
-  it("reads a daily and a monthly item; managed absent = managed", () => {
+  // billing v0.81.48's served row (SpendableCampaignItem): no pathKeys, role and managed nullable.
+  const raw = { offerId: "offer-1", legKey: ENTRY, featureSlug: SALES, role: "proactive", budgetCents: "990.0000000000", period: "day", periodStart: null, periodEnd: null, managed: true };
+  it("reads billing's served rows: daily and monthly, role and managed carried, null kept null", () => {
     const parsed = parseSalesItems([
       raw,
-      { ...raw, period: "month", periodStart: PERIOD_START.toISOString(), periodEnd: PERIOD_END.toISOString(), managed: false },
+      { ...raw, role: "reactive", period: "month", periodStart: PERIOD_START.toISOString(), periodEnd: PERIOD_END.toISOString(), managed: false },
+      { ...raw, role: null, managed: null },
     ]);
     expect(parsed).toEqual([
-      item({ budgetCents: 990 }),
-      item({ budgetCents: 990, period: "month", periodStart: PERIOD_START, periodEnd: PERIOD_END, managed: false }),
+      item({ budgetCents: 990, role: "proactive" }),
+      item({ budgetCents: 990, role: "reactive", period: "month", periodStart: PERIOD_START, periodEnd: PERIOD_END, managed: false }),
+      item({ budgetCents: 990, role: null, managed: null }),
     ]);
+  });
+  it("a managed: null item holds only its own campaign, never the whole read", () => {
+    expect(Array.isArray(parseSalesItems([raw, { ...raw, legKey: REACTIVE, managed: null }]))).toBe(true);
   });
   it("refuses an item naming no leg, a bad budget, an unknown period, a month with no period", () => {
     expect(typeof parseSalesItems([{ ...raw, legKey: null }])).toBe("string");
     expect(typeof parseSalesItems([{ ...raw, budgetCents: "abc" }])).toBe("string");
     expect(typeof parseSalesItems([{ ...raw, period: "week" }])).toBe("string");
     expect(typeof parseSalesItems([{ ...raw, period: "month" }])).toBe("string");
+    expect(typeof parseSalesItems([{ ...raw, role: "sideways" }])).toBe("string");
+    expect(typeof parseSalesItems([{ ...raw, managed: "yes" }])).toBe("string");
     expect(typeof parseSalesItems("nope")).toBe("string");
   });
 });
@@ -224,7 +253,7 @@ describe("itemVerdict", () => {
 
   it("under the daily item: runs; at it: reached, re-checked within ten minutes", async () => {
     spend["c-1"] = { today: 999 };
-    expect(await verdict()).toEqual({ run: true, spentCents: 999, capCents: 1000 });
+    expect(await verdict()).toEqual({ run: true, spentCents: 999, capCents: 1000, reactive: false });
     spend["c-1"] = { today: 1000 };
     expect(await verdict()).toMatchObject({ run: false, kind: "reached", nextRunAt: new Date(NOW.getTime() + ITEM_RECHECK_MS) });
   });
@@ -339,7 +368,7 @@ describe("planBrandTurns — ITEMS mode", () => {
     expect(holdsOf().map((h) => [h.campaign.id, h.reason])).toEqual([["email", "item_budget_reached"]]);
   });
 
-  it("a campaign no active path budgets is held as unfunded, and the global pot is never read", async () => {
+  it("a campaign no item budgets is held as unfunded, and the global pot is never read", async () => {
     mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "items", items: [item()] });
     spend = { email: { today: 0 }, other: { today: 0 } };
     const deferred = await planBrandTurns([claimed("email"), claimed("other", { offerId: "offer-2" })], NOW);
@@ -355,6 +384,33 @@ describe("planBrandTurns — ITEMS mode", () => {
     const deferred = await planBrandTurns([claimed("email")], NOW);
     expect(deferred.get("email")).toEqual(new Date(NOW.getTime() + FUNDING_RECHECK_MS));
     expect(mockGetStatsBudget).not.toHaveBeenCalled();
+  });
+
+  it("an item billing cannot classify (managed: null) holds that campaign only, as unreadable", async () => {
+    mockFetchBrandSalesBudget.mockResolvedValue({
+      ok: true,
+      mode: "items",
+      items: [item({ managed: null }), item({ legKey: REACTIVE, featureSlug: AI_MEETING })],
+    });
+    const deferred = await planBrandTurns(
+      [claimed("email"), claimed("booker", { legKey: REACTIVE, featureSlug: AI_MEETING })],
+      NOW,
+    );
+    expect(deferred.has("booker")).toBe(false);
+    expect(holdsOf().map((h) => [h.campaign.id, h.reason])).toEqual([["email", "budgets_unreadable"]]);
+  });
+
+  it("billing's stated reactive role puts the leg first in its cohort, whatever the catalogue says", async () => {
+    mockFetchBrandSalesBudget.mockResolvedValue({
+      ok: true,
+      mode: "items",
+      // Both entry-leg per the catalogue; billing states the second reactive.
+      items: [item(), item({ offerId: "offer-2", role: "reactive" })],
+    });
+    spend = { a: { today: 0 }, b: { today: 900 } };
+    const deferred = await planBrandTurns([claimed("a"), claimed("b", { offerId: "offer-2" })], NOW);
+    expect(deferred.has("b")).toBe(false);
+    expect(deferred.has("a")).toBe(true);
   });
 
   it("an unreadable spend holds that campaign only", async () => {
@@ -382,5 +438,35 @@ describe("planBrandTurns — ITEMS mode", () => {
     const deferred = await planBrandTurns([claimed("entry"), claimed("reactive", { legKey: REACTIVE })], NOW);
     expect(deferred.has("reactive")).toBe(false);
     expect(deferred.has("entry")).toBe(true);
+  });
+});
+
+// ── A brand billing does not serve items for (no subscriber monthly row) ──────────────────────────
+
+describe("planBrandTurns — a brand NOT in items mode behaves exactly as before", () => {
+  it("campaigns mode: no item verdict, no item hold, the campaign ceiling paces it as always", async () => {
+    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "campaigns" });
+    mockFetchCampaignBudgets.mockResolvedValue({
+      ok: true,
+      brandDailyBudgetCents: 5000,
+      campaigns: [{ offerId: "offer-1", legKey: ENTRY, featureSlug: SALES, dailyBudgetCents: 1000 }],
+    });
+    spend = { email: { today: 10 } };
+    const deferred = await planBrandTurns([claimed("email")], NOW);
+    expect(deferred.has("email")).toBe(false);
+    expect(holdsOf().filter((h) => h.reason === "item_budget_reached")).toEqual([]);
+    // No monthly period window is ever asked outside items mode.
+    for (const [arg] of mockGetStatsBudget.mock.calls) {
+      expect((arg as { windows: Array<{ label: string }> }).windows.map((w) => w.label)).not.toContain("period");
+    }
+  });
+
+  it("salesItemsGate leaves a campaigns-mode brand to today's path", async () => {
+    mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "campaigns" });
+    expect(await salesItemsGate({ ...CAMPAIGN, brandIds: ["brand-1"] }, { orgId: "org-1" }, NOW)).toEqual({
+      applies: false,
+      salesBudget: { ok: true, mode: "campaigns" },
+    });
+    expect(mockGetStatsBudget).not.toHaveBeenCalled();
   });
 });

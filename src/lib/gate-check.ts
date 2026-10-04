@@ -218,8 +218,8 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // lets campaigns keep spending past a configured ceiling. Explicit billing dailyBudgetCents
   // :null (and a null campaign budget with a null brand budget) remain the only unbounded signals.
   //
-  // ITEMS mode (2026-10-04, see sales-items.ts): a brand whose customer activated sales paths and
-  // budgeted their items paces each campaign on ITS item alone (the per-campaign ceiling an upper
+  // ITEMS mode (2026-10-04, see sales-items.ts): a brand holding a subscriber's monthly campaign
+  // budgets paces each campaign on ITS item alone (the per-campaign ceiling an upper
   // bound), and the global pot is gone for it. Every other brand takes the path below, unchanged.
   const itemsGate = isSalesFeature
     ? await salesItemsGate(
