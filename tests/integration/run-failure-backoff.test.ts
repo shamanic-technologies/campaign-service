@@ -171,6 +171,16 @@ describe("run-failure backoff", () => {
     expect(retry!.alertClaimedAt).not.toBeNull();
   });
 
+  it("an alert with no user to state is not sent and the claim is released", async () => {
+    const c = await insertTestCampaign(ORG, { brandIds: [BRAND] });
+    let f = null;
+    for (let i = 0; i < FAILING_ALERT_THRESHOLD; i++) f = await recordRunFailure(c.id);
+    const delivered = await notifyFailingCampaign({ campaign: { ...(await row(c.id)), createdByUserId: null }, failure: f! });
+    expect(delivered).toBe(false);
+    expect(staffAlerts(fetchSpy)).toHaveLength(0);
+    expect((await row(c.id)).failureAlertedAt).toBeNull();
+  });
+
   describe("through POST /end-run", () => {
     async function endRun(campaignId: string, success: boolean) {
       await request(app)
@@ -215,7 +225,8 @@ describe("run-failure backoff", () => {
         retryInterval: "30 min",
         brandId: BRAND,
       });
-      expect((init as RequestInit).headers).toMatchObject({ "x-org-id": ORG, "x-campaign-id": c.id });
+      // A user is stated: one hop down, billing refuses an email send with no user UUID.
+      expect((init as RequestInit).headers).toMatchObject({ "x-org-id": ORG, "x-campaign-id": c.id, "x-user-id": "user_test" });
 
       // The readable state
       const failing = await request(app)
