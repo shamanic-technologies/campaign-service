@@ -223,10 +223,17 @@ function escapeHtml(value: string): string {
 }
 
 export interface FailingAlertContext {
-  campaign: Pick<Campaign, "id" | "orgId" | "name" | "brandIds" | "featureSlug">;
+  campaign: Pick<Campaign, "id" | "orgId" | "name" | "brandIds" | "featureSlug" | "createdByUserId">;
   failure: RecordedFailure;
   /** The run that just failed: a real run id, the parent of transactional-email's send run. */
   runId?: string;
+  /**
+   * The inbound request's acting user, used only when the campaign names no owner. A send with no
+   * user is refused one hop down (billing authorizes the email against a user UUID), so a staff
+   * alert from a machine caller must still state one: the campaign owner's, org-billed like any
+   * side effect of the run.
+   */
+  userId?: string;
 }
 
 /**
@@ -260,6 +267,9 @@ export async function notifyFailingCampaign(ctx: FailingAlertContext): Promise<b
     "x-campaign-id": campaign.id,
   };
   if (ctx.runId) headers["x-run-id"] = ctx.runId;
+  const userId = campaign.createdByUserId || ctx.userId;
+  if (!userId) return release("the campaign names no owner and the run no user: the send would be refused");
+  headers["x-user-id"] = userId;
   if (brandId) headers["x-brand-id"] = brandId;
   if (campaign.featureSlug) headers["x-feature-slug"] = campaign.featureSlug;
 

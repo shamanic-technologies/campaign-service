@@ -651,7 +651,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         if (failure?.alertClaimedAt) {
           // Once per failing episode (the claim is atomic and latched on the row). Fire-and-forget:
           // staff email must never delay run finalization.
-          void notifyFailingCampaign({ campaign: freshCampaign, failure, runId: req.runId });
+          void notifyFailingCampaign({ campaign: freshCampaign, failure, runId: req.runId, userId: req.userId });
         }
       }
 
