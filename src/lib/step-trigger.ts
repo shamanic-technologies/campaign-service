@@ -1,3 +1,4 @@
+import { isInFailureBackoff } from "./run-failure-backoff.js";
 import { and, arrayContains, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
@@ -86,6 +87,12 @@ export const STEP_TRIGGER_SKIPS = {
   INCOMPLETE: "incomplete_campaign",
   /** The dispatch itself was refused. Named rather than thrown: the other campaigns still run. */
   DISPATCH_REFUSED: "dispatch_refused",
+  /**
+   * The campaign has failed several runs in a row and is waiting out a widened retry interval
+   * (src/lib/run-failure-backoff.ts). An event must not bypass the backoff; the lead is NOT
+   * dropped: it stays due and the next scheduled run works it.
+   */
+  FAILURE_BACKOFF: "failure_backoff",
 } as const;
 
 export type StepTriggerSkipReason = (typeof STEP_TRIGGER_SKIPS)[keyof typeof STEP_TRIGGER_SKIPS];
@@ -203,6 +210,14 @@ export async function triggerCampaignsForStep(
     const brandIds = campaign.brandIds ?? [];
     if (brandIds.length === 0 || !campaign.createdByUserId || !campaign.featureSlug) {
       skip(STEP_TRIGGER_SKIPS.INCOMPLETE, "the campaign states no brand, owner or feature");
+      continue;
+    }
+
+    if (isInFailureBackoff(campaign, now)) {
+      skip(
+        STEP_TRIGGER_SKIPS.FAILURE_BACKOFF,
+        `${campaign.consecutiveRunFailures} runs in a row failed; the lead stays due and the next scheduled run (${campaign.nextRunAt!.toISOString()}) works it`,
+      );
       continue;
     }
 
