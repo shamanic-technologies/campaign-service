@@ -30,7 +30,12 @@ export type TurnHoldReason =
    * of the brand, reactive included, waits for a raise or the rollover; a lead waiting at a reactive
    * step stays due and is worked then.
    */
-  | "global_sales_budget_reached";
+  | "global_sales_budget_reached"
+  /**
+   * ITEMS mode: this campaign's own item budget allows nothing more today. Its siblings are not
+   * affected. Re-opens on a raise or the rollover.
+   */
+  | "item_budget_reached";
 
 /** The campaign fields an event needs to be attributable. A structural subset of a claimed row. */
 export interface TurnHoldCampaign {

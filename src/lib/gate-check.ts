@@ -6,6 +6,7 @@ import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { campaignCeilingCents, fetchCampaignBudgets } from "./campaign-budget-client.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { globalSalesPotBlock } from "./global-sales-pot.js";
+import { salesItemsGate } from "./sales-items-pace.js";
 
 // THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
 // hours here against fifteen minutes there, and that gap is a full stop: the sweep re-fires a
@@ -216,7 +217,29 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // tick. This is spend control, not an optimization; treating an unreadable cap as "unbounded"
   // lets campaigns keep spending past a configured ceiling. Explicit billing dailyBudgetCents
   // :null (and a null campaign budget with a null brand budget) remain the only unbounded signals.
-  if (isSalesFeature) {
+  //
+  // ITEMS mode (2026-10-04, see sales-items.ts): a brand whose customer activated sales paths and
+  // budgeted their items paces each campaign on ITS item alone (the per-campaign ceiling an upper
+  // bound), and the global pot is gone for it. Every other brand takes the path below, unchanged.
+  const itemsGate = isSalesFeature
+    ? await salesItemsGate(
+        {
+          id: campaign.campaignId,
+          orgId: campaign.orgId,
+          offerId: campaign.offerId,
+          legKey: campaign.legKey,
+          featureSlug: campaign.featureSlug ?? null,
+          dailyBudgetCents: campaign.dailyBudgetCents,
+          brandIds: campaign.brandIds,
+        },
+        identity,
+      )
+    : null;
+  if (itemsGate?.applies) {
+    if (itemsGate.block) {
+      return { allowed: false, reason: itemsGate.block.reason, nextRunAt: itemsGate.block.nextRunAt };
+    }
+  } else if (isSalesFeature) {
     if (campaign.dailyBudgetCents !== null) {
       // (a) Campaign's OWN daily budget vs its OWN committed spend today.
       const campaignSpend = await getStatsBudget({
@@ -291,7 +314,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         brandId,
         featureSlug: campaign.featureSlug ?? "",
         identity,
-      });
+      }, undefined, campaign.brandIds.length === 1 ? itemsGate?.salesBudget : null);
       if (pot) {
         return { allowed: false, reason: pot.reason, nextRunAt: pot.nextRunAt };
       }

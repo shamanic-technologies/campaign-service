@@ -3,7 +3,7 @@ import { getStatsBudget, type IdentityHeaders } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
-import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
+import { fetchBrandSalesBudget, type BrandSalesBudgetRead } from "./brand-sales-budget-client.js";
 import { isGlobalBudgetExhausted } from "./global-sales-budget.js";
 
 /**
@@ -110,9 +110,11 @@ export interface PotBlock {
 export async function globalSalesPotBlock(
   input: { orgId: string; brandId: string; featureSlug: string; identity: IdentityHeaders },
   now: Date = new Date(),
+  /** The brand's mode when the caller already read it this check (never read twice). */
+  prefetched?: BrandSalesBudgetRead | null,
 ): Promise<PotBlock | null> {
   const recheck = potRecheckAt(now);
-  const mode = await fetchBrandSalesBudget(input.brandId, input.identity);
+  const mode = prefetched ?? (await fetchBrandSalesBudget(input.brandId, input.identity));
   if (!mode.ok) {
     return {
       reason: "Global sales budget unavailable",
