@@ -79,7 +79,8 @@ export interface ItemCampaign {
 }
 
 export type ItemVerdict =
-  | { run: true; spentCents: number; capCents: number }
+  /** `reactive`: the item's effective role (billing's, else our catalogue read). */
+  | { run: true; spentCents: number; capCents: number; reactive: boolean }
   | {
       run: false;
       /** `unfunded` and `reached` are expected states (info); `unreadable` is a fault (warn). */
@@ -106,6 +107,7 @@ export async function itemVerdict(input: {
   budgets?: CampaignBudgetsRead;
 }): Promise<ItemVerdict> {
   const { campaign, brandId, items, reactive, identity, now } = input;
+  // `reactive` is our catalogue read of the leg, used only where billing states no role.
   const recheck = itemRecheckAt(now);
   const mine = itemsOf(items, campaign);
   const periodStart = mine.length === 1 && mine[0].period === "month" ? mine[0].periodStart : null;
@@ -113,7 +115,8 @@ export async function itemVerdict(input: {
   // Nothing to read when nothing funds it.
   const probe = itemPace({ items, campaign, reactive, spentTodayCents: 0, spentInPeriodCents: 0, now });
   if (!probe.ok) {
-    return { run: false, kind: probe.reason === "no_item" ? "unfunded" : "unreadable", detail: probe.detail, nextRunAt: recheck };
+    const unfunded = probe.reason === "no_item" || probe.reason === "unmanaged";
+    return { run: false, kind: unfunded ? "unfunded" : "unreadable", detail: probe.detail, nextRunAt: recheck };
   }
 
   const spend = await readItemSpend(campaign.orgId, campaign.id, campaign.featureSlug ?? "", periodStart, now);
@@ -153,7 +156,7 @@ export async function itemVerdict(input: {
   }
   const capCents = boundedCap(pace.capCents, upper);
   if (!underCap(pace.spentCents, capCents)) {
-    const basis = pace.item.period === "day" ? "daily" : reactive ? "monthly (period cap)" : "monthly (paced)";
+    const basis = pace.item.period === "day" ? "daily" : pace.reactive ? "monthly (period cap)" : "monthly (paced)";
     return {
       run: false,
       kind: "reached",
@@ -163,7 +166,7 @@ export async function itemVerdict(input: {
       capCents,
     };
   }
-  return { run: true, spentCents: pace.spentCents, capCents };
+  return { run: true, spentCents: pace.spentCents, capCents, reactive: pace.reactive };
 }
 
 /** gate-check's `reason` for each item verdict. */
