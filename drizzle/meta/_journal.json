@@ -435,6 +435,13 @@
       "when": 1778600000000,
       "tag": "0061_campaign_run_failure_streak",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1778700000000,
+      "tag": "0062_audience_refill_attempt",
+      "breakpoints": true
     }
   ]
 }

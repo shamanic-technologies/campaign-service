@@ -27,6 +27,24 @@ vi.mock("../../src/lib/brand-runtime-client.js", () => ({
     fetchBrandRuntimeContext(brandId as never, identity as never),
 }));
 
+// The refill (src/lib/audience-refill.ts): the episode claim and the human-service call are
+// stubbed; the staff alert stays real so its /platform-send is observed on the fetch mock.
+const claimEpisodeRefill = vi.fn(async (_campaignId: string) => true);
+const requestBrandAudienceRefill = vi.fn(
+  async (_orgId: string, _brandId: string, _opts?: unknown): Promise<
+    { refilled: true; created: number } | { refilled: false; outcome: string; detail: string | null }
+  > => ({ refilled: false, outcome: "cooldown", detail: null }),
+);
+vi.mock("../../src/lib/audience-refill.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/audience-refill.js")>();
+  return {
+    ...original,
+    claimEpisodeRefill: (campaignId: string) => claimEpisodeRefill(campaignId),
+    requestBrandAudienceRefill: (orgId: string, brandId: string, opts?: unknown) =>
+      requestBrandAudienceRefill(orgId, brandId, opts),
+  };
+});
+
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
@@ -85,6 +103,9 @@ function routeFetch(opts: { autoTopup?: boolean; brandBudgetCents?: string | nul
     if (url.includes("/daily-budget")) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ dailyBudgetCents: brandBudgetCents }) });
     }
+    if (url.endsWith("/platform-send")) {
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(""), json: () => Promise.resolve({}) });
+    }
     if (url.endsWith("/send")) {
       return Promise.resolve({ ok: sendOk, status: sendOk ? 200 : 500, json: () => Promise.resolve({ results: [] }) });
     }
@@ -92,8 +113,13 @@ function routeFetch(opts: { autoTopup?: boolean; brandBudgetCents?: string | nul
   });
 }
 
+// The CLIENT email (POST /send), never the staff alert (POST /platform-send).
 function sendCall() {
-  return mockFetch.mock.calls.find((c) => String(c[0]).endsWith("/send"));
+  return mockFetch.mock.calls.find((c) => String(c[0]).endsWith("/send") && !String(c[0]).endsWith("/platform-send"));
+}
+
+function staffAlertCall() {
+  return mockFetch.mock.calls.find((c) => String(c[0]).endsWith("/platform-send"));
 }
 
 describe("maybeSendExtendAudienceEmail", () => {
@@ -108,6 +134,10 @@ describe("maybeSendExtendAudienceEmail", () => {
       brandProfile: null,
     });
     routeFetch();
+    claimEpisodeRefill.mockReset();
+    claimEpisodeRefill.mockResolvedValue(true);
+    requestBrandAudienceRefill.mockReset();
+    requestBrandAudienceRefill.mockResolvedValue({ refilled: false, outcome: "cooldown", detail: null });
   });
 
   it("sends when exhausted + active + budgeted + auto-topup ON", async () => {
@@ -231,5 +261,99 @@ describe("maybeSendExtendAudienceEmail", () => {
   it("does NOT send when the campaign has no brands", async () => {
     await maybeSendExtendAudienceEmail(makeCampaign({ brandIds: [] }), { runId: "r" });
     expect(sendCall()).toBeUndefined();
+  });
+
+  describe("refill before telling the client", () => {
+    it("refill created new audiences: NO client email, NO staff alert", async () => {
+      requestBrandAudienceRefill.mockResolvedValue({ refilled: true, created: 4 });
+      await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+      expect(requestBrandAudienceRefill).toHaveBeenCalledWith("org-1", "brand-1", expect.anything());
+      expect(sendCall()).toBeUndefined();
+      expect(staffAlertCall()).toBeUndefined();
+    });
+
+    it("refill yielded nobody new: client email AND staff alert naming why", async () => {
+      requestBrandAudienceRefill.mockResolvedValue({ refilled: false, outcome: "cooldown", detail: null });
+      await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "run-9" });
+      expect(sendCall()).toBeTruthy();
+      const staff = staffAlertCall();
+      expect(staff).toBeTruthy();
+      const body = JSON.parse(String(staff![1].body));
+      expect(body.eventType).toBe("audience_refill_failed");
+      expect(body.metadata).toMatchObject({
+        campaignId: "campaign-1",
+        brandId: "brand-1",
+        brandName: "Lux Projects Bali",
+        refillOutcome: "cooldown",
+        refillDetail: "",
+      });
+      expect(staff![1].headers).toMatchObject({ "x-user-id": "user-1", "x-org-id": "org-1", "x-run-id": "run-9" });
+    });
+
+    it("refill errored: client email AND staff alert, logged loudly, never throws", async () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      requestBrandAudienceRefill.mockResolvedValue({ refilled: false, outcome: "error", detail: "human-service 502 boom" });
+      await expect(maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" })).resolves.toBeUndefined();
+      expect(sendCall()).toBeTruthy();
+      const body = JSON.parse(String(staffAlertCall()![1].body));
+      expect(body.metadata.refillOutcome).toBe("error");
+      expect(body.metadata.refillDetail).toBe("human-service 502 boom");
+      expect(errSpy.mock.calls.some((c) => String(c[0]).includes("produced nobody new"))).toBe(true);
+      errSpy.mockRestore();
+    });
+
+    it("a staff alert transactional-email refuses does not stop the client email", async () => {
+      routeFetch();
+      const base = mockFetch.getMockImplementation()!;
+      mockFetch.mockImplementation((url: string, init?: unknown) =>
+        String(url).endsWith("/platform-send")
+          ? Promise.resolve({ ok: false, status: 400, text: () => Promise.resolve("unknown eventType") })
+          : base(url, init),
+      );
+      await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+      expect(sendCall()).toBeTruthy();
+    });
+
+    it("episode already claimed (repeated /end-run observation): no refill, no email", async () => {
+      claimEpisodeRefill.mockResolvedValue(false);
+      await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+      expect(requestBrandAudienceRefill).not.toHaveBeenCalled();
+      expect(sendCall()).toBeUndefined();
+      expect(staffAlertCall()).toBeUndefined();
+    });
+
+    it("refill did nothing but the campaign has somebody serveable again: no email", async () => {
+      await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r", recheckServeable: async () => true });
+      expect(sendCall()).toBeUndefined();
+      expect(staffAlertCall()).toBeUndefined();
+    });
+
+    it("an unreadable re-check is not 'somebody is there': client and staff still hear", async () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await maybeSendExtendAudienceEmail(makeCampaign(), {
+        runId: "r",
+        recheckServeable: async () => {
+          throw new Error("features down");
+        },
+      });
+      expect(sendCall()).toBeTruthy();
+      expect(staffAlertCall()).toBeTruthy();
+      errSpy.mockRestore();
+    });
+
+    it("never refills a defunded brand or one without auto-topup", async () => {
+      routeFetch({ brandBudgetCents: "0" });
+      await maybeSendExtendAudienceEmail(makeCampaign({ dailyBudgetCents: null }), { runId: "r" });
+      routeFetch({ autoTopup: false });
+      await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+      expect(claimEpisodeRefill).not.toHaveBeenCalled();
+      expect(requestBrandAudienceRefill).not.toHaveBeenCalled();
+    });
+
+    it("never refills a campaign that never exhausted an audience", async () => {
+      hasExhaustedAudience.mockResolvedValue(false);
+      await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+      expect(requestBrandAudienceRefill).not.toHaveBeenCalled();
+    });
   });
 });
