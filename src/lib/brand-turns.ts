@@ -372,7 +372,7 @@ async function planOneBrand(
 }
 
 /**
- * ITEMS MODE: the customer activated sales paths and budgeted each (offer, leg, channel) item.
+ * ITEMS MODE: the customer budgets each campaign (offer, leg, channel) and billing serves the items.
  *
  * Every campaign is judged alone on its item (`itemVerdict`, the same verdict gate-check and the
  * step trigger give): no item = held as unfunded; spent = parked until a raise or the rollover;
@@ -438,7 +438,7 @@ async function planItemsBrand(
       });
       continue;
     }
-    if (reactive) reactiveIds.add(c.id);
+    if (verdict.reactive) reactiveIds.add(c.id);
     cohortOf.set(c.id, serializationCohort(c.featureSlug));
     candidates.push({ campaignId: c.id, legKey: c.legKey ?? "", spentCents: verdict.spentCents, ceilingCents: verdict.capCents });
   }

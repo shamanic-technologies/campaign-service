@@ -6,17 +6,18 @@ import type { SalesItem } from "./sales-items.js";
  *
  *   GET /internal/brands/{brandId}/sales-budget (x-api-key + x-org-id)
  *     -> { brandId, orgId, mode: "campaigns" | "global" | "items", dailyBudgetCents: string | null,
- *          items?: [{ offerId, legKey, featureSlug, budgetCents: string, period: "day" | "month",
- *                     periodStart: string | null, periodEnd: string | null, managed?: boolean }], updatedAt }
+ *          items?: [{ offerId, legKey, featureSlug, role: "proactive" | "reactive" | null,
+ *                     budgetCents: string, period: "day" | "month", periodStart: string | null,
+ *                     periodEnd: string | null, managed: boolean | null }], updatedAt }
  *
  * - `campaigns` (the default, and every brand before 2026-09-29): each (offer, leg, channel)
  *   campaign is paced on its own ceiling. The turn planner behaves exactly as it always did.
  * - `global`: the brand stated ONE daily amount for SALES, the one pot every sales campaign of the
  *   brand draws on (reactive legs first, entry legs on what is left, behind the best-ROI sales path
  *   features-service ranks). billing only stores and serves the amount.
- * - `items` (2026-10-04, "you choose, we run"): the customer ACTIVATED sales paths and budgets each
- *   (offer, leg, channel) item of them. Each item's budget is spent by the campaign performing it and
- *   nothing else; the global pot is gone for that brand. See `sales-items.ts`.
+ * - `items` (2026-10-04, one budget per campaign): served for a brand holding a subscriber's MONTHLY
+ *   budget; one row per (offer, leg, channel) campaign. Each budget is spent by the campaign
+ *   performing it and nothing else; the global pot is gone for that brand. See `sales-items.ts`.
  *
  * billing never fabricates a mode: no stored row IS `campaigns`.
  */
@@ -96,7 +97,7 @@ export function parseSalesItems(raw: unknown): SalesItem[] | string {
   const items: SalesItem[] = [];
   for (const r of raw as Array<Record<string, unknown>>) {
     if (!r || typeof r !== "object") return "an item is not an object";
-    const { offerId, legKey, featureSlug, budgetCents, period, periodStart, periodEnd, managed } = r;
+    const { offerId, legKey, featureSlug, role, budgetCents, period, periodStart, periodEnd, managed } = r;
     if (typeof offerId !== "string" || !offerId) return "an item states no offerId";
     if (typeof legKey !== "string" || !legKey) return "an item states no legKey";
     if (typeof featureSlug !== "string" || !featureSlug) return "an item states no featureSlug";
@@ -110,9 +111,23 @@ export function parseSalesItems(raw: unknown): SalesItem[] | string {
         return `monthly item ${offerId}/${legKey}/${featureSlug} states no readable period (${String(periodStart)} to ${String(periodEnd)})`;
       }
     }
-    if (managed !== undefined && typeof managed !== "boolean") return `item ${offerId}/${legKey}/${featureSlug} states a non-boolean managed`;
-    // Absent = managed (billing states `false` for a channel we do not run yet).
-    items.push({ offerId, legKey, featureSlug, budgetCents: cents, period, periodStart: start, periodEnd: end, managed: managed !== false });
+    // null = billing could not read its catalogue for this channel: THAT campaign is held, not the brand.
+    if (managed !== null && typeof managed !== "boolean") return `item ${offerId}/${legKey}/${featureSlug} states a non-boolean managed (${String(managed)})`;
+    // null/absent = billing could not read the catalogue for this leg: our own catalogue read decides.
+    if (role !== undefined && role !== null && role !== "proactive" && role !== "reactive") {
+      return `item ${offerId}/${legKey}/${featureSlug} states an unknown role (${String(role)})`;
+    }
+    items.push({
+      offerId,
+      legKey,
+      featureSlug,
+      role: role ?? null,
+      budgetCents: cents,
+      period,
+      periodStart: start,
+      periodEnd: end,
+      managed,
+    });
   }
   return items;
 }

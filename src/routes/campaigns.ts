@@ -25,6 +25,7 @@ import { STOP_REASONS } from "../lib/stop-reason.js";
 import {
   TRANSITION_SOURCES,
   campaignBirthTransition,
+  signalCampaignBirth,
   setCampaignStatus,
 } from "../lib/campaign-status-history.js";
 import { isSalesFamilyFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
@@ -413,6 +414,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       console.error(`[campaign-service] Failed to trigger initial workflow for campaign ${campaign.id}:`, err);
     });
 
+    // A person created it ongoing: billing hears it like a restart (fire-and-forget).
+    signalCampaignBirth(campaign, { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null });
+
     // New ongoing campaign → wake the scheduler so it resumes monitoring from idle.
     wakeScheduler();
 
@@ -631,6 +635,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
       return inserted;
     });
 
+    signalCampaignBirth(campaign, { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null });
     dispatchFirstRun(campaign, req);
     wakeScheduler();
     return res.status(201).json({ campaign, started: true, alreadyRunning: false, ceilingCents });
