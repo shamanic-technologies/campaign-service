@@ -1073,7 +1073,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       // Wait for async nextRunAt update
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 400));
 
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
@@ -1105,7 +1105,7 @@ describe("Pipeline routes", () => {
         .send({ success: false, stopCampaign: false })
         .expect(200);
 
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 400));
 
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
@@ -1136,7 +1136,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(res.body.status).toBe("completed");
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 400));
 
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
@@ -1172,7 +1172,7 @@ describe("Pipeline routes", () => {
         .send({ success: true, stopCampaign: false, noWorkAvailable: false })
         .expect(200);
 
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 400));
 
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
@@ -1199,7 +1199,7 @@ describe("Pipeline routes", () => {
         .send({ success: false, stopCampaign: false, noWorkAvailable: true })
         .expect(200);
 
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 400));
 
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
@@ -1222,7 +1222,7 @@ describe("Pipeline routes", () => {
         .send({ success: true, stopCampaign: false })
         .expect(200);
 
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 400));
 
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
@@ -1258,7 +1258,7 @@ describe("Pipeline routes", () => {
       expect(res.body.status).toBe("completed");
 
       // Wait for async handling
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 400));
 
       // The served audience is marked exhausted for this campaign.
       const marks = await db
@@ -1315,7 +1315,7 @@ describe("Pipeline routes", () => {
 
       expect(res.body.status).toBe("completed");
 
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 400));
 
       // NOT re-triggered now — but the campaign is exactly as the customer left it, waiting on
       // the audience cadence. "Everybody has been contacted" is a system condition; only the
@@ -1355,7 +1355,7 @@ describe("Pipeline routes", () => {
         .send({ success: true, stopCampaign: true })
         .expect(200);
 
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 400));
 
       const marks = await db
         .select()
@@ -1401,7 +1401,7 @@ describe("Pipeline routes", () => {
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .send({ success: true, stopCampaign: true })
         .expect(200);
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 400));
 
       const waiting = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaign.id) });
       expect(waiting!.status).toBe("ongoing");
@@ -1415,7 +1415,7 @@ describe("Pipeline routes", () => {
         .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
         .send({ success: true, stopCampaign: false })
         .expect(200);
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 400));
 
       const back = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaign.id) });
       expect(back!.status).toBe("ongoing");
@@ -1443,7 +1443,7 @@ describe("Pipeline routes", () => {
         .send({ success: true, stopCampaign: false })
         .expect(200);
 
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 400));
 
       const updated = await db.query.campaigns.findFirst({
         where: eq(campaigns.id, campaign.id),
@@ -1483,7 +1483,7 @@ describe("Pipeline routes", () => {
           .send({ success: false, stopCampaign: false })
           .expect(200);
 
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 400));
 
         const allWarns = warnSpy.mock.calls.flat().join(" ");
         expect(allWarns).toMatch(/Run failed — rescheduled campaign /);
@@ -1509,12 +1509,14 @@ describe("Pipeline routes", () => {
           .send({ success: true, stopCampaign: false })
           .expect(200);
 
-        await new Promise((r) => setTimeout(r, 100));
+        // /end-run answers first and reschedules after a few DB round-trips (the failure-streak
+        // reset is one): wait for the reschedule line rather than a fixed sleep.
+        await vi.waitFor(() => {
+          expect(logSpy.mock.calls.flat().join(" ")).toMatch(/Set nextRunAt=/);
+        }, { timeout: 3000, interval: 25 });
 
         const allWarns = warnSpy.mock.calls.flat().join(" ");
         expect(allWarns).not.toMatch(/Run failed/);
-        const allLogs = logSpy.mock.calls.flat().join(" ");
-        expect(allLogs).toMatch(/Set nextRunAt=/);
       } finally {
         warnSpy.mockRestore();
         logSpy.mockRestore();
