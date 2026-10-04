@@ -232,6 +232,25 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     expect(outcome.skipped[0].reason).toBe(STEP_TRIGGER_SKIPS.COHORT_RUN_IN_FLIGHT);
   });
 
+  it("does not bypass a widened failure backoff: the lead stays due for the next scheduled run", async () => {
+    const nextRunAt = new Date(Date.now() + 20 * 60_000);
+    mockFindMany.mockResolvedValue([campaign({ consecutiveRunFailures: 9, nextRunAt })]);
+
+    const outcome = await triggerCampaignsForStep(request);
+
+    expect(outcome.skipped[0].reason).toBe(STEP_TRIGGER_SKIPS.FAILURE_BACKOFF);
+    expect(outcome.skipped[0].detail).toContain(nextRunAt.toISOString());
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("still fires a campaign inside its first few failures (base cadence, no backoff yet)", async () => {
+    mockFindMany.mockResolvedValue([campaign({ consecutiveRunFailures: 2, nextRunAt: new Date(Date.now() + 60_000) })]);
+
+    const outcome = await triggerCampaignsForStep(request);
+
+    expect(outcome.triggered).toHaveLength(1);
+  });
+
   it("never runs a campaign whose channel the CUSTOMER operates — it has no DAG", async () => {
     mockFindMany.mockResolvedValue([campaign({ workflowSlug: null })]);
 

@@ -148,6 +148,21 @@
             "type": "string",
             "nullable": true
           },
+          "consecutiveRunFailures": {
+            "type": "integer"
+          },
+          "failingSince": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastRunFailureAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureAlertedAt": {
+            "type": "string",
+            "nullable": true
+          },
           "notifyFrequency": {
             "type": "string",
             "nullable": true
@@ -197,6 +212,10 @@
           "status",
           "stopReason",
           "nextRunAt",
+          "consecutiveRunFailures",
+          "failingSince",
+          "lastRunFailureAt",
+          "failureAlertedAt",
           "notifyFrequency",
           "notifyChannel",
           "notifyDestination",
@@ -1738,6 +1757,133 @@
           "audienceSince",
           "audienceLastObservedAt",
           "recurring"
+        ]
+      },
+      "FailingCampaignsResponse": {
+        "type": "object",
+        "properties": {
+          "thresholds": {
+            "type": "object",
+            "properties": {
+              "failuresAtBaseCadence": {
+                "type": "integer"
+              },
+              "baseRetryMs": {
+                "type": "integer"
+              },
+              "retryCeilingMs": {
+                "type": "integer"
+              },
+              "failingAlertThreshold": {
+                "type": "integer"
+              },
+              "alertCooldownMs": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "failuresAtBaseCadence",
+              "baseRetryMs",
+              "retryCeilingMs",
+              "failingAlertThreshold",
+              "alertCooldownMs"
+            ]
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "orgId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "brandIds": {
+                  "type": "array",
+                  "nullable": true,
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "featureSlug": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "nextRunAt": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "runHealth": {
+                  "$ref": "#/components/schemas/RunHealth"
+                }
+              },
+              "required": [
+                "id",
+                "orgId",
+                "name",
+                "brandIds",
+                "featureSlug",
+                "status",
+                "nextRunAt",
+                "runHealth"
+              ]
+            }
+          }
+        },
+        "required": [
+          "thresholds",
+          "campaigns"
+        ]
+      },
+      "RunHealth": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "retrying",
+              "failing"
+            ],
+            "description": "healthy: no failed run since the last success. retrying: the last run(s) failed, fewer than the alert threshold in a row. failing: the alert threshold or more in a row; staff were told."
+          },
+          "consecutiveFailures": {
+            "type": "integer"
+          },
+          "failingSince": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastFailureAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "retryIntervalMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "The delay applied after the latest failure; null when healthy"
+          },
+          "alertedAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "The last staff alert for this campaign; survives a reset"
+          }
+        },
+        "required": [
+          "state",
+          "consecutiveFailures",
+          "failingSince",
+          "lastFailureAt",
+          "retryIntervalMs",
+          "alertedAt"
         ]
       }
     },
@@ -3954,6 +4100,52 @@
           },
           "502": {
             "description": "The acquisition-channel catalogue could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/campaigns/failing": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Every ongoing campaign whose last run failed, with its run health",
+        "description": "Fleet-wide. One row per ONGOING campaign with at least one failed run since its last success, ordered by streak length. `runHealth.state` is `retrying` below the alert threshold and `failing` at or above it (staff were alerted once for the episode). `retryIntervalMs` is the delay /end-run applied after the latest failure: 60s for the first few failures, doubling to a ceiling. `thresholds` states the constants that produced it. A failing campaign is never stopped by this and the customer is never emailed by it. Nothing is written.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Failing and retrying campaigns",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailingCampaignsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
             "content": {
               "application/json": {
                 "schema": {
