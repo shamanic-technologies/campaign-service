@@ -23,6 +23,8 @@ import {
   type GlobalCandidate,
 } from "./global-sales-budget.js";
 import { brandSalesSpentTodayCents, potRecheckAt, readSpentTodayCents } from "./global-sales-pot.js";
+import { itemVerdict } from "./sales-items-pace.js";
+import type { SalesItem } from "./sales-items.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
 // re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
@@ -279,6 +281,13 @@ async function planOneBrand(
   //
   // EVERY funded campaign of the brand is in the running, every tick: each is ranked on what IT has already spent today
   // against the ceiling that actually binds IT, so nothing starves and nothing overspends.
+  // ITEMS mode (see sales-items.ts): each campaign is judged on its OWN item and nothing else, and
+  // the global pot does not exist. One campaign held never holds another.
+  if (salesBudget.mode === "items") {
+    await planItemsBrand(group, salesBudget.items, budgets, now, deferred, holds);
+    return;
+  }
+
   let candidates: TurnCandidate[] = [];
   const cohortOf = new Map<string, string>();
   // Strict per-campaign spend (null = unreadable). Only GLOBAL mode reads it: the brand-wide cap
@@ -359,6 +368,92 @@ async function planOneBrand(
 
   for (const [cohort, members] of cohorts) {
     await planOneCohort(orgId, brandId, cohort, members, byId, now, deferred, holds, firstServed);
+  }
+}
+
+/**
+ * ITEMS MODE: the customer activated sales paths and budgeted each (offer, leg, channel) item.
+ *
+ * Every campaign is judged alone on its item (`itemVerdict`, the same verdict gate-check and the
+ * step trigger give): no item = held as unfunded; spent = parked until a raise or the rollover;
+ * unreadable = held (fail-closed) — each for THAT campaign only. The ones that may spend take the
+ * cohort turn exactly as in campaigns mode, ranked on their fill ratio against today's allowance,
+ * reactive legs first (bottom of the funnel first, as in global mode).
+ */
+async function planItemsBrand(
+  group: ClaimedSalesCampaign[],
+  items: readonly SalesItem[],
+  budgets: Awaited<ReturnType<typeof fetchCampaignBudgets>>,
+  now: Date,
+  deferred: Map<string, Date>,
+  holds: TurnHold[],
+): Promise<void> {
+  const seed = group[0];
+  const orgId = seed.orgId;
+  const brandId = seed.brandIds![0];
+
+  const catalogue = await fetchChannelCatalogue();
+  let legs: readonly CatalogueLeg[] = [];
+  if (catalogue.ok) legs = catalogue.legs;
+  else {
+    console.error(
+      `[campaign-service] brand ${brandId} (org ${orgId}) is in ITEMS sales-budget mode but the channel catalogue could not be read (${catalogue.detail}) — every leg is paced as proactive.`,
+    );
+  }
+
+  const candidates: TurnCandidate[] = [];
+  const cohortOf = new Map<string, string>();
+  const reactiveIds = new Set<string>();
+  for (const c of group) {
+    const reactive = isReactiveLeg(c.legKey, legs);
+    const verdict = await itemVerdict({
+      campaign: {
+        id: c.id,
+        orgId,
+        offerId: c.offerId ?? null,
+        legKey: c.legKey ?? null,
+        featureSlug: c.featureSlug,
+        dailyBudgetCents: c.dailyBudgetCents,
+      },
+      brandId,
+      items,
+      reactive,
+      identity: { orgId, userId: c.createdByUserId ?? undefined, campaignId: c.id, brandId },
+      now,
+      budgets,
+    });
+    if (!verdict.run) {
+      const nextRunAt = verdict.kind === "unfunded" ? new Date(now.getTime() + FUNDING_RECHECK_MS) : verdict.nextRunAt;
+      deferred.set(c.id, nextRunAt);
+      const reason = verdict.kind === "unfunded" ? "unfunded" : verdict.kind === "reached" ? "item_budget_reached" : "budgets_unreadable";
+      const leadNote = reactive && verdict.kind !== "unfunded"
+        ? " A lead waiting at this step is not dropped: it stays due and is worked by the first run the item can pay for."
+        : "";
+      holds.push({
+        campaign: c,
+        reason,
+        detail: `Campaign not run — ${verdict.detail}.${leadNote} Re-checked at ${nextRunAt.toISOString()}.`,
+        nextRunAt,
+        data: verdict.capCents !== undefined ? { spentCents: verdict.spentCents, itemCapCents: verdict.capCents } : undefined,
+      });
+      continue;
+    }
+    if (reactive) reactiveIds.add(c.id);
+    cohortOf.set(c.id, serializationCohort(c.featureSlug));
+    candidates.push({ campaignId: c.id, legKey: c.legKey ?? "", spentCents: verdict.spentCents, ceilingCents: verdict.capCents });
+  }
+  if (candidates.length === 0) return;
+
+  const byId = new Map(group.map((c) => [c.id, c]));
+  const cohorts = new Map<string, TurnCandidate[]>();
+  for (const c of candidates) {
+    const key = cohortOf.get(c.campaignId)!;
+    const bucket = cohorts.get(key);
+    if (bucket) bucket.push(c);
+    else cohorts.set(key, [c]);
+  }
+  for (const [cohort, members] of cohorts) {
+    await planOneCohort(orgId, brandId, cohort, members, byId, now, deferred, holds, reactiveIds);
   }
 }
 
