@@ -577,8 +577,9 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
           // Nobody to contact. Two shapes, one outcome — the campaign is NOT stopped either way:
           //
           //   - it has exhausted an audience before, i.e. outreach genuinely ran out of people:
-          //     nudge the customer to extend an audience so it can resume. Fire-and-forget, never
-          //     blocks run finalization, and the 1x/month-per-brand cap is transactional-email's.
+          //     REFILL the brand's audiences ourselves (once per episode), and only when that gives
+          //     it nobody new, ask the customer to extend an audience and alert staff.
+          //     Fire-and-forget, never blocks run finalization.
           //   - it has never exhausted one, i.e. it has served nothing at all: "nothing left to
           //     serve" is equally true of a campaign that never had anything, so there is no
           //     claim to make and nobody to email. 0 of 0 is not 100%.
@@ -587,12 +588,15 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
           // change — hours or days apart, not eleven seconds.
           const everExhausted = await hasExhaustedAudience(campaignId);
           if (everExhausted && campaign) {
-            void maybeSendExtendAudienceEmail(campaign, { runId: req.runId! });
+            void maybeSendExtendAudienceEmail(campaign, {
+              runId: req.runId!,
+              recheckServeable: () => hasServeableAudience(campaign, req),
+            });
           }
           waitingForAudience = true;
           console.log(
             everExhausted
-              ? `[campaign-service] Campaign ${campaignId} has contacted every targeted audience — it stays ongoing (only the customer stops a campaign) and re-checks in ${NO_SERVEABLE_AUDIENCE_RECHECK_MS}ms; the owner was asked to extend an audience`
+              ? `[campaign-service] Campaign ${campaignId} has contacted every targeted audience — it stays ongoing (only the customer stops a campaign) and re-checks in ${NO_SERVEABLE_AUDIENCE_RECHECK_MS}ms; an automatic audience refill is asked first, the owner only if it gives nobody new`
               : `[campaign-service] Campaign ${campaignId} has no serveable audience and has never exhausted one — it has served nothing, so there is nothing to conclude; it stays ongoing and re-checks in ${NO_SERVEABLE_AUDIENCE_RECHECK_MS}ms`,
           );
         }

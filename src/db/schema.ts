@@ -333,6 +333,9 @@ export const campaignAudienceAvailability = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull().defaultNow(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
+    // The one automatic audience refill of a has_audience = false period (src/lib/audience-refill.ts),
+    // claimed atomically so the many /end-run calls of one episode ask human-service once.
+    refillAttemptedAt: timestamp("refill_attempted_at", { withTimezone: true }),
   },
   (table) => [
     // At most one CURRENT period per campaign.
