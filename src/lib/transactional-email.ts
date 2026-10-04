@@ -1,6 +1,7 @@
 // Lifecycle email: nudge the user to extend an audience when a brand's outreach has
 // fully contacted every lead in its active audiences (the sales loop has no next lead
-// left to send). campaign-service is the SENDER/trigger, so it owns registering the
+// left to send) AND our own automatic refill (src/lib/audience-refill.ts) could not give
+// it anybody new. Finding the next people is our job first; the client hears last. campaign-service is the SENDER/trigger, so it owns registering the
 // template and firing the send; transactional-email-service owns templating, recipient
 // resolution, and the 1x/month-per-brand deduplication.
 //
@@ -10,6 +11,7 @@ import type { Campaign } from "../db/schema.js";
 import { isOutboundSalesFeature } from "./sales-outreach-campaign.js";
 import { hasExhaustedAudience } from "./audience-exhaustion.js";
 import { fetchBrandRuntimeContext } from "./brand-runtime-client.js";
+import { claimEpisodeRefill, notifyRefillFailed, requestBrandAudienceRefill } from "./audience-refill.js";
 
 // eventType == template name. transactional-email-service maps a send's eventType to the
 // template of the same name and applies its monthly-per-brand dedup to this eventType.
@@ -205,12 +207,11 @@ async function hasPositiveDailyBudget(campaign: Campaign): Promise<boolean> {
  * brand) is enforced downstream by the eventType's monthly-per-brand strategy, so a
  * duplicate simply returns { sent: false, reason: "duplicate" }. Never throws.
  */
-async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId: string): Promise<void> {
+async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId: string, brandName: string | null): Promise<void> {
   const cfg = transactionalEmailConfig();
   if (!cfg) return;
   const brandIds = campaign.brandIds ?? [];
   const brandId = brandIds[0];
-  const brandName = await readBrandName(campaign, brandId, userId, runId);
   // Empty when the identity could not be read: the template then renders the footer line
   // blank and the message says exactly what it said before, with nothing invented.
   const brandFooterHtml = brandName ? `About your outreach for ${escapeHtml(brandName)}.` : "";
@@ -248,28 +249,42 @@ async function sendExtendAudienceEmail(campaign: Campaign, userId: string, runId
 }
 
 /**
- * Fire-and-forget: when a brand's outreach is fully contacted (all targeted audiences
- * exhausted, the campaign is being auto-stopped), email the user to extend an audience.
+ * Fire-and-forget, when a campaign has contacted everyone in its audiences: REFILL first, and email
+ * the user to extend an audience only when the refill gave the brand nobody new.
  *
- * Sends ONLY when EVERY condition holds:
- *   - a sales-outreach feature (cold or CRM — the audience/extend concept applies)
+ * Acts ONLY when EVERY condition holds (the same gates whether we refill or email, so we never
+ * spend on audiences for a brand that is paused or unfunded):
+ *   - an outbound sales feature (the audience/extend concept applies)
  *   - the campaign actually RAN OUT of people: at least one real audience of its own was
- *     exhausted. A brand that never had an audience contacted nobody, so "you have now
- *     contacted everyone" is false for it — zero out of zero is not everyone. The dashboard
- *     already tells that brand it has no active audience, and this path says nothing.
- *   - the campaign has an owning user (createdByUserId) to resolve as recipient
- *   - a daily budget is configured (> 0) — which IS "the brand is funded", and is therefore also
- *     what says the brand is running at all now that `brand_pause` is gone
+ *     exhausted. Zero out of zero is not everyone: a brand that never had an audience hears nothing.
+ *   - the campaign has an owning user (createdByUserId), the email recipient and the acting user
+ *   - a daily budget is configured (> 0), which IS "the brand is funded"
  *   - the org has auto-topup ON
  *
- * The 1x/month-per-brand cap is enforced by transactional-email-service dedup, not here.
- * Any error is logged and swallowed — this must never affect run finalization.
+ * Then, once per exhaustion EPISODE (claimed atomically; later /end-run calls of the same episode
+ * do nothing):
+ *   1. ask human-service to refill the brand's audiences now;
+ *   2. new audiences created → nothing is sent: the campaign serves them on its next tick;
+ *   3. otherwise, re-check whether the campaign has somebody serveable after all (a refill that just
+ *      ran elsewhere, an audience the client added): if so nothing is sent;
+ *   4. otherwise the client gets the extend-audience email AND staff get an alert, together.
+ *
+ * The 1x/month-per-brand cap on the client email is transactional-email-service's. Any error is
+ * logged and swallowed: this must never affect run finalization.
  */
-export async function maybeSendExtendAudienceEmail(campaign: Campaign, opts: { runId: string }): Promise<void> {
+export async function maybeSendExtendAudienceEmail(
+  campaign: Campaign,
+  opts: {
+    runId: string;
+    /** Does the campaign have a serveable audience NOW? The /end-run guard's own read. */
+    recheckServeable?: () => Promise<boolean>;
+    /** Test seam: the 409-retry delay of the refill call. */
+    refillBusyRetryDelayMs?: number;
+  },
+): Promise<void> {
   try {
-    // OUTBOUND only. This email asks the customer for more PEOPLE to contact, which is a request
-    // that means nothing to a paid-reach campaign: it buys impressions, it does not work its way
-    // through a list of names, and it has no audience to extend.
+    // OUTBOUND only. This asks for more PEOPLE to contact, which means nothing to a paid-reach
+    // campaign: it buys impressions, it does not work through a list of names.
     if (!isOutboundSalesFeature(campaign.featureSlug)) return;
 
     const userId = campaign.createdByUserId;
@@ -277,20 +292,52 @@ export async function maybeSendExtendAudienceEmail(campaign: Campaign, opts: { r
 
     const brandIds = campaign.brandIds ?? [];
     if (brandIds.length === 0) return;
+    const brandId = brandIds[0];
 
-    // Nobody was ever contacted → nothing was ever "fully contacted". A campaign whose brand
-    // has no audience at all reaches this same auto-stop branch (its exhaustion carries no
-    // audience id, so no mark is ever written), and telling it that its outreach finished is
-    // the one thing it must not hear. The campaign still stops; only the claim is withheld.
+    // Nobody was ever contacted → nothing was ever "fully contacted". A campaign whose brand has
+    // no audience at all reaches the same branch (no audience id, no mark written); it gets
+    // neither a refill nor a claim that its outreach finished.
     if (!(await hasExhaustedAudience(campaign.id))) return;
 
     if (!(await hasPositiveDailyBudget(campaign))) return;
     if (!(await readAutoTopupEnabled(campaign.orgId))) return;
 
-    // The caller's own run, never a minted stand-in: `/end-run` requires x-run-id
-    // (requirePipelineHeaders), so one always exists — and a minted uuid names a run that does not,
-    // which is exactly what the services downstream refuse.
-    await sendExtendAudienceEmail(campaign, userId, opts.runId);
+    // One attempt per episode, whatever it turns out to be.
+    if (!(await claimEpisodeRefill(campaign.id))) return;
+
+    const verdict = await requestBrandAudienceRefill(campaign.orgId, brandId, {
+      busyRetryDelayMs: opts.refillBusyRetryDelayMs,
+    });
+    if (verdict.refilled) {
+      console.log(
+        `[campaign-service] Campaign ${campaign.id} ran out of people; human-service created ${verdict.created} new audience(s) for brand ${brandId} — no email, the campaign serves them on its next tick`,
+      );
+      return;
+    }
+
+    if (opts.recheckServeable) {
+      try {
+        if (await opts.recheckServeable()) {
+          console.log(
+            `[campaign-service] Campaign ${campaign.id}: refill answered ${verdict.outcome}, but the campaign has a serveable audience again — no email`,
+          );
+          return;
+        }
+      } catch (err) {
+        // Unreadable is not "somebody is there": the client and staff still hear.
+        console.error(`[campaign-service] Campaign ${campaign.id}: serveable re-check after the refill failed:`, err);
+      }
+    }
+
+    console.error(
+      `[campaign-service] Campaign ${campaign.id} ran out of people and the automatic refill of brand ${brandId} produced nobody new (outcome=${verdict.outcome}${verdict.detail ? ` detail=${JSON.stringify(verdict.detail)}` : ""}) — emailing the client and alerting staff`,
+    );
+    // The caller's own run, never a minted stand-in: `/end-run` requires x-run-id.
+    const brandName = await readBrandName(campaign, brandId, userId, opts.runId);
+    await Promise.all([
+      notifyRefillFailed({ campaign, userId, runId: opts.runId, brandName, verdict }),
+      sendExtendAudienceEmail(campaign, userId, opts.runId, brandName),
+    ]);
   } catch (err) {
     console.error(`[campaign-service] maybeSendExtendAudienceEmail failed for campaign ${campaign.id}:`, err);
   }
