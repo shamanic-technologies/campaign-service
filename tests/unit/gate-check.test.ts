@@ -42,6 +42,11 @@ vi.mock("drizzle-orm", () => ({
 const { mockPotBlock } = vi.hoisted(() => ({ mockPotBlock: vi.fn() }));
 vi.mock("../../src/lib/global-sales-pot.js", () => ({ globalSalesPotBlock: mockPotBlock }));
 
+// Items mode has its own unit test (sales-items-gate.test.ts). Here the brand is never in items
+// mode unless a test says otherwise, so every path below is today's.
+const { mockItemsGate } = vi.hoisted(() => ({ mockItemsGate: vi.fn() }));
+vi.mock("../../src/lib/sales-items-pace.js", () => ({ salesItemsGate: mockItemsGate }));
+
 // Mock fetch for lead stats
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -154,6 +159,7 @@ describe("Gate Check", () => {
     mockGetStatsBudget.mockResolvedValue({ windows: [] });
     mockUpdateRun.mockResolvedValue({});
     mockPotBlock.mockResolvedValue(null);
+    mockItemsGate.mockResolvedValue({ applies: false, salesBudget: null });
   });
 
   it("should block if campaign is not ongoing", async () => {
@@ -1310,6 +1316,8 @@ describe("Gate Check", () => {
       expect(result).toMatchObject({ allowed: false, reason: "Global sales budget reached", nextRunAt });
       expect(mockPotBlock).toHaveBeenCalledWith(
         expect.objectContaining({ orgId: "org-1", brandId: "brand-1", featureSlug: "sales-cold-email-outreach" }),
+        undefined,
+        null,
       );
     });
 

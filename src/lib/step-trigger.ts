@@ -14,6 +14,8 @@ import {
 } from "./brand-turns.js";
 import { hasLiveRunForCampaign, STUCK_RUN_FRESHNESS_THRESHOLD_MS } from "./scheduler.js";
 import { globalSalesPotBlock } from "./global-sales-pot.js";
+import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
+import { itemVerdict } from "./sales-items-pace.js";
 
 /**
  * A LEAD JUST REACHED A STEP — RUN THE CAMPAIGN THAT WAS BOUGHT TO TAKE THEM OUT OF IT, NOW.
@@ -81,6 +83,11 @@ export const STEP_TRIGGER_SKIPS = {
    * dropped: it stays due in lead-service's queue and the first run the pot can pay for works it.
    */
   GLOBAL_SALES_BUDGET_REACHED: "global_sales_budget_reached",
+  /**
+   * ITEMS mode: this campaign's own item budget allows nothing more today (or cannot be judged).
+   * The lead is NOT dropped: it stays due and the first run the item can pay for works it.
+   */
+  ITEM_BUDGET_REACHED: "item_budget_reached",
   /** A run of a campaign it shares leads and sending accounts with is in flight. */
   COHORT_RUN_IN_FLIGHT: "cohort_run_in_flight",
   /** The row states no brand, owner or feature, so no execution could be identified. */
@@ -221,19 +228,51 @@ export async function triggerCampaignsForStep(
       continue;
     }
 
-    const funding = await campaignFunding(campaign, brandIds[0], { orgId: req.orgId });
-    if (!funding.funded) {
-      skip(STEP_TRIGGER_SKIPS.UNFUNDED, funding.reason);
-      continue;
+    const moneyIdentity = { orgId: req.orgId, userId: campaign.createdByUserId, campaignId: campaign.id, brandId: brandIds[0] };
+    const salesBudget = brandIds.length === 1 ? await fetchBrandSalesBudget(brandIds[0], moneyIdentity) : null;
+    if (salesBudget?.ok && salesBudget.mode === "items") {
+      // ITEMS mode: this campaign's item is its money, and nothing else (see sales-items.ts). A
+      // step-triggered leg is reactive by definition: capped on its item's period, not paced.
+      const verdict = await itemVerdict({
+        campaign: {
+          id: campaign.id,
+          orgId: req.orgId,
+          offerId: campaign.offerId,
+          legKey: campaign.legKey,
+          featureSlug: campaign.featureSlug,
+          dailyBudgetCents: campaign.dailyBudgetCents,
+        },
+        brandId: brandIds[0],
+        items: salesBudget.items,
+        reactive: true,
+        identity: moneyIdentity,
+        now,
+      });
+      if (!verdict.run) {
+        if (verdict.kind === "unfunded") skip(STEP_TRIGGER_SKIPS.UNFUNDED, verdict.detail);
+        else {
+          skip(
+            STEP_TRIGGER_SKIPS.ITEM_BUDGET_REACHED,
+            `${verdict.detail}; the lead stays due and is worked by the first run the item can pay for (next check ${verdict.nextRunAt.toISOString()})`,
+          );
+        }
+        continue;
+      }
+    } else {
+      const funding = await campaignFunding(campaign, brandIds[0], { orgId: req.orgId });
+      if (!funding.funded) {
+        skip(STEP_TRIGGER_SKIPS.UNFUNDED, funding.reason);
+        continue;
+      }
     }
 
     // Same pot gate-check binds on: firing a run it is about to refuse would only burn the run.
-    const pot = await globalSalesPotBlock({
-      orgId: req.orgId,
-      brandId: brandIds[0],
-      featureSlug: campaign.featureSlug,
-      identity: { orgId: req.orgId, userId: campaign.createdByUserId, campaignId: campaign.id, brandId: brandIds[0] },
-    });
+    // (Items mode answers null here: the brand has no pot.)
+    const pot = await globalSalesPotBlock(
+      { orgId: req.orgId, brandId: brandIds[0], featureSlug: campaign.featureSlug, identity: moneyIdentity },
+      now,
+      salesBudget,
+    );
     if (pot) {
       skip(
         STEP_TRIGGER_SKIPS.GLOBAL_SALES_BUDGET_REACHED,

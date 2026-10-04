@@ -49,6 +49,9 @@ vi.mock("../../src/lib/audience-exhaustion.js", () => ({
 vi.mock("../../src/lib/workflows.js", () => ({ executeCampaignWorkflow: mockExecute }));
 const { mockPotBlock } = vi.hoisted(() => ({ mockPotBlock: vi.fn() }));
 vi.mock("../../src/lib/global-sales-pot.js", () => ({ globalSalesPotBlock: mockPotBlock }));
+const { mockSalesBudget, mockItemVerdict } = vi.hoisted(() => ({ mockSalesBudget: vi.fn(), mockItemVerdict: vi.fn() }));
+vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({ fetchBrandSalesBudget: mockSalesBudget }));
+vi.mock("../../src/lib/sales-items-pace.js", () => ({ itemVerdict: mockItemVerdict }));
 
 import {
   triggerCampaignsForStep,
@@ -119,6 +122,7 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
   beforeEach(() => {
     vi.clearAllMocks();
     catalogueAnswers();
+    mockSalesBudget.mockResolvedValue({ ok: true, mode: "campaigns" });
     mockFunding.mockResolvedValue({ funded: true, ceilingCents: 5000 });
     mockLiveCampaign.mockResolvedValue(false);
     mockLiveCohort.mockResolvedValue(false);
@@ -299,11 +303,53 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
         expect.objectContaining({ campaignId: CAMPAIGN, reason: STEP_TRIGGER_SKIPS.GLOBAL_SALES_BUDGET_REACHED }),
       ]);
       expect(outcome.skipped[0].detail).toMatch(/stays due/);
-      expect(mockPotBlock).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG, brandId: BRAND }));
+      expect(mockPotBlock).toHaveBeenCalledWith(
+        expect.objectContaining({ orgId: ORG, brandId: BRAND }),
+        expect.any(Date),
+        { ok: true, mode: "campaigns" },
+      );
     });
 
     it("fires while the pot has money", async () => {
       mockFindMany.mockResolvedValue([campaign()]);
+      mockPotBlock.mockResolvedValue(null);
+      const outcome = await triggerCampaignsForStep(request);
+      expect(outcome.triggered).toHaveLength(1);
+    });
+  });
+
+  describe("ITEMS mode: the campaign's own item is its money", () => {
+    const items = [{ offerId: OFFER, legKey: LEG_OUT, featureSlug: "sales-cold-email-outreach", budgetCents: 500, period: "day", periodStart: null, periodEnd: null, managed: true }];
+
+    it("a spent item holds the lead (named skip, the lead stays due) and the funding/pot path is not asked", async () => {
+      mockFindMany.mockResolvedValue([campaign()]);
+      mockSalesBudget.mockResolvedValue({ ok: true, mode: "items", items });
+      mockItemVerdict.mockResolvedValue({ run: false, kind: "reached", detail: "its daily item budget allows 500 cents today and 500 are committed", nextRunAt: new Date("2026-10-04T00:00:00Z") });
+
+      const outcome = await triggerCampaignsForStep(request);
+
+      expect(mockExecute).not.toHaveBeenCalled();
+      expect(mockFunding).not.toHaveBeenCalled();
+      expect(outcome.skipped).toEqual([
+        expect.objectContaining({ campaignId: CAMPAIGN, reason: STEP_TRIGGER_SKIPS.ITEM_BUDGET_REACHED }),
+      ]);
+      expect(outcome.skipped[0].detail).toMatch(/stays due/);
+      // A step-triggered leg is reactive by definition.
+      expect(mockItemVerdict).toHaveBeenCalledWith(expect.objectContaining({ reactive: true, items }));
+    });
+
+    it("no item for this campaign = unfunded", async () => {
+      mockFindMany.mockResolvedValue([campaign()]);
+      mockSalesBudget.mockResolvedValue({ ok: true, mode: "items", items: [] });
+      mockItemVerdict.mockResolvedValue({ run: false, kind: "unfunded", detail: "no active sales path budgets this campaign", nextRunAt: new Date() });
+      const outcome = await triggerCampaignsForStep(request);
+      expect(outcome.skipped).toEqual([expect.objectContaining({ reason: STEP_TRIGGER_SKIPS.UNFUNDED })]);
+    });
+
+    it("fires while the item has money", async () => {
+      mockFindMany.mockResolvedValue([campaign()]);
+      mockSalesBudget.mockResolvedValue({ ok: true, mode: "items", items });
+      mockItemVerdict.mockResolvedValue({ run: true, spentCents: 0, capCents: 500 });
       mockPotBlock.mockResolvedValue(null);
       const outcome = await triggerCampaignsForStep(request);
       expect(outcome.triggered).toHaveLength(1);
