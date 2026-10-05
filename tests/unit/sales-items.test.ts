@@ -37,7 +37,6 @@ vi.mock("../../src/lib/campaign-offer-adoption.js", () => ({ adoptOfferForPairSa
 
 import {
   boundedCap,
-  daysLeftInPeriod,
   itemPace,
   itemsOf,
   underCap,
@@ -119,47 +118,33 @@ describe("itemPace", () => {
 
   it("billing's stated role wins over our catalogue read; null falls back to it", () => {
     const spentToday = { spentTodayCents: 600, spentInPeriodCents: 2000 };
-    // Stated reactive, catalogue says proactive: a MAX on the period (9900 - 1400 left before today).
-    const r = pace({ items: [monthly({ role: "reactive" })], reactive: false, ...spentToday });
-    expect(r).toMatchObject({ ok: true, reactive: true, capCents: 8500 });
-    // Stated proactive, catalogue says reactive: paced.
-    const p = pace({ items: [monthly({ role: "proactive" })], reactive: true, ...spentToday });
-    expect(p.ok && p.capCents).toBeCloseTo(8500 / 21);
-    // No stated role: our catalogue read decides.
-    expect(pace({ items: [monthly()], reactive: true, ...spentToday })).toMatchObject({ ok: true, reactive: true, capCents: 8500 });
+    expect(pace({ items: [monthly({ role: "reactive" })], reactive: false, ...spentToday })).toMatchObject({ ok: true, reactive: true });
+    expect(pace({ items: [monthly({ role: "proactive" })], reactive: true, ...spentToday })).toMatchObject({ ok: true, reactive: false });
+    expect(pace({ items: [monthly()], reactive: true, ...spentToday })).toMatchObject({ ok: true, reactive: true });
   });
 
   it("two items for one campaign is a fault, never summed by guess", () => {
     expect(pace({ items: [item(), item()] })).toMatchObject({ ok: false, reason: "ambiguous" });
   });
 
-  it("monthly proactive item (subscriber) is paced over the days left: $99 with nothing spent, 21 days left → 471c today", () => {
-    expect(daysLeftInPeriod(NOW, PERIOD_END)).toBe(21);
+  it("monthly PROACTIVE item is a max on the period, never paced: $99 with nothing spent → the whole $99 is spendable today", () => {
     const p = pace({ items: [monthly()], spentTodayCents: 0, spentInPeriodCents: 0 });
-    expect(p.ok && p.capCents).toBeCloseTo(9900 / 21);
+    expect(p).toMatchObject({ ok: true, reactive: false, spentCents: 0, capCents: 9900 });
   });
 
-  it("an under-spent month catches up, an over-spent one pays back", () => {
-    const under = pace({ items: [monthly()], spentTodayCents: 0, spentInPeriodCents: 900 });
-    expect(under.ok && under.capCents).toBeCloseTo(9000 / 21);
-    const over = pace({ items: [monthly()], spentTodayCents: 0, spentInPeriodCents: 9000 });
-    expect(over.ok && over.capCents).toBeCloseTo(900 / 21);
+  it("monthly item: the period's spend is compared to the whole budget; today's spend rides along", () => {
+    const p = pace({ items: [monthly()], spentTodayCents: 3000, spentInPeriodCents: 5000 });
+    expect(p).toMatchObject({ ok: true, spentCents: 5000, capCents: 9900, spentTodayCents: 3000 });
     const spent = pace({ items: [monthly()], spentTodayCents: 0, spentInPeriodCents: 9900 });
-    expect(spent.ok && spent.capCents).toBe(0);
+    expect(spent.ok && underCap(spent.spentCents, spent.capCents)).toBe(false);
   });
 
-  it("today's own spend is not counted twice: it is inside the period figure", () => {
-    const p = pace({ items: [monthly()], spentTodayCents: 300, spentInPeriodCents: 1200 });
-    expect(p).toMatchObject({ ok: true, spentCents: 300 });
-    expect(p.ok && p.capCents).toBeCloseTo((9900 - 900) / 21);
-  });
-
-  it("monthly REACTIVE item is capped on the period only (it fires on leads, which are bursty)", () => {
+  it("monthly REACTIVE item is the same max on the period", () => {
     const p = pace({ items: [monthly({ legKey: REACTIVE })], campaign: { ...KEY, legKey: REACTIVE }, reactive: true, spentTodayCents: 0, spentInPeriodCents: 2000 });
-    expect(p).toMatchObject({ ok: true, capCents: 7900 });
+    expect(p).toMatchObject({ ok: true, reactive: true, spentCents: 2000, capCents: 9900 });
   });
 
-  it("a period that began today does not count the previous period's spend from this morning", () => {
+  it("a period that began today counts only the spend since it began", () => {
     const startedToday = monthly({ periodStart: new Date(2026, 9, 10, 9, 0, 0), periodEnd: new Date(2026, 10, 10, 9, 0, 0) });
     const p = pace({ items: [startedToday], spentTodayCents: 800, spentInPeriodCents: 100 });
     expect(p).toMatchObject({ ok: true, spentCents: 100 });
@@ -296,6 +281,46 @@ describe("itemVerdict", () => {
   });
 });
 
+describe("itemVerdict — monthly item (any payment mode): spend as fast as the work allows until the month's budget is used", () => {
+  // Legistai shape: $90/month on the entry leg; billing's campaign-grain ceiling for that row is $90 / 30 = $3/day.
+  const ceilingAt300 = {
+    ok: true,
+    brandDailyBudgetCents: 300,
+    campaigns: [{ offerId: "offer-1", legKey: ENTRY, featureSlug: SALES, dailyBudgetCents: 300 }],
+  };
+  const m90 = (o: Partial<SalesItem> = {}) => monthly({ budgetCents: 9000, ...o });
+
+  it("proactive, $0 spent this month: allowed past $3 today (billing's monthly/30 ceiling is not read)", async () => {
+    mockFetchCampaignBudgets.mockResolvedValue(ceilingAt300);
+    spend["c-1"] = { today: 2500, period: 2500 };
+    expect(await verdict({ items: [m90()] })).toEqual({ run: true, spentCents: 2500, capCents: 9000, reactive: false });
+    expect(mockFetchCampaignBudgets).not.toHaveBeenCalled();
+  });
+
+  it("proactive: the month's budget used → reached until the period resets", async () => {
+    spend["c-1"] = { today: 4000, period: 9000 };
+    const v = await verdict({ items: [m90()] });
+    expect(v).toMatchObject({ run: false, kind: "reached", spentCents: 9000, capCents: 9000 });
+    expect(v.run === false && v.detail).toContain("spent for the period");
+  });
+
+  it("reactive: same max on the period, never paced", async () => {
+    mockFetchCampaignBudgets.mockResolvedValue(ceilingAt300);
+    const reactiveCampaign = { ...CAMPAIGN, legKey: REACTIVE, featureSlug: AI_MEETING };
+    const items = [m90({ legKey: REACTIVE, featureSlug: AI_MEETING, budgetCents: 900, role: "reactive" })];
+    spend["c-1"] = { today: 800, period: 800 };
+    expect(await verdict({ campaign: reactiveCampaign, items, reactive: true })).toEqual({ run: true, spentCents: 800, capCents: 900, reactive: true });
+    spend["c-1"] = { today: 100, period: 900 };
+    expect(await verdict({ campaign: reactiveCampaign, items, reactive: true })).toMatchObject({ run: false, kind: "reached" });
+  });
+
+  it("a person's own daily budget on the campaign still binds, against today's spend", async () => {
+    spend["c-1"] = { today: 500, period: 500 };
+    expect(await verdict({ items: [m90()], campaign: { ...CAMPAIGN, dailyBudgetCents: 500 } })).toMatchObject({ run: false, kind: "reached", capCents: 500 });
+    expect(await verdict({ items: [m90()], campaign: { ...CAMPAIGN, dailyBudgetCents: 501 } })).toMatchObject({ run: true, capCents: 9000 });
+  });
+});
+
 describe("salesItemsGate (gate-check's items branch)", () => {
   const gateCampaign = { ...CAMPAIGN, brandIds: ["brand-1"] };
 
@@ -323,9 +348,9 @@ describe("salesItemsGate (gate-check's items branch)", () => {
     expect(await salesItemsGate(gateCampaign, { orgId: "org-1" }, NOW)).toMatchObject({ applies: true, block: { reason: "Campaign not funded" } });
   });
 
-  it("the leg's reactive flag comes from the catalogue: a reactive monthly item is capped on the period, not paced", async () => {
+  it("a monthly item is capped on the period, not paced (reactive leg read from the catalogue)", async () => {
     mockFetchBrandSalesBudget.mockResolvedValue({ ok: true, mode: "items", items: [monthly({ legKey: REACTIVE, featureSlug: AI_MEETING })] });
-    // 2000 of 9900 spent this period, 600 of it today: a paced cap (7900/21 = 376) would refuse, the period cap does not.
+    // 2000 of 9900 spent this period, 600 of it today: a paced cap would refuse, the period cap does not.
     spend["c-1"] = { today: 600, period: 2000 };
     const reactiveCampaign = { ...gateCampaign, legKey: REACTIVE, featureSlug: AI_MEETING };
     expect(await salesItemsGate(reactiveCampaign, { orgId: "org-1" }, NOW)).toEqual({ applies: true, block: null });

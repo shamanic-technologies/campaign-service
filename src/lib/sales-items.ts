@@ -14,16 +14,19 @@
  *   - The global pot does not exist for that brand. Items are independent: one item spent, held or
  *     unreadable never stops another item's campaign.
  *   - `period: "day"`: the budget is what the campaign may commit today.
- *   - `period: "month"` (subscriber): the budget covers billing's stated period. A PROACTIVE item is
- *     paced evenly over what is left of it: today's allowance = (budget - spent in the period
- *     before today) / days left including today, so an under-spent day is caught up and an
- *     over-spent one is paid back. A REACTIVE item is a MAX on the period: it spends only when a
- *     lead reached its step, and leads are bursty.
+ *   - `period: "month"` (any payment mode, subscribers included): the budget covers billing's stated
+ *     period and is a MAX on it, proactive or reactive alike: the campaign spends as fast as the work
+ *     allows while what it committed since the period start is under the budget, then waits for the
+ *     next period (owner 2026-10-05: "exactly like a daily budget, per month"). No even pacing, no
+ *     daily allowance derived from it.
  *   - Proactive or reactive is billing's `role` when it states one (it priced the budget on it);
  *     `null` (billing could not read the catalogue for it) falls back to this service's own catalogue
  *     read of the leg.
  *   - A per-campaign ceiling that exists today (the campaign's own `dailyBudgetCents`, or a billing
- *     ceiling at the campaign grain) stays an upper bound on the item's daily allowance.
+ *     ceiling at the campaign grain) stays an upper bound on a DAILY item. A MONTHLY item is bound
+ *     only by the campaign's own `dailyBudgetCents` (a person's daily cap, against today's spend):
+ *     billing's campaign-grain ceiling for a monthly row is that same budget / 30, the pacing the
+ *     owner does not want.
  *   - An item on a channel we do not run (`managed: false`) spends nothing; `managed: null` (billing
  *     could not say) holds THAT campaign as unreadable. This service never creates a campaign from
  *     money (owner rule 1).
@@ -76,8 +79,6 @@ export function itemIsReactive(item: SalesItem, catalogueReactive: boolean): boo
   return item.role === null ? catalogueReactive : item.role === "reactive";
 }
 
-const DAY_MS = 24 * 60 * 60_000;
-
 /** Start of the day `now` falls in, on the same (server-local) clock every daily window here uses. */
 export function startOfDay(now: Date): Date {
   const d = new Date(now.getTime());
@@ -85,14 +86,12 @@ export function startOfDay(now: Date): Date {
   return d;
 }
 
-/** Days left in the period, today included. Never below 1 while the period is current. */
-export function daysLeftInPeriod(now: Date, periodEnd: Date): number {
-  return Math.max(1, Math.ceil((periodEnd.getTime() - startOfDay(now).getTime()) / DAY_MS));
-}
-
 export type ItemPace =
-  /** The campaign may run while `spentCents < capCents` (both TODAY's figures). */
-  | { ok: true; spentCents: number; capCents: number; item: SalesItem; reactive: boolean }
+  /**
+   * The campaign may run while `spentCents < capCents`: today's figures for a daily item, the
+   * period's for a monthly one. `spentTodayCents` is today's committed spend either way.
+   */
+  | { ok: true; spentCents: number; capCents: number; spentTodayCents: number; item: SalesItem; reactive: boolean }
   | {
       ok: false;
       /**
@@ -104,7 +103,8 @@ export type ItemPace =
     };
 
 /**
- * Today's allowance for ONE campaign, from its item and its spend.
+ * What ONE campaign may commit, from its item and its spend: today's budget for a daily item, the
+ * whole period's for a monthly one.
  *
  * `spentTodayCents`: committed today. `spentInPeriodCents`: committed since the item's period start
  * (monthly items only; ignored for a daily item). `reactive`: our own catalogue read of the leg, used
@@ -137,7 +137,7 @@ export function itemPace(input: {
   const reactive = itemIsReactive(item, input.reactive);
 
   if (item.period === "day") {
-    return { ok: true, spentCents: spentTodayCents, capCents: item.budgetCents, item, reactive };
+    return { ok: true, spentCents: spentTodayCents, capCents: item.budgetCents, spentTodayCents, item, reactive };
   }
 
   const start = item.periodStart!;
@@ -150,14 +150,10 @@ export function itemPace(input: {
     };
   }
   const inPeriod = Math.max(0, input.spentInPeriodCents ?? 0);
-  // A period that began today: what was spent today before it began is not this period's.
-  const todayInPeriod = Math.min(Math.max(0, spentTodayCents), inPeriod);
-  const leftBeforeToday = Math.max(0, item.budgetCents - (inPeriod - todayInPeriod));
-  const capCents = reactive ? leftBeforeToday : leftBeforeToday / daysLeftInPeriod(now, end);
-  return { ok: true, spentCents: todayInPeriod, capCents, item, reactive };
+  return { ok: true, spentCents: inPeriod, capCents: item.budgetCents, spentTodayCents: Math.max(0, spentTodayCents), item, reactive };
 }
 
-/** A per-campaign ceiling that exists stays an upper bound: today's cap is the lower of the two. */
+/** A per-campaign ceiling that exists stays an upper bound on a daily item: the cap is the lower of the two. */
 export function boundedCap(capCents: number, upperBoundCents: number | null): number {
   return upperBoundCents === null ? capCents : Math.min(capCents, upperBoundCents);
 }
