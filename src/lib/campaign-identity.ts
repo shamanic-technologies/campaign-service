@@ -52,6 +52,9 @@ const CHANNEL_BY_FEATURE: Readonly<Record<string, string>> = Object.freeze({
   // as google-ads: the fallback is total by construction, so an upstream RENAME would file the
   // campaign under a channel nothing else uses, silently and with no failing test.
   "ai-meeting-booking": "ai_meeting_booking",
+  // Rings the rep on a qualified sales-interest reply. Its own token for the same reason as
+  // ai-meeting-booking: a brand works the reply step through both at once, two campaigns.
+  "ai-instant-call": "ai_instant_call",
   // Earned media — a journalist quotes the brand and the published article carries the link a
   // buyer arrives on. Its own token, shared with no other channel: a brand works one leg
   // through this AND through cold email at once and those are two campaigns, so they must hold

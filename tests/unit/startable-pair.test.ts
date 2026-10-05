@@ -133,4 +133,27 @@ describe("resolveStartablePair", () => {
     const read = await start({}, { workflow: async () => ({ ok: false, detail: "HTTP 500" }) });
     expect(read.ok || read.refusal).toMatchObject({ status: 502, code: "workflow_unavailable" });
   });
+
+  it("a channel another service performs on an event (ai-instant-call) starts with NO workflow, none looked up", async () => {
+    const AIC = "ai-instant-call";
+    const LEG = "conversation_to_booking_call";
+    const workflow = vi.fn();
+    const read = await resolveStartablePair(
+      { brandId: BRAND, offerId: OFFER, legKey: LEG, featureSlug: AIC },
+      IDENTITY,
+      {
+        catalogue: async () => ({
+          ok: true,
+          operatorBySlug: new Map([[AIC, "platform" as const]]),
+          legsBySlug: new Map([[AIC, new Set([LEG])]]),
+          legs: [{ legKey: LEG, fromStepKey: "conversation", toStepKey: "booking_call" }],
+          stepKeys: new Set<string>(),
+        }),
+        budgets: async () => budgets([{ offerId: OFFER, legKey: LEG, featureSlug: AIC, dailyBudgetCents: 500 }]),
+        workflow,
+      } as any,
+    );
+    expect(read).toEqual({ ok: true, pair: { legKey: LEG, ceilingCents: 500, workflowSlug: null } });
+    expect(workflow).not.toHaveBeenCalled();
+  });
 });
