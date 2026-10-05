@@ -1,7 +1,8 @@
-import { and, eq, type SQL } from "drizzle-orm";
+import { and, eq, inArray, type SQL } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, campaignStatusTransitions, type NewCampaignStatusTransition } from "../db/schema.js";
 import { signalMissionStatusChanged, type StatusActor } from "./mission-status-notification.js";
+import { STOP_REASONS } from "./stop-reason.js";
 
 /** The transaction handle `db.transaction` hands its callback. */
 export type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -37,6 +38,18 @@ export const TRANSITION_SOURCES = {
   START_FUNDED_PAIR: "start_funded_pair",
   /** DELETE /internal/campaigns/by-org/:orgId — the org is gone. */
   ORG_TEARDOWN: "org_teardown",
+  /**
+   * A person turned ANOTHER proactive campaign of the same offer ON, which stops this one in the
+   * same transaction (owner 2026-10-05: one proactive campaign on per offer, lib/single-proactive.ts).
+   * The person's act, so billing hears it; the stop reason is `manual`.
+   */
+  PROACTIVE_SWITCH: "proactive_switch",
+  /**
+   * A reactive campaign born ON because a sales path the offer ticked uses it (owner 2026-10-05:
+   * reactive campaigns are on by default). Only ever written while a person acts on the offer
+   * (starting its proactive campaign, or saving its sales paths); never by a tick.
+   */
+  REACTIVE_DEFAULT: "reactive_default",
   /** The payment-hold sweep: billing cannot charge the org's card (lib/payment-hold-sweep.ts). */
   PAYMENT_HOLD: "payment_hold",
   /** Migration 0057 opened the record by observing the PRESENT. Never written by the runtime. */
@@ -61,7 +74,15 @@ type StatusWrite = {
    * move is signalled to billing-service for the staff email (lib/mission-status-notification.ts).
    */
   actor?: StatusActor;
+  /**
+   * Campaigns this start turns OFF, chosen inside the same transaction after the status write
+   * (lib/single-proactive.ts). Each is stopped with reason `manual` and source `proactive_switch`,
+   * and signalled to billing with the same actor. A throw rolls the whole write back.
+   */
+  displace?: (tx: DbTransaction, updated: CampaignRow) => Promise<CampaignRow[]>;
 };
+
+type CampaignRow = typeof campaigns.$inferSelect;
 
 /**
  * Change a campaign's status AND record the transition, atomically.
@@ -70,6 +91,17 @@ type StatusWrite = {
  * means; nothing is recorded for a campaign that was not there).
  */
 export async function setCampaignStatus(write: StatusWrite) {
+  return (await setCampaignStatusWithStops(write)).campaign;
+}
+
+/**
+ * `setCampaignStatus`, also answering which campaigns the write's `displace` stopped. The status
+ * write, its trace, and every displaced stop with ITS trace land in ONE transaction.
+ */
+export async function setCampaignStatusWithStops(
+  write: StatusWrite,
+): Promise<{ campaign: CampaignRow | null; stopped: CampaignRow[] }> {
+  let stopped: CampaignRow[] = [];
   const updated = await db.transaction(async (tx) => {
     const [updated] = await tx
       .update(campaigns)
@@ -93,6 +125,10 @@ export async function setCampaignStatus(write: StatusWrite) {
       source: write.source,
     });
 
+    if (write.displace) {
+      stopped = await stopDisplacedWithHistory(tx, write.orgId, await write.displace(tx, updated));
+    }
+
     return updated;
   });
 
@@ -111,7 +147,56 @@ export async function setCampaignStatus(write: StatusWrite) {
       actor: write.actor,
     });
   }
-  return updated;
+  if (write.actor) signalDisplacedStops(stopped, write.actor);
+  return { campaign: updated ?? null, stopped };
+}
+
+/**
+ * Stop the campaigns a person's start displaced, recording one `proactive_switch` transition each,
+ * inside the transaction that started the replacement. Reason `manual`: the person who turned the
+ * other one on said so. Returns the stopped rows (status already `stopped`).
+ */
+export async function stopDisplacedWithHistory(
+  tx: DbTransaction,
+  orgId: string,
+  rows: CampaignRow[],
+): Promise<CampaignRow[]> {
+  if (rows.length === 0) return [];
+  const stopped = await tx
+    .update(campaigns)
+    .set({ status: "stopped", stopReason: STOP_REASONS.MANUAL, nextRunAt: null, updatedAt: new Date() })
+    .where(and(eq(campaigns.orgId, orgId), eq(campaigns.status, "ongoing"), inArray(campaigns.id, rows.map((r) => r.id))))
+    .returning();
+  if (stopped.length === 0) return [];
+  await tx.insert(campaignStatusTransitions).values(
+    stopped.map((c) => ({
+      campaignId: c.id,
+      orgId,
+      fromStatus: "ongoing",
+      toStatus: "stopped",
+      reason: STOP_REASONS.MANUAL,
+      source: TRANSITION_SOURCES.PROACTIVE_SWITCH,
+    })),
+  );
+  return stopped;
+}
+
+/** After the commit, never awaited: billing hears each displaced stop as the person's move. */
+export function signalDisplacedStops(stopped: CampaignRow[], actor: StatusActor): void {
+  for (const c of stopped) {
+    void signalMissionStatusChanged({
+      source: TRANSITION_SOURCES.PROACTIVE_SWITCH,
+      orgId: c.orgId,
+      campaignId: c.id,
+      brandIds: c.brandIds ?? null,
+      featureSlug: c.featureSlug ?? null,
+      offerId: c.offerId ?? null,
+      legKey: c.legKey ?? null,
+      fromStatus: "ongoing",
+      toStatus: "stopped",
+      actor,
+    });
+  }
 }
 
 /**
@@ -130,9 +215,10 @@ export function signalCampaignBirth(
     legKey: string | null;
   },
   actor: StatusActor,
+  source: TransitionSource = TRANSITION_SOURCES.CREATE,
 ): void {
   void signalMissionStatusChanged({
-    source: TRANSITION_SOURCES.CREATE,
+    source,
     orgId: inserted.orgId,
     campaignId: inserted.id,
     brandIds: inserted.brandIds ?? null,
@@ -211,6 +297,7 @@ export function campaignBirthTransition(
   campaignId: string,
   orgId: string,
   status: string,
+  source: TransitionSource = TRANSITION_SOURCES.CREATE,
 ): NewCampaignStatusTransition {
   return {
     campaignId,
@@ -218,6 +305,6 @@ export function campaignBirthTransition(
     fromStatus: null,
     toStatus: status,
     reason: null,
-    source: TRANSITION_SOURCES.CREATE,
+    source,
   };
 }

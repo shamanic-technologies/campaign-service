@@ -188,3 +188,33 @@ function refuse(
 ): { ok: false; refusal: StartRefusal } {
   return { ok: false, refusal: { status, code, message } };
 }
+
+/**
+ * WHICH DAG A REACTIVE CAMPAIGN THAT IS ON BY DEFAULT IS BORN ON (owner 2026-10-05, see
+ * lib/reactive-defaults.ts). Asked only while a PERSON acts on the offer (starting its proactive
+ * campaign, saving its sales paths), never by a tick, which is why it lives here beside the other
+ * person-start read.
+ *
+ * Same checks as `resolveStartablePair` except FUNDING: a reactive campaign is on by default, and
+ * whether it may spend stays the funding hold's question on every run (unfunded = held, never
+ * spends). Returns the same refusal codes so the answer can say why a pair was skipped.
+ */
+export async function resolveReactiveDefaultWorkflow(
+  featureSlug: string,
+  legKey: string,
+  identity: IdentityHeaders & { userId: string; runId: string },
+  catalogue: Extract<ChannelCatalogueRead, { ok: true }>,
+  deps: { workflow?: typeof fetchStartableWorkflowSlug } = {},
+): Promise<{ ok: true; workflowSlug: string | null } | { ok: false; code: StartRefusal["code"] }> {
+  if (!isSalesFamilyFeature(featureSlug)) return { ok: false, code: "channel_not_paced_here" };
+  const performed = catalogue.legsBySlug.get(featureSlug);
+  if (!performed) return { ok: false, code: "unknown_channel" };
+  if (!performed.has(legKey)) return { ok: false, code: "leg_not_performed" };
+  if ((catalogue.operatorBySlug.get(featureSlug) ?? "platform") === "customer") {
+    return { ok: true, workflowSlug: null };
+  }
+  const workflow = await (deps.workflow ?? fetchStartableWorkflowSlug)(featureSlug, identity);
+  if (!workflow.ok) return { ok: false, code: "workflow_unavailable" };
+  if (workflow.workflowSlug === null) return { ok: false, code: "no_workflow" };
+  return { ok: true, workflowSlug: workflow.workflowSlug };
+}

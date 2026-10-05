@@ -36,6 +36,9 @@ describe("shouldSignalStatusMove — a person's real move only", () => {
   });
   it("a no-op or a system stop sends nothing", () => {
     expect(shouldSignalStatusMove(signal({ fromStatus: "ongoing", toStatus: "ongoing" }))).toBe(false);
+    // A person turning another proactive campaign on stops this one: their move, billing hears it.
+    expect(shouldSignalStatusMove(signal({ source: TRANSITION_SOURCES.PROACTIVE_SWITCH, fromStatus: "ongoing", toStatus: "stopped" }))).toBe(true);
+    expect(shouldSignalStatusMove(signal({ source: TRANSITION_SOURCES.REACTIVE_DEFAULT, fromStatus: null, toStatus: "ongoing" }))).toBe(true);
     expect(shouldSignalStatusMove(signal({ source: TRANSITION_SOURCES.PAYMENT_HOLD }))).toBe(false);
     expect(shouldSignalStatusMove(signal({ source: TRANSITION_SOURCES.ORG_TEARDOWN }))).toBe(false);
   });

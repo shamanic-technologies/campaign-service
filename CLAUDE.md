@@ -26,6 +26,11 @@ An org whose card billing cannot charge stops every campaign.
 - **NOTHING RESUMES AUTOMATICALLY**: the customer presses start once billing stops saying `charge_blocked`. Owner accepted; auto-resume would be the retired resume sweep.
 - `tests/setup.ts` mocks `lib/payment-hold.js` to "not held"; `tests/unit/payment-hold.test.ts` uses `vi.importActual`.
 
+### One proactive ON per offer; reactive ON by default (owner 2026-10-05)
+
+- **Rule 1** (`lib/single-proactive.ts`): a PERSON turning ON a campaign on an ENTRY leg (catalogue `fromStep` null) stops every other ongoing entry-leg campaign of the same (org, offer) IN THE SAME TRANSACTION (`setCampaignStatusWithStops` `displace`, or `stopProactiveReplacedBy` inside an insert tx), reason `manual`, source `proactive_switch`, billing signalled with the same actor. All person starts: `POST /campaigns` (insert + restart), start-funded-pair (insert, restart AND already-running), `PATCH status=activate`; answers carry `stoppedCampaigns`. Advisory xact lock per (org, offer) serializes racing starts. Catalogue read ONLY when another campaign of the offer is live; unreadable then = 502 `catalogue_unavailable`, rolled back. Nothing else ever switches it (no tick/ROI/AI); offers already holding two are left until a person acts.
+- **Rule 2** (`lib/reactive-defaults.ts` plans, `routes/campaigns.ts` `applyReactiveDefaults` writes): ticked paths = brand-service `GET /internal/offers/:id/selected-sales-paths` combinationKeys, never stated = `roi > 1` rows of features `GET /offers/:id/sales-paths?scope=catalogue`; each reactive leg worked by a managed platform channel in the sales family with NO row is born ON (source `reactive_default`, billing signalled, funding NOT checked: the hold gates runs). A stopped row is NEVER restarted (person's off, payment hold, teardown). Triggered only by a person: fire-and-forget after a proactive start, and `POST /offers/:offerId/reactive-defaults {brandId}` when a person saves paths. Never a tick.
+
 ## Identity and money (wave C2: the sales funnel is GONE)
 
 Org > brand > offer > outcome > leg. A campaign is (org, brand, OFFER, LEG, acquisition channel): `uniq_campaigns_org_brand_offer_leg_channel` (migration 0058, partial on `ongoing`, `coalesce` on offer and leg).
