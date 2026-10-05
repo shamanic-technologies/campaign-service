@@ -17,6 +17,34 @@ vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOri
   };
 });
 
+// A person's start asks the catalogue which legs are entry legs (one proactive campaign on per
+// offer) and, in the background, which reactive campaigns the offer's paths switch on. Answer both
+// in-process: a `*.test.local` lookup stalls the event loop behind the next request.
+vi.mock("../../src/lib/channel-operator-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/channel-operator-client.js")>();
+  return {
+    ...original,
+    fetchChannelCatalogue: vi.fn(async () => ({
+      ok: true,
+      operatorBySlug: new Map(),
+      legsBySlug: new Map(),
+      legs: [
+        { legKey: "start_to_conversation", fromStepKey: null, toStepKey: "conversation" },
+        { legKey: "start_to_website_visit", fromStepKey: null, toStepKey: "website_visit" },
+      ],
+      stepKeys: new Set(),
+    })),
+  };
+});
+vi.mock("../../src/lib/reactive-defaults.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/reactive-defaults.js")>();
+  return {
+    ...original,
+    fetchOfferSelectedSalesPaths: vi.fn(async () => ({ ok: true, value: { stated: true, combinationKeys: [] } })),
+    fetchOfferCatalogueSalesPaths: vi.fn(async () => ({ ok: true, value: [] })),
+  };
+});
+
 import request from "supertest";
 import app from "../../src/index.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";

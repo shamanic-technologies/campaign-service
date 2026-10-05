@@ -7,6 +7,9 @@ import {
   CampaignSchema,
   CreateCampaignBody,
   StartFundedPairBody,
+  StoppedCampaignSchema,
+  ReactiveDefaultsBody,
+  ReactiveDefaultsResponse,
   UpdateCampaignBody,
   CampaignsFilterQuery,
   StatsFilterQuery,
@@ -119,11 +122,12 @@ registry.registerPath({
   path: "/campaigns",
   tags: ["Campaigns"],
   summary: "Create a new campaign",
-  description: "A PAYMENT HOLD refuses every start: when billing-service cannot charge the org's card (payment-outlook state charge_blocked) the answer is 409 with reason `payment_declined` (a card was tried and refused), or reason `no_payment_method` when billing's blockedReason is `no_chargeable_card` (no card on file at all), plus `blockedReason` (billing's own code, e.g. card_declined, card_country_unsupported, no_chargeable_card) and `error` in customer-facing English to render verbatim; when billing cannot be read it is 502 with reason `billing_unavailable`. Such an org's campaigns are stopped by the scheduler within ten minutes with stopReason `payment_declined` or `no_payment_method` (same split), and can be started again by a person once billing no longer reports the charge as blocked (paid AND a chargeable card on file).",
+  description: "ONE PROACTIVE CAMPAIGN ON PER OFFER (owner 2026-10-05): when the campaign this request turns ON works an ENTRY leg (features-service catalogue leg with no fromStep), every OTHER ongoing campaign of the same offer that works an entry leg is stopped in the SAME transaction, as this person's act (stopReason `manual`, transition source `proactive_switch`, billing signalled). `stoppedCampaigns` lists them ([] when none). Reactive campaigns are never stopped. The catalogue is read only when another campaign of the offer is live; unreadable then = 502 reason `catalogue_unavailable`, nothing written. Nothing else ever switches the proactive campaign. After a proactive start, the offer's reactive campaigns are switched on by default in the background (see POST /offers/{offerId}/reactive-defaults). A PAYMENT HOLD refuses every start: when billing-service cannot charge the org's card (payment-outlook state charge_blocked) the answer is 409 with reason `payment_declined` (a card was tried and refused), or reason `no_payment_method` when billing's blockedReason is `no_chargeable_card` (no card on file at all), plus `blockedReason` (billing's own code, e.g. card_declined, card_country_unsupported, no_chargeable_card) and `error` in customer-facing English to render verbatim; when billing cannot be read it is 502 with reason `billing_unavailable`. Such an org's campaigns are stopped by the scheduler within ten minutes with stopReason `payment_declined` or `no_payment_method` (same split), and can be started again by a person once billing no longer reports the charge as blocked (paid AND a chargeable card on file).",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: CreateCampaignBody } } } },
   responses: {
-    201: { description: "Campaign created", content: { "application/json": { schema: z.object({ campaign: CampaignSchema }) } } },
+    201: { description: "Campaign created", content: { "application/json": { schema: z.object({ campaign: CampaignSchema, stoppedCampaigns: z.array(StoppedCampaignSchema) }) } } },
+    200: { description: "This identity already had a campaign: handed back started", content: { "application/json": { schema: z.object({ campaign: CampaignSchema, stoppedCampaigns: z.array(StoppedCampaignSchema) }) } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
     409: { description: "Refused — payment_declined | no_payment_method: billing cannot charge this org (see description)", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), blockedReason: z.string().optional() }) } } },
     502: { description: "Refused — billing_unavailable: the org's payment state could not be read, nothing was started", content: { "application/json": { schema: ErrorResponse } } },
@@ -140,6 +144,7 @@ registry.registerPath({
     + "The caller states only what their own screen knows (brand, offer, leg, acquisition channel) and CANNOT state a workflow, a name or a budget: the workflow is re-picked every run here so a slug frozen in a browser goes stale, the name is derived from the identity, and the money is billing's per (offer x leg x channel) and is already set. The body is strict, so a caller reaching for any of the three is told so. "
     + "offerId and legKey are both required; the campaign is resolved and funded at (offer, leg, channel). "
     + "The started campaign is paced, gated and held by billing's ceiling exactly as every other sales-family campaign is. A pair that ALREADY has a campaign never gets a second one: a live campaign is handed back untouched (200, started=false), and a stopped one is started (200, started=true). "
+    + "ONE PROACTIVE CAMPAIGN ON PER OFFER (owner 2026-10-05): when the campaign this request turns ON works an ENTRY leg (features-service catalogue leg with no fromStep), every OTHER ongoing campaign of the same offer that works an entry leg is stopped in the SAME transaction, as this person's act (stopReason `manual`, transition source `proactive_switch`, billing signalled). `stoppedCampaigns` lists them ([] when none). Reactive campaigns are never stopped. The catalogue is read only when another campaign of the offer is live; unreadable then = 502 reason `catalogue_unavailable`, nothing written. Nothing else ever switches the proactive campaign. After a proactive start, the offer's reactive campaigns are switched on by default in the background (see POST /offers/{offerId}/reactive-defaults). "
     + "A pair that cannot be started is refused with `error` in customer-facing English (render it verbatim) and `reason` as a code: leg_required, channel_not_paced_here, unknown_channel, leg_not_performed (400); not_funded, no_workflow, payment_declined, no_payment_method (409); catalogue_unavailable, billing_unavailable, workflow_unavailable (502, try again). "
     + "A PAYMENT HOLD refuses every start: when billing-service cannot charge the org's card (payment-outlook state charge_blocked) the answer is 409 with reason `payment_declined` (a card was tried and refused), or reason `no_payment_method` when billing's blockedReason is `no_chargeable_card` (no card on file at all), plus `blockedReason` (billing's own code, e.g. card_declined, card_country_unsupported, no_chargeable_card) and `error` in customer-facing English to render verbatim; when billing cannot be read it is 502 with reason `billing_unavailable`. Such an org's campaigns are stopped by the scheduler within ten minutes with stopReason `payment_declined` or `no_payment_method` (same split), and can be started again by a person once billing no longer reports the charge as blocked (paid AND a chargeable card on file).",
   security: [{ [apiKeyAuth.name]: [] }],
@@ -147,11 +152,11 @@ registry.registerPath({
   responses: {
     201: {
       description: "Campaign created and started",
-      content: { "application/json": { schema: z.object({ campaign: CampaignSchema, started: z.boolean(), alreadyRunning: z.boolean(), ceilingCents: z.number() }) } },
+      content: { "application/json": { schema: z.object({ campaign: CampaignSchema, started: z.boolean(), alreadyRunning: z.boolean(), ceilingCents: z.number(), stoppedCampaigns: z.array(StoppedCampaignSchema) }) } },
     },
     200: {
       description: "This pair already had a campaign — handed back, started if it had been stopped",
-      content: { "application/json": { schema: z.object({ campaign: CampaignSchema, started: z.boolean(), alreadyRunning: z.boolean(), ceilingCents: z.number().optional() }) } },
+      content: { "application/json": { schema: z.object({ campaign: CampaignSchema, started: z.boolean(), alreadyRunning: z.boolean(), ceilingCents: z.number().optional(), stoppedCampaigns: z.array(StoppedCampaignSchema) }) } },
     },
     400: { description: "Refused — the reason is customer-facing English", content: { "application/json": { schema: ErrorResponse } } },
     409: { description: "Refused — nothing funds this pair, or nothing can run the channel yet", content: { "application/json": { schema: ErrorResponse } } },
@@ -160,18 +165,38 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "post",
+  path: "/offers/{offerId}/reactive-defaults",
+  tags: ["Campaigns"],
+  summary: "Switch on the reactive campaigns the offer's ticked sales paths use",
+  description:
+    "REACTIVE CAMPAIGNS ARE ON BY DEFAULT (owner 2026-10-05). Call when a PERSON saved the offer's sales paths (brand-service selected-sales-paths). The ticked paths are brand-service's stated combinationKeys; never stated = the paths with roi > 1 in features-service GET /offers/{offerId}/sales-paths?scope=catalogue (`basis` says which). Every reactive leg of a ticked path worked by a platform channel we run and pace (sales family) that has NO campaign yet is created ON (`started`, transition source `reactive_default`, billing signalled). A campaign already ON is left (`alreadyOn`); a STOPPED one stays stopped whatever stopped it (`keptOff`): a person's off is never re-enabled. Nothing is ever stopped. `skipped` names pairs nothing can run (reason: channel_not_paced_here, unknown_channel, leg_not_performed, no_workflow, workflow_unavailable). Funding is not checked: an unfunded campaign is held on every run and spends nothing. Also applied in the background after a person turns the offer's proactive campaign ON. Payment hold: 409 like every start. Unreadable sales paths / catalogue: 502 reason `sales_paths_unavailable`, nothing written.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ offerId: z.string() }),
+    body: { content: { "application/json": { schema: ReactiveDefaultsBody } } },
+  },
+  responses: {
+    200: { description: "Applied", content: { "application/json": { schema: ReactiveDefaultsResponse } } },
+    400: { description: "Validation error or missing x-user-id / x-run-id", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "Payment hold", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "Sales paths, selected paths or channel catalogue unreadable; nothing written", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
   method: "patch",
   path: "/campaigns/{id}",
   tags: ["Campaigns"],
   summary: "Update a campaign",
-  description: "status=activate starts the campaign. A PAYMENT HOLD refuses every start: when billing-service cannot charge the org's card (payment-outlook state charge_blocked) the answer is 409 with reason `payment_declined` (a card was tried and refused), or reason `no_payment_method` when billing's blockedReason is `no_chargeable_card` (no card on file at all), plus `blockedReason` (billing's own code, e.g. card_declined, card_country_unsupported, no_chargeable_card) and `error` in customer-facing English to render verbatim; when billing cannot be read it is 502 with reason `billing_unavailable`. Such an org's campaigns are stopped by the scheduler within ten minutes with stopReason `payment_declined` or `no_payment_method` (same split), and can be started again by a person once billing no longer reports the charge as blocked (paid AND a chargeable card on file).",
+  description: "status=activate starts the campaign. ONE PROACTIVE CAMPAIGN ON PER OFFER (owner 2026-10-05): when the campaign this request turns ON works an ENTRY leg (features-service catalogue leg with no fromStep), every OTHER ongoing campaign of the same offer that works an entry leg is stopped in the SAME transaction, as this person's act (stopReason `manual`, transition source `proactive_switch`, billing signalled). `stoppedCampaigns` lists them ([] when none). Reactive campaigns are never stopped. The catalogue is read only when another campaign of the offer is live; unreadable then = 502 reason `catalogue_unavailable`, nothing written. Nothing else ever switches the proactive campaign. After a proactive start, the offer's reactive campaigns are switched on by default in the background (see POST /offers/{offerId}/reactive-defaults). `stoppedCampaigns` is present only on status=activate. A PAYMENT HOLD refuses every start: when billing-service cannot charge the org's card (payment-outlook state charge_blocked) the answer is 409 with reason `payment_declined` (a card was tried and refused), or reason `no_payment_method` when billing's blockedReason is `no_chargeable_card` (no card on file at all), plus `blockedReason` (billing's own code, e.g. card_declined, card_country_unsupported, no_chargeable_card) and `error` in customer-facing English to render verbatim; when billing cannot be read it is 502 with reason `billing_unavailable`. Such an org's campaigns are stopped by the scheduler within ten minutes with stopReason `payment_declined` or `no_payment_method` (same split), and can be started again by a person once billing no longer reports the charge as blocked (paid AND a chargeable card on file).",
   security: [{ [apiKeyAuth.name]: [] }],
   request: {
     params: z.object({ id: z.string().uuid() }),
     body: { content: { "application/json": { schema: UpdateCampaignBody } } },
   },
   responses: {
-    200: { description: "Campaign updated", content: { "application/json": { schema: z.object({ campaign: CampaignSchema }) } } },
+    200: { description: "Campaign updated", content: { "application/json": { schema: z.object({ campaign: CampaignSchema, stoppedCampaigns: z.array(StoppedCampaignSchema).optional() }) } } },
     404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
     409: { description: "Refused — payment_declined | no_payment_method: billing cannot charge this org (see description)", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), blockedReason: z.string().optional() }) } } },
     502: { description: "Refused — billing_unavailable: the org's payment state could not be read, nothing was started", content: { "application/json": { schema: ErrorResponse } } },

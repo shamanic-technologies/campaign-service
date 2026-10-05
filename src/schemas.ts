@@ -174,6 +174,34 @@ export const StartFundedPairBody = z.object({
   legKey: z.string().min(1).nullable().optional(),
 }).strict().openapi("StartFundedPairBody");
 
+/**
+ * A campaign a person's start turned OFF: the offer's other PROACTIVE campaign (owner 2026-10-05,
+ * one proactive campaign on per offer). Stopped with stopReason `manual`, transition source
+ * `proactive_switch`, in the same transaction as the start.
+ */
+export const StoppedCampaignSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  featureSlug: z.string().nullable(),
+  offerId: z.string().nullable(),
+  legKey: z.string().nullable(),
+}).openapi("StoppedCampaign");
+
+/** A person saved the offer's sales paths: switch on the reactive campaigns they use. */
+export const ReactiveDefaultsBody = z.object({
+  brandId: z.string().uuid("brandId must be a valid UUID"),
+}).strict().openapi("ReactiveDefaultsBody");
+
+export const ReactiveDefaultsResponse = z.object({
+  offerId: z.string(),
+  basis: z.enum(["stated", "roi_above_1"]),
+  tickedCombinationKeys: z.array(z.string()),
+  started: z.array(z.object({ id: z.string(), name: z.string(), featureSlug: z.string().nullable(), legKey: z.string().nullable() })),
+  alreadyOn: z.array(z.string()),
+  keptOff: z.array(z.string()),
+  skipped: z.array(z.object({ legKey: z.string(), featureSlug: z.string(), reason: z.string() })),
+}).openapi("ReactiveDefaultsResponse");
+
 export const UpdateCampaignBody = z.object({
   name: z.string().optional(),
   brandIds: z.array(z.string().uuid()).optional(),

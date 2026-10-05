@@ -26,12 +26,198 @@ import {
   TRANSITION_SOURCES,
   campaignBirthTransition,
   signalCampaignBirth,
-  setCampaignStatus,
+  setCampaignStatusWithStops,
+  signalDisplacedStops,
+  stopDisplacedWithHistory,
+  type DbTransaction,
 } from "../lib/campaign-status-history.js";
+import type { StatusActor } from "../lib/mission-status-notification.js";
 import { isSalesFamilyFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
-import { resolveStartablePair } from "../lib/startable-pair.js";
+import { resolveReactiveDefaultWorkflow, resolveStartablePair } from "../lib/startable-pair.js";
+import {
+  ProactiveCatalogueUnavailableError,
+  isEntryLeg,
+  proactiveCampaignsToStop,
+  stoppedCampaignSummary,
+} from "../lib/single-proactive.js";
+import {
+  fetchOfferCatalogueSalesPaths,
+  fetchOfferSelectedSalesPaths,
+  planReactiveDefaults,
+} from "../lib/reactive-defaults.js";
+import { fetchChannelCatalogue, type ChannelCatalogueRead } from "../lib/channel-operator-client.js";
+import { ReactiveDefaultsBody } from "../schemas.js";
 
 const router = Router();
+
+type CampaignRow = typeof campaigns.$inferSelect;
+
+/** The person whose request this is, for the transition ledger and billing's signal. */
+function personActor(req: AuthenticatedRequest): StatusActor {
+  return { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null };
+}
+
+/**
+ * ONE PROACTIVE CAMPAIGN ON PER OFFER (lib/single-proactive.ts): the `displace` a person's start
+ * hands setCampaignStatus, so the other proactive campaign of the offer stops in the same
+ * transaction as this one starts.
+ */
+function displaceOtherProactive(tx: DbTransaction, started: CampaignRow): Promise<CampaignRow[]> {
+  return proactiveCampaignsToStop(tx, started);
+}
+
+/** Inside an insert's own transaction: stop the proactive campaigns the new one replaces. */
+async function stopProactiveReplacedBy(tx: DbTransaction, inserted: CampaignRow): Promise<CampaignRow[]> {
+  return stopDisplacedWithHistory(tx, inserted.orgId, await displaceOtherProactive(tx, inserted));
+}
+
+/** The one refusal a start can now meet: which campaigns to stop could not be read. 502, nothing written. */
+function proactiveRefusal(error: unknown, res: import("express").Response): boolean {
+  if (!(error instanceof ProactiveCatalogueUnavailableError)) return false;
+  console.error(`[campaign-service] Start refused, ${error.message}`);
+  res.status(502).json({ error: error.customerMessage, reason: error.reason });
+  return true;
+}
+
+class ReactiveDefaultsUnavailableError extends Error {}
+
+export interface ReactiveDefaultsResult {
+  offerId: string;
+  basis: "stated" | "roi_above_1";
+  tickedCombinationKeys: string[];
+  /** Born ON just now. */
+  started: Array<{ id: string; name: string; featureSlug: string | null; legKey: string | null }>;
+  /** Already ON: left as is. */
+  alreadyOn: string[];
+  /** Exists and is stopped (a person's off, or a payment hold): left OFF, never re-enabled. */
+  keptOff: string[];
+  /** A reactive pair nothing can run here, with the reason. */
+  skipped: Array<{ legKey: string; featureSlug: string; reason: string }>;
+}
+
+/**
+ * REACTIVE CAMPAIGNS ARE ON BY DEFAULT (lib/reactive-defaults.ts). Creates, ON, each reactive
+ * (leg, channel) campaign a ticked sales path of the offer uses and that has NO row yet. Never
+ * restarts a stopped one, never stops anything. Only ever called from a person's request.
+ */
+async function applyReactiveDefaults(
+  scope: { orgId: string; brandId: string; offerId: string },
+  req: AuthenticatedRequest,
+  knownCatalogue?: ChannelCatalogueRead,
+): Promise<ReactiveDefaultsResult> {
+  const identity = { orgId: scope.orgId, userId: req.userId!, runId: req.runId!, brandId: scope.brandId };
+  const [selected, paths, catalogue] = await Promise.all([
+    fetchOfferSelectedSalesPaths(scope.offerId, scope.brandId, identity),
+    fetchOfferCatalogueSalesPaths(scope.offerId, scope.brandId, identity),
+    knownCatalogue ?? fetchChannelCatalogue(),
+  ]);
+  if (!selected.ok) throw new ReactiveDefaultsUnavailableError(`selected sales paths: ${selected.detail}`);
+  if (!paths.ok) throw new ReactiveDefaultsUnavailableError(`sales paths: ${paths.detail}`);
+  if (!catalogue.ok) throw new ReactiveDefaultsUnavailableError(`channel catalogue: ${catalogue.detail}`);
+
+  const plan = planReactiveDefaults(selected.value, paths.value);
+  const result: ReactiveDefaultsResult = {
+    offerId: scope.offerId,
+    basis: plan.basis,
+    tickedCombinationKeys: plan.tickedCombinationKeys,
+    started: [],
+    alreadyOn: [],
+    keptOff: [],
+    skipped: [],
+  };
+
+  for (const pair of plan.pairs) {
+    const acquisitionChannel = acquisitionChannelForFeature(pair.featureSlug)!;
+    const findRow = () =>
+      db.query.campaigns.findFirst({
+        where: and(
+          eq(campaigns.orgId, scope.orgId),
+          eq(campaigns.brandId, scope.brandId),
+          eq(campaigns.offerId, scope.offerId),
+          eq(campaigns.legKey, pair.legKey),
+          eq(campaigns.acquisitionChannel, acquisitionChannel),
+        ),
+        orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
+      });
+    const existing = await findRow();
+    if (existing) {
+      (existing.status === "ongoing" ? result.alreadyOn : result.keptOff).push(existing.id);
+      continue;
+    }
+
+    const workflow = await resolveReactiveDefaultWorkflow(pair.featureSlug, pair.legKey, identity, catalogue);
+    if (!workflow.ok) {
+      result.skipped.push({ legKey: pair.legKey, featureSlug: pair.featureSlug, reason: workflow.code });
+      continue;
+    }
+
+    const now = new Date();
+    try {
+      const campaign = await db.transaction(async (tx) => {
+        const [inserted] = await tx
+          .insert(campaigns)
+          .values({
+            ...campaignIdentityColumns({ brandIds: [scope.brandId], featureSlug: pair.featureSlug }),
+            orgId: scope.orgId,
+            createdByUserId: req.userId ?? null,
+            parentRunId: req.runId ?? null,
+            name: derivedCampaignName(pair.featureSlug, scope.brandId, scope.offerId, pair.legKey),
+            workflowSlug: workflow.workflowSlug,
+            brandIds: [scope.brandId],
+            featureSlug: pair.featureSlug,
+            offerId: scope.offerId,
+            legKey: pair.legKey,
+            featureInputs: null,
+            status: "ongoing",
+            nextRunAt: workflow.workflowSlug ? now : null,
+            updatedAt: now,
+          })
+          .returning();
+        await tx
+          .insert(campaignStatusTransitions)
+          .values(campaignBirthTransition(inserted.id, scope.orgId, inserted.status, TRANSITION_SOURCES.REACTIVE_DEFAULT));
+        return inserted;
+      });
+      signalCampaignBirth(campaign, personActor(req), TRANSITION_SOURCES.REACTIVE_DEFAULT);
+      result.started.push({ id: campaign.id, name: campaign.name, featureSlug: campaign.featureSlug, legKey: campaign.legKey });
+    } catch (error: any) {
+      // Raced another person's request for the same pair: that campaign IS this pair's.
+      if (error?.code === "23505") {
+        const winner = await findRow();
+        if (winner) {
+          (winner.status === "ongoing" ? result.alreadyOn : result.keptOff).push(winner.id);
+          continue;
+        }
+      }
+      throw error;
+    }
+  }
+  if (result.started.length > 0) wakeScheduler();
+  return result;
+}
+
+/**
+ * After a person turned a campaign ON: when it is the offer's PROACTIVE campaign, switch on the
+ * reactive campaigns its ticked paths use. Fire-and-forget: the start's answer, status and latency
+ * never depend on it; a failure is logged loud and the next person's act on the offer retries.
+ */
+function applyReactiveDefaultsAfterStart(started: CampaignRow, req: AuthenticatedRequest): void {
+  if (!started.offerId || !started.legKey || !started.brandId || !req.userId || !req.runId) return;
+  const { offerId, legKey, brandId, orgId } = started;
+  void (async () => {
+    const catalogue = await fetchChannelCatalogue();
+    if (!catalogue.ok) throw new ReactiveDefaultsUnavailableError(`channel catalogue: ${catalogue.detail}`);
+    if (!isEntryLeg(catalogue, legKey)) return;
+    const result = await applyReactiveDefaults({ orgId, brandId, offerId }, req, catalogue);
+    if (result.started.length > 0) {
+      console.log(
+        `[campaign-service] Reactive defaults ON for offer ${offerId} after campaign ${started.id} started: ${result.started.map((c) => c.id).join(", ")}`,
+      );
+    }
+  })().catch((err) => {
+    console.error(`[campaign-service] Reactive defaults NOT applied for offer ${offerId} after campaign ${started.id} started:`, err);
+  });
+}
 
 // === Scheduler routes (API-key authed, must be before :id routes) ===
 
@@ -279,14 +465,15 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       // had stopped comes back here and NOWHERE else: no sweep, no ceiling, no condition. It goes
       // through setCampaignStatus because every status change leaves a trace, in the same
       // transaction as the change itself.
-      const updated = (await setCampaignStatus({
+      const { campaign: restarted, stopped } = await setCampaignStatusWithStops({
         campaignId: incumbent.id,
         orgId: req.orgId!,
         fromStatus: incumbent.status,
         toStatus: "ongoing",
         reason: null,
         source: TRANSITION_SOURCES.CREATE_RESTART,
-        actor: { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null },
+        actor: personActor(req),
+        displace: displaceOtherProactive,
         fields: {
           workflowSlug,
           nextRunAt: new Date(),
@@ -316,7 +503,8 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           ...(notifyChannel !== undefined ? { notifyChannel } : {}),
           ...(notifyDestination !== undefined ? { notifyDestination } : {}),
         },
-      }))!;
+      });
+      const updated = restarted!;
 
       if (req.runId) {
         traceEvent(req.runId, {
@@ -340,13 +528,15 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         console.error(`[campaign-service] Failed to trigger workflow for campaign ${updated.id}:`, err);
       });
 
+      applyReactiveDefaultsAfterStart(updated, req);
       wakeScheduler();
-      return res.status(200).json({ campaign: updated });
+      return res.status(200).json({ campaign: updated, stoppedCampaigns: stopped.map(stoppedCampaignSummary) });
     }
 
     // The campaign and its BIRTH are written together. A status that lands without a trace is a
     // day nobody can ever replay, and it is invisible — nothing errors, no test goes red — so the
     // two are one transaction rather than a convention.
+    let stoppedOnCreate: CampaignRow[] = [];
     const campaign = await db.transaction(async (tx) => {
       const [inserted] = await tx
       .insert(campaigns)
@@ -392,8 +582,10 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         .insert(campaignStatusTransitions)
         .values(campaignBirthTransition(inserted.id, req.orgId!, inserted.status));
 
+      stoppedOnCreate = await stopProactiveReplacedBy(tx, inserted);
       return inserted;
     });
+    signalDisplacedStops(stoppedOnCreate, personActor(req));
 
     if (req.runId) {
       traceEvent(req.runId, {
@@ -415,13 +607,15 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     });
 
     // A person created it ongoing: billing hears it like a restart (fire-and-forget).
-    signalCampaignBirth(campaign, { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null });
+    signalCampaignBirth(campaign, personActor(req));
+    applyReactiveDefaultsAfterStart(campaign, req);
 
     // New ongoing campaign → wake the scheduler so it resumes monitoring from idle.
     wakeScheduler();
 
-    res.status(201).json({ campaign });
+    res.status(201).json({ campaign, stoppedCampaigns: stoppedOnCreate.map(stoppedCampaignSummary) });
   } catch (error: any) {
+    if (proactiveRefusal(error, res)) return;
     const constraint = error?.constraint ?? error?.constraint_name;
     if (error?.code === "23505" && constraint === "uniq_campaigns_org_name") {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
@@ -444,7 +638,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         ),
         orderBy: [campaigns.createdAt],
       });
-      if (winner) return res.status(200).json({ campaign: winner });
+      if (winner) return res.status(200).json({ campaign: winner, stoppedCampaigns: [] });
     }
     console.error("[campaign-service] Create campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
@@ -574,37 +768,53 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
 
     if (incumbent && incumbent.status === "ongoing") {
       // Already running. There is nothing to start and there is certainly not a second campaign to
-      // create — the customer's screen simply had not caught up.
-      const campaign = Object.keys(learned).length > 0
-        ? (await db.update(campaigns)
-            .set({ ...learned, updatedAt: new Date() })
-            .where(eq(campaigns.id, incumbent.id))
-            .returning())[0]!
-        : incumbent;
-      return res.status(200).json({ campaign, started: false, alreadyRunning: true, ceilingCents });
+      // create — the customer's screen simply had not caught up. The person still said "this one",
+      // so the offer's OTHER proactive campaign stops (lib/single-proactive.ts).
+      let stopped: CampaignRow[] = [];
+      const campaign = await db.transaction(async (tx) => {
+        const row = Object.keys(learned).length > 0
+          ? (await tx.update(campaigns)
+              .set({ ...learned, updatedAt: new Date() })
+              .where(eq(campaigns.id, incumbent.id))
+              .returning())[0]!
+          : incumbent;
+        stopped = await stopProactiveReplacedBy(tx, row);
+        return row;
+      });
+      signalDisplacedStops(stopped, personActor(req));
+      return res.status(200).json({
+        campaign, started: false, alreadyRunning: true, ceilingCents, stoppedCampaigns: stopped.map(stoppedCampaignSummary),
+      });
     }
 
     if (incumbent) {
       // A campaign the customer stopped, started again because they just asked for it. This is the
       // one thing allowed to move a status, and it goes through setCampaignStatus so the change and
       // its trace land in one transaction.
-      const campaign = (await setCampaignStatus({
+      const restarted = await setCampaignStatusWithStops({
         campaignId: incumbent.id,
         orgId: req.orgId!,
         fromStatus: incumbent.status,
         toStatus: "ongoing",
         reason: null,
         source: TRANSITION_SOURCES.START_FUNDED_PAIR,
-        actor: { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null },
+        actor: personActor(req),
+        displace: displaceOtherProactive,
         fields: { ...learned, workflowSlug, nextRunAt: new Date() },
-      }))!;
+      });
+      const campaign = restarted.campaign!;
 
       dispatchFirstRun(campaign, req);
+      applyReactiveDefaultsAfterStart(campaign, req);
       wakeScheduler();
-      return res.status(200).json({ campaign, started: true, alreadyRunning: false, ceilingCents });
+      return res.status(200).json({
+        campaign, started: true, alreadyRunning: false, ceilingCents,
+        stoppedCampaigns: restarted.stopped.map(stoppedCampaignSummary),
+      });
     }
 
     const now = new Date();
+    let stoppedOnBirth: CampaignRow[] = [];
     const campaign = await db.transaction(async (tx) => {
       const [inserted] = await tx
         .insert(campaigns)
@@ -632,14 +842,20 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
         .insert(campaignStatusTransitions)
         .values(campaignBirthTransition(inserted.id, req.orgId!, inserted.status));
 
+      stoppedOnBirth = await stopProactiveReplacedBy(tx, inserted);
       return inserted;
     });
 
-    signalCampaignBirth(campaign, { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null });
+    signalCampaignBirth(campaign, personActor(req));
+    signalDisplacedStops(stoppedOnBirth, personActor(req));
     dispatchFirstRun(campaign, req);
+    applyReactiveDefaultsAfterStart(campaign, req);
     wakeScheduler();
-    return res.status(201).json({ campaign, started: true, alreadyRunning: false, ceilingCents });
+    return res.status(201).json({
+      campaign, started: true, alreadyRunning: false, ceilingCents, stoppedCampaigns: stoppedOnBirth.map(stoppedCampaignSummary),
+    });
   } catch (error: any) {
+    if (proactiveRefusal(error, res)) return;
     const constraint = error?.constraint ?? error?.constraint_name;
     // Two starts raced the same pair. The loser does not get a second campaign for it — whoever
     // won IS this identity's campaign, so hand that one back rather than an error.
@@ -659,9 +875,38 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
         ),
         orderBy: [campaigns.createdAt],
       });
-      if (winner) return res.status(200).json({ campaign: winner, started: false, alreadyRunning: true });
+      if (winner) return res.status(200).json({ campaign: winner, started: false, alreadyRunning: true, stoppedCampaigns: [] });
     }
     console.error("[campaign-service] Start funded pair error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /offers/:offerId/reactive-defaults — a PERSON saved the offer's sales paths: switch ON
+ * every reactive campaign a ticked path uses that has no campaign yet (lib/reactive-defaults.ts).
+ * A stopped one stays stopped; nothing is stopped. Same payment-hold refusal as every start.
+ */
+router.post("/offers/:offerId/reactive-defaults", requireApiKey, serviceAuth, validateBody(ReactiveDefaultsBody), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { brandId } = ReactiveDefaultsBody.parse(req.body);
+    const { offerId } = req.params;
+    if (!req.userId || !req.runId) {
+      const missing = [!req.userId ? "x-user-id" : null, !req.runId ? "x-run-id" : null].filter(Boolean);
+      return res.status(400).json({ error: `Cannot switch on reactive campaigns — missing required headers: ${missing.join(", ")}` });
+    }
+    const refusal = await paymentStartRefusal(req.orgId!);
+    if (refusal) return res.status(refusal.status).json(refusal.body);
+    return res.status(200).json(await applyReactiveDefaults({ orgId: req.orgId!, brandId, offerId }, req));
+  } catch (error) {
+    if (error instanceof ReactiveDefaultsUnavailableError) {
+      console.error(`[campaign-service] Reactive defaults unavailable: ${error.message}`);
+      return res.status(502).json({
+        error: "We couldn't read this offer's sales paths just now. Please try again in a minute.",
+        reason: "sales_paths_unavailable",
+      });
+    }
+    console.error("[campaign-service] Reactive defaults error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -739,20 +984,26 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     };
 
     let updated;
+    let stoppedByActivation: CampaignRow[] | null = null;
     if (requestedStatus) {
       // A person stopping a campaign is a decision, and it says so on the row: `manual` is the
       // customer's own statement. Activating clears the reason — the stop it described is over.
       // The change and its trace are written in ONE transaction, in the one place that can.
-      updated = (await setCampaignStatus({
+      // Turning one ON stops the offer's other proactive campaign in the same transaction
+      // (lib/single-proactive.ts); stopping one stops nothing else.
+      const written = await setCampaignStatusWithStops({
         campaignId: id,
         orgId: req.orgId!,
         fromStatus: existing.status,
         toStatus: statusMap[requestedStatus] ?? requestedStatus,
         reason: requestedStatus === "stop" ? STOP_REASONS.MANUAL : null,
         source: TRANSITION_SOURCES.PATCH,
-        actor: { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null },
+        actor: personActor(req),
         fields: bodyFields,
-      }))!;
+        ...(requestedStatus === "activate" ? { displace: displaceOtherProactive } : {}),
+      });
+      updated = written.campaign!;
+      if (requestedStatus === "activate") stoppedByActivation = written.stopped;
     } else {
       [updated] = await db
         .update(campaigns)
@@ -773,12 +1024,17 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
       ).catch((err) => {
         console.error(`[campaign-service] Failed to trigger workflow for campaign ${id}:`, err);
       });
+      applyReactiveDefaultsAfterStart(updated, req);
       // Campaign just activated (status → ongoing) → wake the scheduler from idle.
       wakeScheduler();
     }
 
-    res.json({ campaign: updated });
+    res.json({
+      campaign: updated,
+      ...(stoppedByActivation ? { stoppedCampaigns: stoppedByActivation.map(stoppedCampaignSummary) } : {}),
+    });
   } catch (error: any) {
+    if (proactiveRefusal(error, res)) return;
     const updateConstraint = error?.constraint ?? error?.constraint_name;
     if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_name") {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
