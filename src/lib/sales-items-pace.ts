@@ -138,7 +138,35 @@ export async function itemVerdict(input: {
   });
   if (!pace.ok) return { run: false, kind: "unreadable", detail: pace.detail, nextRunAt: recheck };
 
-  // The per-campaign ceiling that exists today stays an upper bound.
+  // A MONTHLY item is a max on its period, nothing else from the budget: billing's campaign-grain
+  // ceiling for that row is the same budget / 30 (the pacing the owner does not want), so it is not
+  // read. Only a person's own daily cap still binds, against today's spend.
+  if (pace.item.period === "month") {
+    const own = campaign.dailyBudgetCents;
+    if (own !== null && !underCap(pace.spentTodayCents, own)) {
+      return {
+        run: false,
+        kind: "reached",
+        detail: `its own daily budget allows ${own.toFixed(0)} cents today and ${pace.spentTodayCents.toFixed(0)} are committed`,
+        nextRunAt: recheck,
+        spentCents: pace.spentTodayCents,
+        capCents: own,
+      };
+    }
+    if (!underCap(pace.spentCents, pace.capCents)) {
+      return {
+        run: false,
+        kind: "reached",
+        detail: `its monthly item budget of ${pace.capCents.toFixed(0)} cents is spent for the period (${pace.spentCents.toFixed(0)} committed since ${pace.item.periodStart!.toISOString()}); it runs again when the period resets on ${pace.item.periodEnd!.toISOString()}`,
+        nextRunAt: recheck,
+        spentCents: pace.spentCents,
+        capCents: pace.capCents,
+      };
+    }
+    return { run: true, spentCents: pace.spentCents, capCents: pace.capCents, reactive: pace.reactive };
+  }
+
+  // A DAILY item: the per-campaign ceiling that exists today stays an upper bound.
   let upper: number | null = campaign.dailyBudgetCents;
   if (upper === null) {
     const budgets = input.budgets ?? (await fetchCampaignBudgets(brandId, identity));
@@ -156,11 +184,10 @@ export async function itemVerdict(input: {
   }
   const capCents = boundedCap(pace.capCents, upper);
   if (!underCap(pace.spentCents, capCents)) {
-    const basis = pace.item.period === "day" ? "daily" : pace.reactive ? "monthly (period cap)" : "monthly (paced)";
     return {
       run: false,
       kind: "reached",
-      detail: `its ${basis} item budget allows ${capCents.toFixed(0)} cents today and ${pace.spentCents.toFixed(0)} are committed`,
+      detail: `its daily item budget allows ${capCents.toFixed(0)} cents today and ${pace.spentCents.toFixed(0)} are committed`,
       nextRunAt: recheck,
       spentCents: pace.spentCents,
       capCents,
