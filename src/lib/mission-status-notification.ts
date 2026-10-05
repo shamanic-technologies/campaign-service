@@ -32,6 +32,8 @@ export const PERSON_STATUS_SOURCES: ReadonlySet<TransitionSource> = new Set<Tran
   "patch", // TRANSITION_SOURCES.PATCH
   "create_restart", // TRANSITION_SOURCES.CREATE_RESTART
   "start_funded_pair", // TRANSITION_SOURCES.START_FUNDED_PAIR
+  "proactive_switch", // TRANSITION_SOURCES.PROACTIVE_SWITCH (a person turned another proactive campaign on)
+  "reactive_default", // TRANSITION_SOURCES.REACTIVE_DEFAULT (born on while a person acted on the offer)
 ]);
 
 /** Who acted, as the request carried it. */
