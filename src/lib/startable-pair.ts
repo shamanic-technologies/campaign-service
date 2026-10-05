@@ -2,7 +2,7 @@ import type { IdentityHeaders } from "@distribute/runs-client";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { fetchCampaignBudgets, type CampaignBudgetsRead } from "./campaign-budget-client.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
-import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
+import { isSalesFamilyFeature, isServicePerformedFeature } from "./sales-outreach-campaign.js";
 import { fetchStartableWorkflowSlug } from "./startable-workflow-client.js";
 
 /**
@@ -151,8 +151,10 @@ export async function resolveStartablePair(
   // A channel the CUSTOMER operates has NO workflow, and that absence is the statement rather than
   // a gap: the work is performed by a human off-platform, and the campaign exists so their work has
   // a budget line, a scope for stats and something they can pause.
+  // Same for a channel ANOTHER SERVICE performs on an event (ai-instant-call): no DAG runs it,
+  // so none is looked up and none is required.
   const operator = catalogue.operatorBySlug.get(input.featureSlug) ?? "platform";
-  if (operator === "customer") {
+  if (operator === "customer" || isServicePerformedFeature(input.featureSlug)) {
     return { ok: true, pair: { legKey, ceilingCents: verdict.ceilingCents, workflowSlug: null } };
   }
 
@@ -210,7 +212,10 @@ export async function resolveReactiveDefaultWorkflow(
   const performed = catalogue.legsBySlug.get(featureSlug);
   if (!performed) return { ok: false, code: "unknown_channel" };
   if (!performed.has(legKey)) return { ok: false, code: "leg_not_performed" };
-  if ((catalogue.operatorBySlug.get(featureSlug) ?? "platform") === "customer") {
+  if (
+    (catalogue.operatorBySlug.get(featureSlug) ?? "platform") === "customer" ||
+    isServicePerformedFeature(featureSlug)
+  ) {
     return { ok: true, workflowSlug: null };
   }
   const workflow = await (deps.workflow ?? fetchStartableWorkflowSlug)(featureSlug, identity);
