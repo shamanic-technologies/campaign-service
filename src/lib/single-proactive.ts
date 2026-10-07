@@ -2,6 +2,7 @@ import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
 import { campaigns } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import type { DbTransaction } from "./campaign-status-history.js";
+import { isSourceCampaign } from "./source-campaigns.js";
 
 /**
  * ONE PROACTIVE CAMPAIGN ON PER OFFER (owner, 2026-10-05).
@@ -19,7 +20,8 @@ import type { DbTransaction } from "./campaign-status-history.js";
  * picked at signup stays until a person picks another. Offers that already hold two proactive
  * campaigns ON are left exactly as they are until a person starts one of them.
  *
- * REACTIVE campaigns (a leg out of a step a lead reached) are never stopped here.
+ * REACTIVE campaigns (a leg out of a step a lead reached) are never stopped here, and neither are
+ * SOURCE campaigns (lib/source-campaigns.ts): they neither stop nor are stopped by anything here.
  *
  * Which legs are entry legs is ASKED of the public catalogue (`fromStep` null), the same read
  * `/recurring-status` and `/predecessor` answer from. It is asked ONLY when the offer holds another
@@ -52,6 +54,7 @@ type CampaignRow = typeof campaigns.$inferSelect;
 export interface KeptCampaign {
   id: string;
   orgId: string;
+  featureSlug?: string | null;
   offerId: string | null;
   legKey: string | null;
 }
@@ -79,6 +82,9 @@ export async function proactiveCampaignsToStop(
   deps: { catalogue?: () => Promise<ChannelCatalogueRead> } = {},
 ): Promise<CampaignRow[]> {
   if (!kept.offerId || !kept.legKey) return [];
+  // A SOURCE campaign (lib/source-campaigns.ts) is never the offer's one proactive campaign:
+  // several sources may be ON at once, beside the outreach campaign they feed.
+  if (isSourceCampaign(kept)) return [];
 
   await tx.execute(
     sql`SELECT pg_advisory_xact_lock(hashtext(${`${PROACTIVE_SWITCH_LOCK_PREFIX}:${kept.orgId}:${kept.offerId}`}))`,
@@ -96,7 +102,9 @@ export async function proactiveCampaignsToStop(
         isNotNull(campaigns.legKey),
       ),
     );
-  if (live.length === 0) return [];
+  // A live SOURCE campaign is never stopped by a proactive start, whatever the catalogue publishes.
+  const candidates = live.filter((c) => !isSourceCampaign(c));
+  if (candidates.length === 0) return [];
 
   const catalogue = await (deps.catalogue ?? fetchChannelCatalogue)();
   if (!catalogue.ok) {
@@ -108,7 +116,7 @@ export async function proactiveCampaignsToStop(
     // A reactive campaign (or a leg the catalogue no longer publishes) displaces nothing.
     return [];
   }
-  return live.filter((c) => isEntryLeg(catalogue, c.legKey!));
+  return candidates.filter((c) => isEntryLeg(catalogue, c.legKey!));
 }
 
 export function stoppedCampaignSummary(c: CampaignRow): StoppedCampaign {

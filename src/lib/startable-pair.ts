@@ -4,6 +4,7 @@ import { fetchCampaignBudgets, type CampaignBudgetsRead } from "./campaign-budge
 import { fundingFromBudgets } from "./campaign-funding.js";
 import { isSalesFamilyFeature, isServicePerformedFeature } from "./sales-outreach-campaign.js";
 import { fetchStartableWorkflowSlug } from "./startable-workflow-client.js";
+import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
 
 /**
  * CAN THE CUSTOMER START THE CAMPAIGN FOR THIS FUNDED (OFFER, LEG, CHANNEL), AND WHAT WOULD IT BE?
@@ -48,8 +49,12 @@ export interface StartRefusal {
 export interface StartablePair {
   /** The single LEG this campaign is bought for, as the customer stated it. */
   legKey: string;
-  /** The ceiling billing states for this campaign, by the one shared funding definition. */
-  ceilingCents: number;
+  /**
+   * The ceiling billing states for this campaign, by the one shared funding definition. null for a
+   * SOURCE campaign: it runs nothing itself, so no ceiling is read to start it (its sourcing spend is
+   * paced inside the outreach campaign it feeds, lib/channel-spend.ts).
+   */
+  ceilingCents: number | null;
   /**
    * The DAG this campaign is born on, or null for a channel the CUSTOMER operates: there is no
    * workflow for work a human performs off-platform, and the absence IS the statement.
@@ -99,6 +104,20 @@ export async function resolveStartablePair(
     );
   }
   const legKey = input.legKey;
+
+  // A SOURCE campaign (lib/source-campaigns.ts): the origin's On/Off for the offer. It has no
+  // workflow (lead-service finds the leads inside the outreach campaign's run) and is keyed on the
+  // one leg features-service states for every origin; the catalogue publishes no such leg, so it is
+  // not asked. No funding read: nothing runs under it on its own.
+  if (isSourceOriginSlug(input.featureSlug)) {
+    if (!isLiveSourceOrigin(input.featureSlug)) {
+      return refuse(400, "unknown_channel", "This lead source is no longer available, so it can't be turned on.");
+    }
+    if (legKey !== SOURCE_LEG_KEY) {
+      return refuse(400, "leg_not_performed", "A lead source only finds leads: start it on its lead-found step.");
+    }
+    return { ok: true, pair: { legKey, ceilingCents: null, workflowSlug: null } };
+  }
 
   // Membership in the sales family is a MONEY statement: it says this campaign's ceiling is
   // billing's, read live on every plan. A channel outside it is paced on a per-campaign budget

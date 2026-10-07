@@ -1,6 +1,7 @@
 import { and, arrayContains, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaignAudienceAvailability, campaigns } from "../db/schema.js";
+import { isSourceCampaign } from "./source-campaigns.js";
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
 
 /**
@@ -131,6 +132,11 @@ export async function recurringCampaignStatuses(scope: {
     let kindUnknownReason: KindUnknownReason | undefined;
     if (!c.legKey) {
       kindUnknownReason = "campaign_states_no_leg";
+    } else if (isSourceCampaign(c)) {
+      // A SOURCE campaign (lib/source-campaigns.ts) starts from nothing: proactive by features-service's
+      // statement. Its leg is not a catalogue leg, so it is not asked. It runs no workflow, so it is
+      // never `recurring` itself.
+      kind = "proactive";
     } else if (!fromStepByLeg!.has(c.legKey)) {
       kindUnknownReason = "leg_not_published";
     } else {
