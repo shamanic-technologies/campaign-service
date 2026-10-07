@@ -6,7 +6,7 @@ const { mockGetStatsBudget, mockFindMany, mockFetchBrandSalesBudget } = vi.hoist
   mockFetchBrandSalesBudget: vi.fn(),
 }));
 
-vi.mock("@distribute/runs-client", () => ({ getStatsBudget: mockGetStatsBudget }));
+vi.mock("@distribute/runs-client", () => ({ getStatsBudget: (p: { featureSlug?: string }) => (p?.featureSlug?.startsWith("sourcing-") ? Promise.resolve({ windows: [] }) : mockGetStatsBudget(p)) }));
 vi.mock("../../src/db/index.js", () => ({ db: { query: { campaigns: { findMany: mockFindMany } } } }));
 vi.mock("../../src/db/schema.js", () => ({ campaigns: {} }));
 vi.mock("drizzle-orm", () => ({ and: vi.fn(), eq: vi.fn(), arrayContains: vi.fn() }));
