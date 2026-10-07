@@ -1,5 +1,6 @@
 import { and, arrayContains, eq } from "drizzle-orm";
-import { getStatsBudget, type IdentityHeaders } from "@distribute/runs-client";
+import type { IdentityHeaders } from "@distribute/runs-client";
+import { getChannelStatsBudget } from "./channel-spend.js";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
@@ -38,7 +39,7 @@ export function potRecheckAt(now: Date): Date {
  */
 export async function readSpentTodayCents(orgId: string, campaignId: string, featureSlug: string): Promise<number | null> {
   try {
-    const budget = await getStatsBudget({
+    const budget = await getChannelStatsBudget({
       orgId,
       campaignId,
       featureSlug,
