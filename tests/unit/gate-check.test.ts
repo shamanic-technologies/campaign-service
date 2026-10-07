@@ -823,6 +823,159 @@ describe("Gate Check", () => {
     });
   });
 
+  describe("Split campaign budget: outreach + sourcing on demand (billing v0.82.0)", () => {
+    const ORIG_URL = process.env.BILLING_SERVICE_URL;
+    const ORIG_KEY = process.env.BILLING_SERVICE_API_KEY;
+
+    beforeEach(() => {
+      process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+      process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
+      // Today's TOTAL is under the $20 max, so only the parts can refuse.
+      mockGetStatsBudget.mockResolvedValue(
+        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "500" }]),
+      );
+    });
+
+    afterEach(() => {
+      if (ORIG_URL === undefined) delete process.env.BILLING_SERVICE_URL;
+      else process.env.BILLING_SERVICE_URL = ORIG_URL;
+      if (ORIG_KEY === undefined) delete process.env.BILLING_SERVICE_API_KEY;
+      else process.env.BILLING_SERVICE_API_KEY = ORIG_KEY;
+    });
+
+    const OWN = {
+      offerId: "offer-1", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach",
+      dailyBudgetCents: "2000.0000000000",
+    };
+
+    function mockList(sourcingCeilingCents: string | null | undefined) {
+      const entry: Record<string, unknown> = { ...OWN, updatedAt: null };
+      if (sourcingCeilingCents !== undefined) entry.sourcingCeilingCents = sourcingCeilingCents;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ brandId: "brand-1", dailyBudgetCents: "2000", campaigns: [entry] }),
+      });
+    }
+
+    function mockSplitToday(parts: { outreach: string; sourcing: string | null; sourcingSpent: string; outreachSpent: string }) {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          dailyBudgetCents: "2000.0000000000",
+          outreachDailyBudgetCents: parts.outreach,
+          sourcingCeilingCents: parts.sourcing,
+          split: parts.sourcing !== null,
+          today: {
+            date: "2026-10-07", campaignIds: ["campaign-1"],
+            spentCents: String(parseFloat(parts.sourcingSpent) + parseFloat(parts.outreachSpent)),
+            sourcingSpentCents: parts.sourcingSpent, outreachSpentCents: parts.outreachSpent,
+          },
+        }),
+      });
+    }
+
+    const affordable = () => mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ affordable: true }) });
+
+    function legCampaign(overrides: Partial<GateCheckInput> = {}) {
+      return makeCampaign({ brandIds: ["brand-1"], offerId: "offer-1", legKey: "start_to_conversation", ...overrides });
+    }
+
+    it("refuses when today's sourcing spend reached its ceiling, with the figures", async () => {
+      mockList("1700.0000000000");
+      mockSplitToday({ outreach: "300.0000000000", sourcing: "1700.0000000000", sourcingSpent: "1700", outreachSpent: "100" });
+
+      const result = await runGateChecks(legCampaign());
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Campaign sourcing budget reached");
+      expect(result.reasonDetail).toBe("sourcing spent $17.00 today of its $17.00/day ceiling");
+    });
+
+    it("refuses when today's outreach spend reached its budget", async () => {
+      mockList("1700.0000000000");
+      mockSplitToday({ outreach: "300.0000000000", sourcing: "1700.0000000000", sourcingSpent: "200", outreachSpent: "300" });
+
+      const result = await runGateChecks(legCampaign());
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Campaign outreach budget reached");
+    });
+
+    it("passes under both limits, and reads billing's one-campaign split contract scoped to THIS campaign", async () => {
+      mockList("1700.0000000000");
+      mockSplitToday({ outreach: "300.0000000000", sourcing: "1700.0000000000", sourcingSpent: "1699", outreachSpent: "299" });
+      affordable();
+
+      const result = await runGateChecks(legCampaign());
+      expect(result.allowed).toBe(true);
+      const [url, init] = mockFetch.mock.calls[1];
+      expect(url).toBe(
+        "https://billing.test.local/internal/brands/brand-1/campaign-budget?offerId=offer-1&legKey=start_to_conversation&featureSlug=sales-cold-email-outreach&campaignIds=campaign-1",
+      );
+      expect(init.headers["x-org-id"]).toBe("org-1");
+      expect(init.headers["x-api-key"]).toBe("test-billing-key");
+    });
+
+    it("a part stated at $0 gates nothing (the 100%-sourcing CRM row: outreach $0)", async () => {
+      mockList("2000.0000000000");
+      mockSplitToday({ outreach: "0.0000000000", sourcing: "2000.0000000000", sourcingSpent: "400", outreachSpent: "100" });
+      affordable();
+
+      const result = await runGateChecks(legCampaign());
+      expect(result.allowed).toBe(true);
+    });
+
+    it("a reactive leg with sourcing $0 is never refused on sourcing", async () => {
+      mockList("0.0000000000");
+      mockSplitToday({ outreach: "2000.0000000000", sourcing: "0.0000000000", sourcingSpent: "0", outreachSpent: "100" });
+      affordable();
+
+      const result = await runGateChecks(legCampaign());
+      expect(result.allowed).toBe(true);
+    });
+
+    it("the TOTAL still binds first: max daily spend unchanged", async () => {
+      mockList("1700.0000000000");
+      mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "2000" }]));
+
+      const result = await runGateChecks(legCampaign());
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Campaign daily budget reached");
+    });
+
+    it("fails CLOSED when billing cannot say today's split spend (its 502 on a runs-service failure)", async () => {
+      mockList("1700.0000000000");
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({}) });
+
+      const result = await runGateChecks(legCampaign());
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Campaign budget split unavailable");
+      expect(result.reasonDetail).toBe("billing responded 502");
+    });
+
+    it("fails CLOSED on a split answer with no today block", async () => {
+      mockList("1700.0000000000");
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ outreachDailyBudgetCents: "300", sourcingCeilingCents: "1700", split: true, today: null }),
+      });
+
+      const result = await runGateChecks(legCampaign());
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Campaign budget split unavailable");
+    });
+
+    it.each([
+      ["null (unsplit)", null],
+      ["absent (pre-v0.82 billing)", undefined],
+    ])("an UNSPLIT ceiling (%s) makes no split read and decides exactly as before", async (_label, sourcing) => {
+      mockList(sourcing);
+      affordable();
+
+      const result = await runGateChecks(legCampaign());
+      expect(result.allowed).toBe(true);
+      expect(mockFetch).not.toHaveBeenCalledWith(expect.stringContaining("/campaign-budget?"), expect.anything());
+    });
+  });
+
   describe("Per-brand daily budget pacing", () => {
     const ORIG_URL = process.env.BILLING_SERVICE_URL;
     const ORIG_KEY = process.env.BILLING_SERVICE_API_KEY;

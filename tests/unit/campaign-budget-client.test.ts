@@ -34,14 +34,24 @@ describe("fetchCampaignBudgets", () => {
       json: async () => ({
         brandId: "b",
         dailyBudgetCents: "500.0000000000",
-        campaigns: [{ offerId: "o", legKey: null, featureSlug: BOOKING, dailyBudgetCents: "100.0000000000", updatedAt: "x" }],
+        campaigns: [
+          { offerId: "o", legKey: null, featureSlug: BOOKING, dailyBudgetCents: "100.0000000000", updatedAt: "x" },
+          {
+            offerId: "o", legKey: "start_to_conversation", featureSlug: SALES, dailyBudgetCents: "400.0000000000",
+            outreachDailyBudgetCents: "300.0000000000", sourcingCeilingCents: "100.0000000000", updatedAt: "x",
+          },
+        ],
       }),
     });
     const r = await fetchCampaignBudgets("brand-1", { orgId: "org-1" });
     expect(r).toEqual({
       ok: true,
       brandDailyBudgetCents: 500,
-      campaigns: [{ offerId: "o", legKey: null, featureSlug: BOOKING, dailyBudgetCents: 100 }],
+      campaigns: [
+        // No sourcing ceiling on the wire = an unsplit entry.
+        { offerId: "o", legKey: null, featureSlug: BOOKING, dailyBudgetCents: 100, sourcingCeilingCents: null },
+        { offerId: "o", legKey: "start_to_conversation", featureSlug: SALES, dailyBudgetCents: 400, sourcingCeilingCents: 100 },
+      ],
     });
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toBe("https://billing.test.local/internal/brands/brand-1/campaign-budgets");
@@ -52,6 +62,7 @@ describe("fetchCampaignBudgets", () => {
     for (const answer of [
       { ok: true, json: async () => ({ dailyBudgetCents: "1", campaigns: [{ featureSlug: SALES, dailyBudgetCents: "abc" }] }) },
       { ok: true, json: async () => ({ dailyBudgetCents: "1" }) },
+      { ok: true, json: async () => ({ dailyBudgetCents: "1", campaigns: [{ featureSlug: SALES, dailyBudgetCents: "1", sourcingCeilingCents: "x" }] }) },
       { ok: false, status: 500, json: async () => ({}) },
     ]) {
       mockFetch.mockResolvedValueOnce(answer);

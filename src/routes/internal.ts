@@ -45,6 +45,7 @@ import {
   type ProjectionRow,
 } from "../lib/features-workflow-projection-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
+import { SPLIT_GATE_REASONS } from "../lib/campaign-budget-split.js";
 
 const router = Router();
 
@@ -149,7 +150,10 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
                           // The brand's ONE global sales pot is spent for today: pacing, not a fault.
                           result.reason === "Global sales budget reached" ||
                           // Items mode: this campaign's own item budget is spent for now.
-                          result.reason === "Item budget reached";
+                          result.reason === "Item budget reached" ||
+                          // A split campaign's sourcing or outreach part is spent for today.
+                          result.reason === SPLIT_GATE_REASONS.sourcingReached ||
+                          result.reason === SPLIT_GATE_REASONS.outreachReached;
       // A run allowed because billing could NOT be asked is a fail-OPEN anomaly, not an
       // authorization — exactly the class this service warns on. It rides the event that is
       // already emitted once per gate check, so it adds no log volume at all, and it is the
@@ -158,12 +162,13 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       traceEvent(req.runId, {
         service: "campaign-service",
         event: "gate-check-result",
-        detail: `Gate check ${result.allowed ? "PASSED" : "BLOCKED"} for campaign ${campaignId}${result.reason ? ` — reason: ${result.reason}` : ""}${creditUnreadable ? ` — credit affordability NOT read (${result.creditCheckDetail}), allowed by fail-open` : ""}`,
+        detail: `Gate check ${result.allowed ? "PASSED" : "BLOCKED"} for campaign ${campaignId}${result.reason ? ` — reason: ${result.reason}` : ""}${result.reasonDetail ? ` (${result.reasonDetail})` : ""}${creditUnreadable ? ` — credit affordability NOT read (${result.creditCheckDetail}), allowed by fail-open` : ""}`,
         level: creditUnreadable ? "warn" : (result.allowed || benignBlock ? "info" : "warn"),
         data: {
           campaignId,
           allowed: result.allowed,
           reason: result.reason,
+          reasonDetail: result.reasonDetail,
           creditCheck: result.creditCheck,
           creditCheckDetail: result.creditCheckDetail,
         },
