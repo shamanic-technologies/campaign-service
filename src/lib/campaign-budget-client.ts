@@ -24,6 +24,12 @@ export interface CampaignBudgetEntry {
   featureSlug: string;
   /** This entry's daily ceiling, in CENTS (directly comparable to runs *CostInUsdCents). */
   dailyBudgetCents: number;
+  /**
+   * The part of `dailyBudgetCents` SOURCING may spend per day ("on demand, up to"), in CENTS; the
+   * rest is outreach. null = the entry is not split (the whole chain on one budget, as before
+   * billing v0.82.0). Absent on the wire reads null: an unsplit entry, never a guessed split.
+   */
+  sourcingCeilingCents: number | null;
 }
 
 export type CampaignBudgetsRead =
@@ -77,6 +83,7 @@ export async function fetchCampaignBudgets(
         legKey?: string | null;
         featureSlug?: string;
         dailyBudgetCents?: string;
+        sourcingCeilingCents?: string | null;
       }>;
     };
 
@@ -101,11 +108,18 @@ export async function fetchCampaignBudgets(
       // An unparseable ceiling is not "no ceiling" — refuse the whole read rather than let one
       // campaign silently pace on nothing.
       if (!Number.isFinite(cents)) return { ok: false };
+      let sourcingCeilingCents: number | null = null;
+      if (raw.sourcingCeilingCents !== null && raw.sourcingCeilingCents !== undefined) {
+        sourcingCeilingCents = parseFloat(raw.sourcingCeilingCents);
+        // A stated split that cannot be read is not "unsplit": refuse the read (fail-CLOSED).
+        if (!Number.isFinite(sourcingCeilingCents)) return { ok: false };
+      }
       campaigns.push({
         offerId: raw.offerId ?? null,
         legKey: raw.legKey ?? null,
         featureSlug: raw.featureSlug,
         dailyBudgetCents: cents,
+        sourcingCeilingCents,
       });
     }
 
