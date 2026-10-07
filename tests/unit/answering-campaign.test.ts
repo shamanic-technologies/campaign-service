@@ -37,6 +37,7 @@ const OFFER = "3484bbae-0000-4000-8000-000000000003";
 /** Spelled the way features-service publishes them, without writing a leg literal down. */
 const ENTRY_LEG = "start_to_" + "conversation";
 const CONTINUING_LEG = "conversation" + "_to_" + ["meeting", "booked"].join("_");
+const CALL_LEG = "conversation" + "_to_" + ["booking", "call"].join("_");
 const LATER_LEG = ["meeting", "booked"].join("_") + "_to_" + ["meeting", "attended"].join("_");
 
 const HELD_ID = "3922c8e1-0000-4000-8000-000000000010";
@@ -79,11 +80,13 @@ beforeEach(() => {
     legsBySlug: new Map<string, Set<string>>([
       ["sales-cold-email-outreach", new Set([ENTRY_LEG])],
       ["ai-meeting-booking", new Set([CONTINUING_LEG])],
+      ["ai-instant-call", new Set([CALL_LEG])],
     ]),
     stepKeys: new Set(["conversation", "meeting_booked", "meeting_attended"]),
     legs: [
       { legKey: ENTRY_LEG, fromStepKey: null, toStepKey: "conversation" },
       { legKey: CONTINUING_LEG, fromStepKey: "conversation", toStepKey: "meeting_booked" },
+      { legKey: CALL_LEG, fromStepKey: "conversation", toStepKey: "booking_call" },
       { legKey: LATER_LEG, fromStepKey: "meeting_booked", toStepKey: "meeting_attended" },
     ],
   });
@@ -109,7 +112,7 @@ describe("resolveAnsweringCampaign", () => {
     const out = await resolveAnsweringCampaign(HELD_ID);
     expect(out.absence).toBeNull();
     expect(out.answeredBy).toMatchObject({ campaignId: ANSWERER_ID, legKey: CONTINUING_LEG, status: "ongoing" });
-    expect(out.continuingLegKeys).toEqual([CONTINUING_LEG]);
+    expect(out.continuingLegKeys).toEqual([CONTINUING_LEG, CALL_LEG]);
     expect(out.toStepKey).toBe("conversation");
   });
 
@@ -154,6 +157,45 @@ describe("resolveAnsweringCampaign", () => {
   it("an unknown campaign is a 404", async () => {
     world([]);
     await expect(resolveAnsweringCampaign("nope")).rejects.toBeInstanceOf(AnsweringScopeError);
+  });
+});
+
+describe("a one-shot channel (AI Instant Call) never answers a follow-up", () => {
+  const CALL_ID = "29c5606a-0000-4000-8000-000000000012";
+  const instantCall = (over: Record<string, unknown> = {}) =>
+    held({
+      id: CALL_ID,
+      legKey: CALL_LEG,
+      acquisitionChannel: "ai_instant_call",
+      featureSlug: "ai-instant-call",
+      workflowSlug: null,
+      createdAt: new Date("2026-09-01T00:00:00Z"),
+      ...over,
+    });
+
+  it("names the meeting-booking campaign even when AI Instant Call is live, older and listed first (Doc Dinners)", async () => {
+    const stoppedHeld = held({ status: "stopped" });
+    world([instantCall(), stoppedHeld, answerer()]);
+    const out = await resolveAnsweringCampaign(HELD_ID);
+    expect(out.absence).toBeNull();
+    expect(out.answeredBy?.campaignId).toBe(ANSWERER_ID);
+    expect(out.startableFeatureSlugs).toEqual(["ai-meeting-booking"]);
+  });
+
+  it("an offer whose only live continuing campaign is AI Instant Call is answered by nobody", async () => {
+    world([held(), instantCall()]);
+    const out = await resolveAnsweringCampaign(HELD_ID);
+    expect(out.answeredBy).toBeNull();
+    expect(out.absence).toBe(ANSWERING_ABSENCES.NO_CAMPAIGN);
+    expect(out.candidate).toBeNull();
+    expect(out.startableFeatureSlugs).toEqual(["ai-meeting-booking"]);
+  });
+
+  it("a stopped answerer beside a live AI Instant Call reads stopped, naming the answerer", async () => {
+    world([held(), instantCall(), answerer({ status: "stopped" })]);
+    const out = await resolveAnsweringCampaign(HELD_ID);
+    expect(out.absence).toBe(ANSWERING_ABSENCES.STOPPED);
+    expect(out.candidate?.campaignId).toBe(ANSWERER_ID);
   });
 });
 

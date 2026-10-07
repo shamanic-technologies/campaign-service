@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { resolvePredecessorCampaign, PredecessorScopeError } from "./predecessor-campaign.js";
-import { SALES_FAMILY_FEATURE_SLUGS } from "./sales-outreach-campaign.js";
+import { SALES_FAMILY_FEATURE_SLUGS, isServicePerformedFeature } from "./sales-outreach-campaign.js";
 
 /**
  * WHO ANSWERS THE PEOPLE THIS CAMPAIGN IS HOLDING — the inverse of `/predecessor`, and nothing else.
@@ -41,6 +41,15 @@ import { SALES_FAMILY_FEATURE_SLUGS } from "./sales-outreach-campaign.js";
  * customer can read. "It could not be worked out" stays apart: an unreadable catalogue is a 502 and
  * a leg the catalogue does not publish is a 409 — never a null, or an outage would read exactly
  * like a brand that simply has not started the answering leg.
+ *
+ * ── A ONE-SHOT CHANNEL NEVER ANSWERS ──────────────────────────────────────────────────────────
+ *
+ * A service-performed channel (`SERVICE_PERFORMED_FEATURE_SLUGS`: AI Instant Call rings the rep
+ * once on a qualified reply) runs a continuing leg but never claims from the follow-up queue and
+ * never sends a follow-up. It is neither a candidate nor a startable channel here: naming it put
+ * "Next follow-up by AI Instant Call" on a lead page (Doc Dinners, 2026-10-06), and an offer whose
+ * only live continuing campaign is one reads `no_answering_campaign`. Several live answerers are
+ * tried oldest first (then id), so the answer never depends on row order.
  */
 
 export const ANSWERING_ABSENCES = {
@@ -181,6 +190,7 @@ export async function resolveAnsweringCampaign(
     .map((leg) => leg.legKey);
   const continuing = new Set(continuingLegKeys);
   const startableFeatureSlugs = [...SALES_FAMILY_FEATURE_SLUGS].filter((slug) => {
+    if (isServicePerformedFeature(slug)) return false;
     const performed = catalogue.legsBySlug.get(slug);
     return performed ? [...performed].some((leg) => continuing.has(leg)) : false;
   });
@@ -188,17 +198,21 @@ export async function resolveAnsweringCampaign(
   if (continuingLegKeys.length === 0) return answer(ANSWERING_ABSENCES.NO_CONTINUING_LEG, partial);
 
   // Same scope the predecessor resolver searches from the other side: org, brand, offer.
-  const rows = await db.query.campaigns.findMany({
-    where: and(
-      eq(campaigns.orgId, campaign.orgId),
-      arrayContains(campaigns.brandIds, [brandId]),
-      eq(campaigns.offerId, campaign.offerId),
-      inArray(campaigns.legKey, continuingLegKeys),
-    ),
-  });
+  const rows = (
+    await db.query.campaigns.findMany({
+      where: and(
+        eq(campaigns.orgId, campaign.orgId),
+        arrayContains(campaigns.brandIds, [brandId]),
+        eq(campaigns.offerId, campaign.offerId),
+        inArray(campaigns.legKey, continuingLegKeys),
+      ),
+    })
+  ).filter((row) => !isServicePerformedFeature(row.featureSlug));
   if (rows.length === 0) return answer(ANSWERING_ABSENCES.NO_CAMPAIGN, partial);
 
-  const live = rows.filter((row) => row.status === "ongoing");
+  const live = rows
+    .filter((row) => row.status === "ongoing")
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
   if (live.length === 0) {
     const latest = [...rows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
     return answer(ANSWERING_ABSENCES.STOPPED, { ...partial, candidate: asAnswering(latest) });
