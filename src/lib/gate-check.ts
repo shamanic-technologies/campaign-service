@@ -3,7 +3,8 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
-import { campaignCeilingCents, fetchCampaignBudgets } from "./campaign-budget-client.js";
+import { campaignCeilingCents, ceilingEntriesOf, fetchCampaignBudgets } from "./campaign-budget-client.js";
+import { fetchCampaignSplitToday, isSplitCeiling, splitPartReached, SPLIT_GATE_REASONS } from "./campaign-budget-split.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { globalSalesPotBlock } from "./global-sales-pot.js";
 import { salesItemsGate } from "./sales-items-pace.js";
@@ -69,6 +70,8 @@ export type CreditCheckOutcome = "affordable" | "unaffordable" | "unreadable";
 export interface GateCheckResult {
   allowed: boolean;
   reason?: string;
+  // The figures behind a refusal, when the gate has them (today: the split budget parts).
+  reasonDetail?: string;
   nextRunAt?: Date;
   creditCheck?: CreditCheckOutcome;
   // Why billing could not be read. Only set alongside `unreadable`.
@@ -300,6 +303,24 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         }
         if ((await campaignSpentToday()) >= ceiling.cents) {
           return { allowed: false, reason: "Campaign daily budget reached" };
+        }
+        // (a3) The ceiling in TWO parts (outreach + sourcing "up to"): each part binds on its own,
+        // the total above stays the max. Unsplit = nothing read, nothing changed. Fail-CLOSED.
+        // See campaign-budget-split.ts for the rule.
+        if (isSplitCeiling(ceilingEntriesOf(budgets, campaign))) {
+          const split = await fetchCampaignSplitToday(brandId, {
+            campaignId: campaign.campaignId,
+            offerId: campaign.offerId!,
+            legKey: campaign.legKey!,
+            featureSlug: campaign.featureSlug!,
+          }, identity);
+          if (!split.ok) {
+            return { allowed: false, reason: SPLIT_GATE_REASONS.unavailable, reasonDetail: split.detail };
+          }
+          const reached = splitPartReached(split.value);
+          if (reached) {
+            return { allowed: false, reason: reached.reason, reasonDetail: reached.detail };
+          }
         }
       }
     }
