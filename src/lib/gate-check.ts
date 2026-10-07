@@ -1,5 +1,6 @@
 import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type IdentityHeaders } from "@distribute/runs-client";
 import { getChannelStatsBudget } from "./channel-spend.js";
+import { sourceCampaignsFeeding } from "./source-campaign-store.js";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
@@ -309,11 +310,13 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         // the total above stays the max. Unsplit = nothing read, nothing changed. Fail-CLOSED.
         // See campaign-budget-split.ts for the rule.
         if (isSplitCeiling(ceilingEntriesOf(budgets, campaign))) {
+          const feeding = await sourceCampaignsFeeding(campaign.campaignId, campaign.featureSlug!);
           const split = await fetchCampaignSplitToday(brandId, {
             campaignId: campaign.campaignId,
             offerId: campaign.offerId!,
             legKey: campaign.legKey!,
             featureSlug: campaign.featureSlug!,
+            sourceCampaignIds: feeding.map((f) => f.id),
           }, identity);
           if (!split.ok) {
             return { allowed: false, reason: SPLIT_GATE_REASONS.unavailable, reasonDetail: split.detail };

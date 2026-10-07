@@ -46,6 +46,8 @@ import {
   planReactiveDefaults,
 } from "../lib/reactive-defaults.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "../lib/channel-operator-client.js";
+import { SOURCE_LEG_KEY, isSourceOriginSlug } from "../lib/source-campaigns.js";
+import { ensureDefaultSourceOnStart } from "../lib/source-campaign-store.js";
 import { ReactiveDefaultsBody } from "../schemas.js";
 
 const router = Router();
@@ -62,8 +64,13 @@ function personActor(req: AuthenticatedRequest): StatusActor {
  * hands setCampaignStatus, so the other proactive campaign of the offer stops in the same
  * transaction as this one starts.
  */
-function displaceOtherProactive(tx: DbTransaction, started: CampaignRow): Promise<CampaignRow[]> {
-  return proactiveCampaignsToStop(tx, started);
+async function displaceOtherProactive(tx: DbTransaction, started: CampaignRow): Promise<CampaignRow[]> {
+  const toStop = await proactiveCampaignsToStop(tx, started);
+  // The offer's first outreach campaign of a sourced channel is born with its default SOURCE
+  // campaign ON, in the same transaction (lib/source-campaign-store.ts), so it finds leads exactly
+  // as before sources were campaigns. An offer holding any source row is left alone.
+  await ensureDefaultSourceOnStart(tx, started);
+  return toStop;
 }
 
 /** Inside an insert's own transaction: stop the proactive campaigns the new one replaces. */
@@ -203,6 +210,8 @@ async function applyReactiveDefaults(
  */
 function applyReactiveDefaultsAfterStart(started: CampaignRow, req: AuthenticatedRequest): void {
   if (!started.offerId || !started.legKey || !started.brandId || !req.userId || !req.runId) return;
+  // A SOURCE campaign is not the offer's proactive campaign: turning one on switches nothing else on.
+  if (isSourceOriginSlug(started.featureSlug)) return;
   const { offerId, legKey, brandId, orgId } = started;
   void (async () => {
     const catalogue = await fetchChannelCatalogue();
@@ -357,6 +366,17 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       return res.status(400).json({
         error: `Cannot create a ${resolvedFeatureSlug} campaign without stating the offer it sells ` +
           `and the leg it is bought for — offerId and legKey are required`,
+      });
+    }
+
+    // A SOURCE campaign (lib/source-campaigns.ts) is turned on through ONE path:
+    // POST /campaigns/start-funded-pair {brandId, offerId, featureSlug: <origin>, legKey:
+    // "start_to_lead_found"} (first On creates it), then PATCH /campaigns/:id status=stop|activate.
+    if (isSourceOriginSlug(resolvedFeatureSlug)) {
+      return res.status(400).json({
+        error: `A ${resolvedFeatureSlug} campaign is a lead source: turn it on with ` +
+          `POST /campaigns/start-funded-pair (featureSlug + offerId + legKey "${SOURCE_LEG_KEY}").`,
+        reason: "source_campaign_via_start_pair",
       });
     }
 

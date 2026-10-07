@@ -50,6 +50,16 @@ export const TRANSITION_SOURCES = {
    * (starting its proactive campaign, or saving its sales paths); never by a tick.
    */
   REACTIVE_DEFAULT: "reactive_default",
+  /**
+   * A SOURCE campaign born ON because a person started its offer's first outreach campaign of a
+   * sourced channel and the offer had no source campaign at all (lib/source-campaign-store.ts).
+   */
+  SOURCE_DEFAULT: "source_default",
+  /**
+   * A SOURCE campaign born MIRRORING its offer's outreach campaign when sources became campaigns
+   * (owner 2026-10-07, `POST /internal/source-campaigns/mirror`). Never written by a person or a tick.
+   */
+  SOURCE_MIRROR: "source_mirror",
   /** The payment-hold sweep: billing cannot charge the org's card (lib/payment-hold-sweep.ts). */
   PAYMENT_HOLD: "payment_hold",
   /** Migration 0057 opened the record by observing the PRESENT. Never written by the runtime. */
