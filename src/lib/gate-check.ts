@@ -1,4 +1,5 @@
 import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type IdentityHeaders } from "@distribute/runs-client";
+import { getChannelStatsBudget } from "./channel-spend.js";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
@@ -245,7 +246,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   } else if (isSalesFeature) {
     if (campaign.dailyBudgetCents !== null) {
       // (a) Campaign's OWN daily budget vs its OWN committed spend today.
-      const campaignSpend = await getStatsBudget({
+      const campaignSpend = await getChannelStatsBudget({
         orgId: campaign.orgId,
         campaignId: campaign.campaignId,
         featureSlug: campaign.featureSlug,
@@ -271,7 +272,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       let spentCents: number | null = null;
       const campaignSpentToday = async (): Promise<number> => {
         if (spentCents !== null) return spentCents;
-        const campaignSpend = await getStatsBudget({
+        const campaignSpend = await getChannelStatsBudget({
           orgId: campaign.orgId,
           campaignId: campaign.campaignId,
           featureSlug: campaign.featureSlug,
@@ -628,7 +629,7 @@ async function brandDailyBudgetBlock(
     return { allowed: false, reason: "Brand not funded" };
   }
 
-  const brandSpend = await getStatsBudget({
+  const brandSpend = await getChannelStatsBudget({
     orgId: campaign.orgId,
     brandId,
     featureSlug: campaign.featureSlug,

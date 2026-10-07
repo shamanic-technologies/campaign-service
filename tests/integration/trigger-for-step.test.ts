@@ -15,7 +15,7 @@ vi.mock("@distribute/runs-client", () => ({
   createRun: vi.fn(),
   updateRun: vi.fn(),
   listRuns: mockListRuns,
-  getStatsBudget: mockGetStatsBudget,
+  getStatsBudget: (p: { featureSlug?: string }) => (p?.featureSlug?.startsWith("sourcing-") ? Promise.resolve({ windows: [] }) : mockGetStatsBudget(p)),
 }));
 
 // billing's sales-budget MODE: "campaigns" (no global pot) unless a test says otherwise.

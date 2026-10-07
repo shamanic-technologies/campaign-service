@@ -1,4 +1,5 @@
-import { getStatsBudget, type IdentityHeaders } from "@distribute/runs-client";
+import type { IdentityHeaders } from "@distribute/runs-client";
+import { getChannelStatsBudget } from "./channel-spend.js";
 import { campaignCeilingCents, fetchCampaignBudgets, type CampaignBudgetsRead } from "./campaign-budget-client.js";
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
 import { isReactiveLeg } from "./global-sales-budget.js";
@@ -37,7 +38,7 @@ export async function readItemSpend(
   const windows = [{ label: "today", since: startOfDay(now).toISOString() }];
   if (periodStart) windows.push({ label: "period", since: periodStart.toISOString() });
   try {
-    const budget = await getStatsBudget({ orgId, campaignId, featureSlug, windows });
+    const budget = await getChannelStatsBudget({ orgId, campaignId, featureSlug, windows });
     const read = (label: string): number | null => {
       const w = budget.windows.find((x) => x.label === label);
       if (!w) return 0;

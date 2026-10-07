@@ -28,7 +28,7 @@ const {
 
 vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
-  getStatsBudget: mockGetStatsBudget,
+  getStatsBudget: (p: { featureSlug?: string }) => (p?.featureSlug?.startsWith("sourcing-") ? Promise.resolve({ windows: [] }) : mockGetStatsBudget(p)),
   createRun: mockCreateRun,
   updateRun: mockUpdateRun,
 }));
