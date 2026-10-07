@@ -61,7 +61,7 @@ export type CampaignSplitTodayRead = { ok: true; value: CampaignSplitToday } | {
  */
 export async function fetchCampaignSplitToday(
   brandId: string,
-  campaign: { campaignId: string; offerId: string; legKey: string; featureSlug: string },
+  campaign: { campaignId: string; offerId: string; legKey: string; featureSlug: string; sourceCampaignIds?: string[] },
   identity: IdentityHeaders,
 ): Promise<CampaignSplitTodayRead> {
   const url = process.env.BILLING_SERVICE_URL;
@@ -82,7 +82,10 @@ export async function fetchCampaignSplitToday(
     offerId: campaign.offerId,
     legKey: campaign.legKey,
     featureSlug: campaign.featureSlug,
-    campaignIds: campaign.campaignId,
+    // The campaign FAMILY billing measures today's spend over: this campaign plus the SOURCE
+    // campaigns that feed it (lib/source-campaigns.ts), so the sourcing lead-service files under a
+    // source campaign's id still counts in this campaign's sourcing part, as it does today.
+    campaignIds: [campaign.campaignId, ...(campaign.sourceCampaignIds ?? [])].join(","),
   });
 
   try {

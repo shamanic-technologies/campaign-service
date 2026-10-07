@@ -7,6 +7,11 @@ import {
   CampaignSchema,
   CreateCampaignBody,
   StartFundedPairBody,
+  SourceCampaignsQuery,
+  SourceCampaignsMirrorBody,
+  OfferSourceCampaignsResponse,
+  CampaignSourceCampaignsResponse,
+  SourceCampaignsMirrorResponse,
   StoppedCampaignSchema,
   ReactiveDefaultsBody,
   ReactiveDefaultsResponse,
@@ -146,17 +151,18 @@ registry.registerPath({
     + "The started campaign is paced, gated and held by billing's ceiling exactly as every other sales-family campaign is. A pair that ALREADY has a campaign never gets a second one: a live campaign is handed back untouched (200, started=false), and a stopped one is started (200, started=true). "
     + "ONE PROACTIVE CAMPAIGN ON PER OFFER (owner 2026-10-05): when the campaign this request turns ON works an ENTRY leg (features-service catalogue leg with no fromStep), every OTHER ongoing campaign of the same offer that works an entry leg is stopped in the SAME transaction, as this person's act (stopReason `manual`, transition source `proactive_switch`, billing signalled). `stoppedCampaigns` lists them ([] when none). Reactive campaigns are never stopped. The catalogue is read only when another campaign of the offer is live; unreadable then = 502 reason `catalogue_unavailable`, nothing written. Nothing else ever switches the proactive campaign. After a proactive start, the offer's reactive campaigns are switched on by default in the background (see POST /offers/{offerId}/reactive-defaults). "
     + "A pair that cannot be started is refused with `error` in customer-facing English (render it verbatim) and `reason` as a code: leg_required, channel_not_paced_here, unknown_channel, leg_not_performed (400); not_funded, no_workflow, payment_declined, no_payment_method (409); catalogue_unavailable, billing_unavailable, workflow_unavailable (502, try again). "
+    + "SOURCE CAMPAIGNS: featureSlug may be a sourcing ORIGIN slug with legKey `start_to_lead_found` (see GET /internal/offers/{offerId}/source-campaigns): no funding read, no workflow, ceilingCents null, stops no other campaign; a retired origin is 400 unknown_channel, another leg 400 leg_not_performed. "
     + "A PAYMENT HOLD refuses every start: when billing-service cannot charge the org's card (payment-outlook state charge_blocked) the answer is 409 with reason `payment_declined` (a card was tried and refused), or reason `no_payment_method` when billing's blockedReason is `no_chargeable_card` (no card on file at all), plus `blockedReason` (billing's own code, e.g. card_declined, card_country_unsupported, no_chargeable_card) and `error` in customer-facing English to render verbatim; when billing cannot be read it is 502 with reason `billing_unavailable`. Such an org's campaigns are stopped by the scheduler within ten minutes with stopReason `payment_declined` or `no_payment_method` (same split), and can be started again by a person once billing no longer reports the charge as blocked (paid AND a chargeable card on file).",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: StartFundedPairBody } } } },
   responses: {
     201: {
       description: "Campaign created and started",
-      content: { "application/json": { schema: z.object({ campaign: CampaignSchema, started: z.boolean(), alreadyRunning: z.boolean(), ceilingCents: z.number(), stoppedCampaigns: z.array(StoppedCampaignSchema) }) } },
+      content: { "application/json": { schema: z.object({ campaign: CampaignSchema, started: z.boolean(), alreadyRunning: z.boolean(), ceilingCents: z.number().nullable(), stoppedCampaigns: z.array(StoppedCampaignSchema) }) } },
     },
     200: {
       description: "This pair already had a campaign — handed back, started if it had been stopped",
-      content: { "application/json": { schema: z.object({ campaign: CampaignSchema, started: z.boolean(), alreadyRunning: z.boolean(), ceilingCents: z.number().optional(), stoppedCampaigns: z.array(StoppedCampaignSchema) }) } },
+      content: { "application/json": { schema: z.object({ campaign: CampaignSchema, started: z.boolean(), alreadyRunning: z.boolean(), ceilingCents: z.number().nullable().optional(), stoppedCampaigns: z.array(StoppedCampaignSchema) }) } },
     },
     400: { description: "Refused — the reason is customer-facing English", content: { "application/json": { schema: ErrorResponse } } },
     409: { description: "Refused — nothing funds this pair, or nothing can run the channel yet", content: { "application/json": { schema: ErrorResponse } } },
@@ -487,6 +493,64 @@ registry.registerPath({
     400: { description: "No org, malformed body or unknown step", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+const SOURCE_CAMPAIGNS_DOC =
+  "SOURCE CAMPAIGNS (owner 2026-10-07; vocabulary owned by features-service, `src/routes/CLAUDE.md` \"Source campaigns\"): an offer's lead SOURCES are campaigns keyed (offerId, featureSlug = <origin slug>, legKey = \"start_to_lead_found\"), live origins `sourcing-apollo-cold-filters`, `sourcing-apollo-buying-signals`, `sourcing-linkedin-engagement-signals`, `sourcing-crm-contacts` (`sourcing-apify-search` retired: served when a row exists, never startable). "
+  + "A source campaign has NO workflow (lead-service finds leads inside the outreach campaign's run and files that work under the source campaign's id), so it is never scheduled, triggered or gate-checked. Several may be ON at once and they are never part of the one-proactive-campaign rule: turning a source on stops nothing, and turning the outreach campaign on stops no source. "
+  + "On/Off: first On = POST /campaigns/start-funded-pair {brandId, offerId, featureSlug: <origin>, legKey: \"start_to_lead_found\"} (201 created ON, 200 an existing one handed back / restarted; ceilingCents null; no funding read); then PATCH /campaigns/{id} {status: \"stop\" | \"activate\"} with x-brand-id + x-feature-slug = <origin>. POST /campaigns refuses an origin slug (400 `source_campaign_via_start_pair`). "
+  + "An outreach campaign of a sourced channel (cold email, feedback request, CRM email) keeps its key and works every lead its offer's ON sources found; its spend reads (daily budget, global pot, item pacing) also count the sourcing filed under those source campaigns, so what it may spend is unchanged. The offer's first outreach start with no source row at all creates the channel's default source ON (Apollo Cold Filters; CRM Contacts for CRM email; transition source `source_default`).";
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/offers/{offerId}/source-campaigns",
+  tags: ["Internal"],
+  summary: "An offer's lead sources (source campaigns) and which are running",
+  description: SOURCE_CAMPAIGNS_DOC + " This read lists one entry per live origin (campaignId/status null = no campaign yet = OFF) plus a retired origin that has a row; `runningSourceCampaigns` = the sources that may find leads for the offer now, with the campaign id to file that work under. Requires header x-org-id (an offer belongs to one (org, brand) pair).",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ offerId: z.string() }),
+    query: SourceCampaignsQuery,
+    headers: z.object({ "x-org-id": z.string() }),
+  },
+  responses: {
+    200: { description: "The offer's source campaigns", content: { "application/json": { schema: OfferSourceCampaignsResponse } } },
+    400: { description: "Missing brandId or x-org-id", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/campaigns/{campaignId}/source-campaigns",
+  tags: ["Internal"],
+  summary: "The source campaigns that feed one outreach campaign",
+  description: SOURCE_CAMPAIGNS_DOC + " This read takes the OUTREACH campaign a serve run carries and answers the source campaigns of the same (org, brand, offer) whose origin serves its channel (`servedOrigins`), any status, `running` = may find leads now. A channel that sources nothing, or a campaign stating no offer, answers `sourced: false`.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { params: z.object({ campaignId: z.string() }) },
+  responses: {
+    200: { description: "The feeding source campaigns", content: { "application/json": { schema: CampaignSourceCampaignsResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    404: { description: "No such campaign", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/source-campaigns/mirror",
+  tags: ["Internal"],
+  summary: "Staff migration: create each offer's source campaigns mirroring its outreach campaign",
+  description: SOURCE_CAMPAIGNS_DOC + " MIGRATION (re-runnable, idempotent, dry run unless apply=true): for every offer with an outreach campaign of a sourced channel on an entry leg, creates the channel's default source plus every live origin that spent under one of the offer's outreach campaigns in the last 14 days, each ON iff an outreach campaign it serves is ON, else OFF with that campaign's stop reason (transition source `source_mirror`). An origin already holding a row is never touched. Never starts spend that was not running. Unreadable catalogue = 502.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: SourceCampaignsMirrorBody } } } },
+  responses: {
+    200: { description: "The plan (and what was created when applied)", content: { "application/json": { schema: SourceCampaignsMirrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "Catalogue unreadable", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });

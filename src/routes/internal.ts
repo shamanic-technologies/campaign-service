@@ -46,6 +46,14 @@ import {
 } from "../lib/features-workflow-projection-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
 import { SPLIT_GATE_REASONS } from "../lib/campaign-budget-split.js";
+import {
+  listOfferSourceCampaigns,
+  mirrorSourceCampaigns,
+  MirrorCatalogueUnavailableError,
+  sourceCampaignsFeeding,
+} from "../lib/source-campaign-store.js";
+import { LEAD_FOUND_STEP, SOURCE_LEG_KEY, SOURCING_ORIGINS_BY_CHANNEL, sourceCampaignKey } from "../lib/source-campaigns.js";
+import { SourceCampaignsMirrorBody, SourceCampaignsQuery } from "../schemas.js";
 
 const router = Router();
 
@@ -1132,5 +1140,99 @@ router.post(
     }
   },
 );
+
+// === SOURCE CAMPAIGNS (lib/source-campaigns.ts) ===
+
+/**
+ * GET /internal/offers/:offerId/source-campaigns?brandId=  (x-org-id REQUIRED)
+ *
+ * The offer's lead SOURCES: one entry per live origin (absent campaign = OFF, its first On creates
+ * it), plus a retired origin only when the offer has a row on it. `runningSourceCampaigns` is the
+ * short answer a sibling needs ("which sources may find leads for this offer right now, and the
+ * campaign id to file that work under"). A read: nothing written.
+ */
+router.get("/internal/offers/:offerId/source-campaigns", requireApiKey, validateQuery(SourceCampaignsQuery), async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"];
+    if (typeof orgId !== "string" || !orgId) {
+      return res.status(400).json({ error: "x-org-id header is required: an offer belongs to one (org, brand) pair" });
+    }
+    const { brandId } = req.query as { brandId: string };
+    const sources = await listOfferSourceCampaigns({ orgId, brandId, offerId: req.params.offerId });
+    res.json({
+      orgId,
+      brandId,
+      offerId: req.params.offerId,
+      sourceLegKey: SOURCE_LEG_KEY,
+      leadFoundStep: LEAD_FOUND_STEP,
+      sourceCampaigns: sources,
+      runningSourceCampaigns: sources
+        .filter((s) => s.running)
+        .map((s) => ({ featureSlug: s.featureSlug, campaignId: s.campaignId!, campaignKey: s.campaignKey })),
+    });
+  } catch (error) {
+    console.error("[campaign-service] offer source campaigns error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /internal/campaigns/:campaignId/source-campaigns
+ *
+ * For ONE outreach campaign (what a serve run already carries): the source campaigns of its offer
+ * whose origin serves its channel, with their status. lead-service files a found lead's sourcing
+ * under the RUNNING one's id for the origin it used. 404 unknown campaign; a campaign of a channel
+ * that sources nothing (or stating no offer) answers `sourced: false` and [].
+ */
+router.get("/internal/campaigns/:campaignId/source-campaigns", requireApiKey, async (req, res) => {
+  try {
+    const campaign = await db.query.campaigns.findFirst({ where: eq(campaigns.id, req.params.campaignId) });
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    const origins = campaign.featureSlug ? SOURCING_ORIGINS_BY_CHANNEL[campaign.featureSlug] ?? [] : [];
+    const feeding = campaign.featureSlug ? await sourceCampaignsFeeding(campaign.id, campaign.featureSlug) : [];
+    res.json({
+      campaignId: campaign.id,
+      orgId: campaign.orgId,
+      offerId: campaign.offerId,
+      featureSlug: campaign.featureSlug,
+      sourced: origins.length > 0 && !!campaign.offerId,
+      servedOrigins: origins,
+      sourceCampaigns: feeding.map((f) => ({
+        featureSlug: f.featureSlug,
+        campaignId: f.id,
+        campaignKey: sourceCampaignKey(f.featureSlug),
+        status: f.status,
+        running: f.status === "ongoing",
+      })),
+    });
+  } catch (error) {
+    console.error("[campaign-service] campaign source campaigns error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/source-campaigns/mirror  { apply?: boolean }
+ *
+ * MIGRATION OF TODAY'S STATE (owner 2026-10-07, staff-run, re-runnable, idempotent): creates the
+ * source campaigns each offer finds leads from today, mirroring its outreach campaign's on/off. Dry
+ * run unless `apply: true`. See `mirrorSourceCampaigns`.
+ */
+router.post("/internal/source-campaigns/mirror", requireApiKey, validateBody(SourceCampaignsMirrorBody), async (req, res) => {
+  try {
+    const { apply } = req.body as { apply?: boolean };
+    const result = await mirrorSourceCampaigns({ apply: apply === true });
+    console.log(
+      `[campaign-service] Source campaign mirror ${result.applied ? "APPLIED" : "dry run"}: offers=${result.offers} planned=${result.plan.length} ongoing=${result.counts.ongoing} stopped=${result.counts.stopped} observed=${result.counts.observed} alreadyPresent=${result.alreadyPresent}`,
+    );
+    res.json(result);
+  } catch (error) {
+    if (error instanceof MirrorCatalogueUnavailableError) {
+      return res.status(502).json({ error: `catalogue unreadable: ${error.message}`, reason: "catalogue_unavailable" });
+    }
+    console.error("[campaign-service] source campaign mirror error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 export default router;

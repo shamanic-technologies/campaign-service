@@ -1,4 +1,6 @@
 import { getStatsBudget, type BudgetWindowResult, type StatsBudgetParams, type StatsBudgetResponse } from "@distribute/runs-client";
+import { SOURCING_ORIGINS_BY_CHANNEL } from "./source-campaigns.js";
+import { sourceCampaignsFeeding, type FeedingSourceCampaign } from "./source-campaign-store.js";
 
 /**
  * A CHANNEL'S SPEND INCLUDES THE SOURCING THAT FOUND ITS LEADS (2026-10-07).
@@ -17,7 +19,7 @@ import { getStatsBudget, type BudgetWindowResult, type StatsBudgetParams, type S
  *
  * Which origins source for which channel is features-service's statement
  * (`lib/sourcing-origins.ts` SOURCING_ORIGINS_BY_CHANNEL; its public `GET /public/sourcing-origins`
- * lists the origins and the sourcing channels but not the pairing). This table mirrors it: a
+ * lists the origins and the sourcing channels but not the pairing). The table (lib/source-campaigns.ts) mirrors it: a
  * channel that starts serving another origin must be listed in BOTH places, or its spend reads lose
  * that sourcing cost. Read statically on purpose: it sits on gate-check's money path, where an
  * unreadable catalogue must never change what a budget counts.
@@ -26,18 +28,7 @@ import { getStatsBudget, type BudgetWindowResult, type StatsBudgetParams, type S
  * (sales and feedback-request cold email) would count each other's sourcing. feedback-request has
  * served nothing since 2026-08-25; campaign-scoped reads are exact.
  */
-const SEARCH_AND_SIGNAL_ORIGINS = [
-  "sourcing-apollo-cold-filters",
-  "sourcing-apollo-buying-signals",
-  "sourcing-linkedin-engagement-signals",
-  "sourcing-apify-search",
-] as const;
-
-export const SOURCING_ORIGINS_BY_CHANNEL: Readonly<Record<string, readonly string[]>> = {
-  "sales-cold-email-outreach": SEARCH_AND_SIGNAL_ORIGINS,
-  "feedback-request-cold-email-outreach": SEARCH_AND_SIGNAL_ORIGINS,
-  "sales-crm-email-outreach": ["sourcing-crm-contacts"],
-};
+export { SOURCING_ORIGINS_BY_CHANNEL };
 
 /** The slugs a spend read about `featureSlug` must count: itself, then the origins it sources from. */
 export function spendFeatureSlugs(featureSlug: string): string[] {
@@ -77,13 +68,28 @@ const AMOUNT_FIELDS = [
  * `getStatsBudget`, counting a sourcing channel's origins too. Same params, same answer shape.
  * No feature slug, or one that sources nothing = exactly the single read it always was.
  */
-export async function getChannelStatsBudget(params: StatsBudgetParams): Promise<StatsBudgetResponse> {
+export async function getChannelStatsBudget(
+  params: StatsBudgetParams,
+  deps: { feeding?: (campaignId: string, featureSlug: string) => Promise<FeedingSourceCampaign[]> } = {},
+): Promise<StatsBudgetResponse> {
   const slugs = params.featureSlug ? spendFeatureSlugs(params.featureSlug) : [];
   if (slugs.length <= 1) return getStatsBudget(params);
 
-  const reads = await Promise.all(slugs.map((featureSlug) => getStatsBudget({ ...params, featureSlug })));
+  const reads: StatsBudgetParams[] = slugs.map((featureSlug) => ({ ...params, featureSlug }));
+  // SOURCE CAMPAIGNS (lib/source-campaigns.ts): once lead-service files the sourcing under the
+  // SOURCE campaign's id instead of this outreach campaign's, a campaign-scoped read under this id
+  // alone would lose it and the outreach campaign would spend more than today. So the offer's source
+  // campaigns that feed this channel are read too, each under its own origin slug. Before the
+  // relabel they hold no spend (zero added); after it, this campaign's own sourcing reads zero. The
+  // sum never moves. Brand-scoped reads already see every campaign of the brand: nothing to add.
+  if (params.campaignId && params.featureSlug) {
+    const feeding = await (deps.feeding ?? sourceCampaignsFeeding)(params.campaignId, params.featureSlug);
+    for (const s of feeding) reads.push({ ...params, campaignId: s.id, featureSlug: s.featureSlug });
+  }
+
+  const answers = await Promise.all(reads.map((p) => getStatsBudget(p)));
   const windows: BudgetWindowResult[] = params.windows.map((w) => {
-    const parts = reads.map((r) => r.windows.find((x) => x.label === w.label));
+    const parts = answers.map((r) => r.windows.find((x) => x.label === w.label));
     const present = parts.filter((p): p is BudgetWindowResult => !!p);
     const out = { label: w.label } as BudgetWindowResult;
     // An amount is summed only when every part states it; otherwise it is omitted, exactly as a

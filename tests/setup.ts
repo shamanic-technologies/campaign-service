@@ -12,6 +12,19 @@ vi.mock("../src/lib/payment-hold.js", async (importOriginal) => {
   };
 });
 
+// SOURCE CAMPAIGNS (src/lib/source-campaign-store.ts): the outreach spend read also counts the
+// offer's source campaigns, and a person's first outreach start may birth a default source (which
+// reads the catalogue). Tests that are not about sources see neither; the source tests use
+// vi.importActual (tests/unit/source-campaigns.test.ts, tests/integration/source-campaigns.test.ts).
+vi.mock("../src/lib/source-campaign-store.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/source-campaign-store.js")>();
+  return {
+    ...original,
+    sourceCampaignsFeeding: vi.fn().mockResolvedValue([]),
+    ensureDefaultSourceOnStart: vi.fn().mockResolvedValue(null),
+  };
+});
+
 process.env.NODE_ENV = "test";
 process.env.CAMPAIGN_SERVICE_DATABASE_URL = process.env.CAMPAIGN_SERVICE_DATABASE_URL || "postgresql://test:test@localhost/campaign_test";
 process.env.SERVICE_SECRET_KEY = "test-service-secret";

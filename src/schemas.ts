@@ -746,3 +746,75 @@ export const FailingCampaignsResponse = z.object({
     runHealth: RunHealthSchema,
   })),
 }).openapi("FailingCampaignsResponse");
+
+// === SOURCE CAMPAIGNS (lib/source-campaigns.ts) ===
+
+export const SourceCampaignsQuery = z.object({
+  brandId: z.string().min(1, "brandId is required"),
+}).openapi("SourceCampaignsQuery");
+
+export const SourceCampaignsMirrorBody = z.object({
+  apply: z.boolean().optional(),
+}).strict().openapi("SourceCampaignsMirrorBody");
+
+export const OfferSourceCampaignSchema = z.object({
+  featureSlug: z.string(),
+  legKey: z.string(),
+  campaignKey: z.string(),
+  live: z.boolean(),
+  campaignId: z.string().nullable(),
+  name: z.string().nullable(),
+  status: z.string().nullable(),
+  running: z.boolean(),
+  stopReason: z.string().nullable(),
+}).openapi("OfferSourceCampaign");
+
+export const RunningSourceCampaignSchema = z.object({
+  featureSlug: z.string(),
+  campaignId: z.string(),
+  campaignKey: z.string(),
+}).openapi("RunningSourceCampaign");
+
+export const OfferSourceCampaignsResponse = z.object({
+  orgId: z.string(),
+  brandId: z.string(),
+  offerId: z.string(),
+  sourceLegKey: z.string(),
+  leadFoundStep: z.literal("lead_found"),
+  sourceCampaigns: z.array(OfferSourceCampaignSchema),
+  runningSourceCampaigns: z.array(RunningSourceCampaignSchema),
+}).openapi("OfferSourceCampaignsResponse");
+
+export const CampaignSourceCampaignsResponse = z.object({
+  campaignId: z.string(),
+  orgId: z.string(),
+  offerId: z.string().nullable(),
+  featureSlug: z.string().nullable(),
+  sourced: z.boolean(),
+  servedOrigins: z.array(z.string()),
+  sourceCampaigns: z.array(z.object({
+    featureSlug: z.string(),
+    campaignId: z.string(),
+    campaignKey: z.string(),
+    status: z.string(),
+    running: z.boolean(),
+  })),
+}).openapi("CampaignSourceCampaignsResponse");
+
+export const SourceCampaignsMirrorResponse = z.object({
+  applied: z.boolean(),
+  offers: z.number(),
+  alreadyPresent: z.number(),
+  counts: z.object({ ongoing: z.number(), stopped: z.number(), observed: z.number() }),
+  plan: z.array(z.object({
+    orgId: z.string(),
+    brandId: z.string(),
+    offerId: z.string(),
+    featureSlug: z.string(),
+    status: z.enum(["ongoing", "stopped"]),
+    stopReason: z.string().nullable(),
+    basis: z.enum(["default", "observed"]),
+    mirrors: z.array(z.string()),
+    campaignId: z.string().optional(),
+  })),
+}).openapi("SourceCampaignsMirrorResponse");

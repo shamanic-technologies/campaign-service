@@ -548,6 +548,10 @@ describe('No Legacy Patterns - CRITICAL', () => {
       const content = fs.readFileSync(file, 'utf-8');
       content.split('\n').forEach((line, index) => {
         const code = line.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
+        // The ONE exception: the SOURCE campaign leg, which features-service states for every
+        // sourcing origin and does NOT publish in its catalogue (step `lead_found` is a hand-off,
+        // not a funnel step), so there is nothing to read it from. Held once, carried verbatim.
+        if (relative.split(path.sep).join('/') === 'lib/source-campaigns.ts' && /^export const SOURCE_LEG_KEY = "start_to_lead_found";$/.test(code.trim())) return;
         const literal = /["'][a-z][a-z_]*_to_[a-z][a-z_]*["']/.test(code);
         const parsed = /\blegKey\b[^\n]*\.(split|slice|substring|match|replace|indexOf|startsWith|endsWith)\s*\(/.test(code)
           || /\.(split|slice|substring|match|replace|indexOf|startsWith|endsWith)\s*\([^)]*\)[^\n]*\blegKey\b/.test(code);
@@ -575,7 +579,9 @@ describe('No Legacy Patterns - CRITICAL', () => {
     // pairing structural rather than a convention a new write site can forget. The campaign INSERT
     // leg is the one other site, and it is allowed only because it writes the birth transition in
     // its own transaction; it is named here so a THIRD site cannot appear beside it unnoticed.
-    const allowed = new Set(['lib/campaign-status-history.ts', 'routes/campaigns.ts']);
+    // `lib/source-campaign-store.ts` births SOURCE campaigns (default on a person's start, the
+    // one-off mirror) and writes each birth transition in the same transaction.
+    const allowed = new Set(['lib/campaign-status-history.ts', 'routes/campaigns.ts', 'lib/source-campaign-store.ts']);
     const files = getAllTsFiles(srcDir);
     const violations: { file: string; line: number; code: string }[] = [];
 
