@@ -1,6 +1,7 @@
 import type { IdentityHeaders } from "@distribute/runs-client";
 import {
   campaignCeilingCents,
+  feedingSourceCeilingCents,
   fetchCampaignBudgets,
   type CampaignBudgetsRead,
 } from "./campaign-budget-client.js";
@@ -26,6 +27,11 @@ export type FundingVerdict =
 /**
  * Decide from ceilings ALREADY read, so a caller holding one read for a brand can judge every
  * campaign of that brand without asking billing again per campaign.
+ *
+ * `feeding` = the lead-source campaigns feeding this outreach campaign (`sourceCampaignsFeeding`).
+ * At the CAMPAIGN grain their ongoing ceilings are added to the PACE figure (`ceilingCents`), exactly
+ * as gate-check adds them, because the spend this figure is compared against includes theirs. They
+ * never make an unfunded campaign funded.
  */
 export function fundingFromBudgets(
   campaign: {
@@ -38,6 +44,7 @@ export function fundingFromBudgets(
     legKey?: string | null;
   },
   budgets: Extract<CampaignBudgetsRead, { ok: true }>,
+  feeding: ReadonlyArray<{ featureSlug: string; status: string }> = [],
 ): FundingVerdict {
   // The campaign's own figure, when stated, is the answer (gate-check is the first node of every
   // run and reads the same column).
@@ -59,7 +66,7 @@ export function fundingFromBudgets(
     `offer ${campaign.offerId ?? "none"}, leg ${campaign.legKey ?? "none"}, channel ${campaign.featureSlug ?? "none"}`;
   if (ceiling.cents === null) return { funded: false, reason: `campaign (${scope}) is not funded` };
   return ceiling.cents > 0
-    ? { funded: true, ceilingCents: ceiling.cents }
+    ? { funded: true, ceilingCents: ceiling.cents + feedingSourceCeilingCents(budgets, campaign, feeding) }
     : { funded: false, reason: `campaign (${scope}) is funded at zero` };
 }
 

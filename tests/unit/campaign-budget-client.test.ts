@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   campaignCeilingCents,
   ceilingEntriesOf,
+  feedingSourceCeilingCents,
   fetchCampaignBudgets,
   legKeylessFundedCeilings,
   type CampaignBudgetEntry,
@@ -112,5 +113,44 @@ describe("legKeylessFundedCeilings", () => {
   it("names only FUNDED entries that state no leg", () => {
     const funded = e({ legKey: null });
     expect(legKeylessFundedCeilings(read([funded, e({ legKey: null, dailyBudgetCents: 0 }), e({})]))).toEqual([funded]);
+  });
+});
+
+describe("feedingSourceCeilingCents", () => {
+  const OFFER = "offer-1";
+  const budgets = read([
+    { offerId: OFFER, legKey: "lead_found_to_website_visit", featureSlug: SALES, dailyBudgetCents: 300 },
+    { offerId: OFFER, legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-cold-filters", dailyBudgetCents: 1700 },
+    { offerId: OFFER, legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-buying-signals", dailyBudgetCents: 500 },
+    { offerId: "offer-2", legKey: "start_to_lead_found", featureSlug: "sourcing-crm-contacts", dailyBudgetCents: 900 },
+  ]);
+
+  it("adds the ceiling of every ONGOING source feeding the outreach campaign", () => {
+    expect(feedingSourceCeilingCents(budgets, { offerId: OFFER }, [
+      { featureSlug: "sourcing-apollo-cold-filters", status: "ongoing" },
+      { featureSlug: "sourcing-apollo-buying-signals", status: "ongoing" },
+    ])).toBe(2200);
+  });
+
+  it("adds nothing for a source a person turned off", () => {
+    expect(feedingSourceCeilingCents(budgets, { offerId: OFFER }, [
+      { featureSlug: "sourcing-apollo-cold-filters", status: "ongoing" },
+      { featureSlug: "sourcing-apollo-buying-signals", status: "stopped" },
+    ])).toBe(1700);
+  });
+
+  it("never reads another offer's source money", () => {
+    expect(feedingSourceCeilingCents(budgets, { offerId: OFFER }, [
+      { featureSlug: "sourcing-crm-contacts", status: "ongoing" },
+    ])).toBe(0);
+  });
+
+  it("adds nothing at the brand grain or without an offer", () => {
+    expect(feedingSourceCeilingCents(read([], 2000), { offerId: OFFER }, [
+      { featureSlug: "sourcing-apollo-cold-filters", status: "ongoing" },
+    ])).toBe(0);
+    expect(feedingSourceCeilingCents(budgets, { offerId: null }, [
+      { featureSlug: "sourcing-apollo-cold-filters", status: "ongoing" },
+    ])).toBe(0);
   });
 });

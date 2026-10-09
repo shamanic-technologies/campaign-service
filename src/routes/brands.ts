@@ -12,6 +12,7 @@ import {
   OUTBOUND_SALES_FEATURE_SLUGS,
   SALES_FAMILY_FEATURE_SLUGS,
 } from "../lib/sales-outreach-campaign.js";
+import { LIVE_SOURCE_ORIGIN_SLUGS, RETIRED_SOURCE_ORIGIN_SLUGS } from "../lib/source-campaigns.js";
 import {
   computeSpendableBudget,
   type SpendableBudget,
@@ -27,6 +28,8 @@ import {
 // bind it AHEAD of the offer ceiling it was funded on — a second representation of one fact, which
 // is the thing this service keeps deleting.
 const SALES_FEATURE_SLUGS = [...OUTBOUND_SALES_FEATURE_SLUGS];
+
+const SOURCE_ORIGIN_SLUGS = [...LIVE_SOURCE_ORIGIN_SLUGS, ...RETIRED_SOURCE_ORIGIN_SLUGS];
 
 const router = Router();
 
@@ -148,7 +151,7 @@ router.get("/brands/:brandId/pause-history", requireApiKey, serviceAuth, async (
 });
 
 /**
- * The sales-family campaigns of one (org, brand) pair — ongoing AND stopped.
+ * The sales-family and lead-source campaigns of one (org, brand) pair — ongoing AND stopped.
  *
  * A stopped campaign is what makes "configured but not running" legible: naming it is the
  * difference between "this campaign's money is idle because the campaign is stopped" and "there is
@@ -173,7 +176,10 @@ async function loadSalesCampaigns(orgId: string, brandId: string): Promise<Spend
     .where(and(
       eq(campaigns.orgId, orgId),
       or(eq(campaigns.brandId, brandId), arrayContains(campaigns.brandIds, [brandId])),
-      inArray(campaigns.featureSlug, [...SALES_FAMILY_FEATURE_SLUGS]),
+      // Lead SOURCE campaigns too: billing funds each source per (offer, origin, start_to_lead_found),
+      // and without its campaign here that money always read "not running". Sources stay OUT of the
+      // sales family (that list is a pacing statement, lib/sales-outreach-campaign.ts).
+      inArray(campaigns.featureSlug, [...SALES_FAMILY_FEATURE_SLUGS, ...SOURCE_ORIGIN_SLUGS]),
     ));
   return rows;
 }

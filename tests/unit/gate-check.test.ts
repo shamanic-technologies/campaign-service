@@ -51,6 +51,7 @@ vi.mock("../../src/lib/sales-items-pace.js", () => ({ salesItemsGate: mockItemsG
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
+import { sourceCampaignsFeeding } from "../../src/lib/source-campaign-store.js";
 import { runGateChecks, nextWeekStart, nextMonthStart, nextDayStart, type GateCheckInput } from "../../src/lib/gate-check.js";
 
 // A feature paced by the CAMPAIGN budget windows (not the brand daily budget). Any slug that
@@ -730,6 +731,51 @@ describe("Gate Check", () => {
 
       const result = await runGateChecks(legCampaign());
       expect(result.allowed).toBe(true);
+    });
+
+    it("adds the ceiling of each ONGOING lead source feeding it, since its spend read counts theirs", async () => {
+      const VISIT: Entry = { offerId: "offer-1", legKey: "lead_found_to_website_visit", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "300" };
+      const COLD: Entry = { offerId: "offer-1", legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-cold-filters", dailyBudgetCents: "1700" };
+      const SIGNALS: Entry = { offerId: "offer-1", legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-buying-signals", dailyBudgetCents: "500" };
+      vi.mocked(sourceCampaignsFeeding).mockResolvedValue([
+        { id: "src-cold", featureSlug: "sourcing-apollo-cold-filters", status: "ongoing" },
+        { id: "src-signals", featureSlug: "sourcing-apollo-buying-signals", status: "stopped" },
+      ]);
+      try {
+        // Olive, prod 2026-10-09: 348 cents committed today (sourcing + sending) against outreach $3
+        // alone was held; against outreach $3 + the running source's $17 it runs.
+        mockCampaignBudgets([VISIT, COLD, SIGNALS]);
+        mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "348" }]));
+        mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
+        const under = await runGateChecks(legCampaign({ legKey: "lead_found_to_website_visit" }));
+        expect(under.allowed).toBe(true);
+
+        // The stopped source's 500 never joins: 2000 committed = 300 + 1700, the pace is reached.
+        mockFetch.mockReset();
+        mockCampaignBudgets([VISIT, COLD, SIGNALS]);
+        mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "2000" }]));
+        const reached = await runGateChecks(legCampaign({ legKey: "lead_found_to_website_visit" }));
+        expect(reached.allowed).toBe(false);
+        expect(reached.reason).toBe("Campaign daily budget reached");
+      } finally {
+        vi.mocked(sourceCampaignsFeeding).mockResolvedValue([]);
+      }
+    });
+
+    it("a lead source's money never funds an outreach campaign whose own ceiling is missing", async () => {
+      vi.mocked(sourceCampaignsFeeding).mockResolvedValue([
+        { id: "src-cold", featureSlug: "sourcing-apollo-cold-filters", status: "ongoing" },
+      ]);
+      try {
+        mockCampaignBudgets([
+          { offerId: "offer-1", legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-cold-filters", dailyBudgetCents: "1700" },
+        ]);
+        const result = await runGateChecks(legCampaign({ legKey: "lead_found_to_website_visit" }));
+        expect(result.allowed).toBe(false);
+        expect(result.reason).toBe("Campaign not funded");
+      } finally {
+        vi.mocked(sourceCampaignsFeeding).mockResolvedValue([]);
+      }
     });
 
     it("never falls back to the brand total when none of the money is this campaign's", async () => {

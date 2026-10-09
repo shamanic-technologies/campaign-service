@@ -133,6 +133,11 @@ export function isOutboundSalesFeature(slug?: string | null): boolean {
  * ranks it, and the funding hold never holds it — a campaign running a DAG against a ceiling
  * nothing enforces. Also auto-adopting every published channel would name the dozen paid-reach
  * slugs nothing can execute, so a channel is added only once something can run it.
+ *
+ * Lead SOURCE campaigns (`sourcing-*`, lib/source-campaigns.ts) are deliberately NOT members: they
+ * run no DAG and are never gate-checked. Their money binds through the outreach campaign they feed,
+ * whose pace adds their ongoing ceilings to its own (`feedingSourceCeilingCents`), and the
+ * spendable-budget read lists them by name (routes/brands.ts).
  */
 export const SALES_FAMILY_FEATURE_SLUGS: ReadonlySet<string> = new Set([
   ...OUTBOUND_SALES_FEATURE_SLUGS,
