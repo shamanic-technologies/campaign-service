@@ -10,6 +10,19 @@ export interface WorkflowExecutionInputs {
   activeGoalId?: string | null;
   brandProfileId?: string | null;
   audienceId?: string | null;
+  /**
+   * The trigger EVENT this run answers, when a detector fired it (a `delay` or `poll` trigger,
+   * lib/trigger-detectors.ts): which event, which lead (delay) or which new item (poll). Absent on
+   * every other dispatch, and then the body is byte-identical to before.
+   */
+  trigger?: WorkflowTriggerInput | null;
+}
+
+export interface WorkflowTriggerInput {
+  eventId: string;
+  triggerId: string;
+  leadId: string | null;
+  item: unknown;
 }
 
 const REQUIRED_FIELDS: (keyof WorkflowExecutionInputs)[] = [
@@ -84,6 +97,7 @@ export async function executeCampaignWorkflow(
         activeGoalId: inputs.activeGoalId ?? null,
         brandProfileId: inputs.brandProfileId ?? null,
         audienceId: inputs.audienceId ?? null,
+        ...(inputs.trigger ? { trigger: inputs.trigger } : {}),
       },
     }),
   });

@@ -108,7 +108,22 @@ export interface CatalogueTriggerType {
   firedBy: string;
   /** A service fires it today. Only a coded type is watched for silence. */
   coded: boolean;
+  /**
+   * How it is detected (features-service `triggers[].kind`, 2026-10-09): `event` (a service rings this
+   * one), `delay` ("N days after step X, if nothing happened") or `poll` ("a new item appeared at this
+   * source"). `delay` and `poll` are detected HERE, generically (lib/delay-trigger-detector.ts,
+   * lib/poll-trigger-detector.ts). An unstated or unknown kind is null: never detected on a guess.
+   * Optional so a hand-built read (tests) may omit it.
+   */
+  kind?: CatalogueTriggerKind | null;
+  /** `code` (stated in features-service's code) or `declared` (created live as data). */
+  origin?: "code" | "declared" | null;
+  /** The kind's parameters, verbatim (`delay`: `{afterStep, days}`; `poll`: `{source, everyMinutes}`). */
+  params?: Record<string, unknown> | null;
 }
+
+export const CATALOGUE_TRIGGER_KINDS = ["event", "delay", "poll"] as const;
+export type CatalogueTriggerKind = (typeof CATALOGUE_TRIGGER_KINDS)[number];
 
 /** A reactive (channel, leg) and the trigger that asks for it. */
 export interface CatalogueTriggerTransition {
@@ -147,6 +162,9 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
         fromStep?: unknown;
         firedBy?: unknown;
         coded?: unknown;
+        kind?: unknown;
+        origin?: unknown;
+        params?: unknown;
       }>;
       legs?: Array<{
         legKey?: unknown;
@@ -231,6 +249,9 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
           firedBy: typeof t.firedBy === "string" ? t.firedBy : "",
           // Only a stated `true` is coded: an unknown value is never watched for silence.
           coded: t.coded === true,
+          kind: (CATALOGUE_TRIGGER_KINDS as readonly unknown[]).includes(t.kind) ? (t.kind as CatalogueTriggerKind) : null,
+          origin: t.origin === "code" || t.origin === "declared" ? t.origin : null,
+          params: t.params && typeof t.params === "object" && !Array.isArray(t.params) ? (t.params as Record<string, unknown>) : null,
         });
       }
     }
