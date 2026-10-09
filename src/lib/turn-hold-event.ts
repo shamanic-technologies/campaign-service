@@ -35,7 +35,12 @@ export type TurnHoldReason =
    * ITEMS mode: this campaign's own item budget allows nothing more today. Its siblings are not
    * affected. Re-opens on a raise or the rollover.
    */
-  | "item_budget_reached";
+  | "item_budget_reached"
+  /**
+   * Every lead SOURCE of the campaign's offer is OFF (a person's choice), so lead-service refuses
+   * every serve. Held, not run, until a source is turned back on (lib/sources-off-hold.ts).
+   */
+  | "sources_off";
 
 /** The campaign fields an event needs to be attributable. A structural subset of a claimed row. */
 export interface TurnHoldCampaign {

@@ -12,6 +12,8 @@ import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { reportCampaignRecovery } from "./recovery-event.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import { backOffFailedDispatch } from "./run-failure-backoff.js";
+import { sourcesOffHold, SOURCES_OFF_RECHECK_MS } from "./sources-off-hold.js";
+import { reportTurnHolds } from "./turn-hold-event.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -179,6 +181,25 @@ export async function reRunDueCampaigns(): Promise<number> {
       const brandIdCsv = campaign.brandIds!.join(",");
       const userId = campaign.createdByUserId!;
       const featureSlug = campaign.featureSlug!;
+
+      // Every lead source of the offer is OFF: lead-service would refuse every serve, and each refused
+      // run marks an audience exhausted. Held on its own cadence and SAID, never run (sources-off-hold.ts).
+      const sourcesOff = await sourcesOffHold({ id: campaign.id, featureSlug, legKey: campaign.legKey });
+      if (sourcesOff) {
+        const nextRunAt = new Date(now.getTime() + SOURCES_OFF_RECHECK_MS);
+        await db
+          .update(campaigns)
+          .set({ nextRunAt, updatedAt: new Date() })
+          .where(eq(campaigns.id, campaign.id));
+        await reportTurnHolds([{
+          campaign,
+          reason: "sources_off",
+          detail: `Campaign ${campaign.id} is held: every lead source of its offer is off, so there is nobody to contact. It is looked at again at ${nextRunAt.toISOString()}.`,
+          nextRunAt,
+          data: { sourceCampaignIds: sourcesOff.sourceCampaignIds },
+        }]);
+        continue;
+      }
 
       // Still no per-execution run here — /start-run in the workflow DAG creates that one, and
       // creating a second campaign-tagged run at trigger time is what produced orphan runs
