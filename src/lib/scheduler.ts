@@ -10,6 +10,8 @@ import { planBrandTurns } from "./brand-turns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { reportCampaignRecovery } from "./recovery-event.js";
+import { replaceRetiredWorkflow } from "./retired-workflow.js";
+import { backOffFailedDispatch } from "./run-failure-backoff.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -105,6 +107,8 @@ export async function reRunDueCampaigns(): Promise<number> {
       orgId: campaigns.orgId,
       createdByUserId: campaigns.createdByUserId,
       parentRunId: campaigns.parentRunId,
+      // Named in the staff alert a failing dispatch raises (backOffFailedDispatch).
+      name: campaigns.name,
       workflowSlug: campaigns.workflowSlug,
       brandIds: campaigns.brandIds,
       featureSlug: campaigns.featureSlug,
@@ -148,6 +152,8 @@ export async function reRunDueCampaigns(): Promise<number> {
       if (!campaign.featureSlug) missingFields.push("featureSlug");
       if (missingFields.length > 0) {
         console.warn(`[campaign-service] Campaign ${campaign.id} missing required fields for workflow execution: ${missingFields.join(", ")} — skipping re-run`);
+        // Left at NULL it would be re-claimed by the stuck sweep every tick, forever.
+        await backOffFailedDispatch(campaign, campaign.parentRunId ?? undefined);
         continue;
       }
 
@@ -216,7 +222,7 @@ export async function reRunDueCampaigns(): Promise<number> {
           requiredAudienceIds: campaign.audienceIds,
           excludedAudienceIds,
         });
-        await executeCampaignWorkflow(selection.workflowSlug, {
+        const inputs = {
           campaignId: campaign.id,
           orgId: campaign.orgId,
           brandId: brandIdCsv,
@@ -229,12 +235,30 @@ export async function reRunDueCampaigns(): Promise<number> {
           // CONSUMES it rather than drawing again. Nothing chosen → whatever this call carried
           // before the pick moved here, so a non-rotating feature is byte-unchanged.
           audienceId: selection.audienceId ?? campaign.audienceId,
-        });
+        };
+        try {
+          await executeCampaignWorkflow(selection.workflowSlug, inputs);
+        } catch (err) {
+          // A deprecated workflow (410) is replaced once and never asked for again — see
+          // retired-workflow.ts. Anything else (or no live successor) is a failed dispatch.
+          const successor = await replaceRetiredWorkflow(err, {
+            campaignId: campaign.id,
+            storedSlug: campaign.workflowSlug,
+            featureSlug,
+            identity: { orgId: campaign.orgId, userId, runId, brandId: brandIdCsv },
+          });
+          if (!successor) throw err;
+          await executeCampaignWorkflow(successor, inputs);
+        }
       } catch (err) {
         console.error(`[campaign-service] Failed to re-trigger campaign ${campaign.id}:`, err);
+        // The claim cleared next_run_at: a failed dispatch must reschedule on the failure backoff
+        // (and reach the staff alert), or the stuck sweep re-claims it every tick, invisibly.
+        await backOffFailedDispatch(campaign, runId);
       }
     } catch (err) {
       console.error(`[campaign-service] Error processing campaign ${campaign.id}:`, err);
+      await backOffFailedDispatch(campaign, campaign.parentRunId ?? undefined);
     }
   }
 

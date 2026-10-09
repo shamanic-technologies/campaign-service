@@ -39,6 +39,41 @@ export async function fetchStartableWorkflowSlug(
   featureSlug: string,
   identity: IdentityHeaders & { userId: string; runId: string },
 ): Promise<StartableWorkflowRead> {
+  const read = await listActiveWorkflows(featureSlug, identity);
+  if (!read.ok) return read;
+  return { ok: true, workflowSlug: read.workflows[0]?.workflowSlug ?? null };
+}
+
+/**
+ * The live DYNASTY to replace a retired one with (see retired-workflow.ts): the channel's newest
+ * active workflow whose dynasty is not the retired one. A dynasty slug, not a version slug: the
+ * dynasty is what the selector dispatches and stores, and it survives the next version bump.
+ */
+export async function fetchLiveDynastyOtherThan(
+  featureSlug: string,
+  retiredSlug: string,
+  identity: IdentityHeaders & { userId: string; runId: string },
+): Promise<StartableWorkflowRead> {
+  const read = await listActiveWorkflows(featureSlug, identity);
+  if (!read.ok) return read;
+  const live = read.workflows
+    .map((w) => w.workflowDynastySlug || w.workflowSlug!)
+    .find((slug) => slug !== retiredSlug);
+  return { ok: true, workflowSlug: live ?? null };
+}
+
+interface ActiveWorkflow {
+  workflowSlug?: string;
+  workflowDynastySlug?: string;
+  featureSlug?: string;
+  createdAt?: string;
+}
+
+/** The channel's active workflows, newest first. */
+async function listActiveWorkflows(
+  featureSlug: string,
+  identity: IdentityHeaders & { userId: string; runId: string },
+): Promise<{ ok: true; workflows: ActiveWorkflow[] } | { ok: false; detail: string }> {
   const baseUrl = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
   if (!baseUrl || !apiKey) {
@@ -71,9 +106,7 @@ export async function fetchStartableWorkflowSlug(
       return { ok: false, detail: `HTTP ${res.status}${body ? ` ${body}` : ""}` };
     }
 
-    const data = await res.json() as {
-      workflows?: Array<{ workflowSlug?: string; featureSlug?: string; createdAt?: string }>;
-    };
+    const data = await res.json() as { workflows?: ActiveWorkflow[] };
     if (!Array.isArray(data.workflows)) {
       return { ok: false, detail: "response states no workflows array" };
     }
@@ -84,12 +117,10 @@ export async function fetchStartableWorkflowSlug(
       (w) => typeof w?.workflowSlug === "string" && w.workflowSlug.length > 0
         && (w.featureSlug === undefined || w.featureSlug === featureSlug),
     );
-    if (candidates.length === 0) return { ok: true, workflowSlug: null };
-
     // Newest first, so a brand-new campaign starts on the channel's current workflow rather than
     // its oldest one. Ties (or an absent createdAt) fall back to the listed order, which is stable.
     candidates.sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
-    return { ok: true, workflowSlug: candidates[0]!.workflowSlug! };
+    return { ok: true, workflows: candidates };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

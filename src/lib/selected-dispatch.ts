@@ -1,6 +1,7 @@
 import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
+import { replaceRetiredWorkflow } from "./retired-workflow.js";
 
 /**
  * A RUN A PERSON STARTED GOES THROUGH THE SAME SELECTION AS EVERY OTHER RUN.
@@ -62,7 +63,7 @@ export async function dispatchSelectedRun(
     requiredAudienceIds: campaign.audienceIds,
     excludedAudienceIds,
   });
-  await executeCampaignWorkflow(selection.workflowSlug, {
+  const inputs = {
     campaignId: campaign.id,
     orgId: identity.orgId,
     brandId: brandIdCsv,
@@ -74,6 +75,20 @@ export async function dispatchSelectedRun(
     // Chosen at the trigger → /start-run CONSUMES it. Nothing chosen → exactly what this call
     // carried before, so a non-rotating feature is byte-unchanged.
     audienceId: selection.audienceId ?? campaign.audienceId,
-  });
-  return selection.workflowSlug;
+  };
+  try {
+    await executeCampaignWorkflow(selection.workflowSlug, inputs);
+    return selection.workflowSlug;
+  } catch (err) {
+    // A deprecated workflow (410) is replaced once and never asked for again — see retired-workflow.ts.
+    const successor = await replaceRetiredWorkflow(err, {
+      campaignId: campaign.id,
+      storedSlug: campaign.workflowSlug,
+      featureSlug: campaign.featureSlug,
+      identity: { ...identity, brandId: brandIdCsv },
+    });
+    if (!successor) throw err;
+    await executeCampaignWorkflow(successor, inputs);
+    return successor;
+  }
 }
