@@ -1,6 +1,7 @@
 import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
 import { campaigns } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
+import { legIsReactive } from "./leg-identity.js";
 import type { DbTransaction } from "./campaign-status-history.js";
 import { isSourceCampaign } from "./source-campaigns.js";
 
@@ -59,10 +60,17 @@ export interface KeptCampaign {
   legKey: string | null;
 }
 
-/** True ⟺ the catalogue publishes this leg AND it starts from nothing. Unknown leg = false. */
-export function isEntryLeg(catalogue: Extract<ChannelCatalogueRead, { ok: true }>, legKey: string): boolean {
-  const leg = catalogue.legs.find((l) => l.legKey === legKey);
-  return leg !== undefined && leg.fromStepKey === null;
+/**
+ * True ⟺ the catalogue publishes this (channel, leg) as NON-reactive: the campaign starts the
+ * lead's journey (lib/channel-operator-client.ts `legIsReactive`, either outbound spelling).
+ * Unknown leg = false.
+ */
+export function isEntryLeg(
+  catalogue: Extract<ChannelCatalogueRead, { ok: true }>,
+  featureSlug: string | null | undefined,
+  legKey: string,
+): boolean {
+  return legIsReactive(catalogue, featureSlug, legKey) === false;
 }
 
 /**
@@ -112,11 +120,11 @@ export async function proactiveCampaignsToStop(
       `the acquisition-channel catalogue could not be read (${catalogue.detail}), so whether campaign ${kept.id} replaces another proactive campaign of offer ${kept.offerId} cannot be said`,
     );
   }
-  if (!isEntryLeg(catalogue, kept.legKey)) {
+  if (!isEntryLeg(catalogue, kept.featureSlug, kept.legKey)) {
     // A reactive campaign (or a leg the catalogue no longer publishes) displaces nothing.
     return [];
   }
-  return candidates.filter((c) => isEntryLeg(catalogue, c.legKey!));
+  return candidates.filter((c) => isEntryLeg(catalogue, c.featureSlug, c.legKey!));
 }
 
 export function stoppedCampaignSummary(c: CampaignRow): StoppedCampaign {

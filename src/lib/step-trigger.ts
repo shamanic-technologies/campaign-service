@@ -3,6 +3,7 @@ import { and, arrayContains, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
+import { sameLeg } from "./leg-identity.js";
 import { campaignFunding } from "./campaign-funding.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
@@ -174,7 +175,6 @@ export async function triggerCampaignsForStep(
   };
   if (legKeys.length === 0) return outcome;
 
-  const wanted = new Set(legKeys);
 
   // Read the brand's live campaigns and select in memory. The population is a handful of rows per
   // brand, and a campaign is identified by (offer, leg, channel).
@@ -193,7 +193,8 @@ export async function triggerCampaignsForStep(
       // from a goal or a workflow.
       c.offerId === req.offerId &&
       c.legKey !== null &&
-      wanted.has(c.legKey),
+      // Either outbound spelling names the same leg (lib/leg-identity.ts).
+      legKeys.some((k) => sameLeg(c.featureSlug, k, c.legKey)),
   );
 
   const now = new Date();

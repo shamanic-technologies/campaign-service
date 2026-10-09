@@ -552,6 +552,10 @@ describe('No Legacy Patterns - CRITICAL', () => {
         // sourcing origin and does NOT publish in its catalogue (step `lead_found` is a hand-off,
         // not a funnel step), so there is nothing to read it from. Held once, carried verbatim.
         if (relative.split(path.sep).join('/') === 'lib/source-campaigns.ts' && /^export const SOURCE_LEG_KEY = "start_to_lead_found";$/.test(code.trim())) return;
+        // The second: the owner's LOCKED outbound rename (2026-10-09), two pairs of one identity
+        // shared by six codebases, held once in lib/leg-identity.ts. Nothing else.
+        if (relative.split(path.sep).join('/') === 'lib/leg-identity.ts'
+          && /^\["start_to_(conversation|website_visit)", "lead_found_to_\1"\],$/.test(code.trim())) return;
         const literal = /["'][a-z][a-z_]*_to_[a-z][a-z_]*["']/.test(code);
         const parsed = /\blegKey\b[^\n]*\.(split|slice|substring|match|replace|indexOf|startsWith|endsWith)\s*\(/.test(code)
           || /\.(split|slice|substring|match|replace|indexOf|startsWith|endsWith)\s*\([^)]*\)[^\n]*\blegKey\b/.test(code);

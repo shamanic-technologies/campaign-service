@@ -14,7 +14,8 @@ import { adoptOfferForPairSafely } from "./campaign-offer-adoption.js";
 import { reportTurnHolds, type TurnHold } from "./turn-hold-event.js";
 import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
 import { fetchOfferSalesPaths, type SalesPathEntry } from "./offer-sales-paths-client.js";
-import { fetchChannelCatalogue, type CatalogueLeg } from "./channel-operator-client.js";
+import { fetchChannelCatalogue } from "./channel-operator-client.js";
+import type { CatalogueLegView } from "./leg-identity.js";
 import {
   isGlobalBudgetExhausted,
   isReactiveLeg,
@@ -393,8 +394,8 @@ async function planItemsBrand(
   const brandId = seed.brandIds![0];
 
   const catalogue = await fetchChannelCatalogue();
-  let legs: readonly CatalogueLeg[] = [];
-  if (catalogue.ok) legs = catalogue.legs;
+  let legs: CatalogueLegView = { legs: [] };
+  if (catalogue.ok) legs = catalogue;
   else {
     console.error(
       `[campaign-service] brand ${brandId} (org ${orgId}) is in ITEMS sales-budget mode but the channel catalogue could not be read (${catalogue.detail}) — every leg is paced as proactive.`,
@@ -405,7 +406,7 @@ async function planItemsBrand(
   const cohortOf = new Map<string, string>();
   const reactiveIds = new Set<string>();
   for (const c of group) {
-    const reactive = isReactiveLeg(c.legKey, legs);
+    const reactive = isReactiveLeg(c.legKey, legs, c.featureSlug);
     const verdict = await itemVerdict({
       campaign: {
         id: c.id,
@@ -501,9 +502,9 @@ async function allocateGlobalBudget(input: GlobalAllocationInput): Promise<Globa
   const { orgId, brandId, featureSlug, budgetCents, candidates, byId, strictSpent, provisioning, now, deferred, holds } = input;
 
   const catalogue = await fetchChannelCatalogue();
-  let legs: readonly CatalogueLeg[] = [];
+  let legs: CatalogueLegView = { legs: [] };
   if (catalogue.ok) {
-    legs = catalogue.legs;
+    legs = catalogue;
   } else {
     // Conservative: with no catalogue every leg reads PROACTIVE, i.e. no leg jumps the queue. The
     // pot binds every leg either way.
@@ -515,7 +516,7 @@ async function allocateGlobalBudget(input: GlobalAllocationInput): Promise<Globa
   const reactive: TurnCandidate[] = [];
   const proactive: TurnCandidate[] = [];
   for (const c of candidates) {
-    if (isReactiveLeg(byId.get(c.campaignId)?.legKey ?? null, legs)) reactive.push(c);
+    if (isReactiveLeg(byId.get(c.campaignId)?.legKey ?? null, legs, byId.get(c.campaignId)?.featureSlug ?? null)) reactive.push(c);
     else proactive.push(c);
   }
   const reactiveIds = new Set(reactive.map((c) => c.campaignId));

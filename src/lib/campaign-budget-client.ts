@@ -1,3 +1,4 @@
+import { sameLeg } from "./leg-identity.js";
 import type { IdentityHeaders } from "@distribute/runs-client";
 
 /**
@@ -155,11 +156,13 @@ export function ceilingEntriesOf(
   if (!featureSlug || !offerId || !legKey) return [];
   const onChannel = read.campaigns.filter((e) => e.featureSlug === featureSlug);
   const otherOfferNamed = read.campaigns.some((e) => e.offerId !== null && e.offerId !== offerId);
-  const otherLegNamed = onChannel.some((e) => e.legKey !== null && e.legKey !== legKey);
+  // A leg is compared as ONE identity across the outbound rename (lib/leg-identity.ts): billing
+  // may already speak the new spelling while the row still carries the legacy one, or the reverse.
+  const otherLegNamed = onChannel.some((e) => e.legKey !== null && !sameLeg(featureSlug, e.legKey, legKey));
   return onChannel.filter(
     (e) =>
       (e.offerId === offerId || (e.offerId === null && !otherOfferNamed))
-      && (e.legKey === legKey || (e.legKey === null && !otherLegNamed)),
+      && (sameLeg(featureSlug, e.legKey, legKey) || (e.legKey === null && !otherLegNamed)),
   );
 }
 

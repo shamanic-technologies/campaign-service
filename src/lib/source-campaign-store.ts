@@ -204,7 +204,7 @@ export async function ensureDefaultSourceOnStart(
     );
     return null;
   }
-  if (!isEntryLeg(catalogue, started.legKey)) return null;
+  if (!isEntryLeg(catalogue, started.featureSlug, started.legKey)) return null;
 
   const [inserted] = await tx
     .insert(campaigns)
@@ -302,7 +302,7 @@ export async function mirrorSourceCampaigns(
   const groups = new Map<string, { orgId: string; brandId: string; offerId: string; rows: CampaignRow[] }>();
   for (const c of outreach) {
     const brandId = brandOf(c);
-    if (!brandId || !isEntryLeg(catalogue, c.legKey!)) continue;
+    if (!brandId || !isEntryLeg(catalogue, c.featureSlug, c.legKey!)) continue;
     const key = `${c.orgId}|${brandId}|${c.offerId}`;
     const g = groups.get(key) ?? { orgId: c.orgId, brandId, offerId: c.offerId!, rows: [] };
     g.rows.push(c);
