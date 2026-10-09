@@ -124,6 +124,12 @@ vi.mock("../../src/lib/sources-off-hold.js", () => ({
   SOURCES_OFF_RECHECK_MS: 600_000,
 }));
 vi.mock("../../src/lib/turn-hold-event.js", () => ({ reportTurnHolds: mockReportTurnHolds }));
+// Trigger events and the silence sweep have their own tests (tests/integration/trigger-events.test.ts).
+vi.mock("../../src/lib/trigger-events.js", () => ({
+  fireDueTriggerEvents: vi.fn().mockResolvedValue(0),
+  nextPendingTriggerDueAt: vi.fn().mockResolvedValue(null),
+}));
+vi.mock("../../src/lib/trigger-silence.js", () => ({ alertSilentTriggers: vi.fn().mockResolvedValue([]) }));
 
 import {
   reRunDueCampaigns,

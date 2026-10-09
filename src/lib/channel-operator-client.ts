@@ -83,8 +83,39 @@ export type ChannelCatalogueRead =
        * that states no boolean is absent. Optional so a hand-built read (tests) may omit it.
        */
       reactiveBySlug?: ReadonlyMap<string, ReadonlyMap<string, boolean>>;
+      /**
+       * THE TRIGGER TYPES (features-service `triggers[]`, owner 2026-10-09): every kind of event that
+       * runs a REACTIVE leg, the same list for every client. Only a type on this list can be fired
+       * (lib/trigger-events.ts). Absent until features-service publishes it; optional so a hand-built
+       * read (tests) may omit it.
+       */
+      triggers?: ReadonlyMap<string, CatalogueTriggerType>;
+      /**
+       * Every (channel, leg) a REACTIVE transition hands to a trigger (`stepTransitions[].mode ===
+       * "reactive"` + `triggerId`). The campaigns a trigger runs are the ones bought for exactly these.
+       */
+      triggerTransitions?: readonly CatalogueTriggerTransition[];
     }
   | { ok: false; detail: string };
+
+/** One trigger type, narrowed to what this service reads. */
+export interface CatalogueTriggerType {
+  id: string;
+  label: string;
+  /** The step a lead reached that fires it; null when it is not a step (a campaign asking for a lead). */
+  fromStepKey: string | null;
+  /** The service that detects the event and asks this service to run the campaign. */
+  firedBy: string;
+  /** A service fires it today. Only a coded type is watched for silence. */
+  coded: boolean;
+}
+
+/** A reactive (channel, leg) and the trigger that asks for it. */
+export interface CatalogueTriggerTransition {
+  featureSlug: string;
+  legKey: string;
+  triggerId: string;
+}
 
 export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
@@ -108,7 +139,14 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       channels?: Array<{
         slug?: unknown;
         operatedBy?: unknown;
-        stepTransitions?: Array<{ legKey?: unknown; reactive?: unknown }>;
+        stepTransitions?: Array<{ legKey?: unknown; reactive?: unknown; mode?: unknown; triggerId?: unknown }>;
+      }>;
+      triggers?: Array<{
+        id?: unknown;
+        label?: unknown;
+        fromStep?: unknown;
+        firedBy?: unknown;
+        coded?: unknown;
       }>;
       legs?: Array<{
         legKey?: unknown;
@@ -124,6 +162,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
     const operatorBySlug = new Map<string, ChannelOperator>();
     const legsBySlug = new Map<string, ReadonlySet<string>>();
     const reactiveBySlug = new Map<string, ReadonlyMap<string, boolean>>();
+    const triggerTransitions: CatalogueTriggerTransition[] = [];
     for (const channel of data.channels) {
       if (typeof channel?.slug !== "string" || channel.slug.length === 0) continue;
       // Which legs this channel performs. A channel that publishes none states an EMPTY set,
@@ -136,6 +175,17 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
           if (typeof transition?.legKey === "string" && transition.legKey.length > 0) {
             legs.add(transition.legKey);
             if (typeof transition.reactive === "boolean") reactive.set(transition.legKey, transition.reactive);
+            if (
+              transition.mode === "reactive" &&
+              typeof transition.triggerId === "string" &&
+              transition.triggerId.length > 0
+            ) {
+              triggerTransitions.push({
+                featureSlug: channel.slug,
+                legKey: transition.legKey,
+                triggerId: transition.triggerId,
+              });
+            }
           }
         }
       }
@@ -170,7 +220,22 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       }
     }
 
-    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug };
+    const triggers = new Map<string, CatalogueTriggerType>();
+    if (Array.isArray(data.triggers)) {
+      for (const t of data.triggers) {
+        if (typeof t?.id !== "string" || t.id.length === 0) continue;
+        triggers.set(t.id, {
+          id: t.id,
+          label: typeof t.label === "string" ? t.label : t.id,
+          fromStepKey: typeof t.fromStep === "string" && t.fromStep.length > 0 ? t.fromStep : null,
+          firedBy: typeof t.firedBy === "string" ? t.firedBy : "",
+          // Only a stated `true` is coded: an unknown value is never watched for silence.
+          coded: t.coded === true,
+        });
+      }
+    }
+
+    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug, triggers, triggerTransitions };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

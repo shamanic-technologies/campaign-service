@@ -1,8 +1,8 @@
 import { isInFailureBackoff } from "./run-failure-backoff.js";
 import { and, arrayContains, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaigns } from "../db/schema.js";
-import { fetchChannelCatalogue } from "./channel-operator-client.js";
+import { campaigns, type Campaign } from "../db/schema.js";
+import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { sameLeg } from "./leg-identity.js";
 import { campaignFunding } from "./campaign-funding.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
@@ -144,7 +144,26 @@ export class StepTriggerScopeError extends Error {
 export async function triggerCampaignsForStep(
   req: StepTriggerRequest,
 ): Promise<StepTriggerOutcome> {
-  const catalogue = await fetchChannelCatalogue();
+  return (await runStep(req)).outcome;
+}
+
+/**
+ * What a scope's pass did, plus what only the trigger-event record reads: the campaigns bought for
+ * the matched legs that are OFF (`status = 'stopped'`), read only when no live one matched, so an
+ * event can say "the campaign is off" rather than "nobody bought this leg". Never on the step
+ * route's answer (its shape is unchanged).
+ */
+export interface ScopeRun<O> {
+  outcome: O;
+  offCampaignIds: string[];
+}
+
+/** The step route's pass, with the off-campaign read the event record needs. */
+export async function runStep(
+  req: StepTriggerRequest,
+  catalogueRead?: ChannelCatalogueRead,
+): Promise<ScopeRun<StepTriggerOutcome> & { triggerId: string | null }> {
+  const catalogue = catalogueRead ?? await fetchChannelCatalogue();
   if (!catalogue.ok) {
     // Fail LOUD, unlike provisioning's read of the same catalogue. There the fallback is today's
     // behaviour; here there is no behaviour to fall back to — an unanswerable question must not be
@@ -162,6 +181,13 @@ export async function triggerCampaignsForStep(
     );
   }
 
+  // The trigger type a lead reaching this step IS (features-service's `triggers[].fromStep`), for
+  // the event record. None declared for the step = the event is recorded with no type.
+  let triggerId: string | null = null;
+  for (const t of catalogue.triggers?.values() ?? []) {
+    if (t.fromStepKey === req.step) { triggerId = t.id; break; }
+  }
+
   // The legs OUT of this step. A terminal step legitimately has none — a lead who became a paying client is at the end of the
   // chain — and that is an ordinary empty answer, not an error.
   const legKeys = catalogue.legs
@@ -174,8 +200,31 @@ export async function triggerCampaignsForStep(
     triggered: [],
     skipped: [],
   };
-  if (legKeys.length === 0) return outcome;
+  if (legKeys.length === 0) return { outcome, offCampaignIds: [], triggerId };
 
+  const run = await runCampaignsInScope(
+    req,
+    // Either outbound spelling names the same leg (lib/leg-identity.ts).
+    (c) => legKeys.some((k) => sameLeg(c.featureSlug, k, c.legKey)),
+    `step ${req.step}`,
+  );
+  outcome.triggered = run.triggered;
+  outcome.skipped = run.skipped;
+  return { outcome, offCampaignIds: run.offCampaignIds, triggerId };
+}
+
+/**
+ * Run every LIVE campaign of (org, brand, offer) the matcher selects, with the scheduler's own
+ * guards and dispatch. Shared by the step route and the trigger events (lib/trigger-events.ts):
+ * a trigger id resolves to (channel, leg) pairs, a step to legs, and both run the campaigns
+ * exactly the same way.
+ */
+export async function runCampaignsInScope(
+  req: { orgId: string; brandId: string; offerId: string },
+  matches: (c: Campaign) => boolean,
+  label: string,
+): Promise<Pick<StepTriggerOutcome, "triggered" | "skipped"> & { offCampaignIds: string[] }> {
+  const outcome: Pick<StepTriggerOutcome, "triggered" | "skipped"> = { triggered: [], skipped: [] };
 
   // Read the brand's live campaigns and select in memory. The population is a handful of rows per
   // brand, and a campaign is identified by (offer, leg, channel).
@@ -194,9 +243,22 @@ export async function triggerCampaignsForStep(
       // from a goal or a workflow.
       c.offerId === req.offerId &&
       c.legKey !== null &&
-      // Either outbound spelling names the same leg (lib/leg-identity.ts).
-      legKeys.some((k) => sameLeg(c.featureSlug, k, c.legKey)),
+      matches(c),
   );
+
+  let offCampaignIds: string[] = [];
+  if (responsible.length === 0) {
+    const stopped = await db.query.campaigns.findMany({
+      where: and(
+        eq(campaigns.orgId, req.orgId),
+        eq(campaigns.status, "stopped"),
+        arrayContains(campaigns.brandIds, [req.brandId]),
+      ),
+    });
+    offCampaignIds = stopped
+      .filter((c) => c.status === "stopped" && c.offerId === req.offerId && c.legKey !== null && matches(c))
+      .map((c) => c.id);
+  }
 
   const now = new Date();
   const freshnessCutoff = new Date(now.getTime() - STUCK_RUN_FRESHNESS_THRESHOLD_MS);
@@ -362,7 +424,7 @@ export async function triggerCampaignsForStep(
         workflowSlug,
       });
       console.log(
-        `[campaign-service] Campaign ${campaign.id} triggered on the step a lead reached (org ${req.orgId}, brand ${brandIds[0]}, step ${req.step})`,
+        `[campaign-service] Campaign ${campaign.id} triggered on the step a lead reached (org ${req.orgId}, brand ${brandIds[0]}, ${label})`,
       );
     } catch (err) {
       // One campaign's refused dispatch does not decide the others'. It is REPORTED, never
@@ -377,5 +439,5 @@ export async function triggerCampaignsForStep(
     }
   }
 
-  return outcome;
+  return { ...outcome, offCampaignIds };
 }

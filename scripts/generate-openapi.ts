@@ -44,6 +44,12 @@ import {
   FailingCampaignsResponse,
   RecurringStatusResponse,
   TriggerForStepResponse,
+  RecordTriggerEventBody,
+  RecordTriggerEventResponse,
+  OfferTriggerEventsSummaryQuery,
+  OfferTriggerEventsSummaryResponse,
+  OfferTriggerEventsListQuery,
+  OfferTriggerEventsListResponse,
   PredecessorCampaignResponse,
   AnsweringCampaignResponse,
   AnsweringCampaignsBody,
@@ -480,7 +486,7 @@ registry.registerPath({
   tags: ["Internal"],
   summary: "Run the campaign bought for the leg out of the step a lead just reached",
   description:
-    "A lead reached a step on a (brand, offer); this runs the campaign bought for the leg OUT of that step immediately, instead of waiting for its next tick. The leg is features-service's statement (GET /public/channels -> legs[]) and the campaign is the one already stating that leg — nothing is inferred. The affordability/budget gate is untouched: the dispatch is the scheduler's own, so the run starts at gate-check like any other. A scope that cannot be resolved (unknown step, unreadable catalogue) fails loudly; a scope with no such campaign, or one that is stopped, held for money, already running or operated by the customer's own team, is an ordinary 200 with a NAMED skip. Skip reasons: `no_workflow`, `unfunded`, `run_in_flight`, `global_sales_budget_reached` (global mode: the brand's one pot is spent), `item_budget_reached` (items mode: this campaign's own item budget allows nothing more for now, or cannot be read), `cohort_run_in_flight`, `incomplete_campaign`, `dispatch_refused`, `failure_backoff`. In items mode the campaign is funded by its own (offer, leg, channel) item only, capped on the item's period (a step-triggered leg is reactive). A skipped lead is never dropped: it stays due and the first run the money can pay for works it. The org rides on x-org-id.",
+    "A lead reached a step on a (brand, offer); this runs the campaign bought for the leg OUT of that step immediately, instead of waiting for its next tick. The leg is features-service's statement (GET /public/channels -> legs[]) and the campaign is the one already stating that leg — nothing is inferred. The affordability/budget gate is untouched: the dispatch is the scheduler's own, so the run starts at gate-check like any other. A scope that cannot be resolved (unknown step, unreadable catalogue) fails loudly; a scope with no such campaign, or one that is stopped, held for money, already running or operated by the customer's own team, is an ordinary 200 with a NAMED skip. Skip reasons: `no_workflow`, `unfunded`, `run_in_flight`, `global_sales_budget_reached` (global mode: the brand's one pot is spent), `item_budget_reached` (items mode: this campaign's own item budget allows nothing more for now, or cannot be read), `cohort_run_in_flight`, `incomplete_campaign`, `dispatch_refused`, `failure_backoff`. In items mode the campaign is funded by its own (offer, leg, channel) item only, capped on the item's period (a step-triggered leg is reactive). A skipped lead is never dropped: it stays due and the first run the money can pay for works it. The org rides on x-org-id. Every call is RECORDED as one trigger event (see POST /internal/trigger-events), typed with the trigger whose `fromStep` is this step; the answer adds `eventId` and `triggerId`, everything else is unchanged.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: {
     headers: z.object({
@@ -493,6 +499,70 @@ registry.registerPath({
     400: { description: "No org, malformed body or unknown step", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     502: { description: "The acquisition-channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+const TRIGGER_EVENTS_DOC =
+  "TRIGGER EVENTS (owner 2026-10-09): every leg is PROACTIVE (ticked on its budget, no trigger) or REACTIVE (runs ON DEMAND when exactly one TRIGGER asks: a positive reply received, a lead requested, a meeting booked...). The trigger TYPES are features-service's (GET /public/channels `triggers[]`, each reactive leg naming one on `channels[].stepTransitions[].triggerId`); each campaign's On/Off is its status; THIS service records the EVENTS, one per occurrence, with what each did: `ran` (`ranCampaignIds`) or `skipped` with one named `skipReason` (a campaign's own skip such as `unfunded` / `run_in_flight` / `no_workflow`, else `campaign_off` = a campaign is bought for the leg and is OFF, `no_campaign` = nobody bought it, `no_leg` = no published leg answers the trigger, `trigger_not_declared`). The campaigns a trigger runs are the ones of (org, brand, offer) bought for a (channel, leg) whose reactive transition names it, dispatched exactly like the scheduler's (same funding, budget, in-flight and cohort guards; the run starts at gate-check).";
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/trigger-events",
+  tags: ["Internal"],
+  summary: "Record one occurrence of a declared trigger, and fire it now, later, or record it as already performed",
+  description: TRIGGER_EVENTS_DOC + " WRITE CONTRACT: name a declared `triggerId` (unknown = 400 `unknown_trigger`, nothing recorded; trigger list unreadable = 502 `catalogue_unavailable`, nothing recorded). Due now (no `dueAt`, or `dueAt` <= now) = fired in this call, the outcome is on the returned event. `dueAt` later = recorded `pending` and fired by the scheduler when due (a planned event, e.g. 3h before a meeting), same rules. `performed` = the caller already did the work in-process (lead-service serving a lead on `lead_requested`): `{outcome: \"ran\", campaignId}` (a campaign of the org, else 400 `unknown_campaign`) or `{outcome: \"skipped\", reason, detail?}`; recorded as is, nothing dispatched. `idempotencyKey` (unique per org) makes a retry return the first event with `replayed: true` (200). The org rides on x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    headers: z.object({ "x-org-id": z.string().openapi({ description: "Internal org UUID from client-service" }) }),
+    body: { content: { "application/json": { schema: RecordTriggerEventBody } } },
+  },
+  responses: {
+    201: { description: "Recorded (and fired when due now)", content: { "application/json": { schema: RecordTriggerEventResponse } } },
+    200: { description: "Idempotent replay: the event already recorded under this key", content: { "application/json": { schema: RecordTriggerEventResponse } } },
+    400: { description: "No org, malformed body, `unknown_trigger` or `unknown_campaign` (`reason` names it)", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "`catalogue_unavailable`: the trigger list could not be read", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/offers/{offerId}/trigger-events/summary",
+  tags: ["Internal"],
+  summary: "Per trigger, over a window: how many events occurred, ran, were skipped (by reason), are pending",
+  description: TRIGGER_EVENTS_DOC + " This read groups the offer's events on `occurred_at` in [from, to] (to absent = now) by trigger type; a type with no event in the window is absent (join with features-service `triggers[]` to show it at zero). `recordedSince` = the first event this service ever recorded: before it, absence means not recorded. Requires header x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ offerId: z.string() }),
+    query: OfferTriggerEventsSummaryQuery,
+    headers: z.object({ "x-org-id": z.string() }),
+  },
+  responses: {
+    200: { description: "Per-trigger counts", content: { "application/json": { schema: OfferTriggerEventsSummaryResponse } } },
+    400: { description: "Missing x-org-id or a malformed query", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/offers/{offerId}/trigger-events",
+  tags: ["Internal"],
+  summary: "The latest trigger events of an offer, newest first",
+  description: TRIGGER_EVENTS_DOC + " limit 1-200, absent = 50. Requires header x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ offerId: z.string() }),
+    query: OfferTriggerEventsListQuery,
+    headers: z.object({ "x-org-id": z.string() }),
+  },
+  responses: {
+    200: { description: "The events", content: { "application/json": { schema: OfferTriggerEventsListResponse } } },
+    400: { description: "Missing x-org-id or a malformed query", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },
 });

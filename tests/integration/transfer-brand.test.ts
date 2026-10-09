@@ -26,6 +26,7 @@ import {
   campaignAudienceAvailability,
   campaignAudienceExhaustion,
   brandPauseTransitions,
+  triggerEvents,
 } from "../../src/db/schema.js";
 import { eq, sql } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
@@ -118,6 +119,11 @@ describe("POST /internal/transfer-brand", () => {
       { brandId: sourceBrandId, orgId: sourceOrgId, paused: true },
       { brandId: sourceBrandId, orgId: sourceOrgId, paused: false },
     ]);
+    const now = new Date();
+    await db.insert(triggerEvents).values({
+      orgId: sourceOrgId, brandId: sourceBrandId, offerId: crypto.randomUUID(), triggerId: "positive_reply_received",
+      recordedVia: "trigger_events", occurredAt: now, dueAt: now, status: "done", outcome: "skipped", skipReason: "no_campaign",
+    });
 
     const res = await post({ sourceBrandId, sourceOrgId, targetOrgId });
 
@@ -128,6 +134,7 @@ describe("POST /internal/transfer-brand", () => {
         { tableName: "campaign_status_transitions", count: 2 },
         { tableName: "campaign_audience_availability", count: 1 },
         { tableName: "brand_pause_transitions", count: 2 },
+        { tableName: "trigger_events", count: 1 },
         { tableName: "campaigns_funnel_key_snapshot_20260926", count: 1 },
         { tableName: "campaign_funnel_owner_decisions_funnel_snapshot_20260926", count: 1 },
       ],
@@ -140,6 +147,8 @@ describe("POST /internal/transfer-brand", () => {
     });
     const pauses = await db.select().from(brandPauseTransitions).where(eq(brandPauseTransitions.brandId, sourceBrandId));
     expect(pauses.map((p) => p.orgId)).toEqual([targetOrgId, targetOrgId]);
+    const events = await db.select().from(triggerEvents).where(eq(triggerEvents.brandId, sourceBrandId));
+    expect(events.map((e) => e.orgId)).toEqual([targetOrgId]);
 
     // No brand rewrite asked: the campaign keeps its brand, its status, its history.
     const [moved] = await db.select().from(campaigns).where(eq(campaigns.id, campaign.id));
