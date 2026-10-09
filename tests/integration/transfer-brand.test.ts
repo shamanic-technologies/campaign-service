@@ -27,6 +27,7 @@ import {
   campaignAudienceExhaustion,
   brandPauseTransitions,
   triggerEvents,
+  triggerPollCursors,
 } from "../../src/db/schema.js";
 import { eq, sql } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
@@ -124,6 +125,9 @@ describe("POST /internal/transfer-brand", () => {
       orgId: sourceOrgId, brandId: sourceBrandId, offerId: crypto.randomUUID(), triggerId: "positive_reply_received",
       recordedVia: "trigger_events", occurredAt: now, dueAt: now, status: "done", outcome: "skipped", skipReason: "no_campaign",
     });
+    await db.insert(triggerPollCursors).values({
+      triggerId: "post_reacted", orgId: sourceOrgId, brandId: sourceBrandId, offerId: crypto.randomUUID(), nextPollAt: now,
+    });
 
     const res = await post({ sourceBrandId, sourceOrgId, targetOrgId });
 
@@ -135,6 +139,7 @@ describe("POST /internal/transfer-brand", () => {
         { tableName: "campaign_audience_availability", count: 1 },
         { tableName: "brand_pause_transitions", count: 2 },
         { tableName: "trigger_events", count: 1 },
+        { tableName: "trigger_poll_cursors", count: 1 },
         { tableName: "campaigns_funnel_key_snapshot_20260926", count: 1 },
         { tableName: "campaign_funnel_owner_decisions_funnel_snapshot_20260926", count: 1 },
       ],

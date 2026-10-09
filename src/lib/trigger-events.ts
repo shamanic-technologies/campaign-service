@@ -3,12 +3,14 @@ import { db } from "../db/index.js";
 import { campaigns, triggerEvents, type TriggerEvent } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { sameLeg } from "./leg-identity.js";
+import { DELAY_DETECTOR_RECORDED_VIA, delayGuard, type LeadActivityCache } from "./delay-trigger-detector.js";
 import {
   runCampaignsInScope,
   runStep,
   type StepTriggerOutcome,
   type StepTriggerRequest,
 } from "./step-trigger.js";
+import type { WorkflowTriggerInput } from "./workflows.js";
 
 /**
  * THE TRIGGER EVENTS — ONE ROW PER OCCURRENCE, AND WHAT IT DID (owner 2026-10-09).
@@ -63,7 +65,13 @@ export const TRIGGER_EVENT_SKIPS = {
 export const TRIGGER_EVENT_RECORDED_VIA = {
   STEP_ROUTE: "trigger_for_step",
   TRIGGER_ROUTE: "trigger_events",
+  /** Planned by the generic `delay` detector (lib/delay-trigger-detector.ts). */
+  DELAY_DETECTOR: "delay_detector",
+  /** One new item seen by the generic `poll` detector (lib/poll-trigger-detector.ts). */
+  POLL_DETECTOR: "poll_detector",
 } as const;
+
+const POLL_RECORDED_VIA = TRIGGER_EVENT_RECORDED_VIA.POLL_DETECTOR;
 
 /** A failed fire of a due event is retried on this delay (catalogue outage, dispatch throw). */
 export const TRIGGER_EVENT_RETRY_MS = 10 * 60_000;
@@ -127,6 +135,7 @@ export async function fireTrigger(
   scope: { orgId: string; brandId: string; offerId: string },
   triggerId: string,
   catalogue: Extract<ChannelCatalogueRead, { ok: true }>,
+  trigger?: WorkflowTriggerInput,
 ): Promise<ScopeAnswer> {
   const transitions = (catalogue.triggerTransitions ?? []).filter((t) => t.triggerId === triggerId);
   const legKeys = [...new Set(transitions.map((t) => t.legKey))];
@@ -135,6 +144,7 @@ export async function fireTrigger(
     scope,
     (c) => transitions.some((t) => t.featureSlug === c.featureSlug && sameLeg(c.featureSlug, t.legKey, c.legKey)),
     `trigger ${triggerId}`,
+    trigger,
   );
   return { ...run, legKeys };
 }
@@ -309,24 +319,48 @@ export async function recordTriggerEvent(
   return { event: await fireClaimedEvent(event, catalogue, now), replayed: false };
 }
 
-/** Fire one claimed event and write its outcome. A throw puts it back to `pending` on the retry delay. */
-async function fireClaimedEvent(
+/**
+ * Fire one claimed event and write its outcome. A throw puts it back to `pending` on the retry delay.
+ *
+ * A DETECTOR-planned event (lib/delay-trigger-detector.ts, lib/poll-trigger-detector.ts) carries its
+ * own context on the row (`detail`: the anchor, the item) which is kept beside the outcome, and rides
+ * the `/execute` inputs as `trigger`. A `delay` event first asks whether anything happened to the
+ * lead since the anchor (`delayGuard`): something did = a recorded skip, nothing dispatched.
+ */
+export async function fireClaimedEvent(
   event: TriggerEvent,
   catalogue: Extract<ChannelCatalogueRead, { ok: true }>,
   now: Date,
+  context: { item?: unknown; leadActivity?: LeadActivityCache } = {},
 ): Promise<TriggerEvent> {
   try {
     let verdict: EventVerdict;
+    const skipped = (skipReason: string, extra: Record<string, unknown> = {}): EventVerdict => ({
+      outcome: "skipped",
+      skipReason,
+      ranCampaignIds: [],
+      detail: { legKeys: [], triggered: [], skipped: [], offCampaignIds: [], ...extra },
+    });
+    const detected = event.recordedVia === DELAY_DETECTOR_RECORDED_VIA || event.recordedVia === POLL_RECORDED_VIA;
     if (!event.triggerId || !catalogue.triggers?.has(event.triggerId)) {
-      verdict = {
-        outcome: "skipped",
-        skipReason: TRIGGER_EVENT_SKIPS.TRIGGER_NOT_DECLARED,
-        ranCampaignIds: [],
-        detail: { legKeys: [], triggered: [], skipped: [], offCampaignIds: [] },
-      };
+      verdict = skipped(TRIGGER_EVENT_SKIPS.TRIGGER_NOT_DECLARED);
     } else {
-      verdict = eventVerdict(await fireTrigger(event, event.triggerId, catalogue));
+      const guard = event.recordedVia === DELAY_DETECTOR_RECORDED_VIA
+        ? await delayGuard(event, context.leadActivity)
+        : null;
+      if (guard) {
+        verdict = skipped(guard.reason, { guardDetail: guard.detail });
+      } else {
+        const trigger: WorkflowTriggerInput | undefined = detected
+          ? { eventId: event.id, triggerId: event.triggerId, leadId: event.leadId, item: context.item ?? null }
+          : undefined;
+        verdict = eventVerdict(await fireTrigger(event, event.triggerId, catalogue, trigger));
+      }
     }
+    const own = event.detail && typeof event.detail === "object" && !Array.isArray(event.detail)
+      ? (event.detail as Record<string, unknown>)
+      : null;
+    if (own) verdict = { ...verdict, detail: { ...own, ...verdict.detail } as EventVerdict["detail"] };
     const [done] = await db
       .update(triggerEvents)
       .set({
@@ -400,8 +434,9 @@ export async function fireDueTriggerEvents(now: Date = new Date()): Promise<numb
   }
 
   let fired = 0;
+  const leadActivity: LeadActivityCache = new Map();
   for (const event of claimed) {
-    const done = await fireClaimedEvent(event, catalogue, now);
+    const done = await fireClaimedEvent(event, catalogue, now, { leadActivity });
     if (done.status === "done") fired += 1;
   }
   return fired;

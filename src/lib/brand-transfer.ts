@@ -13,6 +13,10 @@ import type { DbTransaction } from "./campaign-status-history.js";
  *   campaign_audience_availability    org_id, through its campaign    moved
  *   brand_pause_transitions           org_id + brand_id               moved, brand rewritten
  *   trigger_events                    org_id + brand_id               moved, brand rewritten
+ *   trigger_poll_cursors              org_id + brand_id               moved, brand rewritten; a row
+ *                                     the target already holds for the same (trigger, offer) wins
+ *                                     and the source's is dropped (a schedule, not history: the
+ *                                     items seen are trigger_events rows, moved above)
  *   campaigns_funnel_key_snapshot_20260926            org_id + brand_id, per campaign   moved, brand rewritten
  *   campaign_funnel_owner_decisions_funnel_snapshot_20260926  same                       moved, brand rewritten
  *   campaign_audience_exhaustion      NO org column — keyed on the campaign id, which never changes
@@ -141,12 +145,32 @@ export async function transferBrand(input: BrandTransferInput): Promise<BrandTra
       )
       SELECT count(*)::int AS cnt FROM updated`));
 
+    // Poll schedules (lib/poll-trigger-detector.ts), keyed on the brand like the events they guard.
+    const pollCursorsMoved = countOf(await tx.execute(sql`
+      WITH updated AS (
+        UPDATE trigger_poll_cursors c
+        SET org_id = ${targetOrgId}, brand_id = ${rewriteBrand("c.brand_id")}
+        WHERE ${pending(sql`c.org_id`)} AND c.brand_id = ${sourceBrandId}
+          AND NOT EXISTS (
+            SELECT 1 FROM trigger_poll_cursors t
+            WHERE t.trigger_id = c.trigger_id AND t.org_id = ${targetOrgId}
+              AND t.brand_id = ${brandAfter} AND t.offer_id = c.offer_id AND t.id <> c.id
+          )
+        RETURNING 1
+      )
+      SELECT count(*)::int AS cnt FROM updated`));
+    await tx.execute(sql`
+      DELETE FROM trigger_poll_cursors
+      WHERE ${pending(sql`org_id`)} AND brand_id = ${sourceBrandId}
+        AND NOT (org_id = ${targetOrgId} AND brand_id = ${brandAfter})`);
+
     const updatedTables = [
       { tableName: "campaigns", count: campaignsMoved },
       { tableName: "campaign_status_transitions", count: statusTransitions },
       { tableName: "campaign_audience_availability", count: availability },
       { tableName: "brand_pause_transitions", count: pauseTransitions },
       { tableName: "trigger_events", count: triggerEventsMoved },
+      { tableName: "trigger_poll_cursors", count: pollCursorsMoved },
     ];
 
     for (const { table, campaignColumn } of SNAPSHOT_TABLES) {

@@ -15,7 +15,8 @@ import campaignsRoutes from "./routes/campaigns.js";
 import brandsRoutes from "./routes/brands.js";
 import statsRoutes from "./routes/stats.js";
 import internalRoutes from "./routes/internal.js";
-import { startScheduler } from "./lib/scheduler.js";
+import { startScheduler, wakeScheduler } from "./lib/scheduler.js";
+import { startTriggerDetectors } from "./lib/trigger-detectors.js";
 import { registerExtendAudienceTemplate } from "./lib/transactional-email.js";
 import { logLegacyOutboundLegKeys } from "./lib/legacy-leg-key-log.js";
 const app = express();
@@ -71,6 +72,9 @@ if (process.env.NODE_ENV !== "test") {
     .then(() => {
       console.log("[campaign-service] Migrations complete");
       startScheduler();
+      // Generic delay/poll trigger detectors (lib/trigger-detectors.ts): in-process, first tick ~60s
+      // after boot; a planned event wakes the scheduler, the one door that fires due events.
+      startTriggerDetectors(wakeScheduler);
       app.listen(Number(PORT), "::", () => {
         console.log(`[campaign-service] Running on port ${PORT}`);
         // Register lifecycle email templates AFTER port-bind, fire-and-forget: a slow or
