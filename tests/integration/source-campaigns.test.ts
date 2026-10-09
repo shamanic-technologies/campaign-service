@@ -114,7 +114,7 @@ describe("Source campaigns: an offer's lead sources are campaigns (owner 2026-10
     mockStatsBudget.mockResolvedValue({ windows: [] });
     // tests/setup.ts stubs the store for every other suite; this one is ABOUT it.
     const actual = await vi.importActual<typeof import("../../src/lib/source-campaign-store.js")>("../../src/lib/source-campaign-store.js");
-    vi.mocked(store.ensureDefaultSourceOnStart).mockImplementation(actual.ensureDefaultSourceOnStart);
+    vi.mocked(store.ensureSourcesOnStart).mockImplementation(actual.ensureSourcesOnStart);
     vi.mocked(store.sourceCampaignsFeeding).mockImplementation(actual.sourceCampaignsFeeding);
   });
 
@@ -233,6 +233,79 @@ describe("Source campaigns: an offer's lead sources are campaigns (owner 2026-10
 
     const rows = await db.select().from(campaigns).where(and(eq(campaigns.offerId, OFFER), eq(campaigns.legKey, SOURCE_LEG)));
     expect(rows.map((r) => [r.featureSlug, r.status])).toEqual([[SIGNALS, "stopped"]]);
+  });
+
+  describe("a source nobody turned off follows its outreach campaign back ON (owner 2026-10-09)", () => {
+    // Prod 2026-10-09, Novemiq: the 10-07 mirror bore the offer's only source OFF (a copy of the
+    // outreach pause). The client restarted the outreach; 0 leads were served for 5 hours.
+    const sourceStoppedBy = async (origin: string, source: string, reason: string) => {
+      const row = await insertTestCampaign(ORG, {
+        status: "stopped",
+        stopReason: reason,
+        brandIds: [BRAND],
+        brandId: BRAND,
+        offerId: OFFER,
+        legKey: SOURCE_LEG,
+        featureSlug: origin,
+        maxBudgetDailyUsd: undefined,
+      });
+      await db.insert(campaignStatusTransitions).values({
+        campaignId: row.id, orgId: ORG, fromStatus: null, toStatus: "stopped", reason, source,
+      });
+      return row;
+    };
+
+    it("a source the mirror bore OFF comes back ON when a person restarts the outreach campaign", async () => {
+      const outreach = await jubilation("stopped");
+      const mirrored = await sourceStoppedBy(APOLLO, "source_mirror", "manual");
+
+      await patchStatus(outreach.id, COLD, "activate").expect(200);
+
+      expect(await rowOf(mirrored.id)).toMatchObject({ status: "ongoing", stopReason: null, nextRunAt: null });
+      const ledger = await db.select().from(campaignStatusTransitions).where(eq(campaignStatusTransitions.campaignId, mirrored.id));
+      expect(ledger.map((t) => [t.toStatus, t.source]).sort()).toEqual([["ongoing", "source_follows_outreach"], ["stopped", "source_mirror"]]);
+      // No default twin is born beside it.
+      const rows = await db.select().from(campaigns).where(and(eq(campaigns.offerId, OFFER), eq(campaigns.legKey, SOURCE_LEG)));
+      expect(rows).toHaveLength(1);
+      // The scheduler no longer holds the outreach campaign for `sources_off`.
+      const feeding = await store.sourceCampaignsFeeding(outreach.id, COLD);
+      expect(feeding.some((f) => f.status === "ongoing")).toBe(true);
+    });
+
+    it("a source the payment hold stopped follows the person's restart too", async () => {
+      const outreach = await jubilation("stopped");
+      const held = await sourceStoppedBy(SIGNALS, "payment_hold", "payment_declined");
+
+      await patchStatus(outreach.id, COLD, "activate").expect(200);
+
+      expect((await rowOf(held.id)).status).toBe("ongoing");
+    });
+
+    it("a source a PERSON turned off stays off, even beside a mirrored one that comes back", async () => {
+      const outreach = await jubilation("stopped");
+      const mirrored = await sourceStoppedBy(APOLLO, "source_mirror", "manual");
+      const personOff = (await turnOn(SIGNALS).expect(201)).body.campaign;
+      await patchStatus(personOff.id, SIGNALS, "stop").expect(200);
+
+      await patchStatus(outreach.id, COLD, "activate").expect(200);
+
+      expect((await rowOf(mirrored.id)).status).toBe("ongoing");
+      expect((await rowOf(personOff.id)).status).toBe("stopped");
+    });
+
+    it("a reactive outreach leg turns no source on; a CRM source never follows a cold-email start", async () => {
+      const crm = await sourceStoppedBy(CRM_SOURCE, "source_mirror", "manual");
+      const reactive = await insertTestCampaign(ORG, {
+        status: "stopped", brandIds: [BRAND], brandId: BRAND, offerId: OFFER, legKey: "conversation_to_meeting_booked",
+        featureSlug: COLD, acquisitionChannel: "cold_email", maxBudgetDailyUsd: undefined,
+      });
+      const apollo = await sourceStoppedBy(APOLLO, "source_mirror", "manual");
+
+      await patchStatus(reactive.id, COLD, "activate");
+
+      expect((await rowOf(apollo.id)).status).toBe("stopped");
+      expect((await rowOf(crm.id)).status).toBe("stopped");
+    });
   });
 
   describe("migration of today's state (POST /internal/source-campaigns/mirror)", () => {
