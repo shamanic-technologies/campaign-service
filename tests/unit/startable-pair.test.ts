@@ -12,6 +12,8 @@ import type { CampaignBudgetEntry, CampaignBudgetsRead } from "../../src/lib/cam
 
 const CHANNEL = "sales-cold-email-outreach";
 const ENTRY_LEG = "start_to_conversation";
+// What a pair stated in the legacy outbound spelling is stored (and served) as since wave 2.
+const STORED_ENTRY_LEG = "lead_found_to_conversation";
 const SECOND_LEG = "conversation_to_meeting_booked";
 const OFFER = "11111111-1111-1111-1111-111111111111";
 const BRAND = "22222222-2222-2222-2222-222222222222";
@@ -71,7 +73,7 @@ describe("resolveStartablePair", () => {
     const read = await start();
     expect(read).toEqual({
       ok: true,
-      pair: { legKey: ENTRY_LEG, ceilingCents: 1500, workflowSlug: "aurora" },
+      pair: { legKey: STORED_ENTRY_LEG, ceilingCents: 1500, workflowSlug: "aurora" },
     });
   });
 
@@ -120,7 +122,7 @@ describe("resolveStartablePair", () => {
   it("a channel the CUSTOMER operates starts with NO workflow, and workflow-service is never asked", async () => {
     const workflow = vi.fn();
     const read = await start({}, { catalogue: catalogue({ operator: "customer" }), workflow });
-    expect(read).toEqual({ ok: true, pair: { legKey: ENTRY_LEG, ceilingCents: 1500, workflowSlug: null } });
+    expect(read).toEqual({ ok: true, pair: { legKey: STORED_ENTRY_LEG, ceilingCents: 1500, workflowSlug: null } });
     expect(workflow).not.toHaveBeenCalled();
   });
 

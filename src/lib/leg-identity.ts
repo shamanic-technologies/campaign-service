@@ -26,8 +26,10 @@ import type { CatalogueLeg } from "./channel-operator-client.js";
  *                                 `uniq_campaigns_org_brand_offer_leg_channel` still sees one value
  *                                 per identity and keeps policing a race between two spellings.
  *
- * Wave 2 (a separate brief) migrates stored rows and flips `STORED_SPELLING` to "new"; nothing
- * else here changes, because every read already accepts both.
+ * Wave 2 (owner go 2026-10-09): migration 0063 moved every stored outbound row (campaigns and the
+ * 2026-09-26 snapshot) to the new spelling and `STORED_SPELLING` is "new", so this service now
+ * WRITES and SERVES `lead_found_to_*` for an outbound channel. The legacy spelling is still
+ * ACCEPTED on every input (callers and stale caches send it); dropping that is a later decision.
  */
 
 /** The outbound channels (features-service channelType OUTBOUND), LOCKED by the rename brief. */
@@ -53,8 +55,8 @@ const NEW_TO_LEGACY: ReadonlyMap<string, string> = new Map(
   [...LEGACY_TO_NEW].map(([legacy, renamed]) => [renamed, legacy]),
 );
 
-/** Which spelling this service WRITES. Wave 2 flips it, together with the row migration. */
-const STORED_SPELLING: "legacy" | "new" = "legacy";
+/** Which spelling this service WRITES. Wave 2 flipped it to "new", with migration 0063 moving every stored row. */
+const STORED_SPELLING: "legacy" | "new" = "new";
 
 function isRenamedChannel(featureSlug: string | null | undefined): boolean {
   return !!featureSlug && OUTBOUND_RENAMED_FEATURE_SLUGS.has(featureSlug);
@@ -96,7 +98,7 @@ export function otherOutboundSpelling(legKey: string): string | null {
   return LEGACY_TO_NEW.get(legKey) ?? NEW_TO_LEGACY.get(legKey) ?? null;
 }
 
-/** The spelling this service WRITES for `featureSlug`'s leg (wave 1: the legacy one). */
+/** The spelling this service WRITES (and therefore serves) for `featureSlug`'s leg (wave 2: the new one). */
 export function storedLegKey(featureSlug: string | null | undefined, legKey: string): string;
 export function storedLegKey(featureSlug: string | null | undefined, legKey: string | null | undefined): string | null | undefined;
 export function storedLegKey(featureSlug: string | null | undefined, legKey: string | null | undefined): string | null | undefined {

@@ -156,7 +156,7 @@ async function applyReactiveDefaults(
 
     const workflow = await resolveReactiveDefaultWorkflow(pair.featureSlug, pair.legKey, identity, catalogue);
     if (!workflow.ok) {
-      result.skipped.push({ legKey: pair.legKey, featureSlug: pair.featureSlug, reason: workflow.code });
+      result.skipped.push({ legKey: storedLegKey(pair.featureSlug, pair.legKey), featureSlug: pair.featureSlug, reason: workflow.code });
       continue;
     }
 
