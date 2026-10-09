@@ -17,6 +17,7 @@ import statsRoutes from "./routes/stats.js";
 import internalRoutes from "./routes/internal.js";
 import { startScheduler } from "./lib/scheduler.js";
 import { registerExtendAudienceTemplate } from "./lib/transactional-email.js";
+import { logLegacyOutboundLegKeys } from "./lib/legacy-leg-key-log.js";
 const app = express();
 const PORT = process.env.PORT || 3003;
 
@@ -32,6 +33,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
+app.use(logLegacyOutboundLegKeys);
 
 // Routes
 app.use(healthRoutes);
