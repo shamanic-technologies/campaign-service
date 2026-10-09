@@ -8,7 +8,7 @@ import { campaignFunding } from "./campaign-funding.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
-import { executeCampaignWorkflow } from "./workflows.js";
+import { executeCampaignWorkflow, type WorkflowTriggerInput } from "./workflows.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import {
   hasLiveRunForBrandCohort,
@@ -223,6 +223,8 @@ export async function runCampaignsInScope(
   req: { orgId: string; brandId: string; offerId: string },
   matches: (c: Campaign) => boolean,
   label: string,
+  /** The detector-fired event this dispatch answers (lib/trigger-detectors.ts); rides `/execute` inputs. */
+  trigger?: WorkflowTriggerInput,
 ): Promise<Pick<StepTriggerOutcome, "triggered" | "skipped"> & { offCampaignIds: string[] }> {
   const outcome: Pick<StepTriggerOutcome, "triggered" | "skipped"> = { triggered: [], skipped: [] };
 
@@ -402,6 +404,7 @@ export async function runCampaignsInScope(
         activeGoalId: campaign.activeGoalId,
         brandProfileId: campaign.brandProfileId,
         audienceId: selection.audienceId ?? campaign.audienceId,
+        ...(trigger ? { trigger } : {}),
       };
       try {
         await executeCampaignWorkflow(workflowSlug, inputs);

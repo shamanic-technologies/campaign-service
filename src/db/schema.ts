@@ -395,10 +395,41 @@ export const triggerEvents = pgTable(
     index("idx_trigger_events_due").on(table.dueAt).where(sql`${table.status} <> 'done'`),
     index("idx_trigger_events_offer").on(table.orgId, table.brandId, table.offerId, table.occurredAt),
     index("idx_trigger_events_type").on(table.triggerId, table.occurredAt),
+    index("idx_trigger_events_lead")
+      .on(table.orgId, table.brandId, table.offerId, table.leadId, table.occurredAt)
+      .where(sql`${table.leadId} is not null`),
   ]
 );
 
 export type TriggerEvent = typeof triggerEvents.$inferSelect;
+
+// The POLL detector's schedule per (poll trigger type, org, brand, offer) (src/lib/poll-trigger-detector.ts).
+// The items themselves are NOT here: each item seen is one `trigger_events` row whose idempotency key
+// names it, so an item can never be fired twice. `baseline_at` = the first successful read (its items
+// were recorded `poll_baseline`, never fired: they were not NEW).
+export const triggerPollCursors = pgTable(
+  "trigger_poll_cursors",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    triggerId: text("trigger_id").notNull(),
+    orgId: text("org_id").notNull(),
+    brandId: text("brand_id").notNull(),
+    offerId: text("offer_id").notNull(),
+    baselineAt: timestamp("baseline_at", { withTimezone: true }),
+    lastPolledAt: timestamp("last_polled_at", { withTimezone: true }),
+    nextPollAt: timestamp("next_poll_at", { withTimezone: true }).notNull(),
+    lastOutcome: text("last_outcome"),
+    lastError: text("last_error"),
+    polls: integer("polls").notNull().default(0),
+    itemsFired: integer("items_fired").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uniq_trigger_poll_cursors_scope").on(table.triggerId, table.orgId, table.brandId, table.offerId),
+  ]
+);
+
+export type TriggerPollCursor = typeof triggerPollCursors.$inferSelect;
 
 // Which coded trigger types are being watched for SILENCE (src/lib/trigger-silence.ts): a row exists
 // while at least one live reactive campaign depends on the type. `watched_since` bounds the silence
