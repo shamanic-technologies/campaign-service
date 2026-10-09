@@ -1,3 +1,5 @@
+import { WorkflowExecutionRefusedError } from "./workflow-refusal.js";
+
 export interface WorkflowExecutionInputs {
   campaignId: string;
   orgId: string;
@@ -92,9 +94,7 @@ export async function executeCampaignWorkflow(
   // triggered it — the callers already catch and log against the campaign id.
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(
-      `[campaign-service] Execution of "${workflowSlug}" for campaign ${inputs.campaignId} was refused (${res.status}): ${body}`,
-    );
+    throw new WorkflowExecutionRefusedError({ workflowSlug, campaignId: inputs.campaignId, status: res.status, body });
   }
 
   await res.json();
