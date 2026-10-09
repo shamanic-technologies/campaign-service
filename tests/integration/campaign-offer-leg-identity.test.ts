@@ -95,4 +95,55 @@ describe("Campaign identified by (offer, leg, channel)", () => {
     await create(body("Leg only", brandId, { legKey: LEG })).expect(400);
     await create(body("Offer only", brandId, { offerId: crypto.randomUUID() })).expect(400);
   });
+
+  // The outbound leg-key rename, wave 1 (lib/leg-identity.ts): the legacy and the new spelling of
+  // an OUTBOUND leg are one identity; the spelling stored and served stays the legacy one.
+  const NEW_LEG = "lead_found_to_conversation";
+
+  it("a create under the NEW outbound spelling is the SAME campaign, stored and served as today", async () => {
+    const brandId = crypto.randomUUID();
+    const offerId = crypto.randomUUID();
+
+    const first = await create(body("Outbound", brandId, { offerId, legKey: LEG })).expect(201);
+    const again = await create(body("Outbound again", brandId, { offerId, legKey: NEW_LEG })).expect(200);
+    expect(again.body.campaign.id).toBe(first.body.campaign.id);
+    expect(again.body.campaign.legKey).toBe(LEG);
+  });
+
+  it("a campaign first created under the new spelling is stored under the legacy one", async () => {
+    const brandId = crypto.randomUUID();
+    const offerId = crypto.randomUUID();
+
+    const created = await create(body("Outbound new", brandId, { offerId, legKey: NEW_LEG })).expect(201);
+    expect(created.body.campaign.legKey).toBe(LEG);
+    const again = await create(body("Outbound old", brandId, { offerId, legKey: LEG })).expect(200);
+    expect(again.body.campaign.id).toBe(created.body.campaign.id);
+  });
+
+  it("GET /campaigns?legKey answers the same under either outbound spelling, with or without the channel", async () => {
+    const brandId = crypto.randomUUID();
+    const offerId = crypto.randomUUID();
+    const created = await create(body("Outbound list", brandId, { offerId, legKey: LEG })).expect(201);
+
+    for (const legKey of [LEG, NEW_LEG]) {
+      const withChannel = await list({ brandId, featureSlug: SALES, offerId, legKey }).expect(200);
+      expect(withChannel.body.campaigns.map((c: { id: string }) => c.id)).toEqual([created.body.campaign.id]);
+      const noChannel = await list({ brandId, offerId, legKey }).expect(200);
+      expect(noChannel.body.campaigns.map((c: { id: string }) => c.id)).toEqual([created.body.campaign.id]);
+    }
+  });
+
+  it("a NON-outbound start_to_website_visit is never matched by the new spelling", async () => {
+    const brandId = crypto.randomUUID();
+    await create(
+      { name: "PR visit", workflowSlug: "pr-email-cold-outreach", orgId: ORG, brandIds: [brandId], legKey: "start_to_website_visit" },
+      "pr-cold-email-outreach",
+    ).expect(201);
+
+    const legacy = await list({ brandId, legKey: "start_to_website_visit" }).expect(200);
+    expect(legacy.body.campaigns).toHaveLength(1);
+    const renamed = await list({ brandId, legKey: "lead_found_to_website_visit" }).expect(200);
+    expect(renamed.body.campaigns).toEqual([]);
+  });
 });
+

@@ -57,7 +57,10 @@ export async function readItemSpend(
 }
 
 /** Is this leg reactive? An unreadable catalogue reads PROACTIVE: paced, the conservative side. */
-export async function readLegIsReactive(legKey: string | null | undefined): Promise<boolean> {
+export async function readLegIsReactive(
+  legKey: string | null | undefined,
+  featureSlug: string | null | undefined,
+): Promise<boolean> {
   if (!legKey) return false;
   const catalogue = await fetchChannelCatalogue();
   if (!catalogue.ok) {
@@ -66,7 +69,7 @@ export async function readLegIsReactive(legKey: string | null | undefined): Prom
     );
     return false;
   }
-  return isReactiveLeg(legKey, catalogue.legs);
+  return isReactiveLeg(legKey, catalogue, featureSlug);
 }
 
 export interface ItemCampaign {
@@ -227,7 +230,7 @@ export async function salesItemsGate(
     campaign,
     brandId,
     items: salesBudget.items,
-    reactive: await readLegIsReactive(campaign.legKey),
+    reactive: await readLegIsReactive(campaign.legKey, campaign.featureSlug),
     identity,
     now,
   });

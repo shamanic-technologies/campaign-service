@@ -1,3 +1,4 @@
+import { sameLeg } from "./leg-identity.js";
 /**
  * ITEMS MODE — one budget per CAMPAIGN (owner, 2026-10-04).
  *
@@ -70,7 +71,7 @@ export function itemsOf(items: readonly SalesItem[], c: SalesItemKey): SalesItem
   if (!c.offerId || !c.legKey || !c.featureSlug) return [];
   const offerId = c.offerId.toLowerCase();
   return items.filter(
-    (i) => i.offerId.toLowerCase() === offerId && i.legKey === c.legKey && i.featureSlug === c.featureSlug,
+    (i) => i.offerId.toLowerCase() === offerId && i.featureSlug === c.featureSlug && sameLeg(c.featureSlug, i.legKey, c.legKey),
   );
 }
 

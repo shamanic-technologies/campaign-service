@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import { campaignAudienceAvailability, campaigns } from "../db/schema.js";
 import { isSourceCampaign } from "./source-campaigns.js";
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
+import { legIsReactive, type CatalogueLegView } from "./leg-identity.js";
 
 /**
  * WHICH CAMPAIGNS OF A BRAND (OR ORG) COUNT TOWARD RECURRING SPEND RIGHT NOW — the three facts
@@ -116,7 +117,7 @@ export async function recurringCampaignStatuses(scope: {
   // Only asked when some campaign states a leg: the catalogue is the ONE source of which legs are
   // entry legs, and an unreadable one is loud — answering "reactive" or "unknown" for every
   // campaign during an outage would read as a revenue drop.
-  let fromStepByLeg: Map<string, string | null> | null = null;
+  let catalogueLegs: CatalogueLegView | null = null;
   if (rows.some((c) => c.legKey)) {
     const catalogue = await fetchChannelCatalogue();
     if (!catalogue.ok) {
@@ -124,7 +125,7 @@ export async function recurringCampaignStatuses(scope: {
         `the acquisition-channel catalogue could not be read (${catalogue.detail}), so which campaigns run an entry leg cannot be said`,
       );
     }
-    fromStepByLeg = new Map(catalogue.legs.map((l) => [l.legKey, l.fromStepKey]));
+    catalogueLegs = catalogue;
   }
 
   return rows.map((c): RecurringCampaignStatus => {
@@ -137,10 +138,11 @@ export async function recurringCampaignStatuses(scope: {
       // statement. Its leg is not a catalogue leg, so it is not asked. It runs no workflow, so it is
       // never `recurring` itself.
       kind = "proactive";
-    } else if (!fromStepByLeg!.has(c.legKey)) {
-      kindUnknownReason = "leg_not_published";
     } else {
-      kind = fromStepByLeg!.get(c.legKey) === null ? "proactive" : "reactive";
+      // features-service's per-(channel, leg) statement, either outbound spelling (lib/leg-identity.ts).
+      const reactive = legIsReactive(catalogueLegs!, c.featureSlug, c.legKey);
+      if (reactive === null) kindUnknownReason = "leg_not_published";
+      else kind = reactive ? "reactive" : "proactive";
     }
 
     const period = currentPeriod.get(c.id);

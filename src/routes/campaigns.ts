@@ -47,6 +47,8 @@ import {
 } from "../lib/reactive-defaults.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "../lib/channel-operator-client.js";
 import { SOURCE_LEG_KEY, isSourceOriginSlug } from "../lib/source-campaigns.js";
+import { sameLeg, storedLegKey } from "../lib/leg-identity.js";
+import { legKeyMatches } from "../lib/leg-key-sql.js";
 import { ensureDefaultSourceOnStart } from "../lib/source-campaign-store.js";
 import { ReactiveDefaultsBody } from "../schemas.js";
 
@@ -141,7 +143,7 @@ async function applyReactiveDefaults(
           eq(campaigns.orgId, scope.orgId),
           eq(campaigns.brandId, scope.brandId),
           eq(campaigns.offerId, scope.offerId),
-          eq(campaigns.legKey, pair.legKey),
+          legKeyMatches(pair.featureSlug, pair.legKey),
           eq(campaigns.acquisitionChannel, acquisitionChannel),
         ),
         orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
@@ -173,7 +175,7 @@ async function applyReactiveDefaults(
             brandIds: [scope.brandId],
             featureSlug: pair.featureSlug,
             offerId: scope.offerId,
-            legKey: pair.legKey,
+            legKey: storedLegKey(pair.featureSlug, pair.legKey),
             featureInputs: null,
             status: "ongoing",
             nextRunAt: workflow.workflowSlug ? now : null,
@@ -216,7 +218,7 @@ function applyReactiveDefaultsAfterStart(started: CampaignRow, req: Authenticate
   void (async () => {
     const catalogue = await fetchChannelCatalogue();
     if (!catalogue.ok) throw new ReactiveDefaultsUnavailableError(`channel catalogue: ${catalogue.detail}`);
-    if (!isEntryLeg(catalogue, legKey)) return;
+    if (!isEntryLeg(catalogue, started.featureSlug, legKey)) return;
     const result = await applyReactiveDefaults({ orgId, brandId, offerId }, req, catalogue);
     if (result.started.length > 0) {
       console.log(
@@ -276,7 +278,8 @@ router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilt
     // Together with featureSlug (the channel) these find a campaign by (offer, leg, channel) —
     // what a campaign IS.
     if (offerId) conditions.push(eq(campaigns.offerId, offerId));
-    if (legKey) conditions.push(eq(campaigns.legKey, legKey));
+    // Either outbound spelling of the leg finds the same rows (lib/leg-identity.ts).
+    if (legKey) conditions.push(legKeyMatches(featureSlug, legKey));
 
     const query = db
       .select()
@@ -339,7 +342,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       brandProfileId,
       audienceId,
       offerId,
-      legKey,
+      legKey: bodyLegKey,
       audienceIds,
       servicesOffered,
       clickDestinationUrl,
@@ -358,6 +361,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
 
     // featureSlug comes exclusively from x-feature-slug header
     const resolvedFeatureSlug = req.featureSlug || "";
+    // Either outbound spelling of the leg is ONE identity; the spelling stored (and so matched and
+    // served) stays this service's own (lib/leg-identity.ts).
+    const legKey = storedLegKey(resolvedFeatureSlug, bodyLegKey);
 
     // A sales campaign IS (offer, leg, channel): it states the offer it sells and the leg it is
     // bought for, at birth, because that is what billing funds it at. Nothing is inferred — a sales
@@ -478,7 +484,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           // than a restatement of the live one — which is the only way a brand can work one
           // channel for two legs at once. A create that states NO leg matches the leg-less row
           // exactly as it did before the field existed.
-          legKey ? eq(campaigns.legKey, legKey) : isNull(campaigns.legKey),
+          legKey ? legKeyMatches(resolvedFeatureSlug, legKey) : isNull(campaigns.legKey),
           matchOffer && offerId ? eq(campaigns.offerId, offerId) : undefined,
           matchOffer ? undefined : isNull(campaigns.offerId),
         ),
@@ -668,7 +674,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           eq(campaigns.acquisitionChannel, acquisitionChannelForFeature(req.featureSlug)!),
           // The leg is part of the identity that collided, so it is part of finding the winner —
           // otherwise the loser is handed back a campaign bought for a different leg.
-          req.body.legKey ? eq(campaigns.legKey, req.body.legKey) : isNull(campaigns.legKey),
+          req.body.legKey ? legKeyMatches(req.featureSlug, req.body.legKey) : isNull(campaigns.legKey),
           // The offer is part of the identity that collided too, for the same reason: otherwise the
           // loser is handed back a campaign selling a different offer, on different money.
           req.body.offerId ? eq(campaigns.offerId, req.body.offerId) : isNull(campaigns.offerId),
@@ -781,7 +787,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
         eq(campaigns.acquisitionChannel, acquisitionChannel),
         // The campaign that NAMES this (offer, leg) is this pair's campaign.
         eq(campaigns.offerId, offerId!),
-        eq(campaigns.legKey, legKey),
+        legKeyMatches(featureSlug, legKey),
       ),
     });
 
@@ -789,7 +795,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
     // most recent stopped row is the one the customer last worked with.
     const rank = (c: typeof siblings[number]) =>
       (c.offerId === offerId ? 8 : 0)
-      + (c.legKey === legKey ? 4 : 0)
+      + (sameLeg(featureSlug, c.legKey, legKey) ? 4 : 0)
       + (c.status === "ongoing" ? 2 : 0);
     const incumbent = siblings.sort((a, b) => {
       const byRank = rank(b) - rank(a);
@@ -907,7 +913,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
           // The offer and the leg are part of the identity that collided, so they are part of
           // finding the winner — otherwise the loser is handed a campaign selling a different
           // proposition on different money.
-          eq(campaigns.legKey, req.body.legKey),
+          legKeyMatches(req.body.featureSlug, req.body.legKey),
           eq(campaigns.offerId, req.body.offerId),
         ),
         orderBy: [campaigns.createdAt],
@@ -964,6 +970,12 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 
     if (!existing) {
       return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    // Either outbound spelling of a restated leg is ONE identity, written in this service's own
+    // spelling (lib/leg-identity.ts).
+    if (typeof req.body.legKey === "string") {
+      req.body.legKey = storedLegKey(req.body.featureSlug ?? existing.featureSlug, req.body.legKey);
     }
 
     // Same refusal as the create leg, against the feature this update LEAVES the campaign on
