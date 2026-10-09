@@ -1,5 +1,5 @@
 import { db, sql } from "../../src/db/index.js";
-import { campaigns, brandPauseTransitions, campaignAudienceExhaustion, campaignAudienceAvailability, campaignStatusTransitions } from "../../src/db/schema.js";
+import { campaigns, brandPauseTransitions, campaignAudienceExhaustion, campaignAudienceAvailability, campaignStatusTransitions, triggerEvents, triggerSilenceWatch } from "../../src/db/schema.js";
 
 /**
  * Clean all test data from the database
@@ -10,6 +10,8 @@ export async function cleanTestData() {
   await db.delete(campaignAudienceExhaustion);
   await db.delete(campaignAudienceAvailability);
   await db.delete(campaignStatusTransitions);
+  await db.delete(triggerEvents);
+  await db.delete(triggerSilenceWatch);
 }
 
 /**

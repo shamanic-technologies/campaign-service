@@ -506,6 +506,8 @@ export const TriggerForStepBody = z.object({
   // The step the lead just REACHED — features-service's step key, carried verbatim and never
   // parsed. A step it does not publish is a 400, never an empty answer.
   step: z.string().min(1, "step is required"),
+  // OPTIONAL: the lead that reached the step, recorded on the trigger event (lib/trigger-events.ts).
+  leadId: z.string().min(1).optional(),
 }).openapi("TriggerForStepBody");
 
 export const TriggerForStepResponse = z.object({
@@ -528,7 +530,115 @@ export const TriggerForStepResponse = z.object({
     reason: z.string(),
     detail: z.string(),
   })),
+  /** The trigger event this call recorded (null only when the record could not be written: logged). */
+  eventId: z.string().nullable(),
+  /** The trigger type whose `fromStep` is this step (features-service `triggers[]`), null when none is declared. */
+  triggerId: z.string().nullable(),
 }).openapi("TriggerForStepResponse");
+
+// ── TRIGGER EVENTS (owner 2026-10-09; src/lib/trigger-events.ts) ─────────────────────────────────
+
+const isoDateTime = (name: string) =>
+  z.string().refine((v) => !Number.isNaN(Date.parse(v)), `${name} must be an ISO date-time`);
+
+export const RecordTriggerEventBody = z.object({
+  /** A trigger type features-service declares (`GET /public/channels` `triggers[].id`). Unknown = 400 `unknown_trigger`. */
+  triggerId: z.string().min(1, "triggerId is required"),
+  brandId: z.string().uuid("brandId must be a valid UUID"),
+  offerId: z.string().uuid("offerId must be a valid UUID"),
+  leadId: z.string().min(1).optional(),
+  /** The campaign that ASKED (e.g. the outreach campaign that requested a lead). */
+  requestedByCampaignId: z.string().min(1).optional(),
+  /** Unique per org: a retried call returns the first event (`replayed: true`), recorded once. */
+  idempotencyKey: z.string().min(1).max(200).optional(),
+  /** When it happened. Absent = now. */
+  occurredAt: isoDateTime("occurredAt").optional(),
+  /** When it must fire. Absent = when it occurred. Later than now = recorded `pending`, fired by the tick. */
+  dueAt: isoDateTime("dueAt").optional(),
+  /**
+   * The caller ALREADY performed it in-process and states what happened; nothing is dispatched here.
+   * `ran` names the campaign the work was filed under (must be a campaign of the org).
+   */
+  performed: z.discriminatedUnion("outcome", [
+    z.object({ outcome: z.literal("ran"), campaignId: z.string().min(1) }).strict(),
+    z.object({ outcome: z.literal("skipped"), reason: z.string().min(1), detail: z.string().optional() }).strict(),
+  ]).optional(),
+}).strict().refine((b) => !(b.performed && b.dueAt), {
+  message: "an event already performed has no due time: send `performed` or `dueAt`, not both",
+}).openapi("RecordTriggerEventBody");
+
+export const TriggerEventSchema = z.object({
+  id: z.string(),
+  triggerId: z.string().nullable(),
+  step: z.string().nullable(),
+  orgId: z.string(),
+  brandId: z.string(),
+  offerId: z.string(),
+  leadId: z.string().nullable(),
+  requestedByCampaignId: z.string().nullable(),
+  /** `trigger_for_step` | `trigger_events` */
+  recordedVia: z.string(),
+  occurredAt: z.string(),
+  dueAt: z.string(),
+  /** `pending` (due later) | `firing` | `done` */
+  status: z.string(),
+  /** `ran` | `skipped`; null until done */
+  outcome: z.string().nullable(),
+  /**
+   * When skipped: a campaign's named skip (`unfunded`, `run_in_flight`, `no_workflow`,
+   * `global_sales_budget_reached`, `item_budget_reached`, `cohort_run_in_flight`,
+   * `incomplete_campaign`, `dispatch_refused`, `failure_backoff`), else `campaign_off`,
+   * `no_campaign`, `no_leg`, `trigger_not_declared`, or the caller's own reason when performed.
+   */
+  skipReason: z.string().nullable(),
+  ranCampaignIds: z.array(z.string()),
+  performedByCaller: z.boolean(),
+  processedAt: z.string().nullable(),
+  /** Every per-campaign answer: `{legKeys, triggered[], skipped[], offCampaignIds}` (or the caller's `performedDetail`). */
+  detail: z.any().nullable(),
+}).openapi("TriggerEvent");
+
+export const RecordTriggerEventResponse = z.object({
+  event: TriggerEventSchema,
+  replayed: z.boolean(),
+}).openapi("RecordTriggerEventResponse");
+
+export const OfferTriggerEventsSummaryQuery = z.object({
+  brandId: z.string().uuid("brandId must be a valid UUID"),
+  from: isoDateTime("from"),
+  /** Absent = now. */
+  to: isoDateTime("to").optional(),
+}).openapi("OfferTriggerEventsSummaryQuery");
+
+export const OfferTriggerEventsSummaryResponse = z.object({
+  orgId: z.string(),
+  brandId: z.string(),
+  offerId: z.string(),
+  from: z.string(),
+  to: z.string(),
+  /** Earliest event this service holds anywhere: before it, nothing was recorded (not "nothing fired"). */
+  recordedSince: z.string().nullable(),
+  /** One row per trigger type that has at least one event in the window (`triggerId` null = a step with no declared type). */
+  triggers: z.array(z.object({
+    triggerId: z.string().nullable(),
+    events: z.number().int(),
+    ran: z.number().int(),
+    skipped: z.number().int(),
+    pending: z.number().int(),
+    skippedByReason: z.array(z.object({ reason: z.string(), count: z.number().int() })),
+    lastOccurredAt: z.string().nullable(),
+  })),
+}).openapi("OfferTriggerEventsSummaryResponse");
+
+export const OfferTriggerEventsListQuery = z.object({
+  brandId: z.string().uuid("brandId must be a valid UUID"),
+  /** 1-200. Absent = 50. */
+  limit: z.string().regex(/^\d+$/, "limit must be an integer").optional(),
+}).openapi("OfferTriggerEventsListQuery");
+
+export const OfferTriggerEventsListResponse = z.object({
+  events: z.array(TriggerEventSchema),
+}).openapi("OfferTriggerEventsListResponse");
 
 /**
  * WHICH CAMPAIGN RAN THE LEG THAT ENDS WHERE THIS ONE BEGINS.

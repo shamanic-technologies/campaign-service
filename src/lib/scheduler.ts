@@ -14,6 +14,8 @@ import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import { backOffFailedDispatch } from "./run-failure-backoff.js";
 import { sourcesOffHold, SOURCES_OFF_RECHECK_MS } from "./sources-off-hold.js";
 import { reportTurnHolds } from "./turn-hold-event.js";
+import { fireDueTriggerEvents, nextPendingTriggerDueAt } from "./trigger-events.js";
+import { alertSilentTriggers } from "./trigger-silence.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -518,6 +520,14 @@ async function tick(): Promise<void> {
       });
       await claimStuckCampaigns();
       await reRunDueCampaigns();
+      // Planned trigger events that fell due (lib/trigger-events.ts), same On/Off and funding rules
+      // as an immediate one; then the hourly check that no coded trigger has gone silent.
+      await fireDueTriggerEvents().catch((err) => {
+        console.error("[campaign-service] Due trigger events error:", err);
+      });
+      await alertSilentTriggers().catch((err) => {
+        console.error("[campaign-service] Trigger silence sweep error:", err);
+      });
     } catch (err) {
       console.error("[campaign-service] Scheduler tick error:", err);
     }
@@ -530,6 +540,9 @@ async function tick(): Promise<void> {
       delayMs = snapshot.length > 0
         ? Math.min(computeNextDelayMs(snapshot), PAYMENT_HOLD_RECHECK_MS)
         : computeNextDelayMs(snapshot);
+      // Never sleep past a planned trigger event's due time.
+      const nextTriggerDue = await nextPendingTriggerDueAt();
+      if (nextTriggerDue) delayMs = Math.min(delayMs, Math.max(0, nextTriggerDue.getTime() - Date.now()));
     } catch (err) {
       console.error("[campaign-service] Scheduler delay computation error:", err);
     }

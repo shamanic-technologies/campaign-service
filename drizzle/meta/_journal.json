@@ -449,6 +449,13 @@
       "when": 1778800000000,
       "tag": "0063_outbound_leg_key_new_spelling",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1778900000000,
+      "tag": "0064_trigger_events",
+      "breakpoints": true
     }
   ]
 }
