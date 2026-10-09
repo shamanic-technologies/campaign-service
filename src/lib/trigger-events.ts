@@ -247,7 +247,9 @@ export async function recordTriggerEvent(
     const [owned] = await db
       .select({ id: campaigns.id })
       .from(campaigns)
-      .where(and(eq(campaigns.id, input.performed.campaignId), eq(campaigns.orgId, input.orgId)))
+      // `::text` on both: drizzle/0000 made campaigns.id/org_id uuid in some databases (CLAUDE.md),
+      // and a caller's non-uuid id must be a named 400, not a cast error.
+      .where(sql`${campaigns.id}::text = ${input.performed.campaignId} AND ${campaigns.orgId}::text = ${input.orgId}`)
       .limit(1);
     if (!owned) {
       throw new TriggerEventError(
