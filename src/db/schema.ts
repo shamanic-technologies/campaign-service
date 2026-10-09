@@ -350,3 +350,62 @@ export type CampaignAudienceAvailability = typeof campaignAudienceAvailability.$
 export type NewCampaignAudienceAvailability = typeof campaignAudienceAvailability.$inferInsert;
 
 
+
+// THE TRIGGER EVENTS (owner 2026-10-09; src/lib/trigger-events.ts). One row per OCCURRENCE of a
+// trigger (features-service `triggers[]`: a positive reply received, a lead requested, a meeting
+// booked...) on (org, brand, offer), and what it did: ran a campaign, or skipped with a named
+// reason. This is the proof a trigger fires. The trigger TYPES are features-service's; each
+// campaign's On/Off is `campaigns.status`; this table holds only the occurrences.
+//
+// `status`: `pending` (due later, fired by the tick), `firing` (claimed), `done` (outcome written).
+// `outcome` (`ran` | `skipped`) is NULL until done. `performed_by_caller` = the caller performed it
+// in-process and recorded what happened (lead-service serving a lead): nothing was dispatched here.
+export const triggerEvents = pgTable(
+  "trigger_events",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    orgId: text("org_id").notNull(),
+    brandId: text("brand_id").notNull(),
+    offerId: text("offer_id").notNull(),
+    // NULL only for a step call on a step no trigger type is declared for.
+    triggerId: text("trigger_id"),
+    step: text("step"),
+    leadId: text("lead_id"),
+    requestedByCampaignId: text("requested_by_campaign_id"),
+    idempotencyKey: text("idempotency_key"),
+    recordedVia: text("recorded_via").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    status: text("status").notNull(),
+    outcome: text("outcome"),
+    skipReason: text("skip_reason"),
+    ranCampaignIds: text("ran_campaign_ids").array(),
+    detail: jsonb("detail"),
+    performedByCaller: boolean("performed_by_caller").notNull().default(false),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("uniq_trigger_events_idempotency")
+      .on(table.orgId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
+    index("idx_trigger_events_due").on(table.dueAt).where(sql`${table.status} <> 'done'`),
+    index("idx_trigger_events_offer").on(table.orgId, table.brandId, table.offerId, table.occurredAt),
+    index("idx_trigger_events_type").on(table.triggerId, table.occurredAt),
+  ]
+);
+
+export type TriggerEvent = typeof triggerEvents.$inferSelect;
+
+// Which coded trigger types are being watched for SILENCE (src/lib/trigger-silence.ts): a row exists
+// while at least one live reactive campaign depends on the type. `watched_since` bounds the silence
+// so a type is never called silent for days nobody was recording; `last_alerted_at` latches the
+// staff alert to once per 24h.
+export const triggerSilenceWatch = pgTable("trigger_silence_watch", {
+  triggerId: text("trigger_id").primaryKey(),
+  watchedSince: timestamp("watched_since", { withTimezone: true }).notNull().defaultNow(),
+  lastAlertedAt: timestamp("last_alerted_at", { withTimezone: true }),
+});

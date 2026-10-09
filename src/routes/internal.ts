@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and, sql, or, ne, isNotNull, gt, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { brandPauseTransitions, campaigns } from "../db/schema.js";
+import { brandPauseTransitions, campaigns, triggerEvents } from "../db/schema.js";
 import { requireApiKey, requirePipelineHeaders, serviceAuth, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
@@ -18,7 +18,8 @@ import {
   recordRunSuccess,
   type RecordedFailure,
 } from "../lib/run-failure-backoff.js";
-import { AnsweringCampaignsBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
+import { AnsweringCampaignsBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
+import type { z } from "zod";
 import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
@@ -31,7 +32,15 @@ import { transferBrand } from "../lib/brand-transfer.js";
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
-import { triggerCampaignsForStep, StepTriggerScopeError } from "../lib/step-trigger.js";
+import { StepTriggerScopeError } from "../lib/step-trigger.js";
+import {
+  listOfferTriggerEvents,
+  recordTriggerEvent,
+  serializeTriggerEvent,
+  summarizeOfferTriggerEvents,
+  triggerStepAndRecord,
+  TriggerEventError,
+} from "../lib/trigger-events.js";
 import { resolvePredecessorCampaign, PredecessorScopeError } from "../lib/predecessor-campaign.js";
 import {
   resolveAnsweringCampaign,
@@ -846,20 +855,121 @@ router.delete("/internal/campaigns/by-org/:orgId", requireApiKey, async (req, re
  */
 router.post("/internal/campaigns/trigger-for-step", requireApiKey, serviceAuth, validateBody(TriggerForStepBody), async (req: AuthenticatedRequest, res) => {
   try {
-    const { brandId, offerId, step } = req.body;
-    const outcome = await triggerCampaignsForStep({
+    const { brandId, offerId, step, leadId } = req.body;
+    // Recorded as a trigger event (lib/trigger-events.ts); the answer is today's, plus the event.
+    const { outcome, eventId, triggerId } = await triggerStepAndRecord({
       orgId: req.orgId!,
       brandId,
       offerId,
       step,
+      leadId,
     });
-    res.json(outcome);
+    res.json({ ...outcome, eventId, triggerId });
   } catch (error) {
     if (error instanceof StepTriggerScopeError) {
       console.warn(`[campaign-service] ${error.status} on /internal/campaigns/trigger-for-step — ${error.message}`);
       return res.status(error.status).json({ error: error.message });
     }
     console.error("[campaign-service] trigger-for-step error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/trigger-events
+ *
+ * Record ONE occurrence of a declared trigger on (org, brand, offer) and do what it asks: fire it
+ * now, fire it later from the tick (`dueAt` in the future), or record what the caller already
+ * performed in-process (`performed`). The write contract is in lib/trigger-events.ts.
+ *
+ * Returns:
+ *   201 — recorded (and, when due now, fired: `event.outcome` says what ran or why not)
+ *   200 — `idempotencyKey` named an event already recorded: that event, `replayed: true`
+ *   400 — no org, malformed body, `unknown_trigger` (not in features-service's list: nothing
+ *         recorded), `unknown_campaign` (a performed `ran` naming no campaign of the org)
+ *   502 — `catalogue_unavailable`: the trigger list could not be read, nothing recorded
+ */
+router.post("/internal/trigger-events", requireApiKey, serviceAuth, validateBody(RecordTriggerEventBody), async (req: AuthenticatedRequest, res) => {
+  try {
+    const b = req.body as z.infer<typeof RecordTriggerEventBody>;
+    const result = await recordTriggerEvent({
+      orgId: req.orgId!,
+      brandId: b.brandId,
+      offerId: b.offerId,
+      triggerId: b.triggerId,
+      leadId: b.leadId,
+      requestedByCampaignId: b.requestedByCampaignId,
+      idempotencyKey: b.idempotencyKey,
+      occurredAt: b.occurredAt ? new Date(b.occurredAt) : undefined,
+      dueAt: b.dueAt ? new Date(b.dueAt) : undefined,
+      performed: b.performed,
+    });
+    if (!result.replayed && result.event.status === "pending") wakeScheduler();
+    res.status(result.replayed ? 200 : 201).json({ event: serializeTriggerEvent(result.event), replayed: result.replayed });
+  } catch (error) {
+    if (error instanceof TriggerEventError) {
+      console.warn(`[campaign-service] ${error.status} ${error.reason} on /internal/trigger-events — ${error.message}`);
+      return res.status(error.status).json({ error: error.message, reason: error.reason });
+    }
+    console.error("[campaign-service] trigger-events error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /internal/offers/:offerId/trigger-events/summary?brandId=&from=&to=  (+ x-org-id)
+ *
+ * Per trigger type, over a window on `occurred_at`: how many occurred, ran a campaign, were skipped
+ * (by named reason), are still pending. A read: nothing written. `recordedSince` says when this
+ * service started recording, so an empty window before it reads as "not recorded", not "never fired".
+ */
+router.get("/internal/offers/:offerId/trigger-events/summary", requireApiKey, validateQuery(OfferTriggerEventsSummaryQuery), async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"];
+    if (typeof orgId !== "string" || !orgId) {
+      return res.status(400).json({ error: "x-org-id header is required: an offer belongs to one (org, brand) pair" });
+    }
+    const q = req.query as { brandId: string; from: string; to?: string };
+    const from = new Date(q.from);
+    const to = q.to ? new Date(q.to) : new Date();
+    if (from > to) return res.status(400).json({ error: `\`from\` (${q.from}) is after \`to\`` });
+    const [triggers, [first]] = await Promise.all([
+      summarizeOfferTriggerEvents({ orgId, brandId: q.brandId, offerId: req.params.offerId, from, to }),
+      db.select({ at: sql<string | null>`min(${triggerEvents.createdAt})` }).from(triggerEvents),
+    ]);
+    res.json({
+      orgId,
+      brandId: q.brandId,
+      offerId: req.params.offerId,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      recordedSince: first?.at ? new Date(first.at).toISOString() : null,
+      triggers,
+    });
+  } catch (error) {
+    console.error("[campaign-service] trigger-events summary error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /internal/offers/:offerId/trigger-events?brandId=&limit=  (+ x-org-id)
+ *
+ * The latest trigger events of an offer, newest first (limit 1-200, absent = 50). A read.
+ */
+router.get("/internal/offers/:offerId/trigger-events", requireApiKey, validateQuery(OfferTriggerEventsListQuery), async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"];
+    if (typeof orgId !== "string" || !orgId) {
+      return res.status(400).json({ error: "x-org-id header is required: an offer belongs to one (org, brand) pair" });
+    }
+    const q = req.query as { brandId: string; limit?: string };
+    const limit = q.limit ? Number(q.limit) : 50;
+    if (limit < 1 || limit > 200) return res.status(400).json({ error: "limit must be between 1 and 200" });
+    const events = await listOfferTriggerEvents({ orgId, brandId: q.brandId, offerId: req.params.offerId, limit });
+    res.json({ events: events.map(serializeTriggerEvent) });
+  } catch (error) {
+    console.error("[campaign-service] trigger-events list error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

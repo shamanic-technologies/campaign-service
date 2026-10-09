@@ -1344,13 +1344,23 @@
                 "detail"
               ]
             }
+          },
+          "eventId": {
+            "type": "string",
+            "nullable": true
+          },
+          "triggerId": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
           "step",
           "legKeys",
           "triggered",
-          "skipped"
+          "skipped",
+          "eventId",
+          "triggerId"
         ]
       },
       "TriggerForStepBody": {
@@ -1367,12 +1377,310 @@
           "step": {
             "type": "string",
             "minLength": 1
+          },
+          "leadId": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
           "brandId",
           "offerId",
           "step"
+        ]
+      },
+      "RecordTriggerEventResponse": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/TriggerEvent"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "event",
+          "replayed"
+        ]
+      },
+      "TriggerEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "triggerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "step": {
+            "type": "string",
+            "nullable": true
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "leadId": {
+            "type": "string",
+            "nullable": true
+          },
+          "requestedByCampaignId": {
+            "type": "string",
+            "nullable": true
+          },
+          "recordedVia": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "string"
+          },
+          "dueAt": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "nullable": true
+          },
+          "skipReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "ranCampaignIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "performedByCaller": {
+            "type": "boolean"
+          },
+          "processedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "detail": {
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "triggerId",
+          "step",
+          "orgId",
+          "brandId",
+          "offerId",
+          "leadId",
+          "requestedByCampaignId",
+          "recordedVia",
+          "occurredAt",
+          "dueAt",
+          "status",
+          "outcome",
+          "skipReason",
+          "ranCampaignIds",
+          "performedByCaller",
+          "processedAt"
+        ]
+      },
+      "RecordTriggerEventBody": {
+        "type": "object",
+        "properties": {
+          "triggerId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "leadId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "requestedByCampaignId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "occurredAt": {
+            "type": "string"
+          },
+          "dueAt": {
+            "type": "string"
+          },
+          "performed": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "ran"
+                    ]
+                  },
+                  "campaignId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "campaignId"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "skipped"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "detail": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "triggerId",
+          "brandId",
+          "offerId"
+        ],
+        "additionalProperties": false
+      },
+      "OfferTriggerEventsSummaryResponse": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "recordedSince": {
+            "type": "string",
+            "nullable": true
+          },
+          "triggers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "triggerId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "events": {
+                  "type": "integer"
+                },
+                "ran": {
+                  "type": "integer"
+                },
+                "skipped": {
+                  "type": "integer"
+                },
+                "pending": {
+                  "type": "integer"
+                },
+                "skippedByReason": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "reason": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "count"
+                    ]
+                  }
+                },
+                "lastOccurredAt": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "triggerId",
+                "events",
+                "ran",
+                "skipped",
+                "pending",
+                "skippedByReason",
+                "lastOccurredAt"
+              ]
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "brandId",
+          "offerId",
+          "from",
+          "to",
+          "recordedSince",
+          "triggers"
+        ]
+      },
+      "OfferTriggerEventsListResponse": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TriggerEvent"
+            }
+          }
+        },
+        "required": [
+          "events"
         ]
       },
       "OfferSourceCampaignsResponse": {
@@ -4095,7 +4403,7 @@
           "Internal"
         ],
         "summary": "Run the campaign bought for the leg out of the step a lead just reached",
-        "description": "A lead reached a step on a (brand, offer); this runs the campaign bought for the leg OUT of that step immediately, instead of waiting for its next tick. The leg is features-service's statement (GET /public/channels -> legs[]) and the campaign is the one already stating that leg — nothing is inferred. The affordability/budget gate is untouched: the dispatch is the scheduler's own, so the run starts at gate-check like any other. A scope that cannot be resolved (unknown step, unreadable catalogue) fails loudly; a scope with no such campaign, or one that is stopped, held for money, already running or operated by the customer's own team, is an ordinary 200 with a NAMED skip. Skip reasons: `no_workflow`, `unfunded`, `run_in_flight`, `global_sales_budget_reached` (global mode: the brand's one pot is spent), `item_budget_reached` (items mode: this campaign's own item budget allows nothing more for now, or cannot be read), `cohort_run_in_flight`, `incomplete_campaign`, `dispatch_refused`, `failure_backoff`. In items mode the campaign is funded by its own (offer, leg, channel) item only, capped on the item's period (a step-triggered leg is reactive). A skipped lead is never dropped: it stays due and the first run the money can pay for works it. The org rides on x-org-id.",
+        "description": "A lead reached a step on a (brand, offer); this runs the campaign bought for the leg OUT of that step immediately, instead of waiting for its next tick. The leg is features-service's statement (GET /public/channels -> legs[]) and the campaign is the one already stating that leg — nothing is inferred. The affordability/budget gate is untouched: the dispatch is the scheduler's own, so the run starts at gate-check like any other. A scope that cannot be resolved (unknown step, unreadable catalogue) fails loudly; a scope with no such campaign, or one that is stopped, held for money, already running or operated by the customer's own team, is an ordinary 200 with a NAMED skip. Skip reasons: `no_workflow`, `unfunded`, `run_in_flight`, `global_sales_budget_reached` (global mode: the brand's one pot is spent), `item_budget_reached` (items mode: this campaign's own item budget allows nothing more for now, or cannot be read), `cohort_run_in_flight`, `incomplete_campaign`, `dispatch_refused`, `failure_backoff`. In items mode the campaign is funded by its own (offer, leg, channel) item only, capped on the item's period (a step-triggered leg is reactive). A skipped lead is never dropped: it stays due and the first run the money can pay for works it. The org rides on x-org-id. Every call is RECORDED as one trigger event (see POST /internal/trigger-events), typed with the trigger whose `fromStep` is this step; the answer adds `eventId` and `triggerId`, everything else is unchanged.",
         "security": [
           {
             "apiKeyAuth": []
@@ -4165,6 +4473,294 @@
           },
           "502": {
             "description": "The acquisition-channel catalogue could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/trigger-events": {
+      "post": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Record one occurrence of a declared trigger, and fire it now, later, or record it as already performed",
+        "description": "TRIGGER EVENTS (owner 2026-10-09): every leg is PROACTIVE (ticked on its budget, no trigger) or REACTIVE (runs ON DEMAND when exactly one TRIGGER asks: a positive reply received, a lead requested, a meeting booked...). The trigger TYPES are features-service's (GET /public/channels `triggers[]`, each reactive leg naming one on `channels[].stepTransitions[].triggerId`); each campaign's On/Off is its status; THIS service records the EVENTS, one per occurrence, with what each did: `ran` (`ranCampaignIds`) or `skipped` with one named `skipReason` (a campaign's own skip such as `unfunded` / `run_in_flight` / `no_workflow`, else `campaign_off` = a campaign is bought for the leg and is OFF, `no_campaign` = nobody bought it, `no_leg` = no published leg answers the trigger, `trigger_not_declared`). The campaigns a trigger runs are the ones of (org, brand, offer) bought for a (channel, leg) whose reactive transition names it, dispatched exactly like the scheduler's (same funding, budget, in-flight and cohort guards; the run starts at gate-check). WRITE CONTRACT: name a declared `triggerId` (unknown = 400 `unknown_trigger`, nothing recorded; trigger list unreadable = 502 `catalogue_unavailable`, nothing recorded). Due now (no `dueAt`, or `dueAt` <= now) = fired in this call, the outcome is on the returned event. `dueAt` later = recorded `pending` and fired by the scheduler when due (a planned event, e.g. 3h before a meeting), same rules. `performed` = the caller already did the work in-process (lead-service serving a lead on `lead_requested`): `{outcome: \"ran\", campaignId}` (a campaign of the org, else 400 `unknown_campaign`) or `{outcome: \"skipped\", reason, detail?}`; recorded as is, nothing dispatched. `idempotencyKey` (unique per org) makes a retry return the first event with `replayed: true` (200). The org rides on x-org-id.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service"
+            },
+            "required": true,
+            "description": "Internal org UUID from client-service",
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordTriggerEventBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Idempotent replay: the event already recorded under this key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordTriggerEventResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Recorded (and fired when due now)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordTriggerEventResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No org, malformed body, `unknown_trigger` or `unknown_campaign` (`reason` names it)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`catalogue_unavailable`: the trigger list could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/offers/{offerId}/trigger-events/summary": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Per trigger, over a window: how many events occurred, ran, were skipped (by reason), are pending",
+        "description": "TRIGGER EVENTS (owner 2026-10-09): every leg is PROACTIVE (ticked on its budget, no trigger) or REACTIVE (runs ON DEMAND when exactly one TRIGGER asks: a positive reply received, a lead requested, a meeting booked...). The trigger TYPES are features-service's (GET /public/channels `triggers[]`, each reactive leg naming one on `channels[].stepTransitions[].triggerId`); each campaign's On/Off is its status; THIS service records the EVENTS, one per occurrence, with what each did: `ran` (`ranCampaignIds`) or `skipped` with one named `skipReason` (a campaign's own skip such as `unfunded` / `run_in_flight` / `no_workflow`, else `campaign_off` = a campaign is bought for the leg and is OFF, `no_campaign` = nobody bought it, `no_leg` = no published leg answers the trigger, `trigger_not_declared`). The campaigns a trigger runs are the ones of (org, brand, offer) bought for a (channel, leg) whose reactive transition names it, dispatched exactly like the scheduler's (same funding, budget, in-flight and cohort guards; the run starts at gate-check). This read groups the offer's events on `occurred_at` in [from, to] (to absent = now) by trigger type; a type with no event in the window is absent (join with features-service `triggers[]` to show it at zero). `recordedSince` = the first event this service ever recorded: before it, absence means not recorded. Requires header x-org-id.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-trigger counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferTriggerEventsSummaryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing x-org-id or a malformed query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/offers/{offerId}/trigger-events": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "The latest trigger events of an offer, newest first",
+        "description": "TRIGGER EVENTS (owner 2026-10-09): every leg is PROACTIVE (ticked on its budget, no trigger) or REACTIVE (runs ON DEMAND when exactly one TRIGGER asks: a positive reply received, a lead requested, a meeting booked...). The trigger TYPES are features-service's (GET /public/channels `triggers[]`, each reactive leg naming one on `channels[].stepTransitions[].triggerId`); each campaign's On/Off is its status; THIS service records the EVENTS, one per occurrence, with what each did: `ran` (`ranCampaignIds`) or `skipped` with one named `skipReason` (a campaign's own skip such as `unfunded` / `run_in_flight` / `no_workflow`, else `campaign_off` = a campaign is bought for the leg and is OFF, `no_campaign` = nobody bought it, `no_leg` = no published leg answers the trigger, `trigger_not_declared`). The campaigns a trigger runs are the ones of (org, brand, offer) bought for a (channel, leg) whose reactive transition names it, dispatched exactly like the scheduler's (same funding, budget, in-flight and cohort guards; the run starts at gate-check). limit 1-200, absent = 50. Requires header x-org-id.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferTriggerEventsListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing x-org-id or a malformed query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
             "content": {
               "application/json": {
                 "schema": {

@@ -12,6 +12,7 @@ import type { DbTransaction } from "./campaign-status-history.js";
  *   campaign_status_transitions       org_id, through its campaign    moved
  *   campaign_audience_availability    org_id, through its campaign    moved
  *   brand_pause_transitions           org_id + brand_id               moved, brand rewritten
+ *   trigger_events                    org_id + brand_id               moved, brand rewritten
  *   campaigns_funnel_key_snapshot_20260926            org_id + brand_id, per campaign   moved, brand rewritten
  *   campaign_funnel_owner_decisions_funnel_snapshot_20260926  same                       moved, brand rewritten
  *   campaign_audience_exhaustion      NO org column — keyed on the campaign id, which never changes
@@ -130,11 +131,22 @@ export async function transferBrand(input: BrandTransferInput): Promise<BrandTra
       )
       SELECT count(*)::int AS cnt FROM updated`));
 
+    // Trigger events (lib/trigger-events.ts) are keyed on the brand itself, like the pause history.
+    const triggerEventsMoved = countOf(await tx.execute(sql`
+      WITH updated AS (
+        UPDATE trigger_events
+        SET org_id = ${targetOrgId}, brand_id = ${rewriteBrand("brand_id")}
+        WHERE ${pending(sql`org_id`)} AND brand_id = ${sourceBrandId}
+        RETURNING 1
+      )
+      SELECT count(*)::int AS cnt FROM updated`));
+
     const updatedTables = [
       { tableName: "campaigns", count: campaignsMoved },
       { tableName: "campaign_status_transitions", count: statusTransitions },
       { tableName: "campaign_audience_availability", count: availability },
       { tableName: "brand_pause_transitions", count: pauseTransitions },
+      { tableName: "trigger_events", count: triggerEventsMoved },
     ];
 
     for (const { table, campaignColumn } of SNAPSHOT_TABLES) {
