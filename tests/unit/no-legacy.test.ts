@@ -627,7 +627,11 @@ describe('No Legacy Patterns - CRITICAL', () => {
       .map(rel)
       .filter((r) => r !== 'lib/startable-workflow-client.ts')
       .sort();
-    expect(workflowReaders).toEqual(['lib/startable-pair.ts']);
+    // retired-workflow.ts asks a third question, and creates nothing: "workflow-service just
+    // answered 410 for the workflow an EXISTING ongoing campaign dispatched — which live dynasty
+    // replaces it?" It runs only on that refusal, never on a funded ceiling, never to stand a
+    // campaign up (2026-10-09, campaign 1e95a4c3 spun on a deprecated fallback for 3 days).
+    expect(workflowReaders).toEqual(['lib/retired-workflow.ts', 'lib/startable-pair.ts']);
 
     const startReaders = files
       .filter((f) => /startable-pair/.test(fs.readFileSync(f, 'utf-8')))

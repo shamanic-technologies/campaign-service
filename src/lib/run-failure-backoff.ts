@@ -36,7 +36,7 @@
  *     alert latch survives it for FAILING_ALERT_COOLDOWN_MS, so a flapping campaign mails staff at
  *     most once a day rather than once per streak.
  */
-import { and, eq, gt, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, type Campaign } from "../db/schema.js";
 
@@ -305,4 +305,40 @@ export async function notifyFailingCampaign(ctx: FailingAlertContext): Promise<b
   } catch (err) {
     return release(err instanceof Error ? err.message : String(err));
   }
+}
+
+/**
+ * A dispatch that never became a run (the scheduler could not trigger the workflow: execution
+ * refused, the anchor run unobtainable, the campaign missing what an execution needs) is a FAILED
+ * RUN for the streak. Before this, the failed re-trigger left `next_run_at` NULL: the stuck sweep
+ * re-claimed it every tick (a `campaign-recovery` event each time), the streak never moved, and
+ * neither the backoff nor the staff alert could ever fire — prod 2026-10-09, campaign 1e95a4c3,
+ * ~130 recoveries an hour for a campaign that had not run in 3 days.
+ *
+ * Same memory, same delay, same once-per-episode staff alert as a failed `/end-run`. Never a status
+ * change (owner rule 3). Writes `next_run_at` only while it is still NULL (the claim's own state),
+ * so a concurrent reschedule wins. Fail-SOFT: an unwritable streak still reschedules on the base
+ * cadence. Returns the time the next attempt is scheduled for.
+ */
+export async function backOffFailedDispatch(
+  campaign: FailingAlertContext["campaign"],
+  runId?: string,
+): Promise<Date> {
+  let failure: RecordedFailure | null = null;
+  try {
+    failure = await recordRunFailure(campaign.id);
+  } catch (err) {
+    console.error(`[campaign-service] could not record the failure streak of campaign ${campaign.id}:`, err);
+  }
+  const nextRunAt = new Date(Date.now() + (failure?.retryDelayMs ?? FAILURE_RETRY_BASE_MS));
+  try {
+    await db
+      .update(campaigns)
+      .set({ nextRunAt, updatedAt: new Date() })
+      .where(and(eq(campaigns.id, campaign.id), eq(campaigns.status, "ongoing"), isNull(campaigns.nextRunAt)));
+  } catch (err) {
+    console.error(`[campaign-service] could not reschedule campaign ${campaign.id} after a failed dispatch:`, err);
+  }
+  if (failure?.alertClaimedAt) void notifyFailingCampaign({ campaign, failure, runId });
+  return nextRunAt;
 }

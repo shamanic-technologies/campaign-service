@@ -9,6 +9,7 @@ import { ensureCampaignRunId } from "./trigger-run.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
 import { executeCampaignWorkflow } from "./workflows.js";
+import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import {
   hasLiveRunForBrandCohort,
   serializationCohort,
@@ -328,8 +329,8 @@ export async function triggerCampaignsForStep(
         requiredAudienceIds: campaign.audienceIds,
         excludedAudienceIds,
       });
-      const workflowSlug = selection.workflowSlug;
-      await executeCampaignWorkflow(workflowSlug, {
+      let workflowSlug = selection.workflowSlug;
+      const inputs = {
         campaignId: campaign.id,
         orgId: req.orgId,
         brandId: brandIdCsv,
@@ -339,7 +340,21 @@ export async function triggerCampaignsForStep(
         activeGoalId: campaign.activeGoalId,
         brandProfileId: campaign.brandProfileId,
         audienceId: selection.audienceId ?? campaign.audienceId,
-      });
+      };
+      try {
+        await executeCampaignWorkflow(workflowSlug, inputs);
+      } catch (err) {
+        // A deprecated workflow (410) is replaced once and never asked for again — see retired-workflow.ts.
+        const successor = await replaceRetiredWorkflow(err, {
+          campaignId: campaign.id,
+          storedSlug: campaign.workflowSlug,
+          featureSlug: campaign.featureSlug,
+          identity: { orgId: req.orgId, userId: campaign.createdByUserId, runId, brandId: brandIdCsv },
+        });
+        if (!successor) throw err;
+        workflowSlug = successor;
+        await executeCampaignWorkflow(workflowSlug, inputs);
+      }
       firedCohorts.add(cohort);
       outcome.triggered.push({
         campaignId: campaign.id,
