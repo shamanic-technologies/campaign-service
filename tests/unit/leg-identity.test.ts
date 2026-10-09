@@ -47,10 +47,10 @@ describe("leg identity across the outbound rename (wave 1)", () => {
     expect(sameLeg(COLD, OLD_REPLY, null)).toBe(false);
   });
 
-  it("STORES the legacy spelling in wave 1, whichever the caller sent", () => {
-    expect(storedLegKey(COLD, NEW_REPLY)).toBe(OLD_REPLY);
-    expect(storedLegKey(COLD, OLD_REPLY)).toBe(OLD_REPLY);
-    expect(storedLegKey(CALL, NEW_VISIT)).toBe(OLD_VISIT);
+  it("STORES the new spelling since wave 2, whichever the caller sent", () => {
+    expect(storedLegKey(COLD, NEW_REPLY)).toBe(NEW_REPLY);
+    expect(storedLegKey(COLD, OLD_REPLY)).toBe(NEW_REPLY);
+    expect(storedLegKey(CALL, OLD_VISIT)).toBe(NEW_VISIT);
     expect(storedLegKey(COLD, null)).toBeNull();
   });
 
