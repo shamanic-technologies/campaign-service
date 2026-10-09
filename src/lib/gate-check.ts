@@ -5,7 +5,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
-import { campaignCeilingCents, ceilingEntriesOf, fetchCampaignBudgets } from "./campaign-budget-client.js";
+import { campaignCeilingCents, ceilingEntriesOf, feedingSourceCeilingCents, fetchCampaignBudgets } from "./campaign-budget-client.js";
 import { fetchCampaignSplitToday, isSplitCeiling, splitPartReached, SPLIT_GATE_REASONS } from "./campaign-budget-split.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { globalSalesPotBlock } from "./global-sales-pot.js";
@@ -303,14 +303,17 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         if (ceiling.cents === null || ceiling.cents <= 0) {
           return { allowed: false, reason: "Campaign not funded" };
         }
-        if ((await campaignSpentToday()) >= ceiling.cents) {
+        // The lead sources feeding this campaign: its spend read counts what they spent, so their
+        // ongoing ceilings join its own here (campaign-budget-client.ts feedingSourceCeilingCents).
+        const feeding = await sourceCampaignsFeeding(campaign.campaignId, campaign.featureSlug!);
+        const paceCents = ceiling.cents + feedingSourceCeilingCents(budgets, campaign, feeding);
+        if ((await campaignSpentToday()) >= paceCents) {
           return { allowed: false, reason: "Campaign daily budget reached" };
         }
         // (a3) The ceiling in TWO parts (outreach + sourcing "up to"): each part binds on its own,
         // the total above stays the max. Unsplit = nothing read, nothing changed. Fail-CLOSED.
         // See campaign-budget-split.ts for the rule.
         if (isSplitCeiling(ceilingEntriesOf(budgets, campaign))) {
-          const feeding = await sourceCampaignsFeeding(campaign.campaignId, campaign.featureSlug!);
           const split = await fetchCampaignSplitToday(brandId, {
             campaignId: campaign.campaignId,
             offerId: campaign.offerId!,

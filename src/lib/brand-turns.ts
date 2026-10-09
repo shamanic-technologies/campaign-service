@@ -10,6 +10,8 @@ import { buildProvisioningIdentity } from "./provisioning-identity.js";
 import { isOutboundSalesFeature, isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { acquisitionChannelForFeature } from "./campaign-identity.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
+import { isSourcedChannel } from "./source-campaigns.js";
+import { sourceCampaignsFeeding } from "./source-campaign-store.js";
 import { adoptOfferForPairSafely } from "./campaign-offer-adoption.js";
 import { reportTurnHolds, type TurnHold } from "./turn-hold-event.js";
 import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
@@ -295,7 +297,10 @@ async function planOneBrand(
   // must not treat an unreadable spend as zero. Campaigns mode keeps the lenient 0 it always had.
   const strictSpent = new Map<string, number | null>();
   for (const c of group) {
-    const verdict = fundingFromBudgets(c, budgets);
+    // The sources feeding it: its spend read below already counts theirs, so its pace ceiling must
+    // add their money (campaign-funding.ts). [] for any channel that is not sourced (no DB read).
+    const feeding = isSourcedChannel(c.featureSlug) ? await sourceCampaignsFeeding(c.id, c.featureSlug!) : [];
+    const verdict = fundingFromBudgets(c, budgets, feeding);
     if (!verdict.funded) {
       deferred.set(c.id, heldAt);
       holds.push({

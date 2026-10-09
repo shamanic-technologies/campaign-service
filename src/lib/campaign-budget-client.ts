@@ -1,4 +1,5 @@
 import { sameLeg } from "./leg-identity.js";
+import { SOURCE_LEG_KEY } from "./source-campaigns.js";
 import type { IdentityHeaders } from "@distribute/runs-client";
 
 /**
@@ -184,6 +185,39 @@ export function campaignCeilingCents(
   const owned = ceilingEntriesOf(read, campaign);
   if (owned.length === 0) return { grain: "campaign", cents: null };
   return { grain: "campaign", cents: owned.reduce((sum, e) => sum + e.dailyBudgetCents, 0) };
+}
+
+/**
+ * The ceilings of the lead SOURCES feeding one outreach campaign, as one figure (cents), added to the
+ * outreach campaign's own ceiling wherever its spend is PACED.
+ *
+ * Why: an outreach campaign's spend read already counts what its feeding source campaigns spent
+ * (lib/channel-spend.ts: a cold-email run sources its lead, then emails it, and the sourcing is filed
+ * under the source campaign). Comparing that sum against the outreach ceiling ALONE held the whole
+ * run at the outreach figure and left the source's own money unspendable (prod 2026-10-09, Olive:
+ * outreach $3 + Apollo cold filters $17 configured, held at "348 of 300 cents"). The spend side and
+ * the ceiling side must cover the same campaigns.
+ *
+ * Only an ONGOING source adds its money: a source a person turned Off funds nothing today (what it
+ * spent this morning still counts in the spend read, which errs toward spending less). A source's
+ * ceiling is its exact (offer, origin, `start_to_lead_found`) entries, the same rule as any campaign
+ * (`ceilingEntriesOf`). Funding is NOT decided here: an outreach campaign whose own ceiling is
+ * missing or zero stays unfunded whatever its sources hold (sourcing money does not pay for emails).
+ */
+export function feedingSourceCeilingCents(
+  read: Extract<CampaignBudgetsRead, { ok: true }>,
+  campaign: { offerId?: string | null },
+  feeding: ReadonlyArray<{ featureSlug: string; status: string }>,
+): number {
+  if (!campaign.offerId || read.campaigns.length === 0) return 0;
+  let cents = 0;
+  for (const source of feeding) {
+    if (source.status !== "ongoing") continue;
+    for (const e of ceilingEntriesOf(read, { featureSlug: source.featureSlug, offerId: campaign.offerId, legKey: SOURCE_LEG_KEY })) {
+      if (e.dailyBudgetCents > 0) cents += e.dailyBudgetCents;
+    }
+  }
+  return cents;
 }
 
 /**
