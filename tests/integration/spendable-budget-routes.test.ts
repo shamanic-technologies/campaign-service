@@ -55,6 +55,59 @@ describe("Brand spendable budget", () => {
     expect(res.body.campaigns).toEqual([]);
   });
 
+  it("counts a running lead SOURCE campaign's ceiling as running, and names a stopped one", async () => {
+    const orgId = "org-sources";
+    const OFFER = "33333333-3333-4333-8333-333333333333";
+    const outreach = await insertTestCampaign(orgId, {
+      brandIds: [BRAND],
+      brandId: BRAND,
+      featureSlug: "sales-cold-email-outreach",
+      acquisitionChannel: "cold_email",
+      offerId: OFFER,
+      legKey: "lead_found_to_website_visit",
+      status: "ongoing",
+    });
+    const coldFilters = await insertTestCampaign(orgId, {
+      brandIds: [BRAND],
+      brandId: BRAND,
+      featureSlug: "sourcing-apollo-cold-filters",
+      offerId: OFFER,
+      legKey: "start_to_lead_found",
+      status: "ongoing",
+    });
+    const signals = await insertTestCampaign(orgId, {
+      brandIds: [BRAND],
+      brandId: BRAND,
+      featureSlug: "sourcing-apollo-buying-signals",
+      offerId: OFFER,
+      legKey: "start_to_lead_found",
+      status: "stopped",
+    });
+
+    fetchMock.mockResolvedValue(billingPayload({
+      brandId: BRAND,
+      dailyBudgetCents: "2500",
+      campaigns: [
+        { offerId: OFFER, legKey: "lead_found_to_website_visit", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "300" },
+        { offerId: OFFER, legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-cold-filters", dailyBudgetCents: "1700" },
+        { offerId: OFFER, legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-buying-signals", dailyBudgetCents: "500" },
+      ],
+    }));
+
+    const res = await request(app)
+      .get(`/brands/${BRAND}/spendable-budget`)
+      .set("x-api-key", API_KEY)
+      .set("x-org-id", orgId)
+      .expect(200);
+
+    expect(res.body.configuredDailyBudgetCents).toBe(2500);
+    expect(res.body.runningDailyBudgetCents).toBe(2000);
+    const row = (slug: string) => res.body.rows.find((r: { featureSlug: string }) => r.featureSlug === slug);
+    expect(row("sales-cold-email-outreach")).toMatchObject({ running: true, campaignId: outreach.id });
+    expect(row("sourcing-apollo-cold-filters")).toMatchObject({ running: true, campaignId: coldFilters.id });
+    expect(row("sourcing-apollo-buying-signals")).toMatchObject({ running: false, campaignId: signals.id, campaignStatus: "stopped" });
+  });
+
   it("counts only the ceiling whose campaign is ongoing", async () => {
     const orgId = "org-partly-running";
     await insertTestCampaign(orgId, {
