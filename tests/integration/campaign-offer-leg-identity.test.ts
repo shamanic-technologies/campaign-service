@@ -21,6 +21,7 @@ const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "org_test_offer_leg_identity";
 const SALES = "sales-cold-email-outreach";
 const LEG = "start_to_conversation";
+const NEW_LEG = "lead_found_to_conversation";
 const OTHER_LEG = "conversation_to_meeting_booked";
 
 /**
@@ -67,7 +68,8 @@ describe("Campaign identified by (offer, leg, channel)", () => {
     const created = await create(body("Offer x leg", brandId, { offerId, legKey: LEG })).expect(201);
     expect(created.body.campaign).not.toHaveProperty("funnelKey");
     expect(created.body.campaign.offerId).toBe(offerId);
-    expect(created.body.campaign.legKey).toBe(LEG);
+    // Stated in the legacy outbound spelling, stored and served in the new one (wave 2).
+    expect(created.body.campaign.legKey).toBe(NEW_LEG);
     expect(created.body.campaign.acquisitionChannel).toBe("cold_email");
     expect(created.body.campaign.status).toBe("ongoing");
 
@@ -96,26 +98,24 @@ describe("Campaign identified by (offer, leg, channel)", () => {
     await create(body("Offer only", brandId, { offerId: crypto.randomUUID() })).expect(400);
   });
 
-  // The outbound leg-key rename, wave 1 (lib/leg-identity.ts): the legacy and the new spelling of
-  // an OUTBOUND leg are one identity; the spelling stored and served stays the legacy one.
-  const NEW_LEG = "lead_found_to_conversation";
-
-  it("a create under the NEW outbound spelling is the SAME campaign, stored and served as today", async () => {
+  // The outbound leg-key rename (lib/leg-identity.ts): the legacy and the new spelling of an
+  // OUTBOUND leg are one identity; since wave 2 the spelling stored and served is the new one.
+  it("a create under the NEW outbound spelling is the SAME campaign, served in the new spelling", async () => {
     const brandId = crypto.randomUUID();
     const offerId = crypto.randomUUID();
 
     const first = await create(body("Outbound", brandId, { offerId, legKey: LEG })).expect(201);
     const again = await create(body("Outbound again", brandId, { offerId, legKey: NEW_LEG })).expect(200);
     expect(again.body.campaign.id).toBe(first.body.campaign.id);
-    expect(again.body.campaign.legKey).toBe(LEG);
+    expect(again.body.campaign.legKey).toBe(NEW_LEG);
   });
 
-  it("a campaign first created under the new spelling is stored under the legacy one", async () => {
+  it("a campaign first created under the new spelling is stored under it, and a legacy create finds it", async () => {
     const brandId = crypto.randomUUID();
     const offerId = crypto.randomUUID();
 
     const created = await create(body("Outbound new", brandId, { offerId, legKey: NEW_LEG })).expect(201);
-    expect(created.body.campaign.legKey).toBe(LEG);
+    expect(created.body.campaign.legKey).toBe(NEW_LEG);
     const again = await create(body("Outbound old", brandId, { offerId, legKey: LEG })).expect(200);
     expect(again.body.campaign.id).toBe(created.body.campaign.id);
   });
