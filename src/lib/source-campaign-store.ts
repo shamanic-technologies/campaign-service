@@ -1,10 +1,15 @@
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { getStatsBudget } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns, campaignStatusTransitions } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { campaignIdentityColumns, derivedCampaignName } from "./campaign-identity.js";
-import { campaignBirthTransition, TRANSITION_SOURCES, type DbTransaction } from "./campaign-status-history.js";
+import {
+  campaignBirthTransition,
+  startFollowingSourcesWithHistory,
+  TRANSITION_SOURCES,
+  type DbTransaction,
+} from "./campaign-status-history.js";
 import { isEntryLeg } from "./single-proactive.js";
 import { STOP_REASONS } from "./stop-reason.js";
 import {
@@ -163,27 +168,45 @@ function sourceCampaignValues(input: {
 }
 
 /**
- * A PERSON turned ON an outreach campaign of a sourced channel on an ENTRY leg, and its offer has
- * NO source campaign at all (none ever, any origin, any status): the channel's default origin is
- * born ON in the same transaction, so a brand-new offer finds leads exactly as before sources were
- * campaigns. An offer that has any source row is left alone: a person's Off stays off.
- *
- * Never reached by a tick. The catalogue is read only when a source would be created; unreadable =
- * nothing created, logged loud (a start is never refused for this).
+ * Who stopped a source campaign, when it was not a person acting on the SOURCE itself: the mirror's
+ * inherited copy of its outreach campaign's pause (10-07, `source_mirror`) or the payment hold. A
+ * source in that state is OFF because of something that happened to the OUTREACH campaign, so it
+ * follows the outreach campaign back ON when a person starts it.
  */
-export async function ensureDefaultSourceOnStart(
+const STOPS_NOBODY_CHOSE_ON_THE_SOURCE: ReadonlySet<string> = new Set([
+  TRANSITION_SOURCES.SOURCE_MIRROR,
+  TRANSITION_SOURCES.PAYMENT_HOLD,
+]);
+
+/**
+ * A PERSON turned ON an outreach campaign of a sourced channel on an ENTRY leg. In the same
+ * transaction, its offer is given lead sources to serve from:
+ *
+ *   - NO source campaign at all (none ever, any origin, any status): the channel's default origin is
+ *     born ON, so a brand-new offer finds leads exactly as before sources were campaigns;
+ *   - a source campaign that feeds this channel and is OFF although NO PERSON ever turned it off (its
+ *     latest transition is the 10-07 mirror's inherited copy of the outreach pause, or the payment
+ *     hold) is turned back ON, source `source_follows_outreach` (owner 2026-10-09: a source being OFF
+ *     is a decision someone took on the source itself; prod: Novemiq restarted its outreach and
+ *     served 0 leads for 5 hours behind a source the mirror had born OFF);
+ *   - a source a person turned off (`patch`) stays off.
+ *
+ * Never reached by a tick. The catalogue is read only when something would be written; unreadable =
+ * nothing written, logged loud (a start is never refused for this). Returns the sources turned ON.
+ */
+export async function ensureSourcesOnStart(
   tx: DbTransaction,
   started: CampaignRow,
   deps: { catalogue?: () => Promise<ChannelCatalogueRead> } = {},
-): Promise<CampaignRow | null> {
-  if (started.status !== "ongoing" || !isSourcedChannel(started.featureSlug)) return null;
+): Promise<CampaignRow[]> {
+  if (started.status !== "ongoing" || !isSourcedChannel(started.featureSlug)) return [];
   const brandId = brandOf(started);
-  if (!started.offerId || !started.legKey || !brandId) return null;
+  if (!started.offerId || !started.legKey || !brandId) return [];
   const origin = DEFAULT_SOURCE_ORIGIN_BY_CHANNEL[started.featureSlug!];
-  if (!origin) return null;
+  if (!origin) return [];
 
   const existing = await tx
-    .select({ id: campaigns.id })
+    .select({ id: campaigns.id, featureSlug: campaigns.featureSlug, status: campaigns.status })
     .from(campaigns)
     .where(
       and(
@@ -193,18 +216,42 @@ export async function ensureDefaultSourceOnStart(
         eq(campaigns.legKey, SOURCE_LEG_KEY),
         inArray(campaigns.featureSlug, ALL_ORIGINS),
       ),
-    )
-    .limit(1);
-  if (existing.length > 0) return null;
+    );
+
+  let toFollow: string[] = [];
+  if (existing.length > 0) {
+    const served = SOURCING_ORIGINS_BY_CHANNEL[started.featureSlug!] ?? [];
+    const off = existing.filter((r) => r.status === "stopped" && isLiveSourceOrigin(r.featureSlug) && served.includes(r.featureSlug!));
+    if (off.length === 0) return [];
+    const history = await tx
+      .select({ campaignId: campaignStatusTransitions.campaignId, source: campaignStatusTransitions.source, occurredAt: campaignStatusTransitions.occurredAt })
+      .from(campaignStatusTransitions)
+      .where(inArray(campaignStatusTransitions.campaignId, off.map((r) => r.id)))
+      .orderBy(desc(campaignStatusTransitions.occurredAt));
+    const latestSource = new Map<string, string>();
+    for (const t of history) if (!latestSource.has(t.campaignId)) latestSource.set(t.campaignId, t.source);
+    toFollow = off.filter((r) => STOPS_NOBODY_CHOSE_ON_THE_SOURCE.has(latestSource.get(r.id) ?? "")).map((r) => r.id);
+    if (toFollow.length === 0) return [];
+  }
 
   const catalogue = await (deps.catalogue ?? fetchChannelCatalogue)();
   if (!catalogue.ok) {
     console.error(
-      `[campaign-service] Default source campaign NOT created for offer ${started.offerId} (campaign ${started.id} started): catalogue unreadable (${catalogue.detail})`,
+      `[campaign-service] Source campaigns of offer ${started.offerId} NOT ${toFollow.length > 0 ? `turned back on (${toFollow.join(", ")})` : "created"} with campaign ${started.id}: catalogue unreadable (${catalogue.detail})`,
     );
-    return null;
+    return [];
   }
-  if (!isEntryLeg(catalogue, started.featureSlug, started.legKey)) return null;
+  if (!isEntryLeg(catalogue, started.featureSlug, started.legKey)) return [];
+
+  if (toFollow.length > 0) {
+    const followed = await startFollowingSourcesWithHistory(tx, started.orgId, toFollow);
+    if (followed.length > 0) {
+      console.log(
+        `[campaign-service] Source campaigns ${followed.map((c) => `${c.id} (${c.featureSlug})`).join(", ")} turned back ON with campaign ${started.id}: nobody had turned them off`,
+      );
+    }
+    return followed;
+  }
 
   const [inserted] = await tx
     .insert(campaigns)
@@ -227,7 +274,7 @@ export async function ensureDefaultSourceOnStart(
   console.log(
     `[campaign-service] Default source campaign ${inserted.id} (${origin}) born ON for offer ${started.offerId} with campaign ${started.id}`,
   );
-  return inserted;
+  return [inserted];
 }
 
 // === Migration of today's state ===

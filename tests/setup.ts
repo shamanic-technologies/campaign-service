@@ -21,7 +21,7 @@ vi.mock("../src/lib/source-campaign-store.js", async (importOriginal) => {
   return {
     ...original,
     sourceCampaignsFeeding: vi.fn().mockResolvedValue([]),
-    ensureDefaultSourceOnStart: vi.fn().mockResolvedValue(null),
+    ensureSourcesOnStart: vi.fn().mockResolvedValue([]),
   };
 });
 

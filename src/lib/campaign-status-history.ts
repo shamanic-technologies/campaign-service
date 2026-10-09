@@ -60,6 +60,13 @@ export const TRANSITION_SOURCES = {
    * (owner 2026-10-07, `POST /internal/source-campaigns/mirror`). Never written by a person or a tick.
    */
   SOURCE_MIRROR: "source_mirror",
+  /**
+   * A SOURCE campaign that NO PERSON ever turned off (stopped by the mirror's inherited copy of its
+   * outreach campaign's pause, or by the payment hold) turned back ON because a person started an
+   * outreach campaign it feeds (owner 2026-10-09, lib/source-campaign-store.ts). Only ever written
+   * while a person starts an outreach campaign; never by a tick.
+   */
+  SOURCE_FOLLOWS_OUTREACH: "source_follows_outreach",
   /** The payment-hold sweep: billing cannot charge the org's card (lib/payment-hold-sweep.ts). */
   PAYMENT_HOLD: "payment_hold",
   /** Migration 0057 opened the record by observing the PRESENT. Never written by the runtime. */
@@ -189,6 +196,37 @@ export async function stopDisplacedWithHistory(
     })),
   );
   return stopped;
+}
+
+/**
+ * Start the SOURCE campaigns a person's outreach start brings back ON (stopped, never by a person:
+ * lib/source-campaign-store.ts decides which), recording one `source_follows_outreach` transition
+ * each, inside the transaction that started the outreach campaign. A source has no workflow, so
+ * nothing is scheduled. Returns the started rows.
+ */
+export async function startFollowingSourcesWithHistory(
+  tx: DbTransaction,
+  orgId: string,
+  ids: string[],
+): Promise<CampaignRow[]> {
+  if (ids.length === 0) return [];
+  const started = await tx
+    .update(campaigns)
+    .set({ status: "ongoing", stopReason: null, nextRunAt: null, updatedAt: new Date() })
+    .where(and(eq(campaigns.orgId, orgId), eq(campaigns.status, "stopped"), inArray(campaigns.id, ids)))
+    .returning();
+  if (started.length === 0) return [];
+  await tx.insert(campaignStatusTransitions).values(
+    started.map((c) => ({
+      campaignId: c.id,
+      orgId,
+      fromStatus: "stopped",
+      toStatus: "ongoing",
+      reason: null,
+      source: TRANSITION_SOURCES.SOURCE_FOLLOWS_OUTREACH,
+    })),
+  );
+  return started;
 }
 
 /** After the commit, never awaited: billing hears each displaced stop as the person's move. */

@@ -13,8 +13,8 @@ export const SOURCES_OFF_RECHECK_MS = 10 * 60_000;
  * and the audience's origin is not ON ("nothing is bought from a source the customer did not turn
  * on"). When EVERY source of the offer is off, every serve is refused, so every run of the
  * outreach campaign is a no-op — and the DAG reports each refusal as `stopCampaign`, which marks the
- * served audience exhausted. Prod 2026-10-09, campaign 1e95a4c3 (its only source stopped by a person
- * on 10-07): one run every ~11s, one audience falsely marked exhausted per run, heading for the
+ * served audience exhausted. Prod 2026-10-09, campaign 1e95a4c3 (its only source born OFF by the 10-07
+ * mirror, since fixed: lib/source-campaign-store.ts `ensureSourcesOnStart`): one run every ~11s, one audience falsely marked exhausted per run, heading for the
  * all-exhausted path (paid audience refill + a "fully contacted" client email) in about two minutes.
  *
  * The question is answered from the SAME read lead-service's refusal is built on
