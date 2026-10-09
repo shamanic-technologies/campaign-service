@@ -115,6 +115,16 @@ vi.mock("../../src/lib/campaign-resume.js", () => ({
   RESUME_SWEEP_INTERVAL_MS: 600_000,
 }));
 
+const { mockSourcesOffHold, mockReportTurnHolds } = vi.hoisted(() => ({
+  mockSourcesOffHold: vi.fn(),
+  mockReportTurnHolds: vi.fn(),
+}));
+vi.mock("../../src/lib/sources-off-hold.js", () => ({
+  sourcesOffHold: mockSourcesOffHold,
+  SOURCES_OFF_RECHECK_MS: 600_000,
+}));
+vi.mock("../../src/lib/turn-hold-event.js", () => ({ reportTurnHolds: mockReportTurnHolds }));
+
 import {
   reRunDueCampaigns,
   claimStuckCampaigns,
@@ -129,6 +139,7 @@ describe("Scheduler - reRunDueCampaigns", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecuteCampaignWorkflow.mockResolvedValue(undefined);
+    mockSourcesOffHold.mockResolvedValue(null);
     mockResolveWorkflowSlug.mockImplementation(async (a: { fallbackSlug: string }) => ({ workflowSlug: a.fallbackSlug, audienceId: null }));
     mockExhaustedAudienceIds.mockResolvedValue([]);
     mockDbReturning.mockResolvedValue([]);
@@ -253,6 +264,29 @@ describe("Scheduler - reRunDueCampaigns", () => {
       "configured-slug",
       expect.objectContaining({ audienceId: null }),
     );
+  });
+
+  it("holds, never dispatches, a campaign whose every lead source is off — and says so", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-src-off",
+        orgId: "org-1",
+        workflowSlug: "sales-cold-email-outreach-compass",
+        brandIds: ["brand-1"],
+        createdByUserId: "user-1",
+        parentRunId: "anchor-1",
+        featureSlug: "sales-cold-email-outreach",
+        legKey: "lead_found_to_conversation",
+      },
+    ]);
+    mockSourcesOffHold.mockResolvedValueOnce({ sourceCampaignIds: ["s1"] });
+
+    await reRunDueCampaigns();
+
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+    expect(mockReportTurnHolds).toHaveBeenCalledWith([
+      expect.objectContaining({ reason: "sources_off", data: { sourceCampaignIds: ["s1"] } }),
+    ]);
   });
 
   it("should NOT create the EXECUTION run — start-run in the DAG still owns that", async () => {

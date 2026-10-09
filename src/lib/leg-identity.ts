@@ -98,6 +98,17 @@ export function otherOutboundSpelling(legKey: string): string | null {
   return LEGACY_TO_NEW.get(legKey) ?? NEW_TO_LEGACY.get(legKey) ?? null;
 }
 
+/**
+ * Whether `legKey` is the LEGACY spelling of a renamed outbound leg, as far as `featureSlug` lets
+ * us tell: true on an outbound channel, false on any other stated channel, and true when no
+ * channel is stated (a channel-less filter still widens to the outbound rows, see
+ * `otherOutboundSpelling`). Feeds the `legacy-outbound-leg-key` log only (`legacy-leg-key-log.ts`).
+ */
+export function isLegacyOutboundSpelling(featureSlug: string | null | undefined, legKey: string): boolean {
+  if (!LEGACY_TO_NEW.has(legKey)) return false;
+  return !featureSlug || isRenamedChannel(featureSlug);
+}
+
 /** The spelling this service WRITES (and therefore serves) for `featureSlug`'s leg (wave 2: the new one). */
 export function storedLegKey(featureSlug: string | null | undefined, legKey: string): string;
 export function storedLegKey(featureSlug: string | null | undefined, legKey: string | null | undefined): string | null | undefined;
