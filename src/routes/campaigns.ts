@@ -49,7 +49,7 @@ import { fetchChannelCatalogue, type ChannelCatalogueRead } from "../lib/channel
 import { SOURCE_LEG_KEY, isSourceOriginSlug } from "../lib/source-campaigns.js";
 import { sameLeg, storedLegKey } from "../lib/leg-identity.js";
 import { legKeyMatches } from "../lib/leg-key-sql.js";
-import { ensureDefaultSourceOnStart } from "../lib/source-campaign-store.js";
+import { ensureSourcesOnStart } from "../lib/source-campaign-store.js";
 import { ReactiveDefaultsBody } from "../schemas.js";
 
 const router = Router();
@@ -68,10 +68,11 @@ function personActor(req: AuthenticatedRequest): StatusActor {
  */
 async function displaceOtherProactive(tx: DbTransaction, started: CampaignRow): Promise<CampaignRow[]> {
   const toStop = await proactiveCampaignsToStop(tx, started);
-  // The offer's first outreach campaign of a sourced channel is born with its default SOURCE
-  // campaign ON, in the same transaction (lib/source-campaign-store.ts), so it finds leads exactly
-  // as before sources were campaigns. An offer holding any source row is left alone.
-  await ensureDefaultSourceOnStart(tx, started);
+  // An outreach campaign of a sourced channel starts with sources to serve from, in the same
+  // transaction (lib/source-campaign-store.ts): the offer's first one births its default SOURCE
+  // campaign ON; a source nobody ever turned off (mirror, payment hold) comes back ON with it; a
+  // person's Off on a source stays off.
+  await ensureSourcesOnStart(tx, started);
   return toStop;
 }
 
