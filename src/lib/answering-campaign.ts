@@ -2,6 +2,7 @@ import { and, arrayContains, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
+import { catalogueLegOf, sameLeg, withOtherOutboundSpellings } from "./leg-identity.js";
 import { resolvePredecessorCampaign, PredecessorScopeError } from "./predecessor-campaign.js";
 import { SALES_FAMILY_FEATURE_SLUGS, isServicePerformedFeature } from "./sales-outreach-campaign.js";
 
@@ -174,7 +175,8 @@ export async function resolveAnsweringCampaign(
     );
   }
 
-  const ownLeg = catalogue.legs.find((leg) => leg.legKey === campaign.legKey);
+  // Either outbound spelling of the campaign's leg (lib/leg-identity.ts).
+  const ownLeg = catalogueLegOf(catalogue, campaign.featureSlug, campaign.legKey);
   if (!ownLeg) {
     throw new AnsweringScopeError(
       `leg ${JSON.stringify(campaign.legKey)} is not a leg features-service publishes`,
@@ -188,11 +190,10 @@ export async function resolveAnsweringCampaign(
   const continuingLegKeys = catalogue.legs
     .filter((leg) => leg.legKey !== ownLeg.legKey && leg.fromStepKey === toStepKey)
     .map((leg) => leg.legKey);
-  const continuing = new Set(continuingLegKeys);
   const startableFeatureSlugs = [...SALES_FAMILY_FEATURE_SLUGS].filter((slug) => {
     if (isServicePerformedFeature(slug)) return false;
     const performed = catalogue.legsBySlug.get(slug);
-    return performed ? [...performed].some((leg) => continuing.has(leg)) : false;
+    return performed ? [...performed].some((leg) => continuingLegKeys.some((k) => sameLeg(slug, k, leg))) : false;
   });
   const partial = { toStepKey, continuingLegKeys, startableFeatureSlugs };
   if (continuingLegKeys.length === 0) return answer(ANSWERING_ABSENCES.NO_CONTINUING_LEG, partial);
@@ -204,10 +205,12 @@ export async function resolveAnsweringCampaign(
         eq(campaigns.orgId, campaign.orgId),
         arrayContains(campaigns.brandIds, [brandId]),
         eq(campaigns.offerId, campaign.offerId),
-        inArray(campaigns.legKey, continuingLegKeys),
+        // A superset across the outbound rename, re-checked per row under its own channel.
+        inArray(campaigns.legKey, withOtherOutboundSpellings(continuingLegKeys)),
       ),
     })
-  ).filter((row) => !isServicePerformedFeature(row.featureSlug));
+  ).filter((row) => !isServicePerformedFeature(row.featureSlug)
+    && continuingLegKeys.some((k) => sameLeg(row.featureSlug, k, row.legKey)));
   if (rows.length === 0) return answer(ANSWERING_ABSENCES.NO_CAMPAIGN, partial);
 
   const live = rows

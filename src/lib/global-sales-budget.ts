@@ -1,4 +1,4 @@
-import type { CatalogueLeg } from "./channel-operator-client.js";
+import { legIsReactive, sameLeg, type CatalogueLegView } from "./leg-identity.js";
 import type { SalesPathEntry } from "./offer-sales-paths-client.js";
 
 /**
@@ -30,14 +30,17 @@ import type { SalesPathEntry } from "./offer-sales-paths-client.js";
 /**
  * Is this campaign's leg REACTIVE — a leg out of a step a lead reaches, rather than an entry leg?
  *
- * Read from the catalogue features-service publishes (`fromStep` null = entry). A leg the catalogue
- * does not name, or a campaign stating no leg, is treated as PROACTIVE: the conservative side,
- * because only a reactive leg takes its turn ahead of the entry legs. Both draw on the same pot.
+ * Read from the catalogue features-service publishes: the (channel, leg) transition's `reactive`,
+ * else the leg's `fromStep` (`legIsReactive`, either outbound spelling). A leg the catalogue does
+ * not name, or a campaign stating no leg, is treated as PROACTIVE: the conservative side, because
+ * only a reactive leg takes its turn ahead of the entry legs. Both draw on the same pot.
  */
-export function isReactiveLeg(legKey: string | null | undefined, legs: readonly CatalogueLeg[]): boolean {
-  if (!legKey) return false;
-  const leg = legs.find((l) => l.legKey === legKey);
-  return leg !== undefined && leg.fromStepKey !== null;
+export function isReactiveLeg(
+  legKey: string | null | undefined,
+  catalogue: CatalogueLegView,
+  featureSlug?: string | null,
+): boolean {
+  return legIsReactive(catalogue, featureSlug, legKey) === true;
 }
 
 /**
@@ -149,7 +152,7 @@ export function selectByPathRoi(candidates: GlobalCandidate[], targets: EntryTar
   const matched = new Set<string>();
   for (const t of targets) {
     const matches = candidates.filter(
-      (c) => c.offerId === t.offerId && c.legKey === t.legKey && c.featureSlug === t.featureSlug,
+      (c) => c.offerId === t.offerId && c.featureSlug === t.featureSlug && sameLeg(t.featureSlug, c.legKey, t.legKey),
     );
     for (const m of matches) matched.add(m.campaignId);
     const pick = lowestFill(matches);

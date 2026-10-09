@@ -1,3 +1,4 @@
+import { combinationIdentity } from "./leg-identity.js";
 import type { IdentityHeaders } from "@distribute/runs-client";
 import { buildServiceHeaders } from "./downstream-headers.js";
 
@@ -75,9 +76,11 @@ export function planReactiveDefaults(
   paths: readonly CatalogueSalesPath[],
 ): ReactivePlan {
   const basis: ReactivePlan["basis"] = selected.stated ? "stated" : "roi_above_1";
-  const stated = new Set(selected.combinationKeys ?? []);
+  // brand-service and features-service may spell an outbound leg differently mid-rename
+  // (lib/leg-identity.ts): a ticked path is matched on the combination's identity.
+  const stated = new Set((selected.combinationKeys ?? []).map(combinationIdentity));
   const ticked = paths.filter((p) =>
-    selected.stated ? stated.has(p.combinationKey) : p.roi !== null && p.roi > 1,
+    selected.stated ? stated.has(combinationIdentity(p.combinationKey)) : p.roi !== null && p.roi > 1,
   );
 
   const byPair = new Map<string, ReactivePair>();

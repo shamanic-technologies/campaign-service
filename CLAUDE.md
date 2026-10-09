@@ -42,6 +42,13 @@ An org whose card billing cannot charge stops every campaign.
 - **Siblings read**: `GET /internal/offers/:offerId/source-campaigns?brandId=` + `x-org-id` (one entry per live origin, absent = OFF; `runningSourceCampaigns[] {featureSlug, campaignId, campaignKey}`) and `GET /internal/campaigns/:campaignId/source-campaigns` (the sources feeding an outreach campaign, `running`). The generic `GET /campaigns?offerId&featureSlug=<origin>&legKey=start_to_lead_found&status=ongoing` works too.
 - **Migration** `POST /internal/source-campaigns/mirror {apply}` (dry run default, idempotent, re-runnable; source `source_mirror`): per offer with an entry-leg outreach campaign of a sourced channel, the channel default + every live origin that SPENT under one of its outreach campaigns in 14 days, ON iff an outreach campaign it serves is ON, else OFF with that campaign's stop reason. `tests/setup.ts` stubs `sourceCampaignsFeeding` ([]) and `ensureDefaultSourceOnStart` (null); the source tests restore the actual.
 
+### Outbound leg-key rename, wave 1 (owner 2026-10-09; `lib/leg-identity.ts`, SQL `lib/leg-key-sql.ts`)
+
+- LOCKED, outbound slugs only (`OUTBOUND_RENAMED_FEATURE_SLUGS`): `start_to_conversation` ≡ `lead_found_to_conversation`, `start_to_website_visit` ≡ `lead_found_to_website_visit`. Same keys on any other channel are NOT renamed. The rename table is the second leg literal `no-legacy.test.ts` allows.
+- Every leg comparison goes through `sameLeg`/`legIdentity`/`publishedSpelling`/`combinationIdentity` (billing ceilings, items, global targets, catalogue, brand-service combination keys); every DB leg filter through `legKeyMatches` / `withOtherOutboundSpellings` + per-row `sameLeg`. A bare `=== legKey` across two sources is the bug.
+- WRITES use `storedLegKey` (wave 1 = legacy spelling, so the partial unique index still polices races); served values unchanged. Wave 2 (separate brief) migrates rows and flips `STORED_SPELLING`.
+- Proactive/reactive/entry is `legIsReactive`: the channel's `stepTransitions[].reactive` (features-service, per channel x leg), else the leg's `fromStep`. Never "starts from nothing" alone, never a `start_` prefix.
+
 ## Identity and money (wave C2: the sales funnel is GONE)
 
 Org > brand > offer > outcome > leg. A campaign is (org, brand, OFFER, LEG, acquisition channel): `uniq_campaigns_org_brand_offer_leg_channel` (migration 0058, partial on `ongoing`, `coalesce` on offer and leg).

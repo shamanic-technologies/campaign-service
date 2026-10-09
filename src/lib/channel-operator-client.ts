@@ -73,6 +73,16 @@ export type ChannelCatalogueRead =
        * different statements and only one of them is a caller's mistake.
        */
       stepKeys: ReadonlySet<string>;
+      /**
+       * channel slug -> (leg key as that channel publishes it -> the transition's `reactive`).
+       * features-service states it PER (channel, leg) on `stepTransitions[].reactive`: true = the
+       * campaign runs on a lead reaching its from-step, false = it starts the lead's journey (the
+       * offer's proactive campaign, paced on its daily budget). Read instead of "the leg starts
+       * from nothing" because, after the outbound rename, an outbound leg starts at `lead_found`
+       * while its campaign is still the offer's proactive one (lib/leg-identity.ts). A transition
+       * that states no boolean is absent. Optional so a hand-built read (tests) may omit it.
+       */
+      reactiveBySlug?: ReadonlyMap<string, ReadonlyMap<string, boolean>>;
     }
   | { ok: false; detail: string };
 
@@ -98,7 +108,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       channels?: Array<{
         slug?: unknown;
         operatedBy?: unknown;
-        stepTransitions?: Array<{ legKey?: unknown }>;
+        stepTransitions?: Array<{ legKey?: unknown; reactive?: unknown }>;
       }>;
       legs?: Array<{
         legKey?: unknown;
@@ -113,20 +123,24 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
 
     const operatorBySlug = new Map<string, ChannelOperator>();
     const legsBySlug = new Map<string, ReadonlySet<string>>();
+    const reactiveBySlug = new Map<string, ReadonlyMap<string, boolean>>();
     for (const channel of data.channels) {
       if (typeof channel?.slug !== "string" || channel.slug.length === 0) continue;
       // Which legs this channel performs. A channel that publishes none states an EMPTY set,
       // which is a truthful answer ("this channel performs no leg") and
       // not the same thing as a slug the catalogue never names.
       const legs = new Set<string>();
+      const reactive = new Map<string, boolean>();
       if (Array.isArray(channel.stepTransitions)) {
         for (const transition of channel.stepTransitions) {
           if (typeof transition?.legKey === "string" && transition.legKey.length > 0) {
             legs.add(transition.legKey);
+            if (typeof transition.reactive === "boolean") reactive.set(transition.legKey, transition.reactive);
           }
         }
       }
       legsBySlug.set(channel.slug, legs);
+      reactiveBySlug.set(channel.slug, reactive);
       // Only the two published values are read. A third one this service has never heard of is
       // NOT guessed at: it is left out of the map, so the call site treats that channel exactly
       // as it treats one the catalogue does not publish.
@@ -156,7 +170,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       }
     }
 
-    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys };
+    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

@@ -2,6 +2,7 @@ import { and, arrayContains, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
+import { catalogueLegOf, sameLeg, withOtherOutboundSpellings } from "./leg-identity.js";
 
 /**
  * WHICH CAMPAIGN RAN THE LEG THAT ENDS WHERE THIS ONE BEGINS.
@@ -157,7 +158,8 @@ export async function resolvePredecessorCampaign(
     );
   }
 
-  const ownLeg = catalogue.legs.find((leg) => leg.legKey === campaign.legKey);
+  // Either outbound spelling of the campaign's leg (lib/leg-identity.ts).
+  const ownLeg = catalogueLegOf(catalogue, campaign.featureSlug, campaign.legKey);
   if (!ownLeg) {
     // The campaign carries a leg the fleet no longer publishes. A real disagreement between two
     // services about what a leg is — not an absence, and never resolved by guessing.
@@ -192,11 +194,13 @@ export async function resolvePredecessorCampaign(
       eq(campaigns.orgId, campaign.orgId),
       arrayContains(campaigns.brandIds, [brandId]),
       eq(campaigns.offerId, campaign.offerId),
-      inArray(campaigns.legKey, precedingLegKeys),
+      inArray(campaigns.legKey, withOtherOutboundSpellings(precedingLegKeys)),
     ),
   });
 
-  const siblings = rows;
+  // The IN above is a superset across the outbound rename; each row is kept only when its own
+  // channel names one of the preceding legs.
+  const siblings = rows.filter((row) => precedingLegKeys.some((k) => sameLeg(row.featureSlug, k, row.legKey)));
   const live = siblings.filter((row) => row.status === "ongoing");
   if (live.length > 1) {
     throw new PredecessorScopeError(

@@ -29,13 +29,13 @@ function cand(o: Partial<GlobalCandidate> & { campaignId: string }): GlobalCandi
 
 describe("isReactiveLeg", () => {
   it("a leg OUT of a step is reactive; an entry leg is not", () => {
-    expect(isReactiveLeg(REPLY_TO_MEETING, LEGS)).toBe(true);
-    expect(isReactiveLeg(ENTRY_REPLY, LEGS)).toBe(false);
+    expect(isReactiveLeg(REPLY_TO_MEETING, { legs: LEGS })).toBe(true);
+    expect(isReactiveLeg(ENTRY_REPLY, { legs: LEGS })).toBe(false);
   });
   it("a leg the catalogue does not name, or no leg, reads PROACTIVE (capped — the conservative side)", () => {
-    expect(isReactiveLeg("mystery_leg", LEGS)).toBe(false);
-    expect(isReactiveLeg(null, LEGS)).toBe(false);
-    expect(isReactiveLeg(REPLY_TO_MEETING, [])).toBe(false);
+    expect(isReactiveLeg("mystery_leg", { legs: LEGS })).toBe(false);
+    expect(isReactiveLeg(null, { legs: LEGS })).toBe(false);
+    expect(isReactiveLeg(REPLY_TO_MEETING, { legs: [] })).toBe(false);
   });
 });
 

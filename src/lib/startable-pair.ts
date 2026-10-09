@@ -1,3 +1,4 @@
+import { publishedSpelling, storedLegKey } from "./leg-identity.js";
 import type { IdentityHeaders } from "@distribute/runs-client";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { fetchCampaignBudgets, type CampaignBudgetsRead } from "./campaign-budget-client.js";
@@ -103,7 +104,9 @@ export async function resolveStartablePair(
       "Tell us which offer and which step this channel should work, so we know which budget it runs on.",
     );
   }
-  const legKey = input.legKey;
+  // Either outbound spelling of the leg is the same identity; the one STORED is this service's
+  // (lib/leg-identity.ts), so a pair started under the new spelling finds and writes the same row.
+  const legKey = storedLegKey(input.featureSlug, input.legKey);
 
   // A SOURCE campaign (lib/source-campaigns.ts): the origin's On/Off for the offer. It has no
   // workflow (lead-service finds the leads inside the outreach campaign's run) and is keyed on the
@@ -149,7 +152,7 @@ export async function resolveStartablePair(
     );
   }
   // The leg must be one this channel performs (features-service's statement, joined verbatim).
-  if (!performed.has(legKey)) {
+  if (publishedSpelling(input.featureSlug, performed, legKey) === null) {
     return refuse(400, "leg_not_performed", "This channel doesn't perform that step.");
   }
 
@@ -230,7 +233,7 @@ export async function resolveReactiveDefaultWorkflow(
   if (!isSalesFamilyFeature(featureSlug)) return { ok: false, code: "channel_not_paced_here" };
   const performed = catalogue.legsBySlug.get(featureSlug);
   if (!performed) return { ok: false, code: "unknown_channel" };
-  if (!performed.has(legKey)) return { ok: false, code: "leg_not_performed" };
+  if (publishedSpelling(featureSlug, performed, legKey) === null) return { ok: false, code: "leg_not_performed" };
   if (
     (catalogue.operatorBySlug.get(featureSlug) ?? "platform") === "customer" ||
     isServicePerformedFeature(featureSlug)
