@@ -36,14 +36,6 @@ vi.mock("../../src/lib/channel-operator-client.js", async (importOriginal) => {
     })),
   };
 });
-vi.mock("../../src/lib/reactive-defaults.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../src/lib/reactive-defaults.js")>();
-  return {
-    ...original,
-    fetchOfferSelectedSalesPaths: vi.fn(async () => ({ ok: true, value: { stated: true, combinationKeys: [] } })),
-    fetchOfferCatalogueSalesPaths: vi.fn(async () => ({ ok: true, value: [] })),
-  };
-});
 
 import request from "supertest";
 import app from "../../src/index.js";
