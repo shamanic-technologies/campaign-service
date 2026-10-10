@@ -13,7 +13,6 @@ import {
 import { ceilingEntriesOf, type CampaignBudgetEntry } from "../../src/lib/campaign-budget-client.js";
 import { itemsOf, type SalesItem } from "../../src/lib/sales-items.js";
 import { selectByPathRoi } from "../../src/lib/global-sales-budget.js";
-import { planReactiveDefaults } from "../../src/lib/reactive-defaults.js";
 
 const COLD = "sales-cold-email-outreach";
 const CALL = "cold-call-outreach";
@@ -150,18 +149,5 @@ describe("money matches either spelling", () => {
     expect(pick).toEqual({ campaignId: "c1", pathKey: "p1" });
   });
 
-  it("a ticked path stated by brand-service in the old spelling matches features' new one", () => {
-    const plan = planReactiveDefaults(
-      { stated: true, combinationKeys: [`${OLD_REPLY}@${COLD}+conversation_to_meeting_booked@ai-meeting-booking`] } as any,
-      [{
-        combinationKey: `${NEW_REPLY}@${COLD}+conversation_to_meeting_booked@ai-meeting-booking`,
-        roi: null,
-        legs: [
-          { legKey: NEW_REPLY, reactive: false, workedBy: "platform", channelSlug: COLD, channelManaged: true },
-          { legKey: "conversation_to_meeting_booked", reactive: true, workedBy: "platform", channelSlug: "ai-meeting-booking", channelManaged: true },
-        ],
-      }],
-    );
-    expect(plan.pairs.map((p) => p.featureSlug)).toEqual(["ai-meeting-booking"]);
-  });
+
 });

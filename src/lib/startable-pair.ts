@@ -215,10 +215,9 @@ function refuse(
 }
 
 /**
- * WHICH DAG A REACTIVE CAMPAIGN THAT IS ON BY DEFAULT IS BORN ON (owner 2026-10-05, see
- * lib/reactive-defaults.ts). Asked only while a PERSON acts on the offer (starting its proactive
- * campaign, saving its sales paths), never by a tick, which is why it lives here beside the other
- * person-start read.
+ * WHICH DAG A REACTIVE (leg x channel) CAMPAIGN IS BORN ON (owner 2026-10-05). Asked only while a
+ * PERSON starts a funded pair (`resolveStartablePair`), never by a tick, which is why it lives here
+ * beside the other person-start read. (The reactive DEFAULTS that also asked it are retired 2026-10-10.)
  *
  * Same checks as `resolveStartablePair` except FUNDING: a reactive campaign is on by default, and
  * whether it may spend stays the funding hold's question on every run (unfunded = held, never

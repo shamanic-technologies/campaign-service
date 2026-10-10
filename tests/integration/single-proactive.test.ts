@@ -40,10 +40,6 @@ vi.mock("../../src/lib/startable-pair.js", async (importOriginal) => {
   return { ...original, resolveStartablePair: mockResolve };
 });
 vi.mock("../../src/lib/startable-workflow-client.js", () => ({ fetchStartableWorkflowSlug: mockWorkflow }));
-vi.mock("../../src/lib/reactive-defaults.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../src/lib/reactive-defaults.js")>();
-  return { ...original, fetchOfferSelectedSalesPaths: mockSelected, fetchOfferCatalogueSalesPaths: mockPaths };
-});
 
 import app from "../../src/index.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
@@ -176,9 +172,8 @@ describe("ONE proactive campaign ON per offer (owner 2026-10-05)", () => {
     const res = await activate(only.id).expect(200);
     expect(res.body.campaign.status).toBe("ongoing");
     expect(res.body.stoppedCampaigns).toEqual([]);
-    // The rule read nothing (the background reactive-defaults read is the only catalogue call).
-    await vi.waitFor(() => expect(mockSelected).toHaveBeenCalled());
-    expect(mockCatalogue).toHaveBeenCalledTimes(1);
+    // The rule read nothing, and nothing switches on in the background (reactive defaults retired 2026-10-10).
+    expect(mockCatalogue).toHaveBeenCalledTimes(0);
     const rows = await db.query.campaigns.findMany({ where: eq(campaigns.orgId, ORG) });
     expect(rows).toHaveLength(1);
     const transitions = await db.select().from(campaignStatusTransitions);
@@ -267,89 +262,19 @@ describe("ONE proactive campaign ON per offer (owner 2026-10-05)", () => {
   });
 });
 
-describe("REACTIVE campaigns ON by default (owner 2026-10-05)", () => {
-  const meetingPath = {
-    combinationKey: "start_to_conversation@sales-cold-email-outreach+conversation_to_meeting_booked@ai-meeting-booking",
-    roi: 2.5,
-    legs: [
-      { legKey: "start_to_conversation", reactive: false, workedBy: "platform", channelSlug: COLD, channelManaged: true },
-      { legKey: "conversation_to_meeting_booked", reactive: true, workedBy: "platform", channelSlug: MEETING, channelManaged: true },
-    ],
-  };
-  const post = () =>
-    request(app)
+describe("reactive defaults are retired (owner 2026-10-10: a campaign IS a sales funnel)", () => {
+  afterAll(async () => {
+    await cleanTestData();
+    await closeDb();
+  });
+  it("POST /offers/:offerId/reactive-defaults no longer exists", async () => {
+    await request(app)
       .post(`/offers/${OFFER}/reactive-defaults`)
       .set("x-api-key", API_KEY)
       .set("x-org-id", ORG)
       .set("x-user-id", "user_paths")
       .set("x-run-id", crypto.randomUUID())
-      .send({ brandId: BRAND });
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    await cleanTestData();
-    mockCatalogue.mockResolvedValue(CATALOGUE);
-    mockExecute.mockResolvedValue(undefined);
-    mockWorkflow.mockResolvedValue({ ok: true, workflowSlug: "meeting-v1" });
-    mockSelected.mockResolvedValue({ ok: true, value: { stated: false, combinationKeys: null } });
-    mockPaths.mockResolvedValue({ ok: true, value: [meetingPath] });
-  });
-  afterAll(async () => {
-    await cleanTestData();
-    await closeDb();
-  });
-
-  it("creates the reactive campaign a ticked path uses, ON, as the person's act", async () => {
-    const res = await post().expect(200);
-    expect(res.body.basis).toBe("roi_above_1");
-    expect(res.body.started).toHaveLength(1);
-    const created = await statusOf(res.body.started[0].id);
-    expect(created).toMatchObject({
-      status: "ongoing", offerId: OFFER, legKey: "conversation_to_meeting_booked", featureSlug: MEETING,
-      brandId: BRAND, workflowSlug: "meeting-v1",
-    });
-    const [t] = await db.select().from(campaignStatusTransitions).where(eq(campaignStatusTransitions.campaignId, created.id));
-    expect(t).toMatchObject({ fromStatus: null, toStatus: "ongoing", source: "reactive_default" });
-    expect(signal).toHaveBeenCalledWith(expect.objectContaining({ campaignId: created.id, source: "reactive_default", fromStatus: null }));
-
-    // Idempotent: the next save finds it on.
-    const again = await post().expect(200);
-    expect(again.body.started).toEqual([]);
-    expect(again.body.alreadyOn).toEqual([created.id]);
-  });
-
-  it("never re-enables a reactive campaign a person turned off", async () => {
-    const off = await campaign("conversation_to_meeting_booked", "stopped", { stopReason: "manual" });
-    const res = await post().expect(200);
-    expect(res.body.started).toEqual([]);
-    expect(res.body.keptOff).toEqual([off.id]);
-    expect((await statusOf(off.id)).status).toBe("stopped");
-  });
-
-  it("a path the customer did not tick turns nothing on", async () => {
-    mockSelected.mockResolvedValue({ ok: true, value: { stated: true, combinationKeys: ["something-else"] } });
-    const res = await post().expect(200);
-    expect(res.body.basis).toBe("stated");
-    expect(res.body.started).toEqual([]);
-    expect(await db.select().from(campaigns)).toHaveLength(0);
-  });
-
-  it("an unreadable sales-path read is a 502 and writes nothing", async () => {
-    mockPaths.mockResolvedValue({ ok: false, detail: "HTTP 500" });
-    const res = await post().expect(502);
-    expect(res.body.reason).toBe("sales_paths_unavailable");
-    expect(await db.select().from(campaigns)).toHaveLength(0);
-  });
-
-  it("is applied in the background when a person turns the offer's PROACTIVE campaign on", async () => {
-    const proactive = await campaign("start_to_conversation", "stopped");
-    await activate(proactive.id).expect(200);
-    await vi.waitFor(async () => {
-      const rows = await db.query.campaigns.findMany({
-        where: and(eq(campaigns.orgId, ORG), eq(campaigns.legKey, "conversation_to_meeting_booked")),
-      });
-      expect(rows).toHaveLength(1);
-      expect(rows[0]!.status).toBe("ongoing");
-    });
+      .send({ brandId: BRAND })
+      .expect(404);
   });
 });

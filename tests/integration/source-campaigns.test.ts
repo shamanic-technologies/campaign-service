@@ -34,10 +34,6 @@ vi.mock("../../src/lib/mission-status-notification.js", async (importOriginal) =
   const original = await importOriginal<typeof import("../../src/lib/mission-status-notification.js")>();
   return { ...original, signalMissionStatusChanged: vi.fn(async () => undefined) };
 });
-vi.mock("../../src/lib/reactive-defaults.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../src/lib/reactive-defaults.js")>();
-  return { ...original, fetchOfferSelectedSalesPaths: mockSelected, fetchOfferCatalogueSalesPaths: mockPaths };
-});
 
 import app from "../../src/index.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
