@@ -230,8 +230,12 @@ export async function resolveReactiveDefaultWorkflow(
   identity: IdentityHeaders & { userId: string; runId: string },
   catalogue: Extract<ChannelCatalogueRead, { ok: true }>,
   deps: { workflow?: typeof fetchStartableWorkflowSlug } = {},
+  opts: { pacedBySalesFunnelCaps?: boolean } = {},
 ): Promise<{ ok: true; workflowSlug: string | null } | { ok: false; code: StartRefusal["code"] }> {
-  if (!isSalesFamilyFeature(featureSlug)) return { ok: false, code: "channel_not_paced_here" };
+  // The sales family is the MONEY statement of the pre-funnel model (billing's per (offer, leg,
+  // channel) ceiling paces it). A SALES FUNNEL pipe is paced by its funnel's caps instead
+  // (lib/sales-funnel-campaigns.ts), whatever the channel's family, so it is not asked there.
+  if (!opts.pacedBySalesFunnelCaps && !isSalesFamilyFeature(featureSlug)) return { ok: false, code: "channel_not_paced_here" };
   const performed = catalogue.legsBySlug.get(featureSlug);
   if (!performed) return { ok: false, code: "unknown_channel" };
   if (publishedSpelling(featureSlug, performed, legKey) === null) return { ok: false, code: "leg_not_performed" };
@@ -345,7 +349,7 @@ export async function resolveSalesFunnelPlan(
       units.push({ pipeId, featureSlug: channelSlug, legKey: SOURCE_LEG_KEY, mode, workflowSlug: null });
       continue;
     }
-    const workflow = await resolveReactiveDefaultWorkflow(channelSlug, legKey, identity, catalogue, { workflow: deps.workflow });
+    const workflow = await resolveReactiveDefaultWorkflow(channelSlug, legKey, identity, catalogue, { workflow: deps.workflow }, { pacedBySalesFunnelCaps: true });
     if (!workflow.ok) {
       const label = name ?? pipeId;
       if (workflow.code === "workflow_unavailable") {

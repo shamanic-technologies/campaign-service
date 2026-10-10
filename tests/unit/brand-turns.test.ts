@@ -280,6 +280,16 @@ describe("planBrandTurns", () => {
     expect(String(mockFetch.mock.calls[0][0])).toContain("/sales-funnels/f%40x/caps");
   });
 
+  it("plans a sales funnel unit OUTSIDE the sales family on its funnel's caps (#608)", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ stated: false, maxBudget: null, maxVolume: null, pipes: null }) });
+    const now = new Date("2026-10-10T10:00:00Z");
+    const deferred = await planBrandTurns(
+      [claimed({ id: "li-unit", featureSlug: "organic-linkedin-publishing", offerId: OFFER, salesFunnelCampaignId: "fc-li", salesFunnelId: "f@li" })],
+      now,
+    );
+    expect(deferred.get("li-unit")?.getTime()).toBe(now.getTime() + 10 * 60_000);
+  });
+
   it("gives a FUNDED sales funnel unit its cohort's turn on its funnel's consumed / max budget", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

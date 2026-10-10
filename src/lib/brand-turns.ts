@@ -171,7 +171,9 @@ export async function planBrandTurns(
   // cohort rule (one run in flight per brand cohort), ranked on their funnel's consumed / max budget.
   const unitGroups = new Map<string, Array<{ campaign: ClaimedSalesCampaign; candidate: TurnCandidate }>>();
   for (const c of claimed) {
-    if (!isSalesFamilyFeature(c.featureSlug)) continue;
+    // A SALES FUNNEL unit is planned whatever its channel's family: its money is its funnel's caps
+    // (a LinkedIn Posting pipe is a funnel pipe like any other, campaign-service #608).
+    if (!isSalesFamilyFeature(c.featureSlug) && !c.salesFunnelCampaignId) continue;
     // A SALES FUNNEL unit's money is its funnel's caps (lib/sales-funnel-campaigns.ts), never the
     // brand's per-pipe ceilings, items or pot this planner reads: a unit its funnel does not fund is
     // held here, on the funding cadence, and never enters the pre-funnel turn.
@@ -269,7 +271,7 @@ async function planSalesFunnelUnits(
   const firedLegacyCohorts = new Set(
     claimed
       .filter((c) => !c.salesFunnelCampaignId && `${c.orgId}::${c.brandIds?.[0] ?? ""}` === key)
-      .filter((c) => isSalesFamilyFeature(c.featureSlug) && !deferred.has(c.id))
+      .filter((c) => (isSalesFamilyFeature(c.featureSlug) || !!c.salesFunnelCampaignId) && !deferred.has(c.id))
       .map((c) => serializationCohort(c.featureSlug)),
   );
   const cohorts = new Map<string, TurnCandidate[]>();
@@ -826,12 +828,12 @@ export async function hasLiveRunForBrandCohort(
       eq(campaigns.status, "ongoing"),
       arrayContains(campaigns.brandIds, [brandId]),
     ),
-    columns: { id: true, featureSlug: true },
+    columns: { id: true, featureSlug: true, salesFunnelCampaignId: true },
   });
 
   const startedAfter = new Date(now.getTime() - LIVE_RUN_FRESHNESS_MS).toISOString();
   for (const c of alive) {
-    if (!isSalesFamilyFeature(c.featureSlug)) continue;
+    if (!isSalesFamilyFeature(c.featureSlug) && !c.salesFunnelCampaignId) continue;
     if (serializationCohort(c.featureSlug) !== cohort) continue;
     const { runs } = await listRuns({
       orgId,
