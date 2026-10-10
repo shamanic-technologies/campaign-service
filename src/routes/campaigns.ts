@@ -63,7 +63,12 @@ type CampaignRow = typeof campaigns.$inferSelect;
  * funnel campaign to act on instead. Anything else (audiences, services, destination) stays the
  * unit's own. null = not a unit, or nothing refused.
  */
-const SALES_FUNNEL_UNIT_LOCKED_FIELDS = ["offerId", "legKey", "featureSlug", "brandIds"] as const;
+// Identity, and the per-pipe budget of the pre-funnel model: a unit's money is its funnel's caps, so
+// nothing writes an old-style per-campaign budget for it (billing v0.83.12 conversion).
+const SALES_FUNNEL_UNIT_LOCKED_FIELDS = [
+  "offerId", "legKey", "featureSlug", "brandIds",
+  "dailyBudgetCents", "maxBudgetDailyUsd", "maxBudgetWeeklyUsd", "maxBudgetMonthlyUsd", "maxBudgetTotalUsd",
+] as const;
 function salesFunnelUnitRefusal(
   existing: CampaignRow,
   body: Record<string, unknown>,
@@ -72,7 +77,7 @@ function salesFunnelUnitRefusal(
   const locked = SALES_FUNNEL_UNIT_LOCKED_FIELDS.filter((f) => body[f] !== undefined);
   if (locked.length === 0) return null;
   return {
-    error: "This campaign is a step of a sales funnel campaign: its offer, step and channel belong to that sales funnel.",
+    error: "This campaign is a step of a sales funnel campaign: its offer, step, channel and budget belong to that sales funnel.",
     reason: "sales_funnel_unit",
     salesFunnelCampaignId: existing.salesFunnelCampaignId,
   };
