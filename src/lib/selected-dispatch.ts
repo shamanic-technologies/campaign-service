@@ -1,5 +1,5 @@
 import { executeCampaignWorkflow } from "./workflows.js";
-import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
+import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 
@@ -41,10 +41,7 @@ export async function dispatchSelectedRun(
 ): Promise<string> {
   const brandIds = campaign.brandIds ?? [];
   const brandIdCsv = brandIds.join(",");
-  // Only a rotating feature picks an audience, so only a rotating feature pays for this read.
-  const excludedAudienceIds = isWorkflowRotationEnabled(campaign.featureSlug)
-    ? await getFreshExhaustedAudienceIds(campaign.id)
-    : [];
+  const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
   const selection = await resolveSelectionForTrigger({
     featureSlug: campaign.featureSlug,
     primaryBrandId: brandIds[0],

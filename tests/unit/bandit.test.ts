@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import { thompsonArgminCost, greedyArgminCost, sampleBeta, type Arm, type Rng } from "../../src/lib/bandit.js";
 import {
   selectWorkflowGreedy,
-  isWorkflowRotationEnabled,
   type ProjectionRow,
 } from "../../src/lib/features-workflow-projection-client.js";
 
@@ -202,26 +201,9 @@ describe("selectWorkflowGreedy", () => {
   });
 });
 
-describe("isWorkflowRotationEnabled", () => {
-  it("enables rotation for the sales-outreach feature family (cold + CRM)", () => {
-    expect(isWorkflowRotationEnabled("sales-cold-email-outreach")).toBe(true);
-    expect(isWorkflowRotationEnabled("sales-crm-email-outreach")).toBe(true);
-  });
-
-  it("disables rotation for a PAID-REACH channel — there is no send evidence to rank a DAG on", () => {
-    // The projection prices a workflow on send-tagged outcome evidence only an outbound channel
-    // produces. A Google Ads campaign runs the workflow its campaign states, run after run, and
-    // makes no features-service call at all.
-    expect(isWorkflowRotationEnabled("google-ads")).toBe(false);
-  });
-
-  it("disables rotation for pr-expert features", () => {
-    expect(isWorkflowRotationEnabled("pr-expert-quote-outreach")).toBe(false);
-    expect(isWorkflowRotationEnabled("pr-expert-quote-opportunities")).toBe(false);
-  });
-
-  it("disables rotation for any other feature and the empty slug", () => {
-    expect(isWorkflowRotationEnabled("hiring-cold-email-outreach")).toBe(false);
-    expect(isWorkflowRotationEnabled("")).toBe(false);
+describe("no per-channel selection gate (owner 2026-10-10: homogeneous infra)", () => {
+  it("the cold-email-only rotation gate is gone from the selector", async () => {
+    const mod = await import("../../src/lib/features-workflow-projection-client.js");
+    expect("isWorkflowRotationEnabled" in mod).toBe(false);
   });
 });

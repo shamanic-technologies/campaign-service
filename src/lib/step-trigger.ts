@@ -8,7 +8,7 @@ import { campaignFunding } from "./campaign-funding.js";
 import { isSalesFunnelUnit, orderForSharedPipes, pipeKey, salesFunnelUnitMoney, salesFunnelUnitRef, sharedSalesFunnelPipes } from "./sales-funnel-campaigns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
-import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
+import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { executeCampaignWorkflow, type WorkflowTriggerInput } from "./workflows.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import {
@@ -404,9 +404,7 @@ export async function runCampaignsInScope(
       const runId = await ensureCampaignRunId(campaign);
       // Same cell pick as the scheduled path — the audience first, then the cheapest workflow in
       // its column — so an event-triggered run lands on the same grid cell a due one would.
-      const excludedAudienceIds = isWorkflowRotationEnabled(campaign.featureSlug)
-        ? await getFreshExhaustedAudienceIds(campaign.id)
-        : [];
+      const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
       const selection = await resolveSelectionForTrigger({
         featureSlug: campaign.featureSlug,
         primaryBrandId: brandIds[0],

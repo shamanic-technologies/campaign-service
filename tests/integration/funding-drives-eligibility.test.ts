@@ -19,7 +19,6 @@ const { mockExecute } = vi.hoisted(() => ({ mockExecute: vi.fn() }));
 
 vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
   resolveSelectionForTrigger: vi.fn(async (a) => ({ workflowSlug: a.fallbackSlug, audienceId: null })),
-  isWorkflowRotationEnabled: () => false,
 }));
 
 vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
