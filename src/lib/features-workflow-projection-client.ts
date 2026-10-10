@@ -1,6 +1,5 @@
 import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-headers.js";
 import { thompsonArgminCost, type Arm, type Rng } from "./bandit.js";
-import { isOutboundSalesFeature } from "./sales-outreach-campaign.js";
 
 // Audience-grain, send-tagged evidence for one (audience × workflow dynasty) couple.
 // Present ONLY on audienceId != null rows whose audience actually spent under this couple
@@ -607,31 +606,13 @@ export function serveableAudienceIdsInProjection(
   return [...ids].sort();
 }
 
-/**
- * Whether the greedy workflow rotation applies to a given feature. When false, the
- * trigger keeps the campaign's configured workflowSlug (no features-service call).
- *
- * Scoped to the OUTBOUND cold-email channels — those vary their workflow across runs, and the
- * projection prices a DAG on the send-tagged outcome evidence only they produce. A paid-reach
- * channel runs the workflow its campaign states, run after run: there is no second dynasty to
- * rotate onto and no send evidence to rank one against another. Every other feature
- * always runs its campaign's configured workflowSlug, run after run, with no
- * features-service call and no rotation. (Product decision 2026-07-07: rotation is a
- * sales-outreach lever; extended to sales-crm-email-outreach 2026-07-24 and to every OUTBOUND
- * sales channel since — a second cold-email channel is a second feature, and it rotates like the
- * first.)
- */
-export function isWorkflowRotationEnabled(featureSlug: string): boolean {
-  return isOutboundSalesFeature(featureSlug);
-}
-
 /** What the trigger decided for THIS run: the cell it dispatches on. */
 export interface TriggerSelection {
   /** The workflow to launch. Always a real slug — the configured one when nothing was pickable. */
   workflowSlug: string;
   /**
    * The audience this run must serve, chosen BEFORE dispatch so the workflow could be picked
-   * within its column. Null when no audience was chosen (a non-rotating feature, an unreachable
+   * within its column. Null when no audience was chosen (an unreachable
    * features-service, a grid that enumerates none, or a campaign whose constraints leave none) —
    * the caller then supplies whatever it supplied before this existed, and /start-run picks the
    * audience exactly as it always has.
@@ -697,7 +678,9 @@ export async function resolveSelectionForTrigger(args: {
     excludedAudienceIds,
   } = args;
   // Rotation is feature-scoped: non-rotating features keep their configured workflow.
-  if (!isWorkflowRotationEnabled(featureSlug)) return { workflowSlug: fallbackSlug, audienceId: null };
+  // EVERY pipe takes features-service's choice through this one path (owner 2026-10-10: the infra is
+  // homogeneous on workflows and pipes; no per-channel case). Retired: the cold-email-only gate
+  // (`isWorkflowRotationEnabled`), under which every other channel ran its configured workflow.
   // A campaign that states NO LEG has nothing to be priced on, and inventing something to ask with
   // would be pricing on a guess. Such a campaign should not reach selection at all, so it
   // is said loudly and runs the workflow the customer configured — never a re-picked one.

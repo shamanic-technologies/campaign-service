@@ -15,7 +15,6 @@ vi.mock("../../src/lib/startable-workflow-client.js", () => ({
 // scheduler trigger does not make real network calls during integration tests.
 vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
   resolveSelectionForTrigger: vi.fn(async (a) => ({ workflowSlug: a.fallbackSlug, audienceId: null })),
-  isWorkflowRotationEnabled: () => false,
 }));
 
 vi.mock("../../src/lib/workflows.js", async (importOriginal) => {

@@ -41,7 +41,6 @@ vi.mock("../../src/lib/brand-turns.js", () => ({
 vi.mock("../../src/lib/trigger-run.js", () => ({ ensureCampaignRunId: mockAnchor }));
 vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
   resolveSelectionForTrigger: mockResolveSlug,
-  isWorkflowRotationEnabled: () => true,
 }));
 vi.mock("../../src/lib/audience-exhaustion.js", () => ({
   getFreshExhaustedAudienceIds: mockExhausted,
