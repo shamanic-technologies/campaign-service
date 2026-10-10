@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 
-const { mockCatalogue, mockBudgets, mockSelected, mockPaths, mockFunnel, mockSearch, mockPipe } = vi.hoisted(() => ({
+const { mockCatalogue, mockBudgets, mockSelected, mockPaths, mockFunnel, mockSearch, mockPipe, mockPathSearch } = vi.hoisted(() => ({
+  mockPathSearch: vi.fn(),
   mockPipe: vi.fn(),
   mockCatalogue: vi.fn(),
   mockBudgets: vi.fn(),
@@ -24,7 +25,7 @@ vi.mock("../../src/lib/reactive-defaults.js", async (importOriginal) => {
 });
 vi.mock("../../src/lib/sales-funnel-catalogue-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/sales-funnel-catalogue-client.js")>();
-  return { ...original, fetchSalesFunnel: mockFunnel, searchSalesFunnelIds: mockSearch, fetchPipe: mockPipe };
+  return { ...original, fetchSalesFunnel: mockFunnel, searchSalesFunnelIds: mockSearch, fetchPipe: mockPipe, searchSalesPaths: mockPathSearch };
 });
 
 import { db } from "../../src/db/index.js";
@@ -105,6 +106,7 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
       return { ok: false, notFound: true, detail: "404" };
     });
     mockPipe.mockImplementation(async (id: string) => ({ ok: true, value: { id, name: "Bird", channelSlug: id.split("|")[0], legKey: id.split("|")[1], mode: "reactive" } }));
+    mockPathSearch.mockResolvedValue({ ok: true, value: [{ id: `${MEET}+meeting_booked_to_paid_client`, type: "reactive" }, { id: `${ENTRY}+${MEET}`, type: "proactive" }] });
     mockSearch.mockImplementation(async (_q: string, channel: string) => ({ ok: true, value: channel === AMB ? [MEET_FUNNEL] : channel === COLD ? [MIXED_FUNNEL, PROACTIVE_FUNNEL] : [] }));
   });
 

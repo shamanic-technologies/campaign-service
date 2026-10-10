@@ -6,7 +6,7 @@ import { ceilingEntriesOf, fetchCampaignBudgets, type CampaignBudgetEntry } from
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
 import { combinationIdentity, legIsReactive, sameLeg } from "./leg-identity.js";
 import { fetchOfferCatalogueSalesPaths, fetchOfferSelectedSalesPaths } from "./reactive-defaults.js";
-import { fetchPipe, fetchSalesFunnel, searchSalesFunnelIds } from "./sales-funnel-catalogue-client.js";
+import { fetchPipe, fetchSalesFunnel, searchSalesFunnelIds, searchSalesPaths } from "./sales-funnel-catalogue-client.js";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { isSourceOriginSlug } from "./source-campaigns.js";
 
@@ -251,7 +251,12 @@ async function reactiveFunnelOf(
   pipe: Row,
   operatorBySlug: ReadonlyMap<string, string>,
 ): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }> {
-  const funnel = await pureFunnelStartingAt(pipe, [], operatorBySlug);
+  // The REACTIVE sales paths through this leg (the catalogue's served `type`): the funnel list is
+  // ranked by ROI and capped at 25, so a reactive-only funnel is looked for on its own path first.
+  const paths = await searchSalesPaths(pipe.legKey!);
+  if (!paths.ok) return { ok: false, reason: `catalogue_unreadable: ${paths.detail}` };
+  const reactivePathIds = paths.value.filter((p) => p.type === "reactive").map((p) => p.id);
+  const funnel = await pureFunnelStartingAt(pipe, reactivePathIds, operatorBySlug);
   if (!funnel.ok && funnel.reason === "no_catalogue_funnel_with_only_this_pipe") {
     return { ok: false, reason: "no_reactive_funnel_in_catalogue" };
   }

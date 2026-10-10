@@ -105,3 +105,14 @@ export async function searchSalesFunnelIds(
   return readCatalogue(`/internal/catalogue/sales-funnels?${params.toString()}`, (body) =>
     z.object({ rows: z.array(z.object({ id: z.string() })) }).parse(body).rows.map((r) => r.id));
 }
+
+/**
+ * Sales path ids the catalogue's text search finds for `q`, with each path's served `type`
+ * (`proactive` | `reactive`, features-service v0.179.125). At most 25.
+ */
+export async function searchSalesPaths(q: string): Promise<CatalogueRead<Array<{ id: string; type: string | null }>>> {
+  const params = new URLSearchParams({ q, limit: "25" });
+  return readCatalogue(`/internal/catalogue/sales-paths?${params.toString()}`, (body) =>
+    z.object({ rows: z.array(z.object({ id: z.string(), type: z.string().nullable().optional() })) })
+      .parse(body).rows.map((r) => ({ id: r.id, type: r.type ?? null })));
+}
