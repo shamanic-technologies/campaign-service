@@ -49,6 +49,9 @@ import { legIdentity, sameLeg } from "./leg-identity.js";
  *   pipes keep answering. An unmeasured consumption holds the proactive pipes, loudly. Nothing
  *   about what anything costs changes.
  *
+ * POLL READS: a unit may pay a metered poll-trigger read (`salesFunnelPollRoom`): funnel max budget
+ *   stated, consumption measured, consumed + the read's worst case under it. Billed like any payer.
+ *
  * NOT DONE HERE: making a funnel coherent (a proactive pipe feeding the reactive one) is the agent's
  * job; one-proactive-per-offer (lib/single-proactive.ts) does not apply to funnels (several funnels
  * of one offer may run), and a funnel start stops no pre-funnel campaign.
@@ -239,6 +242,40 @@ export async function salesFunnelUnitMoney(
     }
   }
   return { run: true, pace: { spentCents: budget.consumedCents, ceilingCents: amountCents } };
+}
+
+/**
+ * May this UNIT pay for one metered poll-trigger read (lib/poll-trigger-detector.ts `pollPayer`)?
+ * The read is spend filed under the unit, so it is judged on the unit's money, its funnel's caps:
+ * a max budget is stated, its consumption is measured, and the read's worst-case cost still fits
+ * under it (consumed + call <= max budget). Volume is not consumed by a read (it counts first
+ * contacts). Unreadable or unmeasured = no (fail-closed). Billed exactly as any payer: the unit's
+ * own org (= its funnel campaign's), on the unit's ancestor run.
+ */
+export async function salesFunnelPollRoom(
+  unit: SalesFunnelUnitRef,
+  callCents: number,
+  now: Date = new Date(),
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!unit.brandId || !unit.offerId || !unit.salesFunnelId) {
+    return { ok: false, reason: "sales funnel unit states no brand, offer or sales funnel" };
+  }
+  const read = await fetchSalesFunnelCaps(
+    { orgId: unit.orgId, brandId: unit.brandId, offerId: unit.offerId, salesFunnelId: unit.salesFunnelId },
+    now.getTime(),
+  );
+  if (!read.ok) return { ok: false, reason: `sales funnel caps unreadable (${read.detail})` };
+  const budget = read.caps.maxBudget;
+  if (!read.caps.stated || !budget || budget.amountCents === null || !(budget.amountCents > 0)) {
+    return { ok: false, reason: "sales funnel states no max budget" };
+  }
+  if (budget.consumedCents === null) {
+    return { ok: false, reason: `sales funnel budget unmeasured (${budget.consumedUnavailableReason})` };
+  }
+  if (budget.consumedCents + callCents > budget.amountCents) {
+    return { ok: false, reason: `sales funnel ${budget.period} budget: ${budget.consumedCents}c of ${budget.amountCents}c consumed` };
+  }
+  return { ok: true };
 }
 
 /** The money question's view of a campaign row (or a claimed one). */

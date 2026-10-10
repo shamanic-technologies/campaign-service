@@ -41,7 +41,8 @@ vi.mock("../../src/lib/lead-activity-client.js", async (importOriginal) => {
 
 import { and, eq } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
-import { triggerEvents, triggerPollCursors } from "../../src/db/schema.js";
+import { campaigns, salesFunnelCampaigns, triggerEvents, triggerPollCursors } from "../../src/db/schema.js";
+import { resetSalesFunnelCapsCache } from "../../src/lib/sales-funnel-campaigns.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { fireDueTriggerEvents } from "../../src/lib/trigger-events.js";
 import { runTriggerDetectorsTick } from "../../src/lib/trigger-detectors.js";
@@ -263,6 +264,78 @@ describe("generic trigger detectors", () => {
       const treg = vi.fn();
       expect(await pollDueTriggers(catalogue() as never, new Date(), treg)).toMatchObject({ held: 1 });
       expect(treg).not.toHaveBeenCalled();
+    });
+
+    describe("a brand whose only live campaigns are SALES FUNNEL units still has a payer", () => {
+      const SALES_FUNNEL_ID = `${REACT_LEG}@${REACT_SLUG}+conversation_to_paid_client`;
+      const capsFetch = (caps: Record<string, unknown>) =>
+        vi.fn(async (url: string) => {
+          if (!String(url).includes("/sales-funnels/")) throw new Error(`unexpected fetch ${url}`);
+          return { ok: true, status: 200, json: async () => ({ pipes: null, maxVolume: null, ...caps }) };
+        });
+      const budget = (consumedCents: string) => ({
+        amountCents: "1000", period: "weekly", periodStart: "2026-10-05T00:00:00Z", periodEnd: null,
+        consumedCents, remainingCents: null, reached: Number(consumedCents) >= 1000,
+        consumedUnavailableReason: null, consumedUnavailableDetail: null,
+      });
+
+      async function funnelUnitOn(featureSlug: string, legKey: string) {
+        const [parent] = await db.insert(salesFunnelCampaigns).values({
+          orgId: ORG, brandId: BRAND, offerId: OFFER, salesFunnelId: SALES_FUNNEL_ID, salesFunnelName: "Epiphany", status: "ongoing",
+        }).returning();
+        const unit = await campaignOn(featureSlug, legKey);
+        await db.update(campaigns).set({ salesFunnelId: SALES_FUNNEL_ID, salesFunnelCampaignId: parent.id }).where(eq(campaigns.id, unit.id));
+        return unit;
+      }
+
+      beforeEach(async () => {
+        process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+        process.env.BILLING_SERVICE_API_KEY = "k";
+        resetSalesFunnelCapsCache();
+        // The pre-funnel money says NO: a unit must never be paid by it, nor held by it.
+        mockFunding.mockResolvedValue({ funded: false, reason: "pre-funnel money is not a unit's" });
+      });
+
+      it("pays the read on the unit (its own org, its own run) and fires the new item on it", async () => {
+        const unit = await funnelUnitOn(REACT_SLUG, REACT_LEG);
+        vi.stubGlobal("fetch", capsFetch({ stated: true, maxBudget: budget("100") }));
+        try {
+          const treg = vi.fn().mockResolvedValueOnce(answer(["a"])).mockResolvedValueOnce(answer(["a", "b"]));
+          const t0 = new Date();
+          expect(await pollDueTriggers(catalogue() as never, t0, treg)).toMatchObject({ baseline: 1, held: 0 });
+          expect(treg.mock.calls[0][0]).toMatchObject({ orgId: ORG, userId: USER, brandId: BRAND, campaignId: unit.id, featureSlug: REACT_SLUG });
+          resetSalesFunnelCapsCache();
+          expect(await pollDueTriggers(catalogue() as never, new Date(t0.getTime() + 5 * 60_000), treg)).toMatchObject({ polled: 1, fired: 1 });
+          const [fired] = (await pollEvents()).filter((e) => e.outcome === "ran");
+          expect(fired.ranCampaignIds).toEqual([unit.id]);
+          expect(mockFunding).not.toHaveBeenCalled();
+        } finally {
+          vi.unstubAllGlobals();
+        }
+      });
+
+      it("holds the read when the funnel states no max budget, or the read would not fit under it", async () => {
+        await funnelUnitOn(REACT_SLUG, REACT_LEG);
+        const treg = vi.fn();
+        vi.stubGlobal("fetch", capsFetch({ stated: false, maxBudget: null }));
+        try {
+          expect(await pollDueTriggers(catalogue() as never, new Date(), treg)).toMatchObject({ held: 1, polled: 0 });
+        } finally {
+          vi.unstubAllGlobals();
+        }
+        const [cursor] = await db.select().from(triggerPollCursors).where(eq(triggerPollCursors.triggerId, POLL));
+        expect(cursor.lastError).toContain("sales funnel states no max budget");
+
+        await db.update(triggerPollCursors).set({ nextPollAt: new Date(0) }).where(eq(triggerPollCursors.id, cursor.id));
+        resetSalesFunnelCapsCache();
+        vi.stubGlobal("fetch", capsFetch({ stated: true, maxBudget: budget("999.9") }));
+        try {
+          expect(await pollDueTriggers(catalogue() as never, new Date(), treg)).toMatchObject({ held: 1, polled: 0 });
+        } finally {
+          vi.unstubAllGlobals();
+        }
+        expect(treg).not.toHaveBeenCalled();
+      });
     });
 
     it("a failed source read fires nothing and keeps the baseline unset", async () => {
