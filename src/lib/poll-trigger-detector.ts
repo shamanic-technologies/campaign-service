@@ -3,6 +3,7 @@ import { and, eq, lte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, triggerEvents, triggerPollCursors, type Campaign, type TriggerEvent } from "../db/schema.js";
 import { campaignFunding } from "./campaign-funding.js";
+import { isSalesFunnelUnit, salesFunnelPollRoom, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
 import { getChannelStatsBudget } from "./channel-spend.js";
 import type { ChannelCatalogueRead } from "./channel-operator-client.js";
 import {
@@ -196,6 +197,16 @@ export async function pollPayer(candidates: Campaign[], brandId: string, maxMicr
     if (!c.createdByUserId || !c.featureSlug) {
       reasons.push(`${c.id}: no owner or feature`);
       continue;
+    }
+    // A SALES FUNNEL unit pays on its funnel's caps (lib/sales-funnel-campaigns.ts): a brand whose
+    // only live campaigns are funnel units still has a payer, so its poll triggers fire.
+    if (isSalesFunnelUnit(c)) {
+      const room = await salesFunnelPollRoom(salesFunnelUnitRef(c), callCents);
+      if (!room.ok) {
+        reasons.push(`${c.id}: ${room.reason}`);
+        continue;
+      }
+      return { campaign: c };
     }
     const funding = await campaignFunding(c, brandId, { orgId: c.orgId });
     if (!funding.funded) {
