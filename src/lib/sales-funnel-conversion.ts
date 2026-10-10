@@ -4,8 +4,8 @@ import { db } from "../db/index.js";
 import { campaigns, salesFunnelCampaigns } from "../db/schema.js";
 import { ceilingEntriesOf, fetchCampaignBudgets, type CampaignBudgetEntry } from "./campaign-budget-client.js";
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
-import { combinationIdentity, legIsReactive, sameLeg } from "./leg-identity.js";
-import { fetchOfferCatalogueSalesPaths, fetchOfferSelectedSalesPaths } from "./reactive-defaults.js";
+import { legIsReactive, sameLeg } from "./leg-identity.js";
+import { fetchOfferCatalogueSalesPaths } from "./offer-catalogue-sales-paths.js";
 import { fetchPipe, fetchSalesFunnel, searchSalesFunnelIds, searchSalesPaths } from "./sales-funnel-catalogue-client.js";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { isSourceOriginSlug } from "./source-campaigns.js";
@@ -18,8 +18,8 @@ import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
  *   1. ONE PROACTIVE funnel campaign = the offer's live lead SOURCES + its live proactive pipes. Its
  *      MAX BUDGET is DAILY = the sum of those campaigns' current daily ceilings at billing (sourcing
  *      included: the all-inclusive figure gate-check already paced the outreach campaign on). The
- *      funnel is the offer's ticked sales path starting with that pipe (brand-service selected), else
- *      the best-ROI catalogue path starting with it.
+ *      funnel is the best-ROI catalogue path starting with that pipe (brand-service's per-offer
+ *      selected path is retired, 2026-10-10).
  *   2. ONE REACTIVE funnel campaign per live reactive pipe = the catalogue funnel STARTING at that
  *      pipe whose pipes are all reactive. Its MAX BUDGET is "up to" that campaign's current daily
  *      ceiling. A reactive campaign with NO ceiling stays exactly as it is, and is listed.
@@ -49,7 +49,7 @@ export interface ConversionGroup {
   salesFunnelId: string | null;
   salesFunnelName: string | null;
   /** How the funnel was chosen. */
-  basis: "selected_path" | "best_roi_path" | "reactive_funnel" | null;
+  basis: "best_roi_path" | "reactive_funnel" | null;
   /** Why this group is NOT converted (null = converted / convertible). */
   skipped: string | null;
   /** Filled on apply. */
@@ -254,30 +254,23 @@ async function pureFunnelStartingAt(
   return { ok: false, reason: "no_catalogue_funnel_with_only_this_pipe" };
 }
 
-/** The proactive funnel: the offer's ticked sales path starting with the pipe first, else best ROI. */
+/** The proactive funnel: the best-ROI path starting with the pipe. */
 async function proactiveFunnelOf(
   pipe: Row,
   identity: { orgId: string; userId?: string; runId?: string; brandId: string },
   operatorBySlug: ReadonlyMap<string, string>,
-): Promise<{ ok: true; id: string; name: string; basis: "selected_path" | "best_roi_path" } | { ok: false; reason: string }> {
-  const [selected, paths] = await Promise.all([
-    fetchOfferSelectedSalesPaths(pipe.offerId!, identity.brandId, identity),
-    fetchOfferCatalogueSalesPaths(pipe.offerId!, identity.brandId, identity),
-  ]);
+): Promise<{ ok: true; id: string; name: string; basis: "best_roi_path" } | { ok: false; reason: string }> {
+  const paths = await fetchOfferCatalogueSalesPaths(pipe.offerId!, identity.brandId, identity);
   if (!paths.ok) return { ok: false, reason: `sales_paths_unreadable: ${paths.detail}` };
   const startsWithPipe = paths.value
     .filter((p) => p.legs[0] && p.legs[0].channelSlug === pipe.featureSlug && sameLeg(pipe.featureSlug, p.legs[0].legKey, pipe.legKey))
     .sort((a, b) => (b.roi ?? -Infinity) - (a.roi ?? -Infinity));
-  const ticked = selected.ok && selected.value.combinationKeys
-    ? new Set(selected.value.combinationKeys.map(combinationIdentity))
-    : new Set<string>();
-  const tickedPath = startsWithPipe.find((p) => ticked.has(combinationIdentity(p.combinationKey)));
   // A sales path's id is its legs in order (the catalogue's own spelling of a path).
   const pathIdOf = (p: (typeof startsWithPipe)[number]) => p.legs.map((l) => l.legKey).join("+");
-  const ordered = [...new Set([...(tickedPath ? [pathIdOf(tickedPath)] : []), ...startsWithPipe.map(pathIdOf)])];
+  const ordered = [...new Set(startsWithPipe.map(pathIdOf))];
   const funnel = await pureFunnelStartingAt(pipe, ordered, operatorBySlug);
   if (!funnel.ok) return funnel;
-  return { ...funnel, basis: tickedPath ? "selected_path" : "best_roi_path" };
+  return { ...funnel, basis: "best_roi_path" };
 }
 
 /** The reactive funnel: the catalogue funnel starting at this reactive pipe and naming no other. */

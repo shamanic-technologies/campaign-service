@@ -21,9 +21,9 @@ vi.mock("../../src/lib/campaign-budget-client.js", async (importOriginal) => {
   return { ...original, fetchCampaignBudgets: mockBudgets };
 });
 vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({ fetchBrandSalesBudget: mockMode }));
-vi.mock("../../src/lib/reactive-defaults.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../src/lib/reactive-defaults.js")>();
-  return { ...original, fetchOfferSelectedSalesPaths: mockSelected, fetchOfferCatalogueSalesPaths: mockPaths };
+vi.mock("../../src/lib/offer-catalogue-sales-paths.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/offer-catalogue-sales-paths.js")>();
+  return { ...original, fetchOfferCatalogueSalesPaths: mockPaths };
 });
 vi.mock("../../src/lib/sales-funnel-catalogue-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/sales-funnel-catalogue-client.js")>();
@@ -240,7 +240,7 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     expect(await db.select().from(salesFunnelCampaigns)).toHaveLength(1);
   });
 
-  it("prefers the offer's TICKED sales path, and never a funnel naming another platform pipe", async () => {
+  it("takes the best-ROI path's funnel, never a funnel naming another platform pipe", async () => {
     await row(COLD, ENTRY);
     const legsOf = (...keys: string[]) => keys.map((legKey, i) => ({ legKey, reactive: i > 0, workedBy: "platform", channelSlug: i === 0 ? COLD : null, channelManaged: true }));
     const BEST_PATH = `${ENTRY}+conversation_to_paid_client`;
@@ -250,7 +250,6 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
       { combinationKey: PROACTIVE_FUNNEL, roi: 9, legs: legsOf(ENTRY, "conversation_to_paid_client") },
       { combinationKey: TICKED, roi: 1, legs: legsOf(ENTRY, "conversation_to_signup", "signup_to_paid_client") },
     ] });
-    mockSelected.mockResolvedValue({ ok: true, value: { stated: true, combinationKeys: [TICKED] } });
     mockSearch.mockImplementation(async (_q: string, _ch: string, pathId?: string) => ({
       ok: true,
       value: pathId === TICKED_PATH ? [TICKED] : pathId === BEST_PATH ? [MIXED_FUNNEL, PROACTIVE_FUNNEL] : [],
@@ -259,11 +258,8 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     mockFunnel.mockImplementation(async (id: string) => id === TICKED
       ? { ok: true, value: { id, name: "Ticked", pipeIds: [`${COLD}|${ENTRY}`], legs: [{ legKey: ENTRY, pipe: { id: `${COLD}|${ENTRY}`, mode: "proactive" } }, { legKey: "conversation_to_signup", pipe: null }, { legKey: "signup_to_paid_client", pipe: null }] } }
       : base(id));
-    const report = await convertToSalesFunnelCampaigns({ apply: false });
-    expect(report.groups[0]).toMatchObject({ salesFunnelId: TICKED, basis: "selected_path" });
-
-    // Nothing ticked: the best path's PURE funnel, skipping the mixed one listed first.
-    mockSelected.mockResolvedValue({ ok: true, value: { stated: false, combinationKeys: null } });
+    // The per-offer ticked path is retired (2026-10-10): the best path's PURE funnel, skipping the
+    // mixed one listed first, whatever was once ticked.
     const best = await convertToSalesFunnelCampaigns({ apply: false });
     expect(best.groups[0]).toMatchObject({ salesFunnelId: PROACTIVE_FUNNEL, basis: "best_roi_path" });
   });
