@@ -176,7 +176,12 @@ export async function fetchSalesFunnelCaps(
 export interface StatedSalesFunnelCap {
   offerId: string;
   salesFunnelId: string;
-  maxBudget: { amountCents: number; period: z.infer<typeof CapPeriod> } | null;
+  /**
+   * `dailyBudgetCents` is billing's OWN figure of the cap per day (v0.83.13: daily x1, weekly / 7,
+   * monthly / 30, one_off 0, a REACTIVE funnel 0: owner rule, a reactive budget is a ceiling, never
+   * a daily spend). Read, never recomputed here, so both services count the same money.
+   */
+  maxBudget: { amountCents: number; period: z.infer<typeof CapPeriod>; dailyBudgetCents: number } | null;
 }
 
 const BrandSalesFunnelCapsResponse = z.object({
@@ -184,7 +189,7 @@ const BrandSalesFunnelCapsResponse = z.object({
     z.object({
       offerId: z.string(),
       salesFunnelId: z.string(),
-      maxBudget: z.object({ amountCents: Figure, period: CapPeriod }).nullable(),
+      maxBudget: z.object({ amountCents: Figure, period: CapPeriod, dailyBudgetCents: Figure }).nullable(),
     }),
   ),
 });
@@ -210,33 +215,20 @@ export async function fetchBrandSalesFunnelCaps(
     if (!res.ok) return { ok: false, detail: `billing HTTP ${res.status} on ${path}` };
     const parsed = BrandSalesFunnelCapsResponse.safeParse(await res.json());
     if (!parsed.success) return { ok: false, detail: `billing brand caps unparseable: ${parsed.error.message.slice(0, 200)}` };
+    const missing = parsed.data.caps.find((c) => c.maxBudget && !Number.isFinite(c.maxBudget.dailyBudgetCents ?? NaN));
+    if (missing) return { ok: false, detail: `billing serves no maxBudget.dailyBudgetCents for sales funnel ${missing.salesFunnelId}` };
     return {
       ok: true,
       caps: parsed.data.caps.map((c) => ({
         offerId: c.offerId,
         salesFunnelId: c.salesFunnelId,
         maxBudget: c.maxBudget && c.maxBudget.amountCents !== null && Number.isFinite(c.maxBudget.amountCents)
-          ? { amountCents: c.maxBudget.amountCents, period: c.maxBudget.period }
+          ? { amountCents: c.maxBudget.amountCents, period: c.maxBudget.period, dailyBudgetCents: c.maxBudget.dailyBudgetCents ?? NaN }
           : null,
       })),
     };
   } catch (err) {
     return { ok: false, detail: `${path}: ${err instanceof Error ? err.message : String(err)}` };
-  }
-}
-
-/**
- * A funnel's MAX BUDGET as a DAILY figure, billing's rule (v0.83.9) so both services agree:
- * daily x1, weekly / 7, monthly / 30, one_off adds 0 (not recurring). No discount: a cap is
- * configuration. null max budget = 0.
- */
-export function salesFunnelDailyBudgetCents(maxBudget: StatedSalesFunnelCap["maxBudget"]): number {
-  if (!maxBudget || !(maxBudget.amountCents > 0)) return 0;
-  switch (maxBudget.period) {
-    case "daily": return maxBudget.amountCents;
-    case "weekly": return maxBudget.amountCents / 7;
-    case "monthly": return maxBudget.amountCents / 30;
-    case "one_off": return 0;
   }
 }
 

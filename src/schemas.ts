@@ -532,8 +532,8 @@ export const SpendableBudgetCampaign = z.object({
 
 /**
  * One SALES FUNNEL with a stated cap (billing `GET /internal/brands/:id/sales-funnel-caps`): its max
- * budget as a DAILY figure, billing's v0.83.9 rule (daily x1, weekly / 7, monthly / 30, one_off 0,
- * volume-only 0; never discounted). Counted in the brand and offer totals; `running` ⟺ its funnel
+ * budget as billing's SERVED daily figure `maxBudget.dailyBudgetCents` (daily x1, weekly / 7,
+ * monthly / 30, one_off 0, REACTIVE 0, volume-only 0; never discounted, never recomputed here). Counted in the brand and offer totals; `running` ⟺ its funnel
  * campaign is ongoing. Never resolved onto a per-pipe ceiling.
  */
 export const SpendableBudgetSalesFunnel = z.object({
