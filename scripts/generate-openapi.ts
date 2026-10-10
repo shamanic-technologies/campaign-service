@@ -182,9 +182,9 @@ registry.registerPath({
 
 const SALES_FUNNEL_CAMPAIGNS_DOC =
   "SALES FUNNEL CAMPAIGNS (owner 2026-10-10, chat first). A campaign is brand x offer x SALES FUNNEL (features-service's sales funnel id, `GET /internal/catalogue/sales-funnels` rows[].id, its combinationKey, carried verbatim). It owns one UNIT per pipe of the funnel (`<channel slug>|<leg key>`): an ordinary campaign row stating `salesFunnelId` + `salesFunnelCampaignId`, run independently like every campaign (proactive pipes prospect, reactive pipes answer). Uniqueness is brand x offer x sales funnel x channel x leg: a pipe two funnels share is two units, one per funnel. A sourcing pipe (Start -> Lead found, a lead-source origin) is a SOURCE campaign unit: no workflow, its origin is ON for the offer while the funnel runs. A funnel with no sourcing pipe gets the offer's default lead source on its start, as every outreach start does. "
-  + "RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH/DELETE /campaigns/{id} refuse a unit's status or identity with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. "
+  + "RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH /campaigns/{id} {status} on a unit moves its WHOLE funnel campaign (a lead source unit keeps its own On/Off); its identity fields and DELETE are refused with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. "
   + "SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. "
-  + "MONEY: a unit's money is its funnel's caps at billing (GET /internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps: max budget + max volume, one-off / daily / weekly / monthly), never a per-(offer, leg, channel) ceiling or the brand pot. No max budget stated = every unit held unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`). Either cap `reached` = the funnel's PROACTIVE pipes make no new first touch (held, gate-check `Sales funnel max budget reached` / `Sales funnel max volume reached`, step trigger skip `sales_funnel_cap`); REACTIVE pipes keep answering. A consumption billing cannot measure holds the proactive pipes (fail-closed, logged). Caps never change a status. Billing is not signalled per unit (no plan money moves). "
+  + "MONEY: a unit's money is its funnel's caps at billing (GET /internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps: max budget + max volume, one-off / daily / weekly / monthly), never a per-(offer, leg, channel) ceiling or the brand pot. No max budget stated = every unit held unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`). Either cap `reached` = EVERY pipe of the funnel, reactive included, stops (owner 2026-10-10: always respect the user budget; gate-check `Sales funnel max budget reached` / `Sales funnel max volume reached`, step trigger skip `sales_funnel_cap`). A consumption billing cannot measure holds every pipe (fail-closed, logged). Caps never change a status. Billing is not signalled per unit (no plan money moves). "
   + "Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had.";
 
 registry.registerPath({
@@ -201,6 +201,20 @@ registry.registerPath({
     400: { description: "Refused", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string().optional() }) } } },
     409: { description: "Refused", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), blockedReason: z.string().optional() }) } } },
     502: { description: "A sibling could not be read — try again", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string() }) } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/sales-funnel-campaigns/convert",
+  tags: ["Sales funnel campaigns"],
+  summary: "Convert the live (leg x channel) campaigns into sales funnel campaigns (staff, dry run by default)",
+  description: "Owner GO 2026-10-10. Body {apply?: boolean (default false = dry run), orgId?: string}. Per offer: ONE proactive funnel campaign (the offer's live lead sources + its live proactive pipe; funnel = its ticked sales path starting with that pipe, else the best-ROI catalogue path; max budget DAILY = the sum of those campaigns' current billing ceilings) and ONE reactive-only funnel campaign per live reactive pipe (catalogue funnel starting at that pipe whose pipes are all reactive; daily max budget = its ceiling). A reactive campaign with no ceiling, or with no reactive-only funnel in the catalogue yet, is left exactly as it is and listed (`skipped`). Apply, per group: billing cap PUT, rows linked as units (no status move, nothing starts, nothing emailed), then the per-pipe ceilings they no longer use set to 0 at billing (an offer-less ceiling is not addressable there: listed in `ceilingsLeft`). Idempotent. Header x-email = the person who ordered it (rides billing's writes).",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: z.object({ apply: z.boolean().optional(), orgId: z.string().optional() }) } } } },
+  responses: {
+    200: { description: "The plan (or what was applied), per group", content: { "application/json": { schema: z.object({ applied: z.boolean(), groups: z.array(z.record(z.string(), z.unknown())), counts: z.object({ campaigns: z.number(), converted: z.number(), skipped: z.number() }) }) } } },
+    502: { description: "The channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 

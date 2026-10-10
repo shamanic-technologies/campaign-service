@@ -277,9 +277,16 @@ describe('No Legacy Patterns - CRITICAL', () => {
     const offenders: string[] = [];
     for (const file of getAllTsFiles(srcDir)) {
       const rel = path.relative(srcDir, file);
+      // The SALES FUNNEL modules of 2026-10-10 (a funnel = a set of pipes a campaign runs) speak
+      // of funnels throughout; only the retired funnel KEY is banned there.
+      const salesFunnelModule = /(^|\/)sales-funnel-[\w-]+\.ts$/.test(rel.split(path.sep).join('/'));
       fs.readFileSync(file, 'utf-8').split('\n').forEach((line, i) => {
         const code = line.trim();
         if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return;
+        if (salesFunnelModule) {
+          if (/funnelKey|funnel_key|["'`]funnel["'`]/.test(code)) offenders.push(`${rel}:${i + 1}  ${code.slice(0, 100)}`);
+          return;
+        }
         // The two rollback snapshots migrations 0058/0060 left behind are HISTORY tables whose
         // frozen names carry the word; the brand transfer moves their rows by name. Naming a
         // table is not using a funnel.

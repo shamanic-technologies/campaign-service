@@ -27,6 +27,8 @@ export interface SalesFunnelFromCatalogue {
   name: string;
   /** Pipe ids, in leg order, of the legs a platform channel works. Legs with no pipe are skipped. */
   pipeIds: string[];
+  /** Every leg in order, with its pipe (null = the customer's own team works it). */
+  legs: Array<{ legKey: string; pipe: { id: string; mode: "proactive" | "reactive" } | null }>;
 }
 
 export interface PipeFromCatalogue {
@@ -43,7 +45,7 @@ const SalesFunnelResponse = z.object({
   legs: z.array(
     z.object({
       legKey: z.string().min(1),
-      pipe: z.object({ id: z.string().min(1) }).nullable(),
+      pipe: z.object({ id: z.string().min(1), mode: z.enum(["proactive", "reactive"]) }).nullable(),
     }),
   ),
 });
@@ -80,10 +82,21 @@ export async function fetchSalesFunnel(salesFunnelId: string): Promise<Catalogue
       id: parsed.id,
       name: parsed.name,
       pipeIds: parsed.legs.flatMap((leg) => (leg.pipe ? [leg.pipe.id] : [])),
+      legs: parsed.legs.map((leg) => ({ legKey: leg.legKey, pipe: leg.pipe ? { id: leg.pipe.id, mode: leg.pipe.mode } : null })),
     };
   });
 }
 
 export async function fetchPipe(pipeId: string): Promise<CatalogueRead<PipeFromCatalogue>> {
   return readCatalogue(`/internal/catalogue/pipes/${encodeURIComponent(pipeId)}`, (body) => PipeResponse.parse(body));
+}
+
+/**
+ * Sales funnel ids the catalogue's text search finds for `q` (it searches name, line AND id), at
+ * most 25 (the list's cap). A search, not a parse: callers confirm each candidate on its detail.
+ */
+export async function searchSalesFunnelIds(q: string, containsChannel: string): Promise<CatalogueRead<string[]>> {
+  const params = new URLSearchParams({ q, containsChannels: containsChannel, limit: "25" });
+  return readCatalogue(`/internal/catalogue/sales-funnels?${params.toString()}`, (body) =>
+    z.object({ rows: z.array(z.object({ id: z.string() })) }).parse(body).rows.map((r) => r.id));
 }

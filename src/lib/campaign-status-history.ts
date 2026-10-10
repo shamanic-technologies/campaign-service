@@ -9,6 +9,7 @@ import {
 } from "../db/schema.js";
 import { signalMissionStatusChanged, type StatusActor } from "./mission-status-notification.js";
 import { STOP_REASONS } from "./stop-reason.js";
+import { isSourceOriginSlug } from "./source-campaigns.js";
 
 /** The transaction handle `db.transaction` hands its callback. */
 export type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -470,7 +471,12 @@ export async function setSalesFunnelCampaignStatus(write: {
       .select()
       .from(campaigns)
       .where(and(eq(campaigns.orgId, write.orgId), eq(campaigns.salesFunnelCampaignId, parent.id)));
-    const toMove = before.filter((u) => u.status !== write.toStatus);
+    // A lead SOURCE unit keeps its own On/Off (a person turns one origin off; lib/source-campaigns.ts):
+    // a funnel STOP stops it with the rest, a funnel START leaves it to `onUnitStarted`
+    // (ensureSourcesOnStart brings back the sources nobody turned off, a funnel stop included).
+    const toMove = before.filter(
+      (u) => u.status !== write.toStatus && !(write.toStatus === "ongoing" && isSourceOriginSlug(u.featureSlug)),
+    );
 
     const moved: CampaignRow[] = [];
     for (const unit of toMove) {

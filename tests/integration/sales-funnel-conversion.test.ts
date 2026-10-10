@@ -1,0 +1,216 @@
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+
+const { mockCatalogue, mockBudgets, mockSelected, mockPaths, mockFunnel, mockSearch } = vi.hoisted(() => ({
+  mockCatalogue: vi.fn(),
+  mockBudgets: vi.fn(),
+  mockSelected: vi.fn(),
+  mockPaths: vi.fn(),
+  mockFunnel: vi.fn(),
+  mockSearch: vi.fn(),
+}));
+
+vi.mock("../../src/lib/channel-operator-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/channel-operator-client.js")>();
+  return { ...original, fetchChannelCatalogue: mockCatalogue };
+});
+vi.mock("../../src/lib/campaign-budget-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/campaign-budget-client.js")>();
+  return { ...original, fetchCampaignBudgets: mockBudgets };
+});
+vi.mock("../../src/lib/reactive-defaults.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/reactive-defaults.js")>();
+  return { ...original, fetchOfferSelectedSalesPaths: mockSelected, fetchOfferCatalogueSalesPaths: mockPaths };
+});
+vi.mock("../../src/lib/sales-funnel-catalogue-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/sales-funnel-catalogue-client.js")>();
+  return { ...original, fetchSalesFunnel: mockFunnel, searchSalesFunnelIds: mockSearch };
+});
+
+import { db } from "../../src/db/index.js";
+import { campaigns, campaignStatusTransitions, salesFunnelCampaigns } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
+import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
+import { convertToSalesFunnelCampaigns } from "../../src/lib/sales-funnel-conversion.js";
+
+const ORG = "b645207b-0000-4000-8000-0000000000c1";
+const BRAND = "75d7e3e8-0000-4000-8000-0000000000c2";
+const OFFER = "231bb036-0000-4000-8000-0000000000c3";
+const USER = "7a3b1c22-0000-4000-8000-0000000000c4";
+const RUN = "9f0d1c22-0000-4000-8000-0000000000c5";
+const COLD = "sales-cold-email-outreach";
+const ENTRY = "lead_found_to_conversation";
+const AMB = "ai-meeting-booking";
+const AIC = "ai-instant-call";
+const MEET = ["conversation", "to", "meeting", "booked"].join("_");
+const CALL = ["conversation", "to", "booking", "call"].join("_");
+const SOURCE = "sourcing-apollo-cold-filters";
+const SOURCE_LEG = "start_to_lead_found";
+const PROACTIVE_FUNNEL = `${ENTRY}@${COLD}+conversation_to_paid_client`;
+const MEET_FUNNEL = `${MEET}@${AMB}+meeting_booked_to_paid_client`;
+
+const row = (featureSlug: string, legKey: string, status = "ongoing") =>
+  insertTestCampaign(ORG, {
+    brandIds: [BRAND], brandId: BRAND, featureSlug, offerId: OFFER, legKey, status,
+    workflowSlug: featureSlug === AIC || featureSlug === SOURCE ? undefined : `${featureSlug}-v1`,
+    createdByUserId: USER, parentRunId: RUN,
+  });
+
+describe("converting the live (leg x channel) campaigns into sales funnel campaigns", () => {
+  const billingCalls: Array<{ url: string; body: unknown; headers: Record<string, string> }> = [];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await cleanTestData();
+    billingCalls.length = 0;
+    process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+    process.env.BILLING_SERVICE_API_KEY = "k";
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: { body?: string; headers: Record<string, string> }) => {
+      billingCalls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null, headers: init?.headers ?? {} });
+      return { ok: true, status: 200, json: async () => ({}), text: async () => "" };
+    }));
+    mockCatalogue.mockResolvedValue({
+      ok: true,
+      legs: [
+        { legKey: SOURCE_LEG, fromStepKey: null, toStepKey: "lead_found" },
+        { legKey: ENTRY, fromStepKey: "lead_found", toStepKey: "conversation" },
+        { legKey: MEET, fromStepKey: "conversation", toStepKey: "meeting_booked" },
+        { legKey: CALL, fromStepKey: "conversation", toStepKey: "booking_call" },
+      ],
+      legsBySlug: new Map([[COLD, new Set([ENTRY])], [AMB, new Set([MEET])], [AIC, new Set([CALL])]]),
+      reactiveBySlug: new Map([[COLD, new Map([[ENTRY, false]])], [AMB, new Map([[MEET, true]])], [AIC, new Map([[CALL, true]])]]),
+      operatorBySlug: new Map(),
+      stepKeys: new Set(),
+    });
+    mockBudgets.mockResolvedValue({
+      ok: true,
+      brandDailyBudgetCents: 1100,
+      campaigns: [
+        { offerId: OFFER, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 500, sourcingCeilingCents: null },
+        { offerId: OFFER, legKey: SOURCE_LEG, featureSlug: SOURCE, dailyBudgetCents: 500, sourcingCeilingCents: null },
+        { offerId: OFFER, legKey: MEET, featureSlug: AMB, dailyBudgetCents: 100, sourcingCeilingCents: 0 },
+      ],
+    });
+    mockSelected.mockResolvedValue({ ok: true, value: { stated: false, combinationKeys: null } });
+    mockPaths.mockResolvedValue({ ok: true, value: [
+      { combinationKey: PROACTIVE_FUNNEL, roi: 3, legs: [{ legKey: ENTRY, reactive: false, workedBy: "platform", channelSlug: COLD, channelManaged: true }] },
+    ] });
+    mockFunnel.mockImplementation(async (id: string) => {
+      if (id === PROACTIVE_FUNNEL) return { ok: true, value: { id, name: "Zenith", pipeIds: [`${COLD}|${ENTRY}`], legs: [{ legKey: ENTRY, pipe: { id: `${COLD}|${ENTRY}`, mode: "proactive" } }, { legKey: "conversation_to_paid_client", pipe: null }] } };
+      if (id === MEET_FUNNEL) return { ok: true, value: { id, name: "Hush", pipeIds: [`${AMB}|${MEET}`], legs: [{ legKey: MEET, pipe: { id: `${AMB}|${MEET}`, mode: "reactive" } }, { legKey: "meeting_booked_to_paid_client", pipe: null }] } };
+      return { ok: false, notFound: true, detail: "404" };
+    });
+    mockSearch.mockImplementation(async (_q: string, channel: string) => ({ ok: true, value: channel === AMB ? [MEET_FUNNEL] : [] }));
+  });
+
+  afterAll(async () => {
+    vi.unstubAllGlobals();
+    await cleanTestData();
+    await closeDb();
+  });
+
+  it("plans per offer (dry run): one proactive funnel (sources + pipe, caps summed), one per reactive pipe; writes nothing", async () => {
+    const cold = await row(COLD, ENTRY);
+    const src = await row(SOURCE, SOURCE_LEG);
+    const amb = await row(AMB, MEET);
+    const aic = await row(AIC, CALL);
+
+    const report = await convertToSalesFunnelCampaigns({ apply: false });
+
+    const proactive = report.groups.find((g) => g.kind === "proactive")!;
+    expect(proactive).toMatchObject({ salesFunnelId: PROACTIVE_FUNNEL, maxBudgetDailyCents: 1000, basis: "best_roi_path", skipped: null });
+    expect(proactive.campaignIds.sort()).toEqual([cold.id, src.id].sort());
+    const meet = report.groups.find((g) => g.campaignIds[0] === amb.id)!;
+    expect(meet).toMatchObject({ kind: "reactive", salesFunnelId: MEET_FUNNEL, maxBudgetDailyCents: 100, skipped: null });
+    // No ceiling: kept exactly as it is, and listed.
+    expect(report.groups.find((g) => g.campaignIds[0] === aic.id)).toMatchObject({ skipped: "reactive_without_ceiling_kept_as_is" });
+
+    expect(billingCalls).toEqual([]);
+    expect(await db.select().from(salesFunnelCampaigns)).toEqual([]);
+  });
+
+  it("applies: cap at billing first, rows become units with NO status move, ceilings set to 0; idempotent", async () => {
+    const cold = await row(COLD, ENTRY);
+    const src = await row(SOURCE, SOURCE_LEG);
+    const amb = await row(AMB, MEET);
+    const aic = await row(AIC, CALL);
+    const before = await db.select().from(campaignStatusTransitions);
+
+    const report = await convertToSalesFunnelCampaigns({ apply: true, actingEmail: "owner@test.local" });
+
+    const caps = billingCalls.filter((c) => c.url.includes("/caps"));
+    expect(caps.map((c) => [decodeURIComponent(c.url.split("/sales-funnels/")[1]), c.body])).toEqual([
+      [`${PROACTIVE_FUNNEL}/caps`, { maxBudget: { amountCents: "1000", period: "daily" }, maxVolume: null }],
+      [`${MEET_FUNNEL}/caps`, { maxBudget: { amountCents: "100", period: "daily" }, maxVolume: null }],
+    ]);
+    expect(caps[0].headers).toMatchObject({ "x-org-id": ORG, "x-user-id": USER, "x-run-id": RUN, "x-email": "owner@test.local" });
+    const zeroed = billingCalls.filter((c) => c.url.endsWith("/campaign-budget")).map((c) => c.body);
+    expect(zeroed).toHaveLength(3);
+    expect(zeroed).toEqual(expect.arrayContaining([
+      { offerId: OFFER, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 0 },
+      { offerId: OFFER, legKey: SOURCE_LEG, featureSlug: SOURCE, dailyBudgetCents: 0 },
+      { offerId: OFFER, legKey: MEET, featureSlug: AMB, dailyBudgetCents: 0 },
+    ]));
+    // Every zeroing comes AFTER its group's cap and link.
+    expect(billingCalls.findIndex((c) => c.url.endsWith("/campaign-budget"))).toBeGreaterThan(0);
+
+    const funnels = await db.select().from(salesFunnelCampaigns);
+    expect(funnels.map((f) => [f.salesFunnelId, f.status]).sort()).toEqual([[MEET_FUNNEL, "ongoing"], [PROACTIVE_FUNNEL, "ongoing"]].sort());
+    const after = await db.select().from(campaigns);
+    const byId = new Map(after.map((c) => [c.id, c]));
+    for (const c of after) expect(c.status).toBe("ongoing");
+    expect(byId.get(cold.id)!.salesFunnelCampaignId).toBe(byId.get(src.id)!.salesFunnelCampaignId);
+    expect(byId.get(amb.id)!.salesFunnelId).toBe(MEET_FUNNEL);
+    expect(byId.get(aic.id)!.salesFunnelCampaignId).toBeNull();
+    // Nothing moved a status: no transition was written.
+    expect(await db.select().from(campaignStatusTransitions)).toHaveLength(before.length);
+    expect(report.counts).toMatchObject({ campaigns: 4, converted: 3, skipped: 1 });
+
+    // Re-run: nothing left to convert, nothing written.
+    billingCalls.length = 0;
+    const again = await convertToSalesFunnelCampaigns({ apply: true });
+    expect(again.groups.filter((g) => !g.skipped)).toEqual([]);
+    expect(billingCalls).toEqual([]);
+  });
+
+  it("writes no cap for a group funded at zero (it stays unfunded), and lists an offer-less ceiling it cannot clear", async () => {
+    await row(COLD, ENTRY);
+    mockBudgets.mockResolvedValue({ ok: true, brandDailyBudgetCents: 0, campaigns: [
+      { offerId: null, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 0, sourcingCeilingCents: null },
+    ] });
+    const zero = await convertToSalesFunnelCampaigns({ apply: true });
+    expect(zero.groups[0]).toMatchObject({ maxBudgetDailyCents: 0, capWritten: false, ceilingsZeroed: 0 });
+    expect(billingCalls).toEqual([]);
+
+    await cleanTestData();
+    await row(COLD, ENTRY);
+    mockBudgets.mockResolvedValue({ ok: true, brandDailyBudgetCents: 800, campaigns: [
+      { offerId: null, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 800, sourcingCeilingCents: 350 },
+    ] });
+    const offerless = await convertToSalesFunnelCampaigns({ apply: true });
+    expect(offerless.groups[0]).toMatchObject({ maxBudgetDailyCents: 800, capWritten: true, ceilingsZeroed: 0 });
+    expect(offerless.groups[0].ceilingsLeft).toEqual([expect.objectContaining({ dailyBudgetCents: 800, why: "offer_or_leg_less_ceiling_not_addressable" })]);
+  });
+
+  it("prefers the offer's TICKED sales path over the best ROI one", async () => {
+    await row(COLD, ENTRY);
+    const TICKED = `${ENTRY}@${COLD}+conversation_to_meeting_booked+meeting_booked_to_paid_client`;
+    mockPaths.mockResolvedValue({ ok: true, value: [
+      { combinationKey: PROACTIVE_FUNNEL, roi: 9, legs: [{ legKey: ENTRY, reactive: false, workedBy: "platform", channelSlug: COLD, channelManaged: true }] },
+      { combinationKey: TICKED, roi: 1, legs: [{ legKey: ENTRY, reactive: false, workedBy: "platform", channelSlug: COLD, channelManaged: true }] },
+    ] });
+    mockSelected.mockResolvedValue({ ok: true, value: { stated: true, combinationKeys: [TICKED] } });
+    mockFunnel.mockImplementation(async (id: string) => ({ ok: true, value: { id, name: "Ticked", pipeIds: [], legs: [] } }));
+    const report = await convertToSalesFunnelCampaigns({ apply: false });
+    expect(report.groups[0]).toMatchObject({ salesFunnelId: TICKED, basis: "selected_path" });
+  });
+
+  it("leaves a reactive pipe as it is while the catalogue has no reactive-only funnel for it", async () => {
+    const amb = await row(AMB, MEET);
+    mockSearch.mockResolvedValue({ ok: true, value: [] });
+    const report = await convertToSalesFunnelCampaigns({ apply: true });
+    expect(report.groups).toEqual([expect.objectContaining({ campaignIds: [amb.id], skipped: "no_reactive_funnel_in_catalogue" })]);
+    const [still] = await db.select().from(campaigns).where(eq(campaigns.id, amb.id));
+    expect(still.salesFunnelCampaignId).toBeNull();
+    expect(billingCalls).toEqual([]);
+  });
+});
