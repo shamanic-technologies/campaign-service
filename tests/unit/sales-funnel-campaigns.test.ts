@@ -186,6 +186,28 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
     expect(d.workflow).toHaveBeenCalledTimes(1);
   });
 
+  it("launches a pipe OUTSIDE the sales family (LinkedIn Posting, #608): its funnel's caps pace it", async () => {
+    const LI = "organic-linkedin-publishing";
+    const LI_LEG = "start_to_website_visit";
+    const liCatalogue = {
+      ok: true,
+      legsBySlug: new Map([[LI, new Set([LI_LEG])]]),
+      operatorBySlug: new Map([[LI, "platform"]]),
+    } as unknown as ChannelCatalogueRead;
+    const d = {
+      ...deps([`${LI}|${LI_LEG}`]),
+      pipe: vi.fn(async (id: string) => ({ ok: true as const, value: { id, name: "Sunrise", channelSlug: LI, legKey: LI_LEG, mode: "proactive" as const } })),
+      catalogue: vi.fn(async () => liCatalogue),
+    };
+    const ok = await resolveSalesFunnelPlan("f@li", identity, d);
+    expect(ok).toMatchObject({ ok: true, plan: { units: [{ featureSlug: LI, legKey: LI_LEG, workflowSlug: "aurora-v3" }] } });
+
+    // Nothing can run the channel yet (workflow-service has no dynasty for it): the TRUE answer,
+    // not "not paced here".
+    d.workflow = vi.fn(async () => ({ ok: true as const, workflowSlug: null }));
+    expect(await resolveSalesFunnelPlan("f@li", identity, d)).toMatchObject({ ok: false, refusal: { status: 409, code: "no_workflow" } });
+  });
+
   it("refuses the whole launch, naming the pipe, when one pipe cannot be run here", async () => {
     const res = await resolveSalesFunnelPlan("f@x", identity, deps([`${COLD}|${ENTRY}`, "google-ads-unknown|x"]));
     expect(res).toMatchObject({ ok: false, refusal: { status: 400, code: "pipe_not_runnable" } });
