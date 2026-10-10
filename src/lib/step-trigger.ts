@@ -5,6 +5,7 @@ import { campaigns, type Campaign } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { sameLeg } from "./leg-identity.js";
 import { campaignFunding } from "./campaign-funding.js";
+import { isSalesFunnelUnit, orderForSharedPipes, pipeKey, salesFunnelUnitMoney, sharedSalesFunnelPipes } from "./sales-funnel-campaigns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
@@ -102,6 +103,11 @@ export const STEP_TRIGGER_SKIPS = {
    * dropped: it stays due and the next scheduled run works it.
    */
   FAILURE_BACKOFF: "failure_backoff",
+  /**
+   * SALES FUNNELS (lib/sales-funnel-campaigns.ts): two funnels share this pipe (channel x leg), and
+   * another live campaign on it already answered this event. One event is worked once.
+   */
+  PIPE_HANDLED_BY_ANOTHER_CAMPAIGN: "pipe_handled_by_another_campaign",
 } as const;
 
 export type StepTriggerSkipReason = (typeof STEP_TRIGGER_SKIPS)[keyof typeof STEP_TRIGGER_SKIPS];
@@ -238,7 +244,7 @@ export async function runCampaignsInScope(
     ),
   });
 
-  const responsible = live.filter(
+  const matched = live.filter(
     (c) =>
       // The offer is matched EXACTLY and never inferred. A campaign that states none is not the
       // campaign of the offer the caller named — the same reason nothing here derives an offer
@@ -247,6 +253,12 @@ export async function runCampaignsInScope(
       c.legKey !== null &&
       matches(c),
   );
+  // A pipe two SALES FUNNELS share has one live campaign per funnel; the oldest that can run answers
+  // the event and the others are skipped (lib/sales-funnel-campaigns.ts). No shared pipe = the
+  // original order, untouched.
+  const responsible = orderForSharedPipes(matched);
+  const sharedPipes = sharedSalesFunnelPipes(matched);
+  const firedPipes = new Map<string, string>();
 
   let offCampaignIds: string[] = [];
   if (responsible.length === 0) {
@@ -286,6 +298,16 @@ export async function runCampaignsInScope(
       continue;
     }
 
+    const pipe = sharedPipes.has(pipeKey(campaign)) ? pipeKey(campaign) : null;
+    const answeredBy = pipe ? firedPipes.get(pipe) : undefined;
+    if (answeredBy) {
+      skip(
+        STEP_TRIGGER_SKIPS.PIPE_HANDLED_BY_ANOTHER_CAMPAIGN,
+        `campaign ${answeredBy} (another sales funnel on the same pipe) answers this event`,
+      );
+      continue;
+    }
+
     if (isInFailureBackoff(campaign, now)) {
       skip(
         STEP_TRIGGER_SKIPS.FAILURE_BACKOFF,
@@ -295,8 +317,16 @@ export async function runCampaignsInScope(
     }
 
     const moneyIdentity = { orgId: req.orgId, userId: campaign.createdByUserId, campaignId: campaign.id, brandId: brandIds[0] };
-    const salesBudget = brandIds.length === 1 ? await fetchBrandSalesBudget(brandIds[0], moneyIdentity) : null;
-    if (salesBudget?.ok && salesBudget.mode === "items") {
+    // A SALES FUNNEL unit's money is its funnel's caps, and nothing else (lib/sales-funnel-campaigns.ts).
+    const unitMoney = isSalesFunnelUnit(campaign) ? await salesFunnelUnitMoney(campaign, now) : null;
+    if (unitMoney && !unitMoney.run) {
+      skip(STEP_TRIGGER_SKIPS.UNFUNDED, unitMoney.detail);
+      continue;
+    }
+    const salesBudget = brandIds.length === 1 && !unitMoney ? await fetchBrandSalesBudget(brandIds[0], moneyIdentity) : null;
+    if (unitMoney) {
+      // Funded by its funnel: neither an item, a per-pipe ceiling nor the brand pot is its money.
+    } else if (salesBudget?.ok && salesBudget.mode === "items") {
       // ITEMS mode: this campaign's item is its money, and nothing else (see sales-items.ts). A
       // step-triggered leg is reactive by definition: capped on its item's period, not paced.
       const verdict = await itemVerdict({
@@ -334,7 +364,7 @@ export async function runCampaignsInScope(
 
     // Same pot gate-check binds on: firing a run it is about to refuse would only burn the run.
     // (Items mode answers null here: the brand has no pot.)
-    const pot = await globalSalesPotBlock(
+    const pot = unitMoney ? null : await globalSalesPotBlock(
       { orgId: req.orgId, brandId: brandIds[0], featureSlug: campaign.featureSlug, identity: moneyIdentity },
       now,
       salesBudget,
@@ -421,6 +451,7 @@ export async function runCampaignsInScope(
         await executeCampaignWorkflow(workflowSlug, inputs);
       }
       firedCohorts.add(cohort);
+      if (pipe) firedPipes.set(pipe, campaign.id);
       outcome.triggered.push({
         campaignId: campaign.id,
         legKey: campaign.legKey,

@@ -174,6 +174,20 @@ describe("Gate Check", () => {
     expect(result.allowed).toBe(true);
   });
 
+  it("refuses a SALES FUNNEL unit on its funnel's money before any pre-funnel money path is read", async () => {
+    const result = await runGateChecks({
+      ...makeCampaign({ dailyBudgetCents: 5000 } as never),
+      salesFunnelCampaignId: "funnel-campaign-1",
+      salesFunnelId: "f@x",
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("Sales funnel not funded");
+    expect(result.reasonDetail).toContain("funnel-campaign-1");
+    expect(result.nextRunAt).toBeInstanceOf(Date);
+    expect(mockItemsGate).not.toHaveBeenCalled();
+    expect(mockGetStatsBudget).not.toHaveBeenCalled();
+  });
+
   describe("Stale run cleanup", () => {
     it("should mark runs running > 3 hours as failed", async () => {
       const staleRun = makeRun({

@@ -56,6 +56,27 @@ const router = Router();
 
 type CampaignRow = typeof campaigns.$inferSelect;
 
+/**
+ * A SALES FUNNEL unit (lib/sales-funnel-campaigns.ts) is run, paused and identified only through its
+ * funnel campaign: a PATCH stating its status or anything of its identity is refused, naming the
+ * funnel campaign to act on instead. Anything else (audiences, services, destination) stays the
+ * unit's own. null = not a unit, or nothing refused.
+ */
+const SALES_FUNNEL_UNIT_LOCKED_FIELDS = ["status", "offerId", "legKey", "featureSlug", "brandIds"] as const;
+function salesFunnelUnitRefusal(
+  existing: CampaignRow,
+  body: Record<string, unknown>,
+): { error: string; reason: "sales_funnel_unit"; salesFunnelCampaignId: string } | null {
+  if (!existing.salesFunnelCampaignId) return null;
+  const locked = SALES_FUNNEL_UNIT_LOCKED_FIELDS.filter((f) => body[f] !== undefined);
+  if (locked.length === 0) return null;
+  return {
+    error: "This campaign is a step of a sales funnel campaign: run or pause the sales funnel instead.",
+    reason: "sales_funnel_unit",
+    salesFunnelCampaignId: existing.salesFunnelCampaignId,
+  };
+}
+
 /** The person whose request this is, for the transition ledger and billing's signal. */
 function personActor(req: AuthenticatedRequest): StatusActor {
   return { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null };
@@ -146,6 +167,8 @@ async function applyReactiveDefaults(
           eq(campaigns.offerId, scope.offerId),
           legKeyMatches(pair.featureSlug, pair.legKey),
           eq(campaigns.acquisitionChannel, acquisitionChannel),
+          // A SALES FUNNEL unit is not this pair's (leg x channel) campaign.
+          isNull(campaigns.salesFunnelCampaignId),
         ),
         orderBy: [desc(sql`(${campaigns.status} = 'ongoing')`), desc(campaigns.createdAt)],
       });
@@ -267,7 +290,7 @@ router.get("/campaigns/list", requireApiKey, async (_req, res) => {
 router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilterQuery), async (req: AuthenticatedRequest, res) => {
   try {
     const {
-      brandId, status, workflowSlug, featureSlug, offerId, legKey, limit,
+      brandId, status, workflowSlug, featureSlug, offerId, legKey, salesFunnelCampaignId, limit,
     } = CampaignsFilterQuery.parse(req.query);
 
     const conditions = [eq(campaigns.orgId, req.orgId!)];
@@ -281,6 +304,7 @@ router.get("/campaigns", requireApiKey, serviceAuth, validateQuery(CampaignsFilt
     if (offerId) conditions.push(eq(campaigns.offerId, offerId));
     // Either outbound spelling of the leg finds the same rows (lib/leg-identity.ts).
     if (legKey) conditions.push(legKeyMatches(featureSlug, legKey));
+    if (salesFunnelCampaignId) conditions.push(eq(campaigns.salesFunnelCampaignId, salesFunnelCampaignId));
 
     const query = db
       .select()
@@ -466,7 +490,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     // AND the row is matched WHATEVER ITS STATUS. A campaign the customer stopped is still their
     // campaign for this identity: creating a second one beside it is how a brand ended up with two
     // identical live campaigns, and how a deliberately-stopped campaign was left invisible while a
-    // twin spent its money. `uniq_campaigns_org_brand_offer_leg_channel` is partial on `ongoing`, so
+    // twin spent its money. `uniq_campaigns_org_brand_offer_sales_funnel_leg_channel` is partial on `ongoing`, so
     // Postgres cannot police that on its own and never will — production carries 663 stopped rows
     // sharing 33 identities from before this was one campaign, and history is never rewritten. So
     // the guard is HERE, and the index stays the backstop for the live case.
@@ -488,6 +512,9 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           legKey ? legKeyMatches(resolvedFeatureSlug, legKey) : isNull(campaigns.legKey),
           matchOffer && offerId ? eq(campaigns.offerId, offerId) : undefined,
           matchOffer ? undefined : isNull(campaigns.offerId),
+          // A SALES FUNNEL unit is its funnel's (lib/sales-funnel-campaigns.ts): a (leg x channel)
+          // create never matches, restarts or rewrites one.
+          isNull(campaigns.salesFunnelCampaignId),
         ),
         // The LIVE campaign of the identity wins over a stopped one whatever their dates; among
         // stopped rows the most recent is the one the customer last worked with.
@@ -666,7 +693,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
     }
     // Two creates raced the same identity. The loser does not get a second campaign for it — the
     // one that won IS this identity's campaign, so hand that one back rather than an error.
-    if (error?.code === "23505" && constraint === "uniq_campaigns_org_brand_offer_leg_channel") {
+    if (error?.code === "23505" && constraint === "uniq_campaigns_org_brand_offer_sales_funnel_leg_channel") {
       const winner = await db.query.campaigns.findFirst({
         where: and(
           eq(campaigns.orgId, req.orgId!),
@@ -735,7 +762,7 @@ function dispatchFirstRun(
  *
  * A pair that ALREADY has a campaign never gets a second one: the incumbent of the identity is
  * matched whatever its status, exactly as `POST /campaigns` matches it and for the same reason
- * (`uniq_campaigns_org_brand_offer_leg_channel` is partial on `ongoing` and can never police the
+ * (`uniq_campaigns_org_brand_offer_sales_funnel_leg_channel` is partial on `ongoing` and can never police the
  * stopped rows). A live one is handed back untouched; a stopped one is started, because that IS
  * what the person just asked for.
  */
@@ -789,6 +816,8 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
         // The campaign that NAMES this (offer, leg) is this pair's campaign.
         eq(campaigns.offerId, offerId!),
         legKeyMatches(featureSlug, legKey),
+        // Never a SALES FUNNEL unit: it is started only with its funnel.
+        isNull(campaigns.salesFunnelCampaignId),
       ),
     });
 
@@ -904,7 +933,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
     // Two starts raced the same pair. The loser does not get a second campaign for it — whoever
     // won IS this identity's campaign, so hand that one back rather than an error.
     if (error?.code === "23505"
-      && (constraint === "uniq_campaigns_org_name" || constraint === "uniq_campaigns_org_brand_offer_leg_channel")) {
+      && (constraint === "uniq_campaigns_org_name" || constraint === "uniq_campaigns_org_brand_offer_sales_funnel_leg_channel")) {
       const winner = await db.query.campaigns.findFirst({
         where: and(
           eq(campaigns.orgId, req.orgId!),
@@ -916,6 +945,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
           // proposition on different money.
           legKeyMatches(req.body.featureSlug, req.body.legKey),
           eq(campaigns.offerId, req.body.offerId),
+          isNull(campaigns.salesFunnelCampaignId),
         ),
         orderBy: [campaigns.createdAt],
       });
@@ -972,6 +1002,11 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     if (!existing) {
       return res.status(404).json({ error: "Campaign not found" });
     }
+
+    // A SALES FUNNEL unit is run, paused and identified ONLY through its funnel campaign (owner
+    // 2026-10-10: no pause/run at pipe level). Its other settings may still be stated.
+    const unitRefusal = salesFunnelUnitRefusal(existing, req.body);
+    if (unitRefusal) return res.status(409).json(unitRefusal);
 
     // Either outbound spelling of a restated leg is ONE identity, written in this service's own
     // spelling (lib/leg-identity.ts).
@@ -1092,7 +1127,7 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
     // Restating the leg or the offer can move a campaign onto an identity another live campaign
     // already holds.
     // That is a real conflict and it says so, rather than surfacing as an internal error.
-    if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_brand_offer_leg_channel") {
+    if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_brand_offer_sales_funnel_leg_channel") {
       return res.status(409).json({
         error: "Another live campaign already runs this (brand, offer, leg, acquisition channel)",
       });
@@ -1108,6 +1143,19 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
 router.delete("/campaigns/:id", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
+
+    // A SALES FUNNEL unit is a pipe of its funnel: deleting it alone would leave the funnel short
+    // of a pipe while still reading as launched.
+    const target = await db.query.campaigns.findFirst({
+      where: and(eq(campaigns.id, id), eq(campaigns.orgId, req.orgId!)),
+    });
+    if (target?.salesFunnelCampaignId) {
+      return res.status(409).json({
+        error: "This campaign is a step of a sales funnel campaign: manage it through its sales funnel campaign.",
+        reason: "sales_funnel_unit",
+        salesFunnelCampaignId: target.salesFunnelCampaignId,
+      });
+    }
 
     const result = await db
       .delete(campaigns)

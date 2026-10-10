@@ -125,6 +125,14 @@
             "type": "string",
             "nullable": true
           },
+          "salesFunnelId": {
+            "type": "string",
+            "nullable": true
+          },
+          "salesFunnelCampaignId": {
+            "type": "string",
+            "nullable": true
+          },
           "maxLeads": {
             "type": "integer",
             "nullable": true
@@ -206,6 +214,8 @@
           "dailyBudgetCents",
           "offerId",
           "legKey",
+          "salesFunnelId",
+          "salesFunnelCampaignId",
           "maxLeads",
           "startDate",
           "endDate",
@@ -424,6 +434,145 @@
         "required": [
           "brandId",
           "featureSlug"
+        ],
+        "additionalProperties": false
+      },
+      "SalesFunnelCampaign": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "salesFunnelId": {
+            "type": "string"
+          },
+          "salesFunnelName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "stopReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdByUserId": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SalesFunnelUnit"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "orgId",
+          "brandId",
+          "offerId",
+          "salesFunnelId",
+          "salesFunnelName",
+          "status",
+          "stopReason",
+          "createdByUserId",
+          "createdAt",
+          "updatedAt",
+          "units"
+        ]
+      },
+      "SalesFunnelUnit": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string"
+          },
+          "pipeId": {
+            "type": "string"
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "legKey": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "workflowSlug": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "campaignId",
+          "pipeId",
+          "featureSlug",
+          "legKey",
+          "status",
+          "workflowSlug",
+          "name"
+        ]
+      },
+      "CreateSalesFunnelCampaignBody": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "salesFunnelId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "$ref": "#/components/schemas/CampaignStatusEnum"
+          }
+        },
+        "required": [
+          "brandId",
+          "offerId",
+          "salesFunnelId",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "UpdateSalesFunnelCampaignBody": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "activate",
+              "stop"
+            ]
+          }
+        },
+        "required": [
+          "status"
         ],
         "additionalProperties": false
       },
@@ -2743,6 +2892,14 @@
           },
           {
             "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "salesFunnelCampaignId",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "integer",
               "minimum": 1,
               "maximum": 1000
@@ -3250,6 +3407,370 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sales-funnel-campaigns": {
+      "post": {
+        "tags": [
+          "Sales funnel campaigns"
+        ],
+        "summary": "Launch a sales funnel as one campaign (brand x offer x sales funnel)",
+        "description": "SALES FUNNEL CAMPAIGNS (owner 2026-10-10, chat first). A campaign is brand x offer x SALES FUNNEL (features-service's sales funnel id, `GET /internal/catalogue/sales-funnels` rows[].id, its combinationKey, carried verbatim). It owns one UNIT per pipe of the funnel (`<channel slug>|<leg key>`): an ordinary campaign row stating `salesFunnelId` + `salesFunnelCampaignId`, run independently like every campaign (proactive pipes prospect, reactive pipes answer). Uniqueness is brand x offer x sales funnel x channel x leg: a pipe two funnels share is two units, one per funnel. A sourcing pipe (Start -> Lead found, a lead-source origin) is a SOURCE campaign unit: no workflow, its origin is ON for the offer while the funnel runs. A funnel with no sourcing pipe gets the offer's default lead source on its start, as every outreach start does. RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH/DELETE /campaigns/{id} refuse a unit's status or identity with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. MONEY: a unit's money is its funnel's caps at billing (max budget + max volume, one-off / daily / weekly / monthly, keyed brand x offer x sales funnel), never a per-(offer, leg, channel) ceiling or the brand pot. Until billing serves those caps every unit is HELD as unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`) and spends nothing. Billing is not signalled per unit (no plan money moves). Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had. Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | pipe_not_runnable; 409 no_workflow | payment_declined | no_payment_method; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSalesFunnelCampaignBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "This identity already had a funnel campaign: handed back",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "salesFunnelCampaign": {
+                      "$ref": "#/components/schemas/SalesFunnelCampaign"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    },
+                    "started": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "salesFunnelCampaign",
+                    "created",
+                    "started"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created (and started when status=ongoing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "salesFunnelCampaign": {
+                      "$ref": "#/components/schemas/SalesFunnelCampaign"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    },
+                    "started": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "salesFunnelCampaign",
+                    "created",
+                    "started"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "blockedReason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "reason"
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "A sibling could not be read — try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "reason"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Sales funnel campaigns"
+        ],
+        "summary": "List the org's sales funnel campaigns, each with its units",
+        "description": "SALES FUNNEL CAMPAIGNS (owner 2026-10-10, chat first). A campaign is brand x offer x SALES FUNNEL (features-service's sales funnel id, `GET /internal/catalogue/sales-funnels` rows[].id, its combinationKey, carried verbatim). It owns one UNIT per pipe of the funnel (`<channel slug>|<leg key>`): an ordinary campaign row stating `salesFunnelId` + `salesFunnelCampaignId`, run independently like every campaign (proactive pipes prospect, reactive pipes answer). Uniqueness is brand x offer x sales funnel x channel x leg: a pipe two funnels share is two units, one per funnel. A sourcing pipe (Start -> Lead found, a lead-source origin) is a SOURCE campaign unit: no workflow, its origin is ON for the offer while the funnel runs. A funnel with no sourcing pipe gets the offer's default lead source on its start, as every outreach start does. RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH/DELETE /campaigns/{id} refuse a unit's status or identity with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. MONEY: a unit's money is its funnel's caps at billing (max budget + max volume, one-off / daily / weekly / monthly, keyed brand x offer x sales funnel), never a per-(offer, leg, channel) ceiling or the brand pot. Until billing serves those caps every unit is HELD as unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`) and spends nothing. Billing is not signalled per unit (no plan money moves). Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had. Header x-org-id. Filters are exact matches.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "offerId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "salesFunnelId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/CampaignStatusEnum"
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Funnel campaigns, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "salesFunnelCampaigns": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SalesFunnelCampaign"
+                      }
+                    }
+                  },
+                  "required": [
+                    "salesFunnelCampaigns"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sales-funnel-campaigns/{id}": {
+      "get": {
+        "tags": [
+          "Sales funnel campaigns"
+        ],
+        "summary": "One sales funnel campaign with its units",
+        "description": "Header x-org-id. The units' campaign ids are what spend, outcomes and runs are filed under: sum them for the funnel.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The funnel campaign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "salesFunnelCampaign": {
+                      "$ref": "#/components/schemas/SalesFunnelCampaign"
+                    }
+                  },
+                  "required": [
+                    "salesFunnelCampaign"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Sales funnel campaigns"
+        ],
+        "summary": "Run or pause the whole sales funnel",
+        "description": "Body {status: activate | stop}. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSalesFunnelCampaignBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The funnel campaign after the move",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "salesFunnelCampaign": {
+                      "$ref": "#/components/schemas/SalesFunnelCampaign"
+                    }
+                  },
+                  "required": [
+                    "salesFunnelCampaign"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Payment hold",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "blockedReason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "reason"
+                  ]
                 }
               }
             }

@@ -23,7 +23,7 @@ import type { CatalogueLeg } from "./channel-operator-client.js";
  *   - `legKeySpellings`           every spelling a stored row may carry, for a DB filter;
  *   - `storedLegKey`              the spelling WRITTEN. Wave 1 writes the legacy spelling (what
  *                                 every stored row carries today), so the partial unique index
- *                                 `uniq_campaigns_org_brand_offer_leg_channel` still sees one value
+ *                                 `uniq_campaigns_org_brand_offer_sales_funnel_leg_channel` still sees one value
  *                                 per identity and keeps policing a race between two spellings.
  *
  * Wave 2 (owner go 2026-10-09): migration 0063 moved every stored outbound row (campaigns and the

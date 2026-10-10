@@ -1,11 +1,12 @@
 import { db, sql } from "../../src/db/index.js";
-import { campaigns, brandPauseTransitions, campaignAudienceExhaustion, campaignAudienceAvailability, campaignStatusTransitions, triggerEvents, triggerPollCursors, triggerSilenceWatch } from "../../src/db/schema.js";
+import { campaigns, salesFunnelCampaigns, brandPauseTransitions, campaignAudienceExhaustion, campaignAudienceAvailability, campaignStatusTransitions, triggerEvents, triggerPollCursors, triggerSilenceWatch } from "../../src/db/schema.js";
 
 /**
  * Clean all test data from the database
  */
 export async function cleanTestData() {
   await db.delete(campaigns);
+  await db.delete(salesFunnelCampaigns);
   await db.delete(brandPauseTransitions);
   await db.delete(campaignAudienceExhaustion);
   await db.delete(campaignAudienceAvailability);

@@ -266,6 +266,19 @@ describe("planBrandTurns", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("HOLDS a SALES FUNNEL unit on its funnel's money, without reading the brand's per-pipe ceilings", async () => {
+    // The brand funds this pipe generously in the pre-funnel model; a unit never runs on that money.
+    mockCampaignBudgets([{ legKey: ENTRY_LEG, dailyBudgetCents: "5000" }], "5000");
+    mockSpend("0");
+    const now = new Date("2026-10-10T10:00:00Z");
+    const deferred = await planBrandTurns(
+      [claimed({ id: "unit-1", salesFunnelCampaignId: "funnel-campaign-1", salesFunnelId: "f@x" })],
+      now,
+    );
+    expect(deferred.get("unit-1")?.getTime()).toBe(now.getTime() + 10 * 60_000);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("a brand with ONE funded pot and no per-campaign ceilings runs on it", async () => {
     mockCampaignBudgets([], "5000");
     mockSpend("0");

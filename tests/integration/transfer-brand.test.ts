@@ -28,6 +28,7 @@ import {
   brandPauseTransitions,
   triggerEvents,
   triggerPollCursors,
+  salesFunnelCampaigns,
 } from "../../src/db/schema.js";
 import { eq, sql } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
@@ -128,13 +129,19 @@ describe("POST /internal/transfer-brand", () => {
     await db.insert(triggerPollCursors).values({
       triggerId: "post_reacted", orgId: sourceOrgId, brandId: sourceBrandId, offerId: crypto.randomUUID(), nextPollAt: now,
     });
+    const [salesFunnelCampaign] = await db.insert(salesFunnelCampaigns).values({
+      orgId: sourceOrgId, brandId: sourceBrandId, offerId: crypto.randomUUID(), salesFunnelId: "f@x", salesFunnelName: "Epiphany", status: "stopped",
+    }).returning();
 
     const res = await post({ sourceBrandId, sourceOrgId, targetOrgId });
 
     expect(res.status).toBe(200);
+    const [movedSalesFunnelCampaign] = await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.id, salesFunnelCampaign.id));
+    expect(movedSalesFunnelCampaign.orgId).toBe(targetOrgId);
     expect(res.body).toEqual({
       updatedTables: [
         { tableName: "campaigns", count: 1 },
+        { tableName: "sales_funnel_campaigns", count: 1 },
         { tableName: "campaign_status_transitions", count: 2 },
         { tableName: "campaign_audience_availability", count: 1 },
         { tableName: "brand_pause_transitions", count: 2 },
