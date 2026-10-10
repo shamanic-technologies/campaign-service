@@ -1,5 +1,6 @@
 import type { Campaign, SalesFunnelCampaign } from "../db/schema.js";
-import { legIdentity } from "./leg-identity.js";
+import { z } from "zod";
+import { legIdentity, sameLeg } from "./leg-identity.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS — the rules (owner 2026-10-10, "chat first").
@@ -40,11 +41,13 @@ import { legIdentity } from "./leg-identity.js";
  *   Proactive pipes are simply duplicated (owner): each funnel's unit prospects on its own.
  *
  * MONEY
- *   A unit's money is its FUNNEL's caps at billing (max budget + max volume per one-off / day / week
- *   / month, keyed brand x offer x sales funnel), never the per-(offer, leg, channel) ceilings of the
- *   pre-funnel model and never the brand pot. Until billing serves those caps a unit is UNFUNDED:
- *   held on the funding cadence, spends nothing (`salesFunnelUnitMoney`). Fail-CLOSED, like every
- *   unreadable ceiling. Nothing about what anything costs changes.
+ *   A unit's money is its FUNNEL's caps at billing (max budget + max volume, each one-off / daily /
+ *   weekly / monthly, keyed brand x offer x sales funnel; `salesFunnelUnitMoney`), never the
+ *   per-(offer, leg, channel) ceilings of the pre-funnel model and never the brand pot. No max
+ *   budget stated = unfunded. Either cap `reached` = the funnel's proactive pipes stop making NEW
+ *   first touches (held, status untouched: a system condition never changes a status); reactive
+ *   pipes keep answering. An unmeasured consumption holds the proactive pipes, loudly. Nothing
+ *   about what anything costs changes.
  *
  * NOT DONE HERE: making a funnel coherent (a proactive pipe feeding the reactive one) is the agent's
  * job; one-proactive-per-offer (lib/single-proactive.ts) does not apply to funnels (several funnels
@@ -54,30 +57,211 @@ import { legIdentity } from "./leg-identity.js";
 /** How often a unit held for its funnel's money is re-checked (the funding cadence). */
 export const SALES_FUNNEL_MONEY_RECHECK_MS = 10 * 60_000;
 
+/** How long one read of a funnel's caps answers for every unit of it (a tick reads it once). */
+const CAPS_READ_TTL_MS = 30_000;
+
+/** A unit, as much of it as its money question needs. */
+export interface SalesFunnelUnitRef {
+  id: string;
+  orgId: string;
+  brandId: string | null;
+  offerId: string | null;
+  featureSlug: string | null;
+  legKey: string | null;
+  salesFunnelCampaignId: string | null;
+  salesFunnelId: string | null;
+}
+
 export type SalesFunnelMoneyVerdict =
-  | { run: true }
-  | { run: false; kind: "unfunded"; reason: string; detail: string; nextRunAt: Date };
+  | {
+      run: true;
+      /**
+       * What the turn planner ranks it on: the funnel's consumed vs its max budget (a proactive
+       * pipe), or 0 of 1 for a reactive pipe, which answers people already contacted and takes its
+       * cohort's turn first (bottom of the funnel first).
+       */
+      pace: { spentCents: number; ceilingCents: number };
+    }
+  | {
+      run: false;
+      kind: "unfunded" | "unreadable" | "cap_reached";
+      reason: string;
+      detail: string;
+      nextRunAt: Date;
+    };
+
+const CapPeriod = z.enum(["one_off", "daily", "weekly", "monthly"]);
+const Figure = z.union([z.string(), z.number()]).nullable().transform((v) => (v === null ? null : Number(v)));
+const SalesFunnelCapsResponse = z.object({
+  stated: z.boolean(),
+  maxBudget: z
+    .object({
+      amountCents: Figure,
+      period: CapPeriod,
+      consumedCents: Figure,
+      reached: z.boolean().nullable(),
+      consumedUnavailableReason: z.string().nullable(),
+      consumedUnavailableDetail: z.string().nullable().optional(),
+    })
+    .nullable(),
+  maxVolume: z
+    .object({
+      count: z.number(),
+      period: CapPeriod,
+      unit: z.string(),
+      consumed: z.number().nullable(),
+      reached: z.boolean().nullable(),
+      consumedUnavailableReason: z.string().nullable(),
+      consumedUnavailableDetail: z.string().nullable().optional(),
+    })
+    .nullable(),
+  pipes: z
+    .array(z.object({ channelSlug: z.string(), legKey: z.string(), mode: z.enum(["proactive", "reactive"]) }))
+    .nullable(),
+});
+export type SalesFunnelCaps = z.infer<typeof SalesFunnelCapsResponse>;
+
+type CapsRead = { ok: true; caps: SalesFunnelCaps } | { ok: false; detail: string };
+const capsCache = new Map<string, { at: number; read: Promise<CapsRead> }>();
+
+/** Test hook: forget every cached caps read. */
+export function resetSalesFunnelCapsCache(): void {
+  capsCache.clear();
+}
+
+/**
+ * billing-service `GET /internal/brands/:brandId/offers/:offerId/sales-funnels/:salesFunnelId/caps`
+ * (x-api-key + x-org-id; LOCKED, billing v0.83.6): the funnel's max budget and max volume with
+ * what each has consumed in its current period, and billing's own `reached` verdict. Read, never
+ * recomputed here.
+ */
+export async function fetchSalesFunnelCaps(
+  scope: { orgId: string; brandId: string; offerId: string; salesFunnelId: string },
+  nowMs: number = Date.now(),
+): Promise<CapsRead> {
+  const key = `${scope.orgId}|${scope.brandId}|${scope.offerId}|${scope.salesFunnelId}`;
+  const hit = capsCache.get(key);
+  if (hit && nowMs - hit.at < CAPS_READ_TTL_MS) return hit.read;
+  const read = (async (): Promise<CapsRead> => {
+    const url = process.env.BILLING_SERVICE_URL;
+    const apiKey = process.env.BILLING_SERVICE_API_KEY;
+    if (!url || !apiKey) return { ok: false, detail: "billing-service not configured" };
+    const path =
+      `/internal/brands/${encodeURIComponent(scope.brandId)}/offers/${encodeURIComponent(scope.offerId)}` +
+      `/sales-funnels/${encodeURIComponent(scope.salesFunnelId)}/caps`;
+    try {
+      const res = await fetch(`${url.replace(/\/$/, "")}${path}`, {
+        headers: { "x-api-key": apiKey, "x-org-id": scope.orgId },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) return { ok: false, detail: `billing HTTP ${res.status} on ${path}` };
+      const parsed = SalesFunnelCapsResponse.safeParse(await res.json());
+      if (!parsed.success) return { ok: false, detail: `billing caps answer unparseable: ${parsed.error.message.slice(0, 200)}` };
+      return { ok: true, caps: parsed.data };
+    } catch (err) {
+      return { ok: false, detail: `${path}: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  })();
+  capsCache.set(key, { at: nowMs, read });
+  const result = await read;
+  if (!result.ok) capsCache.delete(key); // never remember an outage
+  return result;
+}
 
 /**
  * May this UNIT spend now? The ONE money answer for a sales funnel unit: the turn planner, the step
- * trigger, the poll detector's payer and gate-check all ask it, before any pre-funnel money path.
+ * trigger and gate-check ask it before any pre-funnel money path (none of which is its money).
  *
- * billing does not serve sales funnel caps yet, so every unit is unfunded (fail-closed). When it
- * does, this reads them; nothing else changes.
+ *   - caps unreadable                         → every unit held (`unreadable`, fail-closed, logged)
+ *   - no max budget stated                    → every unit held (`unfunded`: money starts nothing)
+ *   - REACTIVE pipe (billing's `pipes[].mode`) → runs: it answers people already contacted, and
+ *     stopping a funnel stops NEW first touches only (follow-ups go on, the existing rule)
+ *   - PROACTIVE pipe (or a pipe billing does not name): held when the max budget OR the max volume
+ *     is `reached` (`cap_reached`), and held when either consumption cannot be measured
+ *     (`unreadable`, logged with billing's named reason: never read as "not reached")
  */
 export async function salesFunnelUnitMoney(
-  unit: { id: string; salesFunnelCampaignId: string | null; salesFunnelId?: string | null },
+  unit: SalesFunnelUnitRef,
   now: Date = new Date(),
 ): Promise<SalesFunnelMoneyVerdict> {
   const nextRunAt = new Date(now.getTime() + SALES_FUNNEL_MONEY_RECHECK_MS);
-  return {
+  const held = (kind: "unfunded" | "unreadable" | "cap_reached", reason: string, why: string): SalesFunnelMoneyVerdict => ({
     run: false,
-    kind: "unfunded",
-    reason: "Sales funnel not funded",
+    kind,
+    reason,
     detail:
-      `Campaign not run — it is a pipe of sales funnel campaign ${unit.salesFunnelCampaignId} (sales funnel ${unit.salesFunnelId ?? "?"}), ` +
-      `whose money is that sales funnel's caps at billing, and billing serves no sales funnel cap yet. Held rather than spent (fail-closed); re-checked at ${nextRunAt.toISOString()}.`,
+      `Campaign not run — it is a pipe of sales funnel campaign ${unit.salesFunnelCampaignId} (sales funnel ${unit.salesFunnelId ?? "?"}): ` +
+      `${why} Re-checked at ${nextRunAt.toISOString()}.`,
     nextRunAt,
+  });
+
+  if (!unit.brandId || !unit.offerId || !unit.salesFunnelId) {
+    console.error(`[campaign-service] Sales funnel unit ${unit.id} states no brand, offer or sales funnel — held`);
+    return held("unreadable", "Sales funnel caps unavailable", "the unit states no brand, offer or sales funnel, so its caps cannot be asked.");
+  }
+  const read = await fetchSalesFunnelCaps(
+    { orgId: unit.orgId, brandId: unit.brandId, offerId: unit.offerId, salesFunnelId: unit.salesFunnelId },
+    now.getTime(),
+  );
+  if (!read.ok) {
+    console.error(`[campaign-service] Sales funnel caps unreadable for unit ${unit.id} (${unit.salesFunnelId}): ${read.detail} — held (fail-closed)`);
+    return held("unreadable", "Sales funnel caps unavailable", `billing's caps could not be read (${read.detail}). Held rather than spent (fail-closed).`);
+  }
+  const { caps } = read;
+  if (!caps.stated || !caps.maxBudget || caps.maxBudget.amountCents === null || !(caps.maxBudget.amountCents > 0)) {
+    return held("unfunded", "Sales funnel not funded", "the customer states no max budget for this sales funnel at billing. It waits for money.");
+  }
+
+  const pipe = caps.pipes?.find((p) => p.channelSlug === unit.featureSlug && sameLeg(unit.featureSlug, p.legKey, unit.legKey));
+  if (pipe?.mode === "reactive") return { run: true, pace: { spentCents: 0, ceilingCents: 1 } };
+
+  const budget = caps.maxBudget;
+  const amountCents = caps.maxBudget.amountCents;
+  if (budget.consumedCents === null || budget.reached === null) {
+    console.error(
+      `[campaign-service] Sales funnel ${unit.salesFunnelId} max budget consumption unmeasured (${budget.consumedUnavailableReason}: ${budget.consumedUnavailableDetail ?? ""}) — proactive unit ${unit.id} held`,
+    );
+    return held("unreadable", "Sales funnel budget unavailable", `billing could not measure what its max budget consumed (${budget.consumedUnavailableReason}). Held rather than spent (fail-closed).`);
+  }
+  if (budget.reached) {
+    return held("cap_reached", "Sales funnel max budget reached", `its ${budget.period} max budget is reached (${budget.consumedCents} of ${amountCents} cents). New first touches wait; follow-ups go on.`);
+  }
+  const volume = caps.maxVolume;
+  if (volume) {
+    if (volume.consumed === null || volume.reached === null) {
+      console.error(
+        `[campaign-service] Sales funnel ${unit.salesFunnelId} max volume consumption unmeasured (${volume.consumedUnavailableReason}: ${volume.consumedUnavailableDetail ?? ""}) — proactive unit ${unit.id} held`,
+      );
+      return held("unreadable", "Sales funnel volume unavailable", `billing could not measure its max volume (${volume.consumedUnavailableReason}). Held rather than spent (fail-closed).`);
+    }
+    if (volume.reached) {
+      return held("cap_reached", "Sales funnel max volume reached", `its ${volume.period} max volume is reached (${volume.consumed} of ${volume.count} ${volume.unit}). New first touches wait; follow-ups go on.`);
+    }
+  }
+  return { run: true, pace: { spentCents: budget.consumedCents, ceilingCents: amountCents } };
+}
+
+/** The money question's view of a campaign row (or a claimed one). */
+export function salesFunnelUnitRef(c: {
+  id: string;
+  orgId: string;
+  brandId?: string | null;
+  brandIds?: string[] | null;
+  offerId?: string | null;
+  featureSlug?: string | null;
+  legKey?: string | null;
+  salesFunnelCampaignId?: string | null;
+  salesFunnelId?: string | null;
+}): SalesFunnelUnitRef {
+  return {
+    id: c.id,
+    orgId: c.orgId,
+    brandId: c.brandId ?? c.brandIds?.[0] ?? null,
+    offerId: c.offerId ?? null,
+    featureSlug: c.featureSlug ?? null,
+    legKey: c.legKey ?? null,
+    salesFunnelCampaignId: c.salesFunnelCampaignId ?? null,
+    salesFunnelId: c.salesFunnelId ?? null,
   };
 }
 
