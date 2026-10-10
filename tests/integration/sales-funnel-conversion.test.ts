@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 
-const { mockCatalogue, mockBudgets, mockSelected, mockPaths, mockFunnel, mockSearch, mockPipe, mockPathSearch } = vi.hoisted(() => ({
+const { mockMode, mockCatalogue, mockBudgets, mockSelected, mockPaths, mockFunnel, mockSearch, mockPipe, mockPathSearch } = vi.hoisted(() => ({
   mockPathSearch: vi.fn(),
+  mockMode: vi.fn(),
   mockPipe: vi.fn(),
   mockCatalogue: vi.fn(),
   mockBudgets: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("../../src/lib/campaign-budget-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/campaign-budget-client.js")>();
   return { ...original, fetchCampaignBudgets: mockBudgets };
 });
+vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({ fetchBrandSalesBudget: mockMode }));
 vi.mock("../../src/lib/reactive-defaults.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/reactive-defaults.js")>();
   return { ...original, fetchOfferSelectedSalesPaths: mockSelected, fetchOfferCatalogueSalesPaths: mockPaths };
@@ -94,6 +96,7 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
         { offerId: OFFER, legKey: MEET, featureSlug: AMB, dailyBudgetCents: 100, sourcingCeilingCents: 0 },
       ],
     });
+    mockMode.mockResolvedValue({ ok: true, mode: "campaigns" });
     mockSelected.mockResolvedValue({ ok: true, value: { stated: false, combinationKeys: null } });
     mockPaths.mockResolvedValue({ ok: true, value: [
       { combinationKey: PROACTIVE_FUNNEL, roi: 3, legs: [{ legKey: ENTRY, reactive: false, workedBy: "platform", channelSlug: COLD, channelManaged: true }] },
@@ -136,7 +139,7 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     expect(await db.select().from(salesFunnelCampaigns)).toEqual([]);
   });
 
-  it("applies: cap at billing first, rows become units with NO status move, ceilings set to 0; idempotent", async () => {
+  it("applies: units linked with NO status move, and billing swaps the cap for the ceilings atomically; idempotent", async () => {
     const cold = await row(COLD, ENTRY);
     const src = await row(SOURCE, SOURCE_LEG);
     const amb = await row(AMB, MEET);
@@ -145,21 +148,13 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
 
     const report = await convertToSalesFunnelCampaigns({ apply: true, actingEmail: "owner@test.local" });
 
-    const caps = billingCalls.filter((c) => c.url.includes("/caps"));
-    expect(caps.map((c) => [decodeURIComponent(c.url.split("/sales-funnels/")[1]), c.body])).toEqual([
-      [`${PROACTIVE_FUNNEL}/caps`, { maxBudget: { amountCents: "1000", period: "daily" }, maxVolume: null }],
-      [`${MEET_FUNNEL}/caps`, { maxBudget: { amountCents: "100", period: "daily" }, maxVolume: null }],
+    expect(billingCalls.every((c) => c.url.includes("/internal/brands/") && c.url.endsWith("/caps"))).toBe(true);
+    const caps = billingCalls.map((c) => [decodeURIComponent(c.url.split("/sales-funnels/")[1]), c.body]);
+    expect(caps).toEqual([
+      [`${PROACTIVE_FUNNEL}/caps`, { maxBudget: { amountCents: "1000", period: "daily" }, maxVolume: null, replacesCeilings: expect.arrayContaining([{ featureSlug: COLD, legKey: ENTRY }, { featureSlug: SOURCE, legKey: SOURCE_LEG }]) }],
+      [`${MEET_FUNNEL}/caps`, { maxBudget: { amountCents: "100", period: "daily" }, maxVolume: null, replacesCeilings: [{ featureSlug: AMB, legKey: MEET }] }],
     ]);
-    expect(caps[0].headers).toMatchObject({ "x-org-id": ORG, "x-user-id": USER, "x-run-id": RUN, "x-email": "owner@test.local" });
-    const zeroed = billingCalls.filter((c) => c.url.endsWith("/campaign-budget")).map((c) => c.body);
-    expect(zeroed).toHaveLength(3);
-    expect(zeroed).toEqual(expect.arrayContaining([
-      { offerId: OFFER, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 0 },
-      { offerId: OFFER, legKey: SOURCE_LEG, featureSlug: SOURCE, dailyBudgetCents: 0 },
-      { offerId: OFFER, legKey: MEET, featureSlug: AMB, dailyBudgetCents: 0 },
-    ]));
-    // Every zeroing comes AFTER its group's cap and link.
-    expect(billingCalls.findIndex((c) => c.url.endsWith("/campaign-budget"))).toBeGreaterThan(0);
+    expect(billingCalls[0].headers).toMatchObject({ "x-org-id": ORG, "x-user-id": USER, "x-email": "owner@test.local" });
 
     const funnels = await db.select().from(salesFunnelCampaigns);
     expect(funnels.map((f) => [f.salesFunnelId, f.status]).sort()).toEqual([[MEET_FUNNEL, "ongoing"], [PROACTIVE_FUNNEL, "ongoing"]].sort());
@@ -169,34 +164,47 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     expect(byId.get(cold.id)!.salesFunnelCampaignId).toBe(byId.get(src.id)!.salesFunnelCampaignId);
     expect(byId.get(amb.id)!.salesFunnelId).toBe(MEET_FUNNEL);
     expect(byId.get(aic.id)!.salesFunnelCampaignId).toBeNull();
-    // Nothing moved a status: no transition was written.
     expect(await db.select().from(campaignStatusTransitions)).toHaveLength(before.length);
     expect(report.counts).toMatchObject({ campaigns: 4, converted: 3, skipped: 1 });
 
-    // Re-run: nothing left to convert, nothing written.
     billingCalls.length = 0;
     const again = await convertToSalesFunnelCampaigns({ apply: true });
     expect(again.groups.filter((g) => !g.skipped)).toEqual([]);
     expect(billingCalls).toEqual([]);
   });
 
-  it("writes no cap for a group funded at zero (it stays unfunded), and lists an offer-less ceiling it cannot clear", async () => {
+  it("writes NOTHING for a group billing refuses (409): the rows stay pre-funnel campaigns", async () => {
+    const cold = await row(COLD, ENTRY);
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 409, json: async () => ({}), text: async () => '{"reason":"subscriber"}' })));
+    const report = await convertToSalesFunnelCampaigns({ apply: true });
+    expect(report.groups[0].error).toContain("409");
+    expect(await db.select().from(salesFunnelCampaigns)).toEqual([]);
+    const [still] = await db.select().from(campaigns).where(eq(campaigns.id, cold.id));
+    expect(still.salesFunnelCampaignId).toBeNull();
+  });
+
+  it("plans, never forces, what billing would refuse: a global sales budget, a positive offer-less ceiling", async () => {
+    await row(COLD, ENTRY);
+    mockMode.mockResolvedValue({ ok: true, mode: "global" });
+    expect((await convertToSalesFunnelCampaigns({ apply: true })).groups[0].skipped).toBe("brand_in_global_sales_budget_mode");
+
+    mockMode.mockResolvedValue({ ok: true, mode: "campaigns" });
+    mockBudgets.mockResolvedValue({ ok: true, brandDailyBudgetCents: 800, campaigns: [
+      { offerId: null, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 800, sourcingCeilingCents: 350 },
+    ] });
+    expect((await convertToSalesFunnelCampaigns({ apply: true })).groups[0].skipped).toBe("positive_offer_less_ceiling_billing_cannot_replace");
+    expect(billingCalls).toEqual([]);
+  });
+
+  it("links a group funded at zero without any billing write (it stays unfunded)", async () => {
     await row(COLD, ENTRY);
     mockBudgets.mockResolvedValue({ ok: true, brandDailyBudgetCents: 0, campaigns: [
       { offerId: null, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 0, sourcingCeilingCents: null },
     ] });
     const zero = await convertToSalesFunnelCampaigns({ apply: true });
-    expect(zero.groups[0]).toMatchObject({ maxBudgetDailyCents: 0, capWritten: false, ceilingsZeroed: 0 });
+    expect(zero.groups[0]).toMatchObject({ maxBudgetDailyCents: 0, capWritten: false, skipped: null });
     expect(billingCalls).toEqual([]);
-
-    await cleanTestData();
-    await row(COLD, ENTRY);
-    mockBudgets.mockResolvedValue({ ok: true, brandDailyBudgetCents: 800, campaigns: [
-      { offerId: null, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 800, sourcingCeilingCents: 350 },
-    ] });
-    const offerless = await convertToSalesFunnelCampaigns({ apply: true });
-    expect(offerless.groups[0]).toMatchObject({ maxBudgetDailyCents: 800, capWritten: true, ceilingsZeroed: 0 });
-    expect(offerless.groups[0].ceilingsLeft).toEqual([expect.objectContaining({ dailyBudgetCents: 800, why: "offer_or_leg_less_ceiling_not_addressable" })]);
+    expect(await db.select().from(salesFunnelCampaigns)).toHaveLength(1);
   });
 
   it("prefers the offer's TICKED sales path, and never a funnel naming another platform pipe", async () => {

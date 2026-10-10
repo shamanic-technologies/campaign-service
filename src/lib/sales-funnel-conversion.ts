@@ -9,6 +9,7 @@ import { fetchOfferCatalogueSalesPaths, fetchOfferSelectedSalesPaths } from "./r
 import { fetchPipe, fetchSalesFunnel, searchSalesFunnelIds, searchSalesPaths } from "./sales-funnel-catalogue-client.js";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { isSourceOriginSlug } from "./source-campaigns.js";
+import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
 
 /**
  * CONVERT THE LIVE (leg x channel) CAMPAIGNS INTO SALES FUNNEL CAMPAIGNS (owner GO 2026-10-10).
@@ -25,10 +26,11 @@ import { isSourceOriginSlug } from "./source-campaigns.js";
  *
  * Nothing changes a status, nothing new starts, nobody is emailed: the old rows BECOME the units
  * (they keep their ids, history, workflow and audiences), every funnel campaign is born `ongoing`
- * like the rows it owns. Order per group, money-safe: (a) write the cap at billing, (b) link the rows
- * (from now on they are paced on the cap), (c) set the per-pipe ceilings they no longer use to 0,
- * so billing's brand figures read the same money once (an offer-less ceiling cannot be addressed by
- * billing's API: listed, left). Dry run by default; idempotent (linked rows are not live candidates).
+ * like the rows it owns. Per group, all or nothing: the rows are linked inside a transaction that
+ * also makes billing's ATOMIC swap (the cap written, the per-pipe ceilings it replaces deleted:
+ * billing v0.83.12) and commits only when billing said yes. What billing would refuse (a global
+ * or items sales budget, a positive ceiling stating no offer) is said in the plan, never forced.
+ * Dry run by default; idempotent (linked rows are not live candidates).
  */
 
 type Row = typeof campaigns.$inferSelect;
@@ -53,8 +55,6 @@ export interface ConversionGroup {
   /** Filled on apply. */
   salesFunnelCampaignId?: string;
   capWritten?: boolean;
-  ceilingsZeroed?: number;
-  ceilingsLeft?: Array<{ featureSlug: string; legKey: string | null; dailyBudgetCents: number; why: string }>;
   error?: string;
 }
 
@@ -95,6 +95,16 @@ export async function convertToSalesFunnelCampaigns(opts: { apply: boolean; orgI
     const owner = offerRows.find((r) => r.createdByUserId && r.parentRunId) ?? offerRows[0];
     const identity = { orgId, userId: owner.createdByUserId ?? undefined, runId: owner.parentRunId ?? undefined, brandId };
     const budgets = await fetchCampaignBudgets(brandId, identity);
+    // billing refuses a funnel cap for a brand on one global sales budget (and items mode is a
+    // subscriber's): said in the plan, never forced.
+    const salesBudget = await fetchBrandSalesBudget(brandId, identity);
+    const modeRefusal = !salesBudget.ok
+      ? "billing_sales_budget_unreadable"
+      : salesBudget.mode !== "campaigns" ? `brand_in_${salesBudget.mode}_sales_budget_mode` : null;
+    // billing replaces ceilings named by (offer, channel, leg): a positive ceiling stating no offer
+    // or no leg cannot be named, and billing would answer 409 ceiling_not_found.
+    const unnameable = (cs: ConversionGroup["ceilings"]) =>
+      cs.some((c) => c.dailyBudgetCents > 0 && (!c.offerId || !c.legKey)) ? "positive_offer_less_ceiling_billing_cannot_replace" : null;
 
     const sources = offerRows.filter((r) => isSourceOriginSlug(r.featureSlug));
     const pipes = offerRows.filter((r) => !isSourceOriginSlug(r.featureSlug));
@@ -130,7 +140,10 @@ export async function convertToSalesFunnelCampaigns(opts: { apply: boolean; orgI
       else {
         const funnel = await proactiveFunnelOf(proactive[0], identity, catalogue.operatorBySlug);
         if (!funnel.ok) group.skipped = funnel.reason;
-        else Object.assign(group, { salesFunnelId: funnel.id, salesFunnelName: funnel.name, basis: funnel.basis });
+        else {
+          Object.assign(group, { salesFunnelId: funnel.id, salesFunnelName: funnel.name, basis: funnel.basis });
+          group.skipped = modeRefusal ?? unnameable(group.ceilings);
+        }
       }
       groups.push(group);
     } else if (sources.length > 0) {
@@ -150,7 +163,10 @@ export async function convertToSalesFunnelCampaigns(opts: { apply: boolean; orgI
       else {
         const funnel = await reactiveFunnelOf(r, catalogue.operatorBySlug);
         if (!funnel.ok) group.skipped = funnel.reason;
-        else Object.assign(group, { salesFunnelId: funnel.id, salesFunnelName: funnel.name, basis: "reactive_funnel" });
+        else {
+          Object.assign(group, { salesFunnelId: funnel.id, salesFunnelName: funnel.name, basis: "reactive_funnel" });
+          group.skipped = modeRefusal ?? unnameable(group.ceilings);
+        }
       }
       groups.push(group);
     }
@@ -263,44 +279,49 @@ async function reactiveFunnelOf(
   return funnel;
 }
 
-async function billingPut(path: string, body: unknown, headers: Record<string, string>): Promise<void> {
+/**
+ * billing v0.83.12 `PUT /internal/brands/:b/offers/:o/sales-funnels/:id/caps` {maxBudget, maxVolume,
+ * replacesCeilings}: writes the cap AND deletes the named per-pipe ceilings atomically; 409 (nothing
+ * written) when the cap/day differs from their sum, a named ceiling is missing, the brand runs on
+ * one global sales budget, or the org is a subscriber.
+ */
+async function putCapReplacingCeilings(g: ConversionGroup, headers: Record<string, string>): Promise<void> {
   const url = process.env.BILLING_SERVICE_URL;
   const apiKey = process.env.BILLING_SERVICE_API_KEY;
   if (!url || !apiKey) throw new Error("billing-service not configured");
+  const path =
+    `/internal/brands/${encodeURIComponent(g.brandId)}/offers/${encodeURIComponent(g.offerId)}` +
+    `/sales-funnels/${encodeURIComponent(g.salesFunnelId!)}/caps`;
   const res = await fetch(`${url.replace(/\/$/, "")}${path}`, {
     method: "PUT",
     headers: { "content-type": "application/json", "x-api-key": apiKey, ...headers },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      maxBudget: { amountCents: String(g.maxBudgetDailyCents), period: "daily" },
+      maxVolume: null,
+      replacesCeilings: g.ceilings
+        .filter((c) => c.dailyBudgetCents > 0)
+        .map((c) => ({ featureSlug: c.featureSlug, legKey: c.legKey })),
+    }),
     signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) throw new Error(`billing PUT ${path} answered ${res.status}: ${(await res.text()).slice(0, 300)}`);
 }
 
+/**
+ * One group, all or nothing: the funnel campaign and its units are written in a transaction that
+ * also makes billing's atomic cap-for-ceilings swap, and commits only if billing said yes. So the
+ * rows are units exactly when their money is the cap (no tick sees units without a cap, or pipes
+ * without their ceilings, beyond the commit itself). A group funded at 0 has no cap to write: its
+ * ceilings stay as they are (0), and its units stay unfunded, as the pipes were.
+ */
 async function applyGroup(g: ConversionGroup, rows: Row[], actingEmail: string | null): Promise<void> {
   const members = rows.filter((r) => g.campaignIds.includes(r.id));
-  const owner = members.find((r) => r.createdByUserId && r.parentRunId);
-  if (!owner) throw new Error("no member states an owner and an ancestor run (billing needs both)");
+  const owner = members.find((r) => r.createdByUserId && r.parentRunId) ?? members[0];
   const headers: Record<string, string> = {
     "x-org-id": g.orgId,
-    "x-user-id": owner.createdByUserId!,
-    "x-run-id": owner.parentRunId!,
-    "x-brand-id": g.brandId,
+    ...(owner?.createdByUserId ? { "x-user-id": owner.createdByUserId } : {}),
     ...(actingEmail ? { "x-email": actingEmail } : {}),
   };
-
-  // (a) The cap, before any row is paced on it.
-  if (g.maxBudgetDailyCents !== null && g.maxBudgetDailyCents > 0) {
-    await billingPut(
-      `/v1/brands/${encodeURIComponent(g.brandId)}/offers/${encodeURIComponent(g.offerId)}/sales-funnels/${encodeURIComponent(g.salesFunnelId!)}/caps`,
-      { maxBudget: { amountCents: String(g.maxBudgetDailyCents), period: "daily" }, maxVolume: null },
-      headers,
-    );
-    g.capWritten = true;
-  } else {
-    g.capWritten = false;
-  }
-
-  // (b) The funnel campaign, and the rows become its units. No status moves.
   const id = randomUUID();
   await db.transaction(async (tx) => {
     const now = new Date();
@@ -313,8 +334,8 @@ async function applyGroup(g: ConversionGroup, rows: Row[], actingEmail: string |
       salesFunnelName: g.salesFunnelName!,
       status: "ongoing",
       stopReason: null,
-      createdByUserId: owner.createdByUserId,
-      parentRunId: owner.parentRunId,
+      createdByUserId: owner?.createdByUserId ?? null,
+      parentRunId: owner?.parentRunId ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -326,27 +347,12 @@ async function applyGroup(g: ConversionGroup, rows: Row[], actingEmail: string |
     if (linked.length !== g.campaignIds.length) {
       throw new Error(`expected to link ${g.campaignIds.length} rows, linked ${linked.length} (a row moved meanwhile): rolled back`);
     }
+    if (g.maxBudgetDailyCents !== null && g.maxBudgetDailyCents > 0) {
+      await putCapReplacingCeilings(g, headers);
+      g.capWritten = true;
+    } else {
+      g.capWritten = false;
+    }
   });
   g.salesFunnelCampaignId = id;
-
-  // (c) The per-pipe ceilings the units no longer use, to 0, so billing counts the money once.
-  g.ceilingsZeroed = 0;
-  g.ceilingsLeft = [];
-  for (const c of g.ceilings) {
-    if (!(c.dailyBudgetCents > 0)) continue;
-    if (!c.offerId || !c.legKey) {
-      g.ceilingsLeft.push({ featureSlug: c.featureSlug, legKey: c.legKey, dailyBudgetCents: c.dailyBudgetCents, why: "offer_or_leg_less_ceiling_not_addressable" });
-      continue;
-    }
-    try {
-      await billingPut(
-        `/v1/brands/${encodeURIComponent(g.brandId)}/campaign-budget`,
-        { offerId: c.offerId, legKey: c.legKey, featureSlug: c.featureSlug, dailyBudgetCents: 0 },
-        headers,
-      );
-      g.ceilingsZeroed++;
-    } catch (err) {
-      g.ceilingsLeft.push({ featureSlug: c.featureSlug, legKey: c.legKey, dailyBudgetCents: c.dailyBudgetCents, why: err instanceof Error ? err.message : String(err) });
-    }
-  }
 }
