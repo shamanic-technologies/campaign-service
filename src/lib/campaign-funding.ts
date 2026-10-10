@@ -24,6 +24,13 @@ export type FundingVerdict =
   | { funded: true; ceilingCents: number }
   | { funded: false; reason: string };
 
+function salesFunnelUnitBackstop(salesFunnelCampaignId: string): FundingVerdict {
+  return {
+    funded: false,
+    reason: `its money is its sales funnel campaign's caps (${salesFunnelCampaignId}), not a per-pipe ceiling`,
+  };
+}
+
 /**
  * Decide from ceilings ALREADY read, so a caller holding one read for a brand can judge every
  * campaign of that brand without asking billing again per campaign.
@@ -42,10 +49,16 @@ export function fundingFromBudgets(
     offerId?: string | null;
     /** The single LEG this campaign was bought for — features-service's id, carried and never derived. */
     legKey?: string | null;
+    /** Set on a SALES FUNNEL unit: its money is its funnel's caps, never a per-pipe ceiling. */
+    salesFunnelCampaignId?: string | null;
   },
   budgets: Extract<CampaignBudgetsRead, { ok: true }>,
   feeding: ReadonlyArray<{ featureSlug: string; status: string }> = [],
 ): FundingVerdict {
+  // A SALES FUNNEL unit (lib/sales-funnel-campaigns.ts) is never funded by a per-(offer, leg,
+  // channel) ceiling, its own daily budget column or the brand pot: its funnel's caps are its money,
+  // judged by `salesFunnelUnitMoney`. Callers judging a unit ask that first; this is the backstop.
+  if (campaign.salesFunnelCampaignId) return salesFunnelUnitBackstop(campaign.salesFunnelCampaignId);
   // The campaign's own figure, when stated, is the answer (gate-check is the first node of every
   // run and reads the same column).
   if (campaign.dailyBudgetCents !== null && campaign.dailyBudgetCents !== undefined) {
@@ -83,10 +96,13 @@ export async function campaignFunding(
     featureSlug?: string | null;
     offerId?: string | null;
     legKey?: string | null;
+    salesFunnelCampaignId?: string | null;
   },
   brandId: string,
   identity: IdentityHeaders,
 ): Promise<FundingVerdict> {
+  // A SALES FUNNEL unit: its funnel's caps, and nothing else (lib/sales-funnel-campaigns.ts).
+  if (campaign.salesFunnelCampaignId) return salesFunnelUnitBackstop(campaign.salesFunnelCampaignId);
   // Answerable without billing: an own ceiling is the mirror, and a zero one is a decision.
   if (campaign.dailyBudgetCents !== null && campaign.dailyBudgetCents !== undefined) {
     return campaign.dailyBudgetCents > 0

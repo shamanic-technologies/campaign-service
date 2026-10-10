@@ -12,6 +12,7 @@ const __dirname = dirname(__filename);
 const openapiPath = join(__dirname, "..", "openapi.json");
 import healthRoutes from "./routes/health.js";
 import campaignsRoutes from "./routes/campaigns.js";
+import salesFunnelCampaignsRoutes from "./routes/sales-funnel-campaigns.js";
 import brandsRoutes from "./routes/brands.js";
 import statsRoutes from "./routes/stats.js";
 import internalRoutes from "./routes/internal.js";
@@ -39,6 +40,7 @@ app.use(logLegacyOutboundLegKeys);
 // Routes
 app.use(healthRoutes);
 app.use(campaignsRoutes);
+app.use(salesFunnelCampaignsRoutes);
 app.use(brandsRoutes);
 app.use(statsRoutes);
 app.use(internalRoutes);

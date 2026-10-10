@@ -283,9 +283,15 @@ describe('No Legacy Patterns - CRITICAL', () => {
         // The two rollback snapshots migrations 0058/0060 left behind are HISTORY tables whose
         // frozen names carry the word; the brand transfer moves their rows by name. Naming a
         // table is not using a funnel.
+        // The SALES FUNNEL of 2026-10-10 (lib/sales-funnel-campaigns.ts) is a different object: a
+        // SET of pipes a campaign runs, keyed on features-service's sales funnel id. Its own names
+        // are allowed; the retired funnel KEY (`funnelKey`, `funnel_key`, `?funnel=`) stays banned.
         const withoutSnapshotNames = code
           .replace(/campaigns_funnel_key_snapshot_20260926/g, '')
-          .replace(/campaign_funnel_owner_decisions_funnel_snapshot_20260926/g, '');
+          .replace(/campaign_funnel_owner_decisions_funnel_snapshot_20260926/g, '')
+          .replace(/\w*(salesFunnel|SalesFunnel|sales_funnel|SALES_FUNNEL)\w*/g, '')
+          .replace(/[\w/-]*sales-funnels?[\w/.-]*/g, '')
+          .replace(/[Ss]ales funnels?/g, '');
         if (!/funnel/i.test(withoutSnapshotNames)) return;
         offenders.push(`${rel}:${i + 1}  ${code.slice(0, 100)}`);
       });
@@ -638,7 +644,8 @@ describe('No Legacy Patterns - CRITICAL', () => {
       .map(rel)
       .filter((r) => r !== 'lib/startable-pair.ts')
       .sort();
-    expect(startReaders).toEqual(['routes/campaigns.ts']);
+    // A SALES FUNNEL launch (routes/sales-funnel-campaigns.ts) is a person's start too.
+    expect(startReaders).toEqual(['routes/campaigns.ts', 'routes/sales-funnel-campaigns.ts']);
   });
 
   it('should NOT take a workflow, a name or a ceiling from the customer starting a funded pair', () => {

@@ -61,6 +61,13 @@ export const CampaignSchema = z.object({
   // step-to-step move a customer actually buys. OPAQUE — never split into the steps it connects,
   // and never derived from the channel or the workflow. Null = the campaign states no leg.
   legKey: z.string().nullable(),
+  // SALES FUNNEL UNIT (owner 2026-10-10): the features-service sales funnel id (its
+  // `combinationKey`) this campaign is one pipe of, and the funnel-level campaign that owns it
+  // (GET /sales-funnel-campaigns/{id}). Null on both = a pre-funnel (leg x channel) campaign. A
+  // unit is run and paused ONLY through its funnel campaign: PATCH /campaigns/{id} refuses its
+  // status and identity (409 `sales_funnel_unit`).
+  salesFunnelId: z.string().nullable(),
+  salesFunnelCampaignId: z.string().nullable(),
   maxLeads: z.number().int().nullable(),
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),
@@ -152,6 +159,8 @@ export const CampaignsFilterQuery = z.object({
   // IS. Each is an exact match.
   offerId: z.string().optional(),
   legKey: z.string().optional(),
+  // The units of one sales funnel campaign (exact match on `salesFunnelCampaignId`).
+  salesFunnelCampaignId: z.string().optional(),
   // Optional cap on how many rows come back. Absent = every match, which is what every
   // existing consumer gets today. When present the response also carries `hasMore`, so a
   // truncated list is never mistaken for a complete one.
@@ -191,6 +200,69 @@ export const StoppedCampaignSchema = z.object({
   offerId: z.string().nullable(),
   legKey: z.string().nullable(),
 }).openapi("StoppedCampaign");
+
+// --- Sales funnel campaigns (owner 2026-10-10, lib/sales-funnel-campaigns.ts) ---
+
+/**
+ * A person (or the agent acting for them) launches a SALES FUNNEL as one campaign: brand x offer x
+ * sales funnel. Everything else is resolved here: the pipes are features-service's statement of the
+ * funnel, each pipe's workflow is this service's choice (re-picked every run), and the money is
+ * billing's funnel caps. `.strict()`: a caller reaching for a workflow, a pipe list or a budget is
+ * told no rather than having it silently stripped.
+ */
+export const CreateSalesFunnelCampaignBody = z.object({
+  brandId: z.string().uuid("brandId must be a valid UUID"),
+  offerId: z.string().uuid("offerId must be a valid UUID"),
+  // features-service's sales funnel id (`GET /internal/catalogue/sales-funnels` rows[].id), verbatim.
+  salesFunnelId: z.string().min(1, "salesFunnelId is required"),
+  // REQUIRED: "ongoing" launches it now, "stopped" creates it switched off. Never defaulted: a
+  // campaign the customer did not start must never start.
+  status: CampaignStatusEnum,
+}).strict().openapi("CreateSalesFunnelCampaignBody");
+
+/** Run or pause the WHOLE funnel: every unit moves with it, in one transaction. */
+export const UpdateSalesFunnelCampaignBody = z.object({
+  status: z.enum(["activate", "stop"], { error: 'status must be "activate" or "stop"' }),
+}).strict().openapi("UpdateSalesFunnelCampaignBody");
+
+export const SalesFunnelCampaignsQuery = z.object({
+  brandId: z.string().optional(),
+  offerId: z.string().optional(),
+  salesFunnelId: z.string().optional(),
+  status: CampaignStatusEnum.optional(),
+}).openapi("SalesFunnelCampaignsQuery");
+
+/** One pipe of a funnel campaign: the `campaigns` row that runs it. */
+export const SalesFunnelUnitSchema = z.object({
+  campaignId: z.string(),
+  // `<channel slug>|<leg key>`, features-service's pipe id.
+  pipeId: z.string(),
+  featureSlug: z.string(),
+  legKey: z.string(),
+  // Always equal to the funnel campaign's status (they move together).
+  status: z.string(),
+  // The DAG fallback this unit runs (re-picked every run); null for a channel the customer
+  // operates or another service performs (it never runs a DAG).
+  workflowSlug: z.string().nullable(),
+  name: z.string(),
+}).openapi("SalesFunnelUnit");
+
+export const SalesFunnelCampaignSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  brandId: z.string(),
+  offerId: z.string(),
+  salesFunnelId: z.string(),
+  salesFunnelName: z.string(),
+  // "ongoing" | "stopped", the campaign vocabulary.
+  status: z.string(),
+  // STOP_REASONS: manual | org_teardown | payment_declined | no_payment_method; null while ongoing.
+  stopReason: z.string().nullable(),
+  createdByUserId: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  units: z.array(SalesFunnelUnitSchema),
+}).openapi("SalesFunnelCampaign");
 
 /** A person saved the offer's sales paths: switch on the reactive campaigns they use. */
 export const ReactiveDefaultsBody = z.object({

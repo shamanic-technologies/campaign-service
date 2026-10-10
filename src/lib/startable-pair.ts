@@ -6,6 +6,7 @@ import { fundingFromBudgets } from "./campaign-funding.js";
 import { isSalesFamilyFeature, isServicePerformedFeature } from "./sales-outreach-campaign.js";
 import { fetchStartableWorkflowSlug } from "./startable-workflow-client.js";
 import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
+import { fetchPipe, fetchSalesFunnel } from "./sales-funnel-catalogue-client.js";
 
 /**
  * CAN THE CUSTOMER START THE CAMPAIGN FOR THIS FUNDED (OFFER, LEG, CHANNEL), AND WHAT WOULD IT BE?
@@ -244,4 +245,125 @@ export async function resolveReactiveDefaultWorkflow(
   if (!workflow.ok) return { ok: false, code: "workflow_unavailable" };
   if (workflow.workflowSlug === null) return { ok: false, code: "no_workflow" };
   return { ok: true, workflowSlug: workflow.workflowSlug };
+}
+
+// === Sales funnel campaigns (owner 2026-10-10, lib/sales-funnel-campaigns.ts) ===
+
+/** One pipe of the funnel, resolved for a unit to be born on it. */
+export interface SalesFunnelUnitPlan {
+  /** features-service's pipe id (`<channel slug>|<leg key>`), carried verbatim. */
+  pipeId: string;
+  featureSlug: string;
+  /** The leg in this service's STORED spelling (lib/leg-identity.ts). */
+  legKey: string;
+  mode: "proactive" | "reactive";
+  /** The DAG the unit is born on, or null (customer-operated / service-performed channel). */
+  workflowSlug: string | null;
+}
+
+export interface SalesFunnelPlan {
+  salesFunnelId: string;
+  salesFunnelName: string;
+  units: SalesFunnelUnitPlan[];
+}
+
+/** A refusal to launch a funnel, rendered VERBATIM by the caller (an agent or the dashboard). */
+export interface SalesFunnelRefusal {
+  status: 400 | 409 | 502;
+  code:
+    | "unknown_sales_funnel"
+    | "no_pipe"
+    | "pipe_not_runnable"
+    | "no_workflow"
+    | "catalogue_unavailable"
+    | "workflow_unavailable";
+  message: string;
+}
+
+/**
+ * WHAT A SALES FUNNEL CAMPAIGN IS MADE OF: one unit per pipe the funnel names (features-service's
+ * statement, read live), each with the DAG it is born on (the same per-pipe resolution a reactive
+ * default uses: sales family, leg performed by the channel, workflow-service's live dynasty; NO
+ * funding read, because the funnel's money is billing's funnel caps and they gate every run).
+ *
+ * Fail LOUD on anything that would leave a pipe of the funnel silently unrun: a pipe this service
+ * cannot run refuses the WHOLE launch, naming the pipe, rather than a funnel short of a pipe.
+ * Making the funnel COHERENT (a proactive pipe feeding the reactive one) is the agent's job, not
+ * this one (owner 2026-10-10): pipes are run independently, as campaigns always have been.
+ */
+export async function resolveSalesFunnelPlan(
+  salesFunnelId: string,
+  identity: IdentityHeaders & { userId: string; runId: string },
+  deps: {
+    salesFunnel?: typeof fetchSalesFunnel;
+    pipe?: typeof fetchPipe;
+    catalogue?: () => Promise<ChannelCatalogueRead>;
+    workflow?: typeof fetchStartableWorkflowSlug;
+  } = {},
+): Promise<{ ok: true; plan: SalesFunnelPlan } | { ok: false; refusal: SalesFunnelRefusal }> {
+  const refuseLaunch = (status: SalesFunnelRefusal["status"], code: SalesFunnelRefusal["code"], message: string) =>
+    ({ ok: false as const, refusal: { status, code, message } });
+  const unavailable = () =>
+    refuseLaunch(502, "catalogue_unavailable", "We couldn't read this sales funnel just now. Please try again in a minute.");
+
+  const read = await (deps.salesFunnel ?? fetchSalesFunnel)(salesFunnelId);
+  if (!read.ok) {
+    if (read.notFound) return refuseLaunch(400, "unknown_sales_funnel", "We don't know this sales funnel.");
+    console.error(`[campaign-service] Sales funnel ${salesFunnelId} unreadable: ${read.detail}`);
+    return unavailable();
+  }
+  if (read.value.pipeIds.length === 0) {
+    return refuseLaunch(400, "no_pipe", `The sales funnel "${read.value.name}" has no step we run, so there is nothing to launch.`);
+  }
+
+  const catalogue = await (deps.catalogue ?? fetchChannelCatalogue)();
+  if (!catalogue.ok) {
+    console.error(`[campaign-service] Sales funnel ${salesFunnelId}: channel catalogue unreadable: ${catalogue.detail}`);
+    return unavailable();
+  }
+
+  const units: SalesFunnelUnitPlan[] = [];
+  for (const pipeId of read.value.pipeIds) {
+    const pipe = await (deps.pipe ?? fetchPipe)(pipeId);
+    if (!pipe.ok) {
+      console.error(`[campaign-service] Sales funnel ${salesFunnelId}: pipe ${pipeId} unreadable: ${pipe.detail}`);
+      if (pipe.notFound) {
+        return refuseLaunch(400, "pipe_not_runnable", `The sales funnel "${read.value.name}" names a step we don't know (${pipeId}).`);
+      }
+      return unavailable();
+    }
+    const { channelSlug, legKey, mode, name } = pipe.value;
+    // A SOURCING pipe (Start → Lead found, worked by a lead-source ORIGIN): its unit is a source
+    // campaign of the funnel (lib/source-campaigns.ts) — no workflow, never scheduled; lead-service
+    // finds the leads inside the outreach run and files them under the running source. While it is
+    // ON its origin is ON for the offer. A funnel with no sourcing pipe still gets its leads: a
+    // person's start of its entry pipe brings the offer's default source (ensureSourcesOnStart).
+    if (isSourceOriginSlug(channelSlug)) {
+      if (!isLiveSourceOrigin(channelSlug) || storedLegKey(channelSlug, legKey) !== SOURCE_LEG_KEY) {
+        return refuseLaunch(400, "pipe_not_runnable", `We can't run the lead source "${name ?? pipeId}" of this sales funnel.`);
+      }
+      units.push({ pipeId, featureSlug: channelSlug, legKey: SOURCE_LEG_KEY, mode, workflowSlug: null });
+      continue;
+    }
+    const workflow = await resolveReactiveDefaultWorkflow(channelSlug, legKey, identity, catalogue, { workflow: deps.workflow });
+    if (!workflow.ok) {
+      const label = name ?? pipeId;
+      if (workflow.code === "workflow_unavailable") {
+        return refuseLaunch(502, "workflow_unavailable", "We couldn't work out how to run this sales funnel just now. Please try again in a minute.");
+      }
+      if (workflow.code === "no_workflow") {
+        return refuseLaunch(409, "no_workflow", `Nothing can run the step "${label}" of this sales funnel yet, so it can't be launched.`);
+      }
+      return refuseLaunch(400, "pipe_not_runnable", `We can't run the step "${label}" of this sales funnel (${workflow.code}).`);
+    }
+    units.push({
+      pipeId,
+      featureSlug: channelSlug,
+      legKey: storedLegKey(channelSlug, legKey),
+      mode,
+      workflowSlug: workflow.workflowSlug,
+    });
+  }
+
+  return { ok: true, plan: { salesFunnelId: read.value.id, salesFunnelName: read.value.name, units } };
 }

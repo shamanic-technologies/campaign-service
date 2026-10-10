@@ -13,6 +13,7 @@ import type { DbTransaction } from "./campaign-status-history.js";
  *   campaign_audience_availability    org_id, through its campaign    moved
  *   brand_pause_transitions           org_id + brand_id               moved, brand rewritten
  *   trigger_events                    org_id + brand_id               moved, brand rewritten
+ *   sales_funnel_campaigns            org_id + brand_id               moved, brand rewritten
  *   trigger_poll_cursors              org_id + brand_id               moved, brand rewritten; a row
  *                                     the target already holds for the same (trigger, offer) wins
  *                                     and the source's is dropped (a schedule, not history: the
@@ -164,8 +165,20 @@ export async function transferBrand(input: BrandTransferInput): Promise<BrandTra
       WHERE ${pending(sql`org_id`)} AND brand_id = ${sourceBrandId}
         AND NOT (org_id = ${targetOrgId} AND brand_id = ${brandAfter})`);
 
+    // Sales funnel campaigns (lib/sales-funnel-campaigns.ts) are keyed on the brand; their units are
+    // `campaigns` rows, moved above. An offer belongs to one brand, so a merge never collides.
+    const salesFunnelCampaignsMoved = countOf(await tx.execute(sql`
+      WITH updated AS (
+        UPDATE sales_funnel_campaigns
+        SET org_id = ${targetOrgId}, brand_id = ${rewriteBrand("brand_id")}, updated_at = NOW()
+        WHERE ${pending(sql`org_id`)} AND brand_id = ${sourceBrandId}
+        RETURNING 1
+      )
+      SELECT count(*)::int AS cnt FROM updated`));
+
     const updatedTables = [
       { tableName: "campaigns", count: campaignsMoved },
+      { tableName: "sales_funnel_campaigns", count: salesFunnelCampaignsMoved },
       { tableName: "campaign_status_transitions", count: statusTransitions },
       { tableName: "campaign_audience_availability", count: availability },
       { tableName: "brand_pause_transitions", count: pauseTransitions },
