@@ -22,6 +22,7 @@ import { acquisitionChannelForFeature, derivedCampaignName } from "../lib/campai
 import { ensureSourcesOnStart } from "../lib/source-campaign-store.js";
 import { serializeSalesFunnelCampaign } from "../lib/sales-funnel-campaigns.js";
 import { wakeScheduler } from "../lib/scheduler.js";
+import { convertToSalesFunnelCampaigns } from "../lib/sales-funnel-conversion.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -280,5 +281,23 @@ router.patch(
     }
   },
 );
+
+/**
+ * POST /internal/sales-funnel-campaigns/convert {apply?, orgId?} — turn the live (leg x channel)
+ * campaigns into sales funnel campaigns (owner GO 2026-10-10, lib/sales-funnel-conversion.ts). Dry
+ * run unless `apply: true`; idempotent (a row already a unit is not a candidate). `x-email` (the
+ * person who ordered it) rides billing's writes so staff budget emails know whose act it was.
+ */
+router.post("/internal/sales-funnel-campaigns/convert", requireApiKey, async (req, res) => {
+  try {
+    const apply = req.body?.apply === true;
+    const orgId = typeof req.body?.orgId === "string" ? req.body.orgId : undefined;
+    const actingEmail = (req.headers["x-email"] as string | undefined) ?? null;
+    res.json(await convertToSalesFunnelCampaigns({ apply, orgId, actingEmail }));
+  } catch (error) {
+    console.error("[campaign-service] Sales funnel conversion error:", error);
+    res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
 
 export default router;

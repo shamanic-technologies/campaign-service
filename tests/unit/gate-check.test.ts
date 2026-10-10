@@ -215,18 +215,15 @@ describe("Gate Check", () => {
       expect(await runGateChecks(unitInput())).toMatchObject({ allowed: false, reason: "Sales funnel budget unavailable" });
     });
 
-    it("lets a REACTIVE pipe answer even when the cap is reached (follow-ups go on)", async () => {
+    it("refuses a REACTIVE pipe too once the cap is reached (owner: always respect the user budget)", async () => {
       capsAnswer({
         stated: true,
         maxBudget: budget("1000", true),
         pipes: [{ pipeId: "ai-meeting-booking|x", channelSlug: "ai-meeting-booking", legKey: "conversation_to_meeting_booked", mode: "reactive", campaignIds: [] }],
       });
       const input = { ...unitInput("ai-meeting-booking"), legKey: "conversation_to_meeting_booked" };
-      const result = await runGateChecks(input);
-      expect(result.allowed).toBe(true);
-      // No pre-funnel money path ran for it.
+      expect(await runGateChecks(input)).toMatchObject({ allowed: false, reason: "Sales funnel max budget reached" });
       expect(mockItemsGate).not.toHaveBeenCalled();
-      expect(mockPotBlock).not.toHaveBeenCalled();
     });
 
     it("runs a proactive pipe under its caps, reading none of the pre-funnel money", async () => {
