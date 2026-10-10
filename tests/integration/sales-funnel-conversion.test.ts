@@ -183,7 +183,7 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     expect(still.salesFunnelCampaignId).toBeNull();
   });
 
-  it("plans, never forces, what billing would refuse: a global sales budget, a positive offer-less ceiling", async () => {
+  it("plans, never forces, what billing would refuse: a global sales budget, a positive leg-less ceiling", async () => {
     await row(COLD, ENTRY);
     mockMode.mockResolvedValue({ ok: true, mode: "global" });
     expect((await convertToSalesFunnelCampaigns({ apply: true })).groups[0].skipped).toBe("brand_in_global_sales_budget_mode");
@@ -192,7 +192,13 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     mockBudgets.mockResolvedValue({ ok: true, brandDailyBudgetCents: 800, campaigns: [
       { offerId: null, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 800, sourcingCeilingCents: 350 },
     ] });
-    expect((await convertToSalesFunnelCampaigns({ apply: true })).groups[0].skipped).toBe("positive_offer_less_ceiling_billing_cannot_replace");
+    // An offer-less ceiling is sent: billing replaces it when it is the only one (v0.83.14).
+    expect((await convertToSalesFunnelCampaigns({ apply: false })).groups[0].skipped).toBeNull();
+    // A leg-less one cannot be named at all: planned, never forced.
+    mockBudgets.mockResolvedValue({ ok: true, brandDailyBudgetCents: 800, campaigns: [
+      { offerId: OFFER, legKey: null, featureSlug: COLD, dailyBudgetCents: 800, sourcingCeilingCents: null },
+    ] });
+    expect((await convertToSalesFunnelCampaigns({ apply: true })).groups[0].skipped).toBe("positive_leg_less_ceiling_billing_cannot_replace");
     expect(billingCalls).toEqual([]);
   });
 
@@ -218,7 +224,7 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     mockBudgets.mockResolvedValue({ ok: true, brandDailyBudgetCents: 800, campaigns: [
       { offerId: null, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 800, sourcingCeilingCents: 350 },
     ] });
-    const offerless = await convertToSalesFunnelCampaigns({ apply: true, allowOfferLessCeilings: true });
+    const offerless = await convertToSalesFunnelCampaigns({ apply: true });
     expect(offerless.groups[0]).toMatchObject({ skipped: null, capWritten: true });
     expect(billingCalls[0].body).toMatchObject({ maxBudget: { amountCents: "800", period: "daily" }, replacesCeilings: [{ featureSlug: COLD, legKey: ENTRY }] });
   });
