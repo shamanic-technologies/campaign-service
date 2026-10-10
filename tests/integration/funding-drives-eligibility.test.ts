@@ -322,7 +322,7 @@ describe("GET /brands/:brandId/pause answers from the money", () => {
 
   it("NOT held when the brand is funded only by a SALES FUNNEL max budget", async () => {
     billingAnswers([], null, [
-      { offerId: OFFER, salesFunnelId: "f@x", maxBudget: { amountCents: "7000", period: "weekly" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
+      { offerId: OFFER, salesFunnelId: "f@x", maxBudget: { amountCents: "7000", period: "weekly", dailyBudgetCents: "1000" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
     ]);
     const res = await getPause(crypto.randomUUID()).expect(200);
     expect(res.body.paused).toBe(false);

@@ -1,5 +1,5 @@
 import { ceilingEntriesOf, type CampaignBudgetsRead } from "./campaign-budget-client.js";
-import { salesFunnelDailyBudgetCents, type StatedSalesFunnelCap } from "./sales-funnel-campaigns.js";
+import type { StatedSalesFunnelCap } from "./sales-funnel-campaigns.js";
 
 /**
  * "Of the money this brand has CONFIGURED, how much is attached to a campaign that is actually
@@ -42,8 +42,8 @@ export interface SpendableSalesFunnelCampaign {
 }
 
 /**
- * One SALES FUNNEL's money for the pair: its stated max budget as a daily figure (billing v0.83.9
- * rule: daily x1, weekly / 7, monthly / 30, one_off 0), and the funnel campaign spending it.
+ * One SALES FUNNEL's money for the pair: its stated max budget as billing's own daily figure
+ * (daily x1, weekly / 7, monthly / 30, one_off 0, reactive 0), and the funnel campaign spending it.
  */
 export interface SpendableSalesFunnelLine {
   offerId: string;
@@ -52,9 +52,9 @@ export interface SpendableSalesFunnelLine {
   status: string | null;
   /** True ⟺ the funnel campaign exists AND is ongoing. */
   running: boolean;
-  maxBudget: StatedSalesFunnelCap["maxBudget"];
+  maxBudget: { amountCents: number; period: string } | null;
   dailyBudgetCents: number;
-  /** False for a one-off max budget: real money, but not a recurring daily figure (adds 0). */
+  /** False for a one-off or REACTIVE max budget: a real ceiling, but never a daily figure (adds 0). */
   recurring: boolean;
   unitCampaignIds: string[];
 }
@@ -267,7 +267,8 @@ export function computeSpendableBudget(
       (f) => f.offerId === cap.offerId && f.salesFunnelId === cap.salesFunnelId,
     ) ?? null;
     const running = fc?.status === "ongoing";
-    const dailyBudgetCents = salesFunnelDailyBudgetCents(cap.maxBudget);
+    // billing's own per-day figure of the cap (reactive and one-off = 0), never recomputed here.
+    const dailyBudgetCents = cap.maxBudget?.dailyBudgetCents ?? 0;
     const unitCampaignIds = fc
       ? campaigns.filter((c) => c.salesFunnelCampaignId === fc.id).map((c) => c.id)
       : [];
@@ -287,9 +288,9 @@ export function computeSpendableBudget(
       salesFunnelCampaignId: fc?.id ?? null,
       status: fc?.status ?? null,
       running,
-      maxBudget: cap.maxBudget,
+      maxBudget: cap.maxBudget ? { amountCents: cap.maxBudget.amountCents, period: cap.maxBudget.period } : null,
       dailyBudgetCents,
-      recurring: !!cap.maxBudget && cap.maxBudget.period !== "one_off",
+      recurring: dailyBudgetCents > 0,
       unitCampaignIds,
     };
   });
