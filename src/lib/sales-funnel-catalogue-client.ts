@@ -95,8 +95,13 @@ export async function fetchPipe(pipeId: string): Promise<CatalogueRead<PipeFromC
  * Sales funnel ids the catalogue's text search finds for `q` (it searches name, line AND id), at
  * most 25 (the list's cap). A search, not a parse: callers confirm each candidate on its detail.
  */
-export async function searchSalesFunnelIds(q: string, containsChannel: string): Promise<CatalogueRead<string[]>> {
+export async function searchSalesFunnelIds(
+  q: string,
+  containsChannel: string,
+  salesPathId?: string,
+): Promise<CatalogueRead<string[]>> {
   const params = new URLSearchParams({ q, containsChannels: containsChannel, limit: "25" });
+  if (salesPathId) params.set("paths", salesPathId);
   return readCatalogue(`/internal/catalogue/sales-funnels?${params.toString()}`, (body) =>
     z.object({ rows: z.array(z.object({ id: z.string() })) }).parse(body).rows.map((r) => r.id));
 }
