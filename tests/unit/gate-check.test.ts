@@ -887,11 +887,8 @@ describe("Gate Check", () => {
     });
 
     it("a brand with no per-campaign ceilings paces on its brand budget", async () => {
+      // The pre-funnel pot of the SAME read; billing's /daily-budget (which adds funnel caps) is not read.
       mockCampaignBudgets([], "1000");
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ brandId: "brand-1", dailyBudgetCents: "1000", updatedAt: null }),
-      });
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1000" }]),
       );
@@ -899,6 +896,7 @@ describe("Gate Check", () => {
       const result = await runGateChecks(legCampaign());
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe("Brand daily budget reached");
+      expect(mockFetch.mock.calls.map((c) => String(c[0])).some((u) => u.includes("/daily-budget"))).toBe(false);
     });
 
     it("fails CLOSED when the per-campaign ceilings cannot be read", async () => {
@@ -1121,12 +1119,13 @@ describe("Gate Check", () => {
       });
     }
 
-    // Queue one billing daily-budget response (FIFO with other fetches in the same tick).
+    // Queue the brand's PRE-FUNNEL pot: billing's campaign-budgets read with no per-campaign
+    // ceilings answers the brand total, and that ONE read is what paces the campaign. The
+    // `/daily-budget` read is never made: since billing v0.83.9 it adds sales funnel caps.
     function mockDailyBudget(dailyBudgetCents: string | null, brandId = "brand-1") {
-      mockNoCampaignCeilings(brandId);
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ brandId, dailyBudgetCents, updatedAt: null }),
+        json: async () => ({ brandId, dailyBudgetCents, campaigns: [] }),
       });
     }
 
@@ -1261,7 +1260,6 @@ describe("Gate Check", () => {
     });
 
     it("blocks when the billing read throws (fail-closed spend control)", async () => {
-      mockNoCampaignCeilings();
       mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([
@@ -1271,28 +1269,26 @@ describe("Gate Check", () => {
 
       const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
       expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand daily budget unavailable");
+      expect(result.reason).toBe("Campaign daily budget unavailable");
     });
 
     it("blocks when the billing read returns non-2xx (fail-closed spend control)", async () => {
-      mockNoCampaignCeilings();
       mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
 
       const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
       expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand daily budget unavailable");
+      expect(result.reason).toBe("Campaign daily budget unavailable");
     });
 
     it("blocks when the billing read returns malformed dailyBudgetCents", async () => {
-      mockNoCampaignCeilings();
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ brandId: "brand-1", dailyBudgetCents: "not-a-number", updatedAt: null }),
+        json: async () => ({ brandId: "brand-1", dailyBudgetCents: "not-a-number", campaigns: [] }),
       });
 
       const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
       expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand daily budget unavailable");
+      expect(result.reason).toBe("Campaign daily budget unavailable");
     });
 
     it("blocks the tick if ANY brand in a multi-brand campaign hits its ceiling", async () => {
@@ -1332,13 +1328,14 @@ describe("Gate Check", () => {
       expect(brandSpendCall).not.toHaveProperty("campaignId");
     });
 
-    it("calls the locked daily-budget contract with x-api-key + x-brand-id", async () => {
+    it("paces on the PRE-FUNNEL pot of its one campaign-budgets read, never on /daily-budget (which adds funnel caps)", async () => {
       mockDailyBudget("999999");
       const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], runId: "run-1" }));
       expect(result.allowed).toBe(true);
 
-      const [calledUrl, opts] = mockFetch.mock.calls[1];
-      expect(calledUrl).toBe("https://billing.test.local/internal/brands/brand-1/daily-budget");
+      const brandReads = mockFetch.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/internal/brands/"));
+      expect(brandReads).toEqual(["https://billing.test.local/internal/brands/brand-1/campaign-budgets"]);
+      const [, opts] = mockFetch.mock.calls[0];
       expect(opts.headers["x-api-key"]).toBe("test-billing-key");
       expect(opts.headers["x-org-id"]).toBe("org-1");
       expect(opts.headers["x-brand-id"]).toBe("brand-1");

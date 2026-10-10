@@ -510,8 +510,9 @@ export const SpendableBudgetRow = z.object({
 
 export const SpendableBudgetOffer = z.object({
   offerId: z.string().nullable(),
-  configuredDailyBudgetCents: z.number().int(),
-  runningDailyBudgetCents: z.number().int(),
+  // Includes the offer's sales funnels' daily figures (fractional when a weekly / monthly cap is).
+  configuredDailyBudgetCents: z.number(),
+  runningDailyBudgetCents: z.number(),
   campaignIds: z.array(z.string()),
 }).openapi("SpendableBudgetOffer");
 
@@ -522,19 +523,45 @@ export const SpendableBudgetCampaign = z.object({
   featureSlug: z.string().nullable(),
   offerId: z.string().nullable(),
   legKey: z.string().nullable(),
-  configuredDailyBudgetCents: z.number().int(),
-  runningDailyBudgetCents: z.number().int(),
+  // The SALES FUNNEL campaign owning this unit; null on a pre-funnel campaign. A unit's own
+  // figures are always 0: its money is its funnel's, counted under `salesFunnels`.
+  salesFunnelCampaignId: z.string().nullable(),
+  configuredDailyBudgetCents: z.number(),
+  runningDailyBudgetCents: z.number(),
 }).openapi("SpendableBudgetCampaign");
+
+/**
+ * One SALES FUNNEL with a stated cap (billing `GET /internal/brands/:id/sales-funnel-caps`): its max
+ * budget as a DAILY figure, billing's v0.83.9 rule (daily x1, weekly / 7, monthly / 30, one_off 0,
+ * volume-only 0; never discounted). Counted in the brand and offer totals; `running` ⟺ its funnel
+ * campaign is ongoing. Never resolved onto a per-pipe ceiling.
+ */
+export const SpendableBudgetSalesFunnel = z.object({
+  offerId: z.string(),
+  salesFunnelId: z.string(),
+  salesFunnelCampaignId: z.string().nullable(),
+  status: z.string().nullable(),
+  running: z.boolean(),
+  maxBudget: z.object({ amountCents: z.number(), period: z.enum(["one_off", "daily", "weekly", "monthly"]) }).nullable(),
+  dailyBudgetCents: z.number(),
+  recurring: z.boolean(),
+  unitCampaignIds: z.array(z.string()),
+}).openapi("SpendableBudgetSalesFunnel");
 
 export const SpendableBudgetResponse = z.object({
   orgId: z.string(),
   brandId: z.string(),
+  // The grain of the PRE-FUNNEL money (billing's ceilings / pot); sales funnels are `salesFunnels`.
   grain: z.enum(["campaign", "brand", "none"]),
-  configuredDailyBudgetCents: z.number().int(),
-  runningDailyBudgetCents: z.number().int(),
+  // Pre-funnel rows + every sales funnel's daily figure; running = rows of ongoing campaigns +
+  // funnels whose funnel campaign is ongoing. A funnel caps read billing cannot answer = 502 /
+  // `unavailable`, never a smaller figure.
+  configuredDailyBudgetCents: z.number(),
+  runningDailyBudgetCents: z.number(),
   offers: z.array(SpendableBudgetOffer),
   campaigns: z.array(SpendableBudgetCampaign),
   rows: z.array(SpendableBudgetRow),
+  salesFunnels: z.array(SpendableBudgetSalesFunnel),
 }).openapi("SpendableBudgetResponse");
 
 /**

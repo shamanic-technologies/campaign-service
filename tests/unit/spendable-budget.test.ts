@@ -125,8 +125,9 @@ describe("computeSpendableBudget", () => {
     expect(result.rows).toEqual([]);
   });
 
-  it("never serves a funnel", () => {
+  it("never serves the retired funnel KEY (sales funnels of 2026-10-10 are served under salesFunnels)", () => {
     const result = computeSpendableBudget(ORG, BRAND, budgets([entry({})]), [campaign({ id: "live" })]);
-    expect(JSON.stringify(result)).not.toMatch(/funnel/i);
+    expect(JSON.stringify(result)).not.toMatch(/funnelKey|funnel_key/i);
+    expect(result.salesFunnels).toEqual([]);
   });
 });

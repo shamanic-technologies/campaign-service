@@ -1,4 +1,5 @@
 import { ceilingEntriesOf, type CampaignBudgetsRead } from "./campaign-budget-client.js";
+import { salesFunnelDailyBudgetCents, type StatedSalesFunnelCap } from "./sales-funnel-campaigns.js";
 
 /**
  * "Of the money this brand has CONFIGURED, how much is attached to a campaign that is actually
@@ -25,6 +26,37 @@ export interface SpendableCampaign {
   /** The single LEG this campaign was bought for — the grain it is funded at. */
   legKey: string | null;
   createdAt: Date;
+  /**
+   * Set on a SALES FUNNEL unit (lib/sales-funnel-campaigns.ts). A unit is never resolved onto a
+   * per-pipe ceiling: its money is its funnel's caps, counted under `salesFunnels`.
+   */
+  salesFunnelCampaignId?: string | null;
+}
+
+/** A funnel campaign of the pair, as this computation needs it. */
+export interface SpendableSalesFunnelCampaign {
+  id: string;
+  offerId: string;
+  salesFunnelId: string;
+  status: string;
+}
+
+/**
+ * One SALES FUNNEL's money for the pair: its stated max budget as a daily figure (billing v0.83.9
+ * rule: daily x1, weekly / 7, monthly / 30, one_off 0), and the funnel campaign spending it.
+ */
+export interface SpendableSalesFunnelLine {
+  offerId: string;
+  salesFunnelId: string;
+  salesFunnelCampaignId: string | null;
+  status: string | null;
+  /** True ⟺ the funnel campaign exists AND is ongoing. */
+  running: boolean;
+  maxBudget: StatedSalesFunnelCap["maxBudget"];
+  dailyBudgetCents: number;
+  /** False for a one-off max budget: real money, but not a recurring daily figure (adds 0). */
+  recurring: boolean;
+  unitCampaignIds: string[];
 }
 
 /**
@@ -64,6 +96,8 @@ export interface SpendableCampaignLine {
   offerId: string | null;
   /** The single LEG this campaign was bought for, or null when it states none. */
   legKey: string | null;
+  /** The funnel campaign owning this unit; null on a pre-funnel campaign. A unit's own figures are 0. */
+  salesFunnelCampaignId: string | null;
   configuredDailyBudgetCents: number;
   runningDailyBudgetCents: number;
 }
@@ -86,6 +120,8 @@ export interface SpendableBudget {
   offers: SpendableOfferLine[];
   campaigns: SpendableCampaignLine[];
   rows: SpendableRow[];
+  /** The brand's sales funnels with a stated cap; their daily figures are inside both totals. */
+  salesFunnels: SpendableSalesFunnelLine[];
 }
 
 interface RawRow {
@@ -112,9 +148,12 @@ function campaignForRow(
   budgets: Extract<CampaignBudgetsRead, { ok: true }>,
   grain: SpendableGrain,
 ): SpendableCampaign | null {
+  // A SALES FUNNEL unit never stands behind a per-pipe ceiling or the brand pot: the funnel's money
+  // is not a pre-funnel campaign's, and the pre-funnel money is not a unit's.
+  const unowned = all.filter((c) => !c.salesFunnelCampaignId);
   const candidates = grain === "brand"
-    ? all
-    : all.filter((c) => ceilingEntriesOf(budgets, c).some(
+    ? unowned
+    : unowned.filter((c) => ceilingEntriesOf(budgets, c).some(
       (e) => e.featureSlug === row.featureSlug && e.offerId === row.offerId && e.legKey === row.legKey,
     ));
   if (candidates.length === 0) return null;
@@ -136,6 +175,7 @@ export function computeSpendableBudget(
   brandId: string,
   budgets: Extract<CampaignBudgetsRead, { ok: true }>,
   campaigns: SpendableCampaign[],
+  owned: { caps: StatedSalesFunnelCap[]; salesFunnelCampaigns: SpendableSalesFunnelCampaign[] } = { caps: [], salesFunnelCampaigns: [] },
 ): SpendableBudget {
   let grain: SpendableGrain;
   let rawRows: RawRow[];
@@ -198,6 +238,7 @@ export function computeSpendableBudget(
       featureSlug: c.featureSlug,
       offerId: c.offerId,
       legKey: c.legKey,
+      salesFunnelCampaignId: c.salesFunnelCampaignId ?? null,
       configuredDailyBudgetCents: configuredByCampaign.get(c.id) ?? 0,
       runningDailyBudgetCents: runningByCampaign.get(c.id) ?? 0,
     }));
@@ -219,14 +260,52 @@ export function computeSpendableBudget(
     offerMap.set(key, line);
   }
 
+  // SALES FUNNELS: each stated cap counts once, by its max budget per day, under its offer. A cap
+  // with no funnel campaign yet is configured money that nothing runs.
+  const salesFunnels: SpendableSalesFunnelLine[] = owned.caps.map((cap) => {
+    const fc = owned.salesFunnelCampaigns.find(
+      (f) => f.offerId === cap.offerId && f.salesFunnelId === cap.salesFunnelId,
+    ) ?? null;
+    const running = fc?.status === "ongoing";
+    const dailyBudgetCents = salesFunnelDailyBudgetCents(cap.maxBudget);
+    const unitCampaignIds = fc
+      ? campaigns.filter((c) => c.salesFunnelCampaignId === fc.id).map((c) => c.id)
+      : [];
+    const line = offerMap.get(cap.offerId) ?? {
+      offerId: cap.offerId,
+      configuredDailyBudgetCents: 0,
+      runningDailyBudgetCents: 0,
+      campaignIds: [],
+    };
+    line.configuredDailyBudgetCents += dailyBudgetCents;
+    if (running) line.runningDailyBudgetCents += dailyBudgetCents;
+    for (const id of unitCampaignIds) if (!line.campaignIds.includes(id)) line.campaignIds.push(id);
+    offerMap.set(cap.offerId, line);
+    return {
+      offerId: cap.offerId,
+      salesFunnelId: cap.salesFunnelId,
+      salesFunnelCampaignId: fc?.id ?? null,
+      status: fc?.status ?? null,
+      running,
+      maxBudget: cap.maxBudget,
+      dailyBudgetCents,
+      recurring: !!cap.maxBudget && cap.maxBudget.period !== "one_off",
+      unitCampaignIds,
+    };
+  });
+
+  const capsConfigured = salesFunnels.reduce((sum, f) => sum + f.dailyBudgetCents, 0);
+  const capsRunning = salesFunnels.reduce((sum, f) => sum + (f.running ? f.dailyBudgetCents : 0), 0);
+
   return {
     orgId,
     brandId,
     grain,
-    configuredDailyBudgetCents: rows.reduce((sum, r) => sum + r.dailyBudgetCents, 0),
-    runningDailyBudgetCents: rows.reduce((sum, r) => sum + (r.running ? r.dailyBudgetCents : 0), 0),
+    configuredDailyBudgetCents: rows.reduce((sum, r) => sum + r.dailyBudgetCents, 0) + capsConfigured,
+    runningDailyBudgetCents: rows.reduce((sum, r) => sum + (r.running ? r.dailyBudgetCents : 0), 0) + capsRunning,
     offers: [...offerMap.values()],
     campaigns: campaignLines,
     rows,
+    salesFunnels,
   };
 }

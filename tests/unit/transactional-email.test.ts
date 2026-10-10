@@ -100,8 +100,12 @@ function routeFetch(opts: { autoTopup?: boolean; brandBudgetCents?: string | nul
     if (url.includes("/internal/accounts/by-org/")) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ has_auto_topup: autoTopup }) });
     }
+    if (url.includes("/campaign-budgets")) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ dailyBudgetCents: brandBudgetCents, campaigns: [] }) });
+    }
     if (url.includes("/daily-budget")) {
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ dailyBudgetCents: brandBudgetCents }) });
+      // Since billing v0.83.9 this figure includes sales funnel caps: it must never be read here.
+      return Promise.reject(new Error("transactional-email must not read /daily-budget"));
     }
     if (url.endsWith("/platform-send")) {
       return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(""), json: () => Promise.resolve({}) });

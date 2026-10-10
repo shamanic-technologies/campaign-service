@@ -7,6 +7,8 @@
 //
 // EVERYTHING here is fire-and-forget: it must NEVER block, delay, or fail the outreach
 // loop / run finalization. Every path swallows its error (logged, not thrown).
+import { fetchCampaignBudgets } from "./campaign-budget-client.js";
+import { fetchSalesFunnelCaps, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
 import type { Campaign } from "../db/schema.js";
 import { isOutboundSalesFeature } from "./sales-outreach-campaign.js";
 import { hasExhaustedAudience } from "./audience-exhaustion.js";
@@ -162,43 +164,33 @@ async function readAutoTopupEnabled(orgId: string): Promise<boolean> {
 }
 
 /**
- * Read a brand's daily budget (cents) from billing-service. Service-to-service read.
- * Fail-SAFE: any error / non-2xx / unparseable returns null (treated as no budget).
- * Never throws.
- */
-async function readBrandDailyBudgetCents(orgId: string, brandId: string): Promise<number | null> {
-  const url = process.env.BILLING_SERVICE_URL;
-  const apiKey = process.env.BILLING_SERVICE_API_KEY;
-  if (!url || !apiKey) return null;
-  try {
-    const res = await fetch(`${url}/internal/brands/${brandId}/daily-budget`, {
-      headers: { "x-api-key": apiKey, "x-org-id": orgId, "x-brand-id": brandId },
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { dailyBudgetCents?: string | null };
-    if (data.dailyBudgetCents === null || data.dailyBudgetCents === undefined) return null;
-    const cents = parseFloat(data.dailyBudgetCents);
-    return Number.isFinite(cents) ? cents : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Does the campaign have a positive daily budget configured? The campaign's OWN daily
- * budget (dailyBudgetCents) takes precedence; when unset, fall back to ANY targeted
- * brand's daily budget (mirrors the sales gate-check resolution). Fail-safe → false.
+ * Does the campaign have positive money configured? Fail-safe → false.
+ *
+ *   - a SALES FUNNEL unit: its funnel states a positive max budget at billing (its only money);
+ *   - otherwise its OWN daily budget when stated, else ANY targeted brand's PRE-FUNNEL total
+ *     (billing `/campaign-budgets` brand figure: the ceilings' sum, else the legacy pot). Not
+ *     `/daily-budget`: since billing v0.83.9 it adds every sales funnel's max budget, and a
+ *     funnel's money is never a pre-funnel campaign's (lib/sales-funnel-campaigns.ts).
  */
 async function hasPositiveDailyBudget(campaign: Campaign): Promise<boolean> {
-  if (campaign.dailyBudgetCents !== null && campaign.dailyBudgetCents !== undefined) {
-    return campaign.dailyBudgetCents > 0;
+  try {
+    if (campaign.salesFunnelCampaignId) {
+      const ref = salesFunnelUnitRef(campaign);
+      if (!ref.brandId || !ref.offerId || !ref.salesFunnelId) return false;
+      const read = await fetchSalesFunnelCaps({ orgId: ref.orgId, brandId: ref.brandId, offerId: ref.offerId, salesFunnelId: ref.salesFunnelId });
+      return read.ok && read.caps.stated && !!read.caps.maxBudget && (read.caps.maxBudget.amountCents ?? 0) > 0;
+    }
+    if (campaign.dailyBudgetCents !== null && campaign.dailyBudgetCents !== undefined) {
+      return campaign.dailyBudgetCents > 0;
+    }
+    for (const brandId of campaign.brandIds ?? []) {
+      const budgets = await fetchCampaignBudgets(brandId, { orgId: campaign.orgId });
+      if (budgets.ok && budgets.brandDailyBudgetCents !== null && budgets.brandDailyBudgetCents > 0) return true;
+    }
+    return false;
+  } catch {
+    return false;
   }
-  const brandIds = campaign.brandIds ?? [];
-  for (const brandId of brandIds) {
-    const cents = await readBrandDailyBudgetCents(campaign.orgId, brandId);
-    if (cents !== null && cents > 0) return true;
-  }
-  return false;
 }
 
 /**
