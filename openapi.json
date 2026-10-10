@@ -3730,6 +3730,17 @@
                   },
                   "orgId": {
                     "type": "string"
+                  },
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "includeUnfundedReactive": {
+                    "type": "boolean",
+                    "description": "Also convert a reactive campaign with no ceiling, into its reactive funnel with no cap (held, unfunded)."
+                  },
+                  "allowOfferLessCeilings": {
+                    "type": "boolean",
+                    "description": "Let billing replace a positive ceiling stating no offer (once billing serves that swap)."
                   }
                 }
               }

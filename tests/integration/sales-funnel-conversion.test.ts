@@ -196,6 +196,33 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     expect(billingCalls).toEqual([]);
   });
 
+  it("on request, converts a reactive campaign with NO ceiling into its reactive funnel with no cap, and lets billing replace an offer-less ceiling", async () => {
+    const aic = await row(AIC, CALL);
+    const CALL_FUNNEL = `${CALL}@${AIC}+booking_call_to_paid_client`;
+    const base = mockFunnel.getMockImplementation()!;
+    mockFunnel.mockImplementation(async (id: string) => id === CALL_FUNNEL
+      ? { ok: true, value: { id, name: "Moving", pipeIds: [`${AIC}|${CALL}`], legs: [{ legKey: CALL, pipe: { id: `${AIC}|${CALL}`, mode: "reactive" } }, { legKey: "booking_call_to_paid_client", pipe: null }] } }
+      : base(id));
+    mockSearch.mockImplementation(async (_q: string, channel: string) => ({ ok: true, value: channel === AIC ? [CALL_FUNNEL] : [] }));
+    const kept = await convertToSalesFunnelCampaigns({ apply: false });
+    expect(kept.groups[0].skipped).toBe("reactive_without_ceiling_kept_as_is");
+    const done = await convertToSalesFunnelCampaigns({ apply: true, includeUnfundedReactive: true });
+    expect(done.groups[0]).toMatchObject({ salesFunnelId: CALL_FUNNEL, maxBudgetDailyCents: null, capWritten: false });
+    expect(billingCalls).toEqual([]);
+    const [unit] = await db.select().from(campaigns).where(eq(campaigns.id, aic.id));
+    expect(unit).toMatchObject({ status: "ongoing", salesFunnelId: CALL_FUNNEL });
+
+    await cleanTestData();
+    await row(COLD, ENTRY);
+    mockSearch.mockImplementation(async (_q: string, channel: string) => ({ ok: true, value: channel === COLD ? [PROACTIVE_FUNNEL] : [] }));
+    mockBudgets.mockResolvedValue({ ok: true, brandDailyBudgetCents: 800, campaigns: [
+      { offerId: null, legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 800, sourcingCeilingCents: 350 },
+    ] });
+    const offerless = await convertToSalesFunnelCampaigns({ apply: true, allowOfferLessCeilings: true });
+    expect(offerless.groups[0]).toMatchObject({ skipped: null, capWritten: true });
+    expect(billingCalls[0].body).toMatchObject({ maxBudget: { amountCents: "800", period: "daily" }, replacesCeilings: [{ featureSlug: COLD, legKey: ENTRY }] });
+  });
+
   it("links a group funded at zero without any billing write (it stays unfunded)", async () => {
     await row(COLD, ENTRY);
     mockBudgets.mockResolvedValue({ ok: true, brandDailyBudgetCents: 0, campaigns: [
