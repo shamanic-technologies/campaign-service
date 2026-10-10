@@ -77,8 +77,9 @@ export async function convertToSalesFunnelCampaigns(opts: {
    */
   includeUnfundedReactive?: boolean;
   /**
-   * Let billing replace a positive ceiling stating no offer (billing resolves it when unambiguous).
-   * Off until billing serves that swap.
+   * DEPRECATED, ignored: billing v0.83.14 replaces a positive ceiling stating no offer when it is
+   * the only one for that channel + leg (409 `ceiling_ambiguous` / `ceiling_not_found` otherwise),
+   * so it is always sent and billing decides.
    */
   allowOfferLessCeilings?: boolean;
 }): Promise<ConversionReport> {
@@ -117,12 +118,11 @@ export async function convertToSalesFunnelCampaigns(opts: {
     const modeRefusal = !salesBudget.ok
       ? "billing_sales_budget_unreadable"
       : salesBudget.mode !== "campaigns" ? `brand_in_${salesBudget.mode}_sales_budget_mode` : null;
-    // billing replaces ceilings named by (offer, channel, leg): a positive ceiling stating no offer
-    // or no leg cannot be named, and billing would answer 409 ceiling_not_found.
+    // billing replaces ceilings named by (channel, leg) under the offer; an offer-less one is
+    // replaced when it is the only one for that channel + leg (billing v0.83.14, else 409, nothing
+    // written). A positive ceiling stating NO LEG cannot be named at all: planned, never forced.
     const unnameable = (cs: ConversionGroup["ceilings"]) =>
-      cs.some((c) => c.dailyBudgetCents > 0 && (!c.legKey || (!c.offerId && !opts.allowOfferLessCeilings)))
-        ? "positive_offer_less_ceiling_billing_cannot_replace"
-        : null;
+      cs.some((c) => c.dailyBudgetCents > 0 && !c.legKey) ? "positive_leg_less_ceiling_billing_cannot_replace" : null;
 
     const sources = offerRows.filter((r) => isSourceOriginSlug(r.featureSlug));
     const pipes = offerRows.filter((r) => !isSourceOriginSlug(r.featureSlug));
