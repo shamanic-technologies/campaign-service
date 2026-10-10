@@ -66,7 +66,22 @@ export interface ConversionReport {
 
 const live = (r: Row) => r.status === "ongoing" && !r.salesFunnelCampaignId;
 
-export async function convertToSalesFunnelCampaigns(opts: { apply: boolean; orgId?: string; actingEmail?: string | null }): Promise<ConversionReport> {
+export async function convertToSalesFunnelCampaigns(opts: {
+  apply: boolean;
+  orgId?: string;
+  brandId?: string;
+  actingEmail?: string | null;
+  /**
+   * Convert a reactive campaign with NO ceiling too, into its reactive funnel with no cap (held,
+   * unfunded). Owner decision 2026-10-10 for AI Instant Call, which never ran in prod.
+   */
+  includeUnfundedReactive?: boolean;
+  /**
+   * Let billing replace a positive ceiling stating no offer (billing resolves it when unambiguous).
+   * Off until billing serves that swap.
+   */
+  allowOfferLessCeilings?: boolean;
+}): Promise<ConversionReport> {
   const rows = (await db
     .select()
     .from(campaigns)
@@ -77,6 +92,7 @@ export async function convertToSalesFunnelCampaigns(opts: { apply: boolean; orgI
       isNotNull(campaigns.brandId),
       isNotNull(campaigns.legKey),
       opts.orgId ? eq(campaigns.orgId, opts.orgId) : undefined,
+      opts.brandId ? eq(campaigns.brandId, opts.brandId) : undefined,
     )))
     .filter((r) => live(r) && (isSalesFamilyFeature(r.featureSlug) || isSourceOriginSlug(r.featureSlug)));
 
@@ -104,7 +120,9 @@ export async function convertToSalesFunnelCampaigns(opts: { apply: boolean; orgI
     // billing replaces ceilings named by (offer, channel, leg): a positive ceiling stating no offer
     // or no leg cannot be named, and billing would answer 409 ceiling_not_found.
     const unnameable = (cs: ConversionGroup["ceilings"]) =>
-      cs.some((c) => c.dailyBudgetCents > 0 && (!c.offerId || !c.legKey)) ? "positive_offer_less_ceiling_billing_cannot_replace" : null;
+      cs.some((c) => c.dailyBudgetCents > 0 && (!c.legKey || (!c.offerId && !opts.allowOfferLessCeilings)))
+        ? "positive_offer_less_ceiling_billing_cannot_replace"
+        : null;
 
     const sources = offerRows.filter((r) => isSourceOriginSlug(r.featureSlug));
     const pipes = offerRows.filter((r) => !isSourceOriginSlug(r.featureSlug));
@@ -159,7 +177,7 @@ export async function convertToSalesFunnelCampaigns(opts: { apply: boolean; orgI
         salesFunnelId: null, salesFunnelName: null, basis: null, skipped: null,
       };
       if (!budgets.ok) group.skipped = "billing_unreadable";
-      else if (!ceilings || ceilings.length === 0) group.skipped = "reactive_without_ceiling_kept_as_is";
+      else if ((!ceilings || ceilings.length === 0) && !opts.includeUnfundedReactive) group.skipped = "reactive_without_ceiling_kept_as_is";
       else {
         const funnel = await reactiveFunnelOf(r, catalogue.operatorBySlug);
         if (!funnel.ok) group.skipped = funnel.reason;

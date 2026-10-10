@@ -292,8 +292,13 @@ router.post("/internal/sales-funnel-campaigns/convert", requireApiKey, async (re
   try {
     const apply = req.body?.apply === true;
     const orgId = typeof req.body?.orgId === "string" ? req.body.orgId : undefined;
+    const brandId = typeof req.body?.brandId === "string" ? req.body.brandId : undefined;
     const actingEmail = (req.headers["x-email"] as string | undefined) ?? null;
-    res.json(await convertToSalesFunnelCampaigns({ apply, orgId, actingEmail }));
+    res.json(await convertToSalesFunnelCampaigns({
+      apply, orgId, brandId, actingEmail,
+      includeUnfundedReactive: req.body?.includeUnfundedReactive === true,
+      allowOfferLessCeilings: req.body?.allowOfferLessCeilings === true,
+    }));
   } catch (error) {
     console.error("[campaign-service] Sales funnel conversion error:", error);
     res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
