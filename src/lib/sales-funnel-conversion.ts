@@ -6,7 +6,7 @@ import { ceilingEntriesOf, fetchCampaignBudgets, type CampaignBudgetEntry } from
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
 import { combinationIdentity, legIsReactive, sameLeg } from "./leg-identity.js";
 import { fetchOfferCatalogueSalesPaths, fetchOfferSelectedSalesPaths } from "./reactive-defaults.js";
-import { fetchSalesFunnel, searchSalesFunnelIds } from "./sales-funnel-catalogue-client.js";
+import { fetchPipe, fetchSalesFunnel, searchSalesFunnelIds } from "./sales-funnel-catalogue-client.js";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { isSourceOriginSlug } from "./source-campaigns.js";
 
@@ -128,7 +128,7 @@ export async function convertToSalesFunnelCampaigns(opts: { apply: boolean; orgI
       else if (budgets.campaigns.length === 0) group.skipped = "brand_pot_not_per_campaign";
       else if (proactive.length > 1) group.skipped = "several_proactive_pipes";
       else {
-        const funnel = await proactiveFunnelOf(proactive[0], identity);
+        const funnel = await proactiveFunnelOf(proactive[0], identity, catalogue.operatorBySlug);
         if (!funnel.ok) group.skipped = funnel.reason;
         else Object.assign(group, { salesFunnelId: funnel.id, salesFunnelName: funnel.name, basis: funnel.basis });
       }
@@ -148,7 +148,7 @@ export async function convertToSalesFunnelCampaigns(opts: { apply: boolean; orgI
       if (!budgets.ok) group.skipped = "billing_unreadable";
       else if (!ceilings || ceilings.length === 0) group.skipped = "reactive_without_ceiling_kept_as_is";
       else {
-        const funnel = await reactiveFunnelOf(r);
+        const funnel = await reactiveFunnelOf(r, catalogue.operatorBySlug);
         if (!funnel.ok) group.skipped = funnel.reason;
         else Object.assign(group, { salesFunnelId: funnel.id, salesFunnelName: funnel.name, basis: "reactive_funnel" });
       }
@@ -180,10 +180,51 @@ export async function convertToSalesFunnelCampaigns(opts: { apply: boolean; orgI
   };
 }
 
-/** The offer's sales path starting with this proactive pipe: ticked first, else best ROI. */
+/**
+ * The catalogue funnel STARTING at `pipe` whose every other leg is worked by NO platform pipe (the
+ * customer's own team), so the funnel's pipes are exactly this one: never mix proactive and
+ * reactive pipes (owner), and billing measures the funnel's spend on its pipes, so a funnel naming
+ * another live pipe would count that pipe's spend twice. Sales paths are tried in the order given
+ * (the offer's ticked one, then its best ROI ones), then any path; the catalogue lists by ROI.
+ */
+async function pureFunnelStartingAt(
+  pipe: Row,
+  salesPathIds: string[],
+  operatorBySlug: ReadonlyMap<string, string>,
+): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }> {
+  // A leg is "nobody on the platform" when it has no pipe, or its pipe's channel is one the
+  // CUSTOMER operates (the channel catalogue's operator, e.g. your-team-meeting-attendance).
+  const offPlatform = async (leg: { pipe: { id: string } | null }): Promise<boolean | null> => {
+    if (leg.pipe === null) return true;
+    const read = await fetchPipe(leg.pipe.id);
+    if (!read.ok) return read.notFound ? false : null;
+    return operatorBySlug.get(read.value.channelSlug) === "customer";
+  };
+  const pipeId = `${pipe.featureSlug}|${pipe.legKey}`;
+  for (const pathId of [...salesPathIds, undefined]) {
+    const found = await searchSalesFunnelIds(`${pipe.legKey}@${pipe.featureSlug}`, pipe.featureSlug!, pathId);
+    if (!found.ok) return { ok: false, reason: `catalogue_unreadable: ${found.detail}` };
+    for (const id of found.value) {
+      const funnel = await fetchSalesFunnel(id);
+      if (!funnel.ok) {
+        if (!funnel.notFound) return { ok: false, reason: `catalogue_unreadable: ${funnel.detail}` };
+        continue;
+      }
+      const [first, ...rest] = funnel.value.legs;
+      if (first?.pipe?.id !== pipeId) continue;
+      const verdicts = await Promise.all(rest.map(offPlatform));
+      if (verdicts.some((v) => v === null)) return { ok: false, reason: "catalogue_unreadable: a pipe of the funnel could not be read" };
+      if (verdicts.every((v) => v === true)) return { ok: true, id: funnel.value.id, name: funnel.value.name };
+    }
+  }
+  return { ok: false, reason: "no_catalogue_funnel_with_only_this_pipe" };
+}
+
+/** The proactive funnel: the offer's ticked sales path starting with the pipe first, else best ROI. */
 async function proactiveFunnelOf(
   pipe: Row,
   identity: { orgId: string; userId?: string; runId?: string; brandId: string },
+  operatorBySlug: ReadonlyMap<string, string>,
 ): Promise<{ ok: true; id: string; name: string; basis: "selected_path" | "best_roi_path" } | { ok: false; reason: string }> {
   const [selected, paths] = await Promise.all([
     fetchOfferSelectedSalesPaths(pipe.offerId!, identity.brandId, identity),
@@ -196,31 +237,25 @@ async function proactiveFunnelOf(
   const ticked = selected.ok && selected.value.combinationKeys
     ? new Set(selected.value.combinationKeys.map(combinationIdentity))
     : new Set<string>();
-  const pick = startsWithPipe.find((p) => ticked.has(combinationIdentity(p.combinationKey)));
-  const candidates = pick ? [{ p: pick, basis: "selected_path" as const }] : startsWithPipe.map((p) => ({ p, basis: "best_roi_path" as const }));
-  for (const { p, basis } of candidates) {
-    const funnel = await fetchSalesFunnel(p.combinationKey);
-    if (!funnel.ok) continue;
-    // Never mix: the proactive funnel's other pipes are not ours to start.
-    return { ok: true, id: funnel.value.id, name: funnel.value.name, basis };
-  }
-  return { ok: false, reason: "no_catalogue_funnel_starting_with_pipe" };
+  const tickedPath = startsWithPipe.find((p) => ticked.has(combinationIdentity(p.combinationKey)));
+  // A sales path's id is its legs in order (the catalogue's own spelling of a path).
+  const pathIdOf = (p: (typeof startsWithPipe)[number]) => p.legs.map((l) => l.legKey).join("+");
+  const ordered = [...new Set([...(tickedPath ? [pathIdOf(tickedPath)] : []), ...startsWithPipe.map(pathIdOf)])];
+  const funnel = await pureFunnelStartingAt(pipe, ordered, operatorBySlug);
+  if (!funnel.ok) return funnel;
+  return { ...funnel, basis: tickedPath ? "selected_path" : "best_roi_path" };
 }
 
-/** The catalogue funnel STARTING at this reactive pipe whose pipes are all reactive. */
-async function reactiveFunnelOf(pipe: Row): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }> {
-  const pipeId = `${pipe.featureSlug}|${pipe.legKey}`;
-  const found = await searchSalesFunnelIds(`${pipe.legKey}@${pipe.featureSlug}`, pipe.featureSlug!);
-  if (!found.ok) return { ok: false, reason: `catalogue_unreadable: ${found.detail}` };
-  for (const id of found.value) {
-    const funnel = await fetchSalesFunnel(id);
-    if (!funnel.ok) continue;
-    const allReactive = funnel.value.legs.every((l) => l.pipe === null || l.pipe.mode === "reactive");
-    if (funnel.value.legs[0]?.pipe?.id === pipeId && allReactive) {
-      return { ok: true, id: funnel.value.id, name: funnel.value.name };
-    }
+/** The reactive funnel: the catalogue funnel starting at this reactive pipe and naming no other. */
+async function reactiveFunnelOf(
+  pipe: Row,
+  operatorBySlug: ReadonlyMap<string, string>,
+): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }> {
+  const funnel = await pureFunnelStartingAt(pipe, [], operatorBySlug);
+  if (!funnel.ok && funnel.reason === "no_catalogue_funnel_with_only_this_pipe") {
+    return { ok: false, reason: "no_reactive_funnel_in_catalogue" };
   }
-  return { ok: false, reason: "no_reactive_funnel_in_catalogue" };
+  return funnel;
 }
 
 async function billingPut(path: string, body: unknown, headers: Record<string, string>): Promise<void> {

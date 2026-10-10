@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 
-const { mockCatalogue, mockBudgets, mockSelected, mockPaths, mockFunnel, mockSearch } = vi.hoisted(() => ({
+const { mockCatalogue, mockBudgets, mockSelected, mockPaths, mockFunnel, mockSearch, mockPipe } = vi.hoisted(() => ({
+  mockPipe: vi.fn(),
   mockCatalogue: vi.fn(),
   mockBudgets: vi.fn(),
   mockSelected: vi.fn(),
@@ -23,7 +24,7 @@ vi.mock("../../src/lib/reactive-defaults.js", async (importOriginal) => {
 });
 vi.mock("../../src/lib/sales-funnel-catalogue-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/sales-funnel-catalogue-client.js")>();
-  return { ...original, fetchSalesFunnel: mockFunnel, searchSalesFunnelIds: mockSearch };
+  return { ...original, fetchSalesFunnel: mockFunnel, searchSalesFunnelIds: mockSearch, fetchPipe: mockPipe };
 });
 
 import { db } from "../../src/db/index.js";
@@ -47,6 +48,8 @@ const SOURCE = "sourcing-apollo-cold-filters";
 const SOURCE_LEG = "start_to_lead_found";
 const PROACTIVE_FUNNEL = `${ENTRY}@${COLD}+conversation_to_paid_client`;
 const MEET_FUNNEL = `${MEET}@${AMB}+meeting_booked_to_paid_client`;
+// The cold email pipe THEN the meeting-booking pipe: mixes proactive and reactive, never chosen.
+const MIXED_FUNNEL = `${ENTRY}@${COLD}+${MEET}@${AMB}+meeting_booked_to_paid_client`;
 
 const row = (featureSlug: string, legKey: string, status = "ongoing") =>
   insertTestCampaign(ORG, {
@@ -78,7 +81,7 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
       ],
       legsBySlug: new Map([[COLD, new Set([ENTRY])], [AMB, new Set([MEET])], [AIC, new Set([CALL])]]),
       reactiveBySlug: new Map([[COLD, new Map([[ENTRY, false]])], [AMB, new Map([[MEET, true]])], [AIC, new Map([[CALL, true]])]]),
-      operatorBySlug: new Map(),
+      operatorBySlug: new Map([["your-team-meeting-attendance", "customer"]]),
       stepKeys: new Set(),
     });
     mockBudgets.mockResolvedValue({
@@ -96,10 +99,13 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     ] });
     mockFunnel.mockImplementation(async (id: string) => {
       if (id === PROACTIVE_FUNNEL) return { ok: true, value: { id, name: "Zenith", pipeIds: [`${COLD}|${ENTRY}`], legs: [{ legKey: ENTRY, pipe: { id: `${COLD}|${ENTRY}`, mode: "proactive" } }, { legKey: "conversation_to_paid_client", pipe: null }] } };
-      if (id === MEET_FUNNEL) return { ok: true, value: { id, name: "Hush", pipeIds: [`${AMB}|${MEET}`], legs: [{ legKey: MEET, pipe: { id: `${AMB}|${MEET}`, mode: "reactive" } }, { legKey: "meeting_booked_to_paid_client", pipe: null }] } };
+      if (id === MIXED_FUNNEL) return { ok: true, value: { id, name: "Victory", pipeIds: [`${COLD}|${ENTRY}`, `${AMB}|${MEET}`], legs: [{ legKey: ENTRY, pipe: { id: `${COLD}|${ENTRY}`, mode: "proactive" } }, { legKey: MEET, pipe: { id: `${AMB}|${MEET}`, mode: "reactive" } }] } };
+      // A reactive-only funnel whose next leg is the CUSTOMER's own team (a customer-operated pipe).
+      if (id === MEET_FUNNEL) return { ok: true, value: { id, name: "Motivate", pipeIds: [`${AMB}|${MEET}`, "your-team-meeting-attendance|meeting_booked_to_meeting_attended"], legs: [{ legKey: MEET, pipe: { id: `${AMB}|${MEET}`, mode: "reactive" } }, { legKey: "meeting_booked_to_meeting_attended", pipe: { id: "your-team-meeting-attendance|meeting_booked_to_meeting_attended", mode: "reactive" } }, { legKey: "meeting_attended_to_paid_client", pipe: null }] } };
       return { ok: false, notFound: true, detail: "404" };
     });
-    mockSearch.mockImplementation(async (_q: string, channel: string) => ({ ok: true, value: channel === AMB ? [MEET_FUNNEL] : [] }));
+    mockPipe.mockImplementation(async (id: string) => ({ ok: true, value: { id, name: "Bird", channelSlug: id.split("|")[0], legKey: id.split("|")[1], mode: "reactive" } }));
+    mockSearch.mockImplementation(async (_q: string, channel: string) => ({ ok: true, value: channel === AMB ? [MEET_FUNNEL] : channel === COLD ? [MIXED_FUNNEL, PROACTIVE_FUNNEL] : [] }));
   });
 
   afterAll(async () => {
@@ -191,17 +197,32 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     expect(offerless.groups[0].ceilingsLeft).toEqual([expect.objectContaining({ dailyBudgetCents: 800, why: "offer_or_leg_less_ceiling_not_addressable" })]);
   });
 
-  it("prefers the offer's TICKED sales path over the best ROI one", async () => {
+  it("prefers the offer's TICKED sales path, and never a funnel naming another platform pipe", async () => {
     await row(COLD, ENTRY);
-    const TICKED = `${ENTRY}@${COLD}+conversation_to_meeting_booked+meeting_booked_to_paid_client`;
+    const legsOf = (...keys: string[]) => keys.map((legKey, i) => ({ legKey, reactive: i > 0, workedBy: "platform", channelSlug: i === 0 ? COLD : null, channelManaged: true }));
+    const BEST_PATH = `${ENTRY}+conversation_to_paid_client`;
+    const TICKED_PATH = `${ENTRY}+conversation_to_signup+signup_to_paid_client`;
+    const TICKED = `${ENTRY}@${COLD}+conversation_to_signup+signup_to_paid_client`;
     mockPaths.mockResolvedValue({ ok: true, value: [
-      { combinationKey: PROACTIVE_FUNNEL, roi: 9, legs: [{ legKey: ENTRY, reactive: false, workedBy: "platform", channelSlug: COLD, channelManaged: true }] },
-      { combinationKey: TICKED, roi: 1, legs: [{ legKey: ENTRY, reactive: false, workedBy: "platform", channelSlug: COLD, channelManaged: true }] },
+      { combinationKey: PROACTIVE_FUNNEL, roi: 9, legs: legsOf(ENTRY, "conversation_to_paid_client") },
+      { combinationKey: TICKED, roi: 1, legs: legsOf(ENTRY, "conversation_to_signup", "signup_to_paid_client") },
     ] });
     mockSelected.mockResolvedValue({ ok: true, value: { stated: true, combinationKeys: [TICKED] } });
-    mockFunnel.mockImplementation(async (id: string) => ({ ok: true, value: { id, name: "Ticked", pipeIds: [], legs: [] } }));
+    mockSearch.mockImplementation(async (_q: string, _ch: string, pathId?: string) => ({
+      ok: true,
+      value: pathId === TICKED_PATH ? [TICKED] : pathId === BEST_PATH ? [MIXED_FUNNEL, PROACTIVE_FUNNEL] : [],
+    }));
+    const base = mockFunnel.getMockImplementation()!;
+    mockFunnel.mockImplementation(async (id: string) => id === TICKED
+      ? { ok: true, value: { id, name: "Ticked", pipeIds: [`${COLD}|${ENTRY}`], legs: [{ legKey: ENTRY, pipe: { id: `${COLD}|${ENTRY}`, mode: "proactive" } }, { legKey: "conversation_to_signup", pipe: null }, { legKey: "signup_to_paid_client", pipe: null }] } }
+      : base(id));
     const report = await convertToSalesFunnelCampaigns({ apply: false });
     expect(report.groups[0]).toMatchObject({ salesFunnelId: TICKED, basis: "selected_path" });
+
+    // Nothing ticked: the best path's PURE funnel, skipping the mixed one listed first.
+    mockSelected.mockResolvedValue({ ok: true, value: { stated: false, combinationKeys: null } });
+    const best = await convertToSalesFunnelCampaigns({ apply: false });
+    expect(best.groups[0]).toMatchObject({ salesFunnelId: PROACTIVE_FUNNEL, basis: "best_roi_path" });
   });
 
   it("leaves a reactive pipe as it is while the catalogue has no reactive-only funnel for it", async () => {
