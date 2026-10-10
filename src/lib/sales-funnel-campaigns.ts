@@ -171,6 +171,74 @@ export async function fetchSalesFunnelCaps(
   return result;
 }
 
+/** One sales funnel's stated caps, as billing lists them for a brand. */
+export interface StatedSalesFunnelCap {
+  offerId: string;
+  salesFunnelId: string;
+  maxBudget: { amountCents: number; period: z.infer<typeof CapPeriod> } | null;
+}
+
+const BrandSalesFunnelCapsResponse = z.object({
+  caps: z.array(
+    z.object({
+      offerId: z.string(),
+      salesFunnelId: z.string(),
+      maxBudget: z.object({ amountCents: Figure, period: CapPeriod }).nullable(),
+    }),
+  ),
+});
+
+/**
+ * billing-service `GET /internal/brands/:brandId/sales-funnel-caps` (x-org-id; billing v0.83.6):
+ * every funnel cap the customer stated for the brand, figures only (no consumption). One read per
+ * brand, for the budget-derived figures (spendable budget, held state). Not cached: a person reads it.
+ */
+export async function fetchBrandSalesFunnelCaps(
+  orgId: string,
+  brandId: string,
+): Promise<{ ok: true; caps: StatedSalesFunnelCap[] } | { ok: false; detail: string }> {
+  const url = process.env.BILLING_SERVICE_URL;
+  const apiKey = process.env.BILLING_SERVICE_API_KEY;
+  if (!url || !apiKey) return { ok: false, detail: "billing-service not configured" };
+  const path = `/internal/brands/${encodeURIComponent(brandId)}/sales-funnel-caps`;
+  try {
+    const res = await fetch(`${url.replace(/\/$/, "")}${path}`, {
+      headers: { "x-api-key": apiKey, "x-org-id": orgId },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return { ok: false, detail: `billing HTTP ${res.status} on ${path}` };
+    const parsed = BrandSalesFunnelCapsResponse.safeParse(await res.json());
+    if (!parsed.success) return { ok: false, detail: `billing brand caps unparseable: ${parsed.error.message.slice(0, 200)}` };
+    return {
+      ok: true,
+      caps: parsed.data.caps.map((c) => ({
+        offerId: c.offerId,
+        salesFunnelId: c.salesFunnelId,
+        maxBudget: c.maxBudget && c.maxBudget.amountCents !== null && Number.isFinite(c.maxBudget.amountCents)
+          ? { amountCents: c.maxBudget.amountCents, period: c.maxBudget.period }
+          : null,
+      })),
+    };
+  } catch (err) {
+    return { ok: false, detail: `${path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/**
+ * A funnel's MAX BUDGET as a DAILY figure, billing's rule (v0.83.9) so both services agree:
+ * daily x1, weekly / 7, monthly / 30, one_off adds 0 (not recurring). No discount: a cap is
+ * configuration. null max budget = 0.
+ */
+export function salesFunnelDailyBudgetCents(maxBudget: StatedSalesFunnelCap["maxBudget"]): number {
+  if (!maxBudget || !(maxBudget.amountCents > 0)) return 0;
+  switch (maxBudget.period) {
+    case "daily": return maxBudget.amountCents;
+    case "weekly": return maxBudget.amountCents / 7;
+    case "monthly": return maxBudget.amountCents / 30;
+    case "one_off": return 0;
+  }
+}
+
 /**
  * May this UNIT spend now? The ONE money answer for a sales funnel unit: the turn planner, the step
  * trigger and gate-check ask it before any pre-funnel money path (none of which is its money).

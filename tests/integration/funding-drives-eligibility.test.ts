@@ -59,8 +59,12 @@ const LEG = "start_to_conversation";
 type Entry = { offerId?: string | null; legKey?: string | null; featureSlug?: string; dailyBudgetCents: string };
 
 /** billing answers these per-campaign ceilings for every brand asked about. */
-function billingAnswers(entries: Entry[], brandDailyBudgetCents: string | null) {
+function billingAnswers(entries: Entry[], brandDailyBudgetCents: string | null, funnelCaps: unknown[] = []) {
   mockFetch.mockImplementation(async (url: string) => {
+    // The brand's SALES FUNNEL caps: none unless the test states some.
+    if (String(url).includes("/sales-funnel-caps")) {
+      return { ok: true, json: async () => ({ orgId, brandId: "b", caps: funnelCaps }) };
+    }
     if (String(url).includes("/campaign-budgets")) {
       return {
         ok: true,
@@ -83,10 +87,6 @@ function billingAnswers(entries: Entry[], brandDailyBudgetCents: string | null) 
         ok: true,
         json: async () => ({ brandId: "b", orgId, mode: "campaigns", dailyBudgetCents: null, updatedAt: null }),
       };
-    }
-    // The brand pot, read by the gate for a brand with no per-campaign ceilings.
-    if (String(url).includes("/daily-budget")) {
-      return { ok: true, json: async () => ({ brandId: "b", dailyBudgetCents: brandDailyBudgetCents, updatedAt: null }) };
     }
     return { ok: false, status: 500, json: async () => ({}) };
   });
@@ -318,6 +318,22 @@ describe("GET /brands/:brandId/pause answers from the money", () => {
     const brandId = crypto.randomUUID();
     const res = await getPause(brandId).expect(200);
     expect(res.body.paused).toBe(false);
+  });
+
+  it("NOT held when the brand is funded only by a SALES FUNNEL max budget", async () => {
+    billingAnswers([], null, [
+      { offerId: OFFER, salesFunnelId: "f@x", maxBudget: { amountCents: "7000", period: "weekly" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
+    ]);
+    const res = await getPause(crypto.randomUUID()).expect(200);
+    expect(res.body.paused).toBe(false);
+  });
+
+  it("still held when the only funnel cap is a volume (no money)", async () => {
+    billingAnswers([], null, [
+      { offerId: OFFER, salesFunnelId: "f@x", maxBudget: null, maxVolume: { count: 5, period: "daily", unit: "first_contacts" }, updatedAt: "2026-10-10T00:00:00Z" },
+    ]);
+    const res = await getPause(crypto.randomUUID()).expect(200);
+    expect(res.body.paused).toBe(true);
   });
 
   it("502s rather than reporting a brand as running when billing cannot be read", async () => {
