@@ -85,10 +85,6 @@ export interface GateCheckResult {
   creditCheckDetail?: string;
 }
 
-type BrandDailyBudgetRead =
-  | { ok: true; dailyBudgetCents: number | null }
-  | { ok: false };
-
 export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheckResult> {
   // Campaign must be ongoing
   if (campaign.status !== "ongoing") {
@@ -321,7 +317,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
         const ceiling = campaignCeilingCents(budgets, campaign);
         if (ceiling.grain === "brand") {
           // (b) One pot: paced on the brand's committed spend, exactly as before.
-          const blocked = await brandDailyBudgetBlock(campaign, identity, brandId);
+          const blocked = await brandDailyBudgetBlock(campaign, brandId, budgets.brandDailyBudgetCents);
           if (blocked) return blocked;
           continue;
         }
@@ -535,52 +531,6 @@ async function readCreditAffordability(
   }
 }
 
-/**
- * Read a brand's current daily spend ceiling from billing-service.
- * Returns the ceiling in CENTS, or null when billing explicitly stores no cap.
- *
- * Fail-CLOSED by design: missing config, network error, non-2xx, or unparseable values
- * return ok:false so the caller blocks the tick instead of spending past an unreadable cap.
- *
- * Contract: GET /internal/brands/{brandId}/daily-budget (x-api-key) ->
- *   { brandId, dailyBudgetCents: string|null, updatedAt: string|null }
- */
-async function getBrandDailyBudget(brandId: string, identity: IdentityHeaders): Promise<BrandDailyBudgetRead> {
-  const url = process.env.BILLING_SERVICE_URL;
-  const apiKey = process.env.BILLING_SERVICE_API_KEY;
-  if (!url || !apiKey) {
-    return { ok: false };
-  }
-
-  const headers: Record<string, string> = {
-    "x-api-key": apiKey,
-    "x-org-id": identity.orgId,
-    "x-brand-id": brandId,
-  };
-  if (identity.userId) headers["x-user-id"] = identity.userId;
-  if (identity.runId) headers["x-run-id"] = identity.runId;
-  if (identity.campaignId) headers["x-campaign-id"] = identity.campaignId;
-  if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
-
-  try {
-    const res = await fetch(`${url}/internal/brands/${brandId}/daily-budget`, { headers });
-    if (!res.ok) {
-      return { ok: false };
-    }
-    const data = await res.json() as { dailyBudgetCents?: string | null };
-    if (data.dailyBudgetCents === null || data.dailyBudgetCents === undefined) {
-      return { ok: true, dailyBudgetCents: null };
-    }
-    const cents = parseFloat(data.dailyBudgetCents);
-    if (!Number.isFinite(cents)) {
-      return { ok: false };
-    }
-    return { ok: true, dailyBudgetCents: cents };
-  } catch {
-    return { ok: false };
-  }
-}
-
 function startOfToday(): Date {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -638,15 +588,13 @@ export function nextMonthStart(): Date {
  */
 async function brandDailyBudgetBlock(
   campaign: GateCheckInput,
-  identity: IdentityHeaders,
   brandId: string,
+  // The brand's PRE-FUNNEL pot, from the same `/campaign-budgets` read that chose this path
+  // (billing's legacy figure: global amount / scalar). NOT `/internal/brands/:id/daily-budget`:
+  // since billing v0.83.9 that one adds every sales funnel's max budget, and a funnel's money
+  // must never pace a pre-funnel campaign (lib/sales-funnel-campaigns.ts).
+  dailyBudgetCents: number | null,
 ): Promise<GateCheckResult | null> {
-  const dailyBudget = await getBrandDailyBudget(brandId, identity);
-  if (!dailyBudget.ok) {
-    return { allowed: false, reason: "Brand daily budget unavailable" };
-  }
-
-  const dailyBudgetCents = dailyBudget.dailyBudgetCents;
   // A budget nobody ever stated is NOT "no cap this tick" — it is nothing funded, and a campaign
   // the customer funds nothing for does not run. Reading it as unbounded is exactly how two
   // brands that fund nothing at all kept sending against no ceiling while 27 brands that DID

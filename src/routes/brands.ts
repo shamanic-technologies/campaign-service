@@ -1,8 +1,9 @@
 import { Router } from "express";
-import { and, asc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
-import { brandPauseTransitions, campaigns } from "../db/schema.js";
+import { brandPauseTransitions, campaigns, salesFunnelCampaigns } from "../db/schema.js";
+import { fetchBrandSalesFunnelCaps } from "../lib/sales-funnel-campaigns.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { BatchSpendableBudgetBody, SetBrandCampaignsDailyBudgetBody } from "../schemas.js";
@@ -63,10 +64,21 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
       return;
     }
 
+    // A brand funded by a SALES FUNNEL max budget is not held either (billing counts it funded).
+    let paused = brandHeldFromBudgets(budgets);
+    if (paused) {
+      const caps = await fetchBrandSalesFunnelCaps(orgId, brandId);
+      if (!caps.ok) {
+        res.status(502).json({ error: "Brand funding unavailable" });
+        return;
+      }
+      if (caps.caps.some((c) => c.maxBudget && c.maxBudget.amountCents > 0)) paused = false;
+    }
+
     res.json({
       brandId,
       orgId,
-      paused: brandHeldFromBudgets(budgets),
+      paused,
       updatedAt: null,
     });
   } catch (error) {
@@ -99,6 +111,8 @@ router.patch("/brands/:brandId/daily-budget", requireApiKey, serviceAuth, valida
         eq(campaigns.orgId, orgId),
         arrayContains(campaigns.brandIds, [brandId]),
         inArray(campaigns.featureSlug, SALES_FEATURE_SLUGS),
+        // A SALES FUNNEL unit never gets a per-campaign budget: its money is its funnel's caps.
+        isNull(campaigns.salesFunnelCampaignId),
       ))
       .returning({ id: campaigns.id });
 
@@ -171,6 +185,7 @@ async function loadSalesCampaigns(orgId: string, brandId: string): Promise<Spend
       offerId: campaigns.offerId,
       legKey: campaigns.legKey,
       createdAt: campaigns.createdAt,
+      salesFunnelCampaignId: campaigns.salesFunnelCampaignId,
     })
     .from(campaigns)
     .where(and(
@@ -179,7 +194,11 @@ async function loadSalesCampaigns(orgId: string, brandId: string): Promise<Spend
       // Lead SOURCE campaigns too: billing funds each source per (offer, origin, start_to_lead_found),
       // and without its campaign here that money always read "not running". Sources stay OUT of the
       // sales family (that list is a pacing statement, lib/sales-outreach-campaign.ts).
-      inArray(campaigns.featureSlug, [...SALES_FAMILY_FEATURE_SLUGS, ...SOURCE_ORIGIN_SLUGS]),
+      // SALES FUNNEL units of any channel too (their money is their funnel's, never a ceiling here).
+      or(
+        inArray(campaigns.featureSlug, [...SALES_FAMILY_FEATURE_SLUGS, ...SOURCE_ORIGIN_SLUGS]),
+        isNotNull(campaigns.salesFunnelCampaignId),
+      ),
     ));
   return rows;
 }
@@ -196,8 +215,28 @@ async function spendableBudgetFor(
   // remove from the staff numbers.
   if (!budgets.ok) return { ok: false, reason: "billing did not answer the brand's budget" };
 
+  // The brand's SALES FUNNEL caps (billing) count each funnel campaign by its max budget per day.
+  // Fail LOUD like the ceilings: a smaller figure is the silent under-count this endpoint removes.
+  const caps = await fetchBrandSalesFunnelCaps(orgId, brandId);
+  if (!caps.ok) return { ok: false, reason: `billing did not answer the brand's sales funnel caps (${caps.detail})` };
+  const ownerRows = await db
+    .select({
+      id: salesFunnelCampaigns.id,
+      offerId: salesFunnelCampaigns.offerId,
+      salesFunnelId: salesFunnelCampaigns.salesFunnelId,
+      status: salesFunnelCampaigns.status,
+    })
+    .from(salesFunnelCampaigns)
+    .where(and(eq(salesFunnelCampaigns.orgId, orgId), eq(salesFunnelCampaigns.brandId, brandId)));
+
   const campaignRows = await loadSalesCampaigns(orgId, brandId);
-  return { ok: true, budget: computeSpendableBudget(orgId, brandId, budgets, campaignRows) };
+  return {
+    ok: true,
+    budget: computeSpendableBudget(orgId, brandId, budgets, campaignRows, {
+      caps: caps.caps,
+      salesFunnelCampaigns: ownerRows,
+    }),
+  };
 }
 
 /**
