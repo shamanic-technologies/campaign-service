@@ -3,6 +3,7 @@ import {
   orderForSharedPipes,
   salesFunnelUnitMoney,
   sharedSalesFunnelPipes,
+  resetSalesFunnelCapsCache,
   serializeSalesFunnelCampaign,
 } from "../../src/lib/sales-funnel-campaigns.js";
 import { fundingFromBudgets, campaignFunding } from "../../src/lib/campaign-funding.js";
@@ -50,15 +51,77 @@ describe("one dispatch per pipe two sales funnels share", () => {
 });
 
 describe("a sales funnel unit's money is its funnel's caps", () => {
-  it("is held as unfunded while billing serves no funnel cap (fail-closed)", async () => {
-    const now = new Date("2026-10-10T10:00:00Z");
-    const verdict = await salesFunnelUnitMoney({ id: "u1", salesFunnelCampaignId: "F1", salesFunnelId: "f@x" }, now);
-    expect(verdict.run).toBe(false);
-    if (verdict.run) return;
-    expect(verdict.kind).toBe("unfunded");
-    expect(verdict.reason).toBe("Sales funnel not funded");
-    expect(verdict.detail).toContain("F1");
-    expect(verdict.nextRunAt.getTime()).toBe(now.getTime() + 10 * 60_000);
+  const unit = {
+    id: "u1", orgId: "org", brandId: "brand", offerId: "offer", featureSlug: COLD, legKey: ENTRY,
+    salesFunnelCampaignId: "F1", salesFunnelId: "f@x",
+  };
+  const answer = (body: unknown, ok = true) =>
+    vi.fn(async () => ({ ok, status: ok ? 200 : 503, json: async () => body }));
+  const budget = (amountCents: string, consumedCents: string | null, reached: boolean | null, period = "weekly") => ({
+    amountCents, period, periodStart: "2026-10-05T00:00:00Z", periodEnd: null, consumedCents, remainingCents: null, reached,
+    consumedUnavailableReason: consumedCents === null ? "runs_unavailable" : null, consumedUnavailableDetail: null,
+  });
+  const withCaps = async (body: unknown, ok = true, u = unit) => {
+    process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+    process.env.BILLING_SERVICE_API_KEY = "k";
+    resetSalesFunnelCapsCache();
+    const fetchMock = answer(body, ok);
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      return { verdict: await salesFunnelUnitMoney(u, new Date("2026-10-10T10:00:00Z")), fetchMock };
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  };
+
+  it("is unfunded while the customer states no max budget (money starts nothing)", async () => {
+    const { verdict, fetchMock } = await withCaps({ stated: false, maxBudget: null, maxVolume: null, pipes: null });
+    expect(verdict).toMatchObject({ run: false, kind: "unfunded", reason: "Sales funnel not funded" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
+    expect(url).toBe("https://billing.test.local/internal/brands/brand/offers/offer/sales-funnels/f%40x/caps");
+    expect(init.headers["x-org-id"]).toBe("org");
+  });
+
+  it("is unfunded on a volume cap alone: an unstated budget is never unbounded", async () => {
+    const { verdict } = await withCaps({ stated: true, maxBudget: null, maxVolume: { count: 10, period: "daily", unit: "first_contacts", consumed: 0, reached: false, consumedUnavailableReason: null }, pipes: null });
+    expect(verdict).toMatchObject({ run: false, kind: "unfunded" });
+  });
+
+  it("runs a proactive pipe under both caps, paced on the funnel's consumed / max budget", async () => {
+    const { verdict } = await withCaps({ stated: true, maxBudget: budget("1000", "250", false), maxVolume: { count: 100, period: "monthly", unit: "first_contacts", consumed: 3, reached: false, consumedUnavailableReason: null }, pipes: null });
+    expect(verdict).toEqual({ run: true, pace: { spentCents: 250, ceilingCents: 1000 } });
+  });
+
+  it("holds a proactive pipe when EITHER cap is reached: new first touches stop", async () => {
+    expect((await withCaps({ stated: true, maxBudget: budget("1000", "1000", true), maxVolume: null, pipes: null })).verdict)
+      .toMatchObject({ run: false, kind: "cap_reached", reason: "Sales funnel max budget reached" });
+    expect((await withCaps({ stated: true, maxBudget: budget("1000", "10", false), maxVolume: { count: 5, period: "daily", unit: "first_contacts", consumed: 5, reached: true, consumedUnavailableReason: null }, pipes: null })).verdict)
+      .toMatchObject({ run: false, kind: "cap_reached", reason: "Sales funnel max volume reached" });
+  });
+
+  it("holds a proactive pipe LOUDLY when a consumption cannot be measured (never read as not reached)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { verdict } = await withCaps({ stated: true, maxBudget: budget("1000", "10", false), maxVolume: { count: 5, period: "daily", unit: "first_contacts", consumed: null, reached: null, consumedUnavailableReason: "volume_not_measured_on_channel" }, pipes: null });
+    expect(verdict).toMatchObject({ run: false, kind: "unreadable" });
+    expect(errors.mock.calls.flat().join(" ")).toContain("volume_not_measured_on_channel");
+    errors.mockRestore();
+  });
+
+  it("lets a REACTIVE pipe (billing's pipes[].mode) keep answering past a reached cap", async () => {
+    const reactive = { ...unit, featureSlug: "ai-meeting-booking", legKey: REACTIVE };
+    const { verdict } = await withCaps(
+      { stated: true, maxBudget: budget("1000", "1200", true), maxVolume: null, pipes: [{ pipeId: "p", channelSlug: "ai-meeting-booking", legKey: REACTIVE, mode: "reactive", campaignIds: [] }] },
+      true,
+      reactive,
+    );
+    expect(verdict).toEqual({ run: true, pace: { spentCents: 0, ceilingCents: 1 } });
+  });
+
+  it("holds every unit when billing cannot be read (fail-closed)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { verdict } = await withCaps({}, false);
+    expect(verdict).toMatchObject({ run: false, kind: "unreadable", reason: "Sales funnel caps unavailable" });
+    errors.mockRestore();
   });
 
   it("is never funded by the per-(offer, leg, channel) ceiling of the pre-funnel model", async () => {

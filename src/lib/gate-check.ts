@@ -10,7 +10,7 @@ import { fetchCampaignSplitToday, isSplitCeiling, splitPartReached, SPLIT_GATE_R
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { globalSalesPotBlock } from "./global-sales-pot.js";
 import { salesItemsGate } from "./sales-items-pace.js";
-import { salesFunnelUnitMoney } from "./sales-funnel-campaigns.js";
+import { salesFunnelUnitMoney, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
 
 // THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
 // hours here against fifteen minutes there, and that gap is a full stop: the sweep re-fires a
@@ -141,12 +141,18 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // 2b. A SALES FUNNEL unit spends only what its funnel's caps allow (lib/sales-funnel-campaigns.ts).
   // Asked BEFORE every pre-funnel money path below (per-pipe ceiling, items, global pot, brand
   // budget), none of which is its money. Fail-CLOSED, as everywhere else.
-  if (campaign.salesFunnelCampaignId) {
-    const verdict = await salesFunnelUnitMoney({
+  const paidByCaps = !!campaign.salesFunnelCampaignId;
+  if (paidByCaps) {
+    const verdict = await salesFunnelUnitMoney(salesFunnelUnitRef({
       id: campaign.campaignId,
+      orgId: campaign.orgId,
+      brandId: campaign.brandIds[0] ?? (campaign.brandId || null),
+      offerId: campaign.offerId,
+      featureSlug: campaign.featureSlug ?? null,
+      legKey: campaign.legKey,
       salesFunnelCampaignId: campaign.salesFunnelCampaignId,
       salesFunnelId: campaign.salesFunnelId ?? null,
-    });
+    }));
     if (!verdict.run) {
       return { allowed: false, reason: verdict.reason, reasonDetail: verdict.detail, nextRunAt: verdict.nextRunAt };
     }
@@ -245,7 +251,9 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // ITEMS mode (2026-10-04, see sales-items.ts): a brand holding a subscriber's monthly campaign
   // budgets paces each campaign on ITS item alone (the per-campaign ceiling an upper
   // bound), and the global pot is gone for it. Every other brand takes the path below, unchanged.
-  const itemsGate = isSalesFeature
+  // A funnel-paid unit skips every pre-funnel money path below (items, own/per-pipe ceiling,
+  // brand budget, global pot): its funnel's caps, read in 2b, are its money.
+  const itemsGate = isSalesFeature && !paidByCaps
     ? await salesItemsGate(
         {
           id: campaign.campaignId,
@@ -263,7 +271,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     if (itemsGate.block) {
       return { allowed: false, reason: itemsGate.block.reason, nextRunAt: itemsGate.block.nextRunAt };
     }
-  } else if (isSalesFeature) {
+  } else if (isSalesFeature && !paidByCaps) {
     if (campaign.dailyBudgetCents !== null) {
       // (a) Campaign's OWN daily budget vs its OWN committed spend today.
       const campaignSpend = await getChannelStatsBudget({

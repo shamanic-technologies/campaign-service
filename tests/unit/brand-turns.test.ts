@@ -267,16 +267,36 @@ describe("planBrandTurns", () => {
   });
 
   it("HOLDS a SALES FUNNEL unit on its funnel's money, without reading the brand's per-pipe ceilings", async () => {
-    // The brand funds this pipe generously in the pre-funnel model; a unit never runs on that money.
-    mockCampaignBudgets([{ legKey: ENTRY_LEG, dailyBudgetCents: "5000" }], "5000");
-    mockSpend("0");
+    // The brand funds this pipe generously in the pre-funnel model; a unit never runs on that money:
+    // its funnel states no max budget at billing, so it waits.
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ stated: false, maxBudget: null, maxVolume: null, pipes: null }) });
     const now = new Date("2026-10-10T10:00:00Z");
     const deferred = await planBrandTurns(
-      [claimed({ id: "unit-1", salesFunnelCampaignId: "funnel-campaign-1", salesFunnelId: "f@x" })],
+      [claimed({ id: "unit-1", offerId: OFFER, salesFunnelCampaignId: "funnel-campaign-1", salesFunnelId: "f@x" })],
       now,
     );
     expect(deferred.get("unit-1")?.getTime()).toBe(now.getTime() + 10 * 60_000);
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(String(mockFetch.mock.calls[0][0])).toContain("/sales-funnels/f%40x/caps");
+  });
+
+  it("gives a FUNDED sales funnel unit its cohort's turn on its funnel's consumed / max budget", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        stated: true,
+        maxBudget: { amountCents: "1000", period: "weekly", consumedCents: "100", reached: false, consumedUnavailableReason: null },
+        maxVolume: null,
+        pipes: null,
+      }),
+    });
+    mockListRuns.mockResolvedValue({ runs: [] });
+    mockFindMany.mockResolvedValue([]);
+    const deferred = await planBrandTurns([
+      claimed({ id: "unit-2", offerId: OFFER, salesFunnelCampaignId: "funnel-campaign-2", salesFunnelId: "f@y" }),
+    ]);
+    expect(deferred.has("unit-2")).toBe(false);
   });
 
   it("a brand with ONE funded pot and no per-campaign ceilings runs on it", async () => {

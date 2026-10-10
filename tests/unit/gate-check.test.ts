@@ -174,18 +174,71 @@ describe("Gate Check", () => {
     expect(result.allowed).toBe(true);
   });
 
-  it("refuses a SALES FUNNEL unit on its funnel's money before any pre-funnel money path is read", async () => {
-    const result = await runGateChecks({
-      ...makeCampaign({ dailyBudgetCents: 5000 } as never),
+  describe("a SALES FUNNEL unit is paid by its funnel's caps (billing), nothing else", () => {
+    const unitInput = (featureSlug = "sales-cold-email-outreach") => ({
+      ...makeCampaign({ dailyBudgetCents: 5000, featureSlug } as never),
+      offerId: "offer-1",
+      legKey: "lead_found_to_conversation",
       salesFunnelCampaignId: "funnel-campaign-1",
       salesFunnelId: "f@x",
     });
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toBe("Sales funnel not funded");
-    expect(result.reasonDetail).toContain("funnel-campaign-1");
-    expect(result.nextRunAt).toBeInstanceOf(Date);
-    expect(mockItemsGate).not.toHaveBeenCalled();
-    expect(mockGetStatsBudget).not.toHaveBeenCalled();
+    const capsAnswer = (body: Record<string, unknown>) =>
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ pipes: null, maxVolume: null, ...body }) });
+    const budget = (consumedCents: string | null, reached: boolean | null) => ({
+      amountCents: "1000", period: "weekly", consumedCents, reached,
+      consumedUnavailableReason: consumedCents === null ? "runs_unavailable" : null, consumedUnavailableDetail: null,
+    });
+
+    beforeEach(async () => {
+      process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+      process.env.BILLING_SERVICE_API_KEY = "k";
+      (await import("../../src/lib/sales-funnel-campaigns.js")).resetSalesFunnelCapsCache();
+    });
+
+    it("refuses when no max budget is stated, before any pre-funnel money path is read", async () => {
+      capsAnswer({ stated: false, maxBudget: null });
+      const result = await runGateChecks(unitInput());
+      expect(result).toMatchObject({ allowed: false, reason: "Sales funnel not funded" });
+      expect(result.reasonDetail).toContain("funnel-campaign-1");
+      expect(mockFetch.mock.calls[0][0]).toContain("/internal/brands/");
+      expect(mockFetch.mock.calls[0][0]).toContain("/sales-funnels/f%40x/caps");
+      expect(mockItemsGate).not.toHaveBeenCalled();
+    });
+
+    it("refuses a proactive pipe once the max budget is reached (new first touches stop)", async () => {
+      capsAnswer({ stated: true, maxBudget: budget("1000", true) });
+      expect(await runGateChecks(unitInput())).toMatchObject({ allowed: false, reason: "Sales funnel max budget reached" });
+    });
+
+    it("refuses a proactive pipe when the consumption cannot be measured (fail-closed, never 'not reached')", async () => {
+      capsAnswer({ stated: true, maxBudget: budget(null, null) });
+      expect(await runGateChecks(unitInput())).toMatchObject({ allowed: false, reason: "Sales funnel budget unavailable" });
+    });
+
+    it("lets a REACTIVE pipe answer even when the cap is reached (follow-ups go on)", async () => {
+      capsAnswer({
+        stated: true,
+        maxBudget: budget("1000", true),
+        pipes: [{ pipeId: "ai-meeting-booking|x", channelSlug: "ai-meeting-booking", legKey: "conversation_to_meeting_booked", mode: "reactive", campaignIds: [] }],
+      });
+      const input = { ...unitInput("ai-meeting-booking"), legKey: "conversation_to_meeting_booked" };
+      const result = await runGateChecks(input);
+      expect(result.allowed).toBe(true);
+      // No pre-funnel money path ran for it.
+      expect(mockItemsGate).not.toHaveBeenCalled();
+      expect(mockPotBlock).not.toHaveBeenCalled();
+    });
+
+    it("runs a proactive pipe under its caps, reading none of the pre-funnel money", async () => {
+      capsAnswer({ stated: true, maxBudget: budget("400", false), maxVolume: { count: 100, period: "monthly", unit: "first_contacts", consumed: 10, reached: false, consumedUnavailableReason: null } });
+      expect((await runGateChecks(unitInput())).allowed).toBe(true);
+      expect(mockGetStatsBudget).not.toHaveBeenCalled();
+    });
+
+    it("refuses when billing cannot be read", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
+      expect(await runGateChecks(unitInput())).toMatchObject({ allowed: false, reason: "Sales funnel caps unavailable" });
+    });
   });
 
   describe("Stale run cleanup", () => {

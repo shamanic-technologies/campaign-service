@@ -276,7 +276,10 @@ describe("sales funnel campaigns (brand x offer x sales funnel, one unit per pip
       expect(mockExecute).toHaveBeenCalledTimes(1);
     });
 
-    it("holds every unit as unfunded while billing serves no funnel cap", async () => {
+    it("holds every unit while billing cannot answer for the funnel's caps (fail-closed)", async () => {
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const billingUrl = process.env.BILLING_SERVICE_URL;
+      delete process.env.BILLING_SERVICE_URL;
       await twoFunnels();
       const out = await runCampaignsInScope(
         { orgId: ORG, brandId: BRAND, offerId: OFFER },
@@ -284,8 +287,10 @@ describe("sales funnel campaigns (brand x offer x sales funnel, one unit per pip
         "test event",
       );
       expect(out.triggered).toEqual([]);
-      expect(out.skipped.map((s) => s.reason)).toEqual([STEP_TRIGGER_SKIPS.UNFUNDED, STEP_TRIGGER_SKIPS.UNFUNDED]);
+      expect(out.skipped.map((s) => s.reason)).toEqual([STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAP, STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAP]);
       expect(mockExecute).not.toHaveBeenCalled();
+      if (billingUrl !== undefined) process.env.BILLING_SERVICE_URL = billingUrl;
+      errors.mockRestore();
     });
   });
 });

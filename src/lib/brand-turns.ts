@@ -10,7 +10,7 @@ import { buildProvisioningIdentity } from "./provisioning-identity.js";
 import { isOutboundSalesFeature, isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { acquisitionChannelForFeature } from "./campaign-identity.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
-import { salesFunnelUnitMoney } from "./sales-funnel-campaigns.js";
+import { salesFunnelUnitMoney, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
 import { isSourcedChannel } from "./source-campaigns.js";
 import { sourceCampaignsFeeding } from "./source-campaign-store.js";
 import { adoptOfferForPairSafely } from "./campaign-offer-adoption.js";
@@ -167,21 +167,37 @@ export async function planBrandTurns(
   // Only the sales family is funded per campaign by billing. Everything else keeps its own pacing
   // and its own per-campaign serialization, untouched.
   const groups = new Map<string, ClaimedSalesCampaign[]>();
+  // Funded SALES FUNNEL units, per (org, brand): planned after the pre-funnel campaigns, on the same
+  // cohort rule (one run in flight per brand cohort), ranked on their funnel's consumed / max budget.
+  const unitGroups = new Map<string, Array<{ campaign: ClaimedSalesCampaign; candidate: TurnCandidate }>>();
   for (const c of claimed) {
     if (!isSalesFamilyFeature(c.featureSlug)) continue;
     // A SALES FUNNEL unit's money is its funnel's caps (lib/sales-funnel-campaigns.ts), never the
     // brand's per-pipe ceilings, items or pot this planner reads: a unit its funnel does not fund is
-    // held here, on the funding cadence, and never enters the brand's turn.
+    // held here, on the funding cadence, and never enters the pre-funnel turn.
     if (c.salesFunnelCampaignId) {
-      const verdict = await salesFunnelUnitMoney(
-        { id: c.id, salesFunnelCampaignId: c.salesFunnelCampaignId, salesFunnelId: c.salesFunnelId ?? null },
-        now,
-      );
-      if (!verdict.run) {
-        deferred.set(c.id, verdict.nextRunAt);
-        holds.push({ campaign: c, reason: "unfunded", detail: verdict.detail, nextRunAt: verdict.nextRunAt });
-        continue;
+      try {
+        const verdict = await salesFunnelUnitMoney(salesFunnelUnitRef(c), now);
+        if (!verdict.run) {
+          deferred.set(c.id, verdict.nextRunAt);
+          holds.push({
+            campaign: c,
+            reason: verdict.kind === "cap_reached" ? "daily_ceiling_reached" : verdict.kind === "unreadable" ? "budgets_unreadable" : "unfunded",
+            detail: verdict.detail,
+            nextRunAt: verdict.nextRunAt,
+          });
+          continue;
+        }
+        const key = `${c.orgId}::${c.brandIds?.[0] ?? ""}`;
+        const bucket = unitGroups.get(key) ?? [];
+        bucket.push({ campaign: c, candidate: { campaignId: c.id, legKey: c.legKey ?? "", ...verdict.pace } });
+        unitGroups.set(key, bucket);
+      } catch (err) {
+        const heldAt = new Date(now.getTime() + FUNDING_RECHECK_MS);
+        deferred.set(c.id, heldAt);
+        holds.push({ campaign: c, reason: "planning_failed", detail: `Campaign not run — its sales funnel's money could not be judged: ${err instanceof Error ? err.message : String(err)}`, nextRunAt: heldAt });
       }
+      continue;
     }
     const brandId = c.brandIds?.[0];
     if (!brandId) continue;
@@ -212,11 +228,62 @@ export async function planBrandTurns(
     }
   }
 
+  for (const [key, members] of unitGroups) {
+    try {
+      await planSalesFunnelUnits(key, members, claimed, now, deferred, holds);
+    } catch (err) {
+      console.warn(`[campaign-service] turn planning failed for sales funnel units of ${key} — holding them:`, err);
+      const heldAt = new Date(now.getTime() + FUNDING_RECHECK_MS);
+      for (const { campaign } of members) {
+        deferred.set(campaign.id, heldAt);
+        holds.push({ campaign, reason: "planning_failed", detail: `Campaign not run — turn planning failed: ${err instanceof Error ? err.message : String(err)}`, nextRunAt: heldAt });
+      }
+    }
+  }
+
   // Fail-SOFT and AFTER the planning: the holds are a statement about decisions already made, so
   // an unreportable one must never change whether a campaign runs.
   await reportTurnHolds(holds);
 
   return deferred;
+}
+
+/**
+ * The funded SALES FUNNEL units of one (org, brand): same cohort serialization as every sales
+ * campaign (at most one run in flight per brand cohort), the turn to the lowest consumed / max
+ * budget (a reactive pipe ranks first). A cohort a pre-funnel campaign of the brand just took this
+ * tick is busy: its units wait the ordinary turn defer.
+ */
+async function planSalesFunnelUnits(
+  key: string,
+  members: Array<{ campaign: ClaimedSalesCampaign; candidate: TurnCandidate }>,
+  claimed: ClaimedSalesCampaign[],
+  now: Date,
+  deferred: Map<string, Date>,
+  holds: TurnHold[],
+): Promise<void> {
+  const orgId = members[0].campaign.orgId;
+  const brandId = members[0].campaign.brandIds?.[0];
+  if (!brandId) return;
+  const byId = new Map(members.map((m) => [m.campaign.id, m.campaign]));
+  const firedLegacyCohorts = new Set(
+    claimed
+      .filter((c) => !c.salesFunnelCampaignId && `${c.orgId}::${c.brandIds?.[0] ?? ""}` === key)
+      .filter((c) => isSalesFamilyFeature(c.featureSlug) && !deferred.has(c.id))
+      .map((c) => serializationCohort(c.featureSlug)),
+  );
+  const cohorts = new Map<string, TurnCandidate[]>();
+  for (const { campaign, candidate } of members) {
+    const cohort = serializationCohort(campaign.featureSlug);
+    cohorts.set(cohort, [...(cohorts.get(cohort) ?? []), candidate]);
+  }
+  for (const [cohort, candidates] of cohorts) {
+    if (firedLegacyCohorts.has(cohort)) {
+      for (const c of candidates) deferred.set(c.campaignId, new Date(now.getTime() + TURN_DEFER_MS));
+      continue;
+    }
+    await planOneCohort(orgId, brandId, cohort, candidates, byId, now, deferred, holds);
+  }
 }
 
 async function planOneBrand(

@@ -5,7 +5,7 @@ import { campaigns, type Campaign } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { sameLeg } from "./leg-identity.js";
 import { campaignFunding } from "./campaign-funding.js";
-import { isSalesFunnelUnit, orderForSharedPipes, pipeKey, salesFunnelUnitMoney, sharedSalesFunnelPipes } from "./sales-funnel-campaigns.js";
+import { isSalesFunnelUnit, orderForSharedPipes, pipeKey, salesFunnelUnitMoney, salesFunnelUnitRef, sharedSalesFunnelPipes } from "./sales-funnel-campaigns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
@@ -108,6 +108,11 @@ export const STEP_TRIGGER_SKIPS = {
    * another live campaign on it already answered this event. One event is worked once.
    */
   PIPE_HANDLED_BY_ANOTHER_CAMPAIGN: "pipe_handled_by_another_campaign",
+  /**
+   * SALES FUNNELS: the unit's funnel cap is reached, or billing could not measure it (fail-closed).
+   * Only a proactive pipe is ever held on it; the lead is not dropped.
+   */
+  SALES_FUNNEL_CAP: "sales_funnel_cap",
 } as const;
 
 export type StepTriggerSkipReason = (typeof STEP_TRIGGER_SKIPS)[keyof typeof STEP_TRIGGER_SKIPS];
@@ -318,9 +323,9 @@ export async function runCampaignsInScope(
 
     const moneyIdentity = { orgId: req.orgId, userId: campaign.createdByUserId, campaignId: campaign.id, brandId: brandIds[0] };
     // A SALES FUNNEL unit's money is its funnel's caps, and nothing else (lib/sales-funnel-campaigns.ts).
-    const unitMoney = isSalesFunnelUnit(campaign) ? await salesFunnelUnitMoney(campaign, now) : null;
+    const unitMoney = isSalesFunnelUnit(campaign) ? await salesFunnelUnitMoney(salesFunnelUnitRef(campaign), now) : null;
     if (unitMoney && !unitMoney.run) {
-      skip(STEP_TRIGGER_SKIPS.UNFUNDED, unitMoney.detail);
+      skip(unitMoney.kind === "unfunded" ? STEP_TRIGGER_SKIPS.UNFUNDED : STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAP, unitMoney.detail);
       continue;
     }
     const salesBudget = brandIds.length === 1 && !unitMoney ? await fetchBrandSalesBudget(brandIds[0], moneyIdentity) : null;
