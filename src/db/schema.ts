@@ -116,6 +116,15 @@ export const campaigns = pgTable(
     // Stated by the creator or NULL; required at create for the sales family.
     legKey: text("leg_key"),
 
+    // The SALES FUNNEL this campaign is one pipe of (owner 2026-10-10, lib/sales-funnel-campaigns.ts):
+    // features-service's sales funnel id (its `combinationKey`, carried verbatim, never parsed) and
+    // the funnel-level campaign (`sales_funnel_campaigns.id`) that owns this row. A row naming them
+    // is a UNIT: it runs like any campaign, but only its funnel campaign is run or paused, and its
+    // money is the funnel's. NULL on both = a (leg x channel) campaign of the pre-funnel model,
+    // served and run exactly as before. Written once at birth, never moved.
+    salesFunnelId: text("sales_funnel_id"),
+    salesFunnelCampaignId: text("sales_funnel_campaign_id"),
+
     // Volume limit (optional, total leads across all runs)
     maxLeads: integer("max_leads"),
 
@@ -171,20 +180,27 @@ export const campaigns = pgTable(
     index("idx_campaigns_org_leg")
       .on(table.orgId, table.legKey)
       .where(sql`${table.legKey} is not null`),
+    // Serves "which units does this funnel campaign own" (every funnel status move and read).
+    index("idx_campaigns_sales_funnel_campaign")
+      .on(table.salesFunnelCampaignId)
+      .where(sql`${table.salesFunnelCampaignId} is not null`),
     // Serves the resume sweep's only read — the stopped campaigns that ran out of people to
     // contact. Partial so it covers that narrow population and not the whole stopped history.
     index("idx_campaigns_resumable")
       .on(table.stopReason, table.updatedAt)
       .where(sql`${table.status} = 'stopped' and ${table.stopReason} is not null`),
-    // A campaign is unique on (org, brand, OFFER, LEG, acquisition channel) — migration 0058.
-    // Scoped to `ongoing`: a stopped row is history, not a competitor for the brand's turn.
-    // `coalesce(..., '')` is load-bearing — Postgres treats NULLs as distinct, so without it a
-    // brand could grow unlimited offer-less or leg-less campaigns on one channel.
-    uniqueIndex("uniq_campaigns_org_brand_offer_leg_channel")
+    // A campaign is unique on (org, brand, OFFER, SALES FUNNEL, LEG, acquisition channel) —
+    // migration 0058, widened by 0066 with the sales funnel (owner 2026-10-10: a pipe two funnels
+    // share runs once per funnel). A pre-funnel campaign states no funnel (`''`), so its identity
+    // is exactly what it was. Scoped to `ongoing`: a stopped row is history, not a competitor for
+    // the brand's turn. `coalesce(..., '')` is load-bearing — Postgres treats NULLs as distinct, so
+    // without it a brand could grow unlimited offer-less or leg-less campaigns on one channel.
+    uniqueIndex("uniq_campaigns_org_brand_offer_sales_funnel_leg_channel")
       .on(
         table.orgId,
         table.brandId,
         sql`coalesce(${table.offerId}, '')`,
+        sql`coalesce(${table.salesFunnelId}, '')`,
         sql`coalesce(${table.legKey}, '')`,
         table.acquisitionChannel,
       )
@@ -196,6 +212,52 @@ export const campaigns = pgTable(
 
 export type Campaign = typeof campaigns.$inferSelect;
 export type NewCampaign = typeof campaigns.$inferInsert;
+
+// SALES FUNNEL CAMPAIGNS (owner 2026-10-10, migration 0066, lib/sales-funnel-campaigns.ts).
+//
+// A sales funnel is a SET of pipes (one per leg x channel of a sales path, from Start to Paid
+// client), and a campaign on it is brand x offer x sales funnel. This row is that campaign: the
+// ONE thing a person runs or pauses. It owns one `campaigns` row per pipe (its units, linked by
+// `campaigns.sales_funnel_campaign_id`), which run independently of each other exactly as every
+// campaign always has. Its status and every unit's status move together, in one transaction
+// (lib/campaign-status-history.ts); a unit is never run or paused on its own.
+//
+// Unique on the identity WHATEVER the status: a funnel campaign that exists is never created again
+// (owner rule 2), it is handed back.
+export const salesFunnelCampaigns = pgTable(
+  "sales_funnel_campaigns",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    orgId: text("org_id").notNull(),
+    brandId: text("brand_id").notNull(),
+    // brand-service's offer UUID, carried never derived.
+    offerId: text("offer_id").notNull(),
+    // features-service's sales funnel id (`combinationKey`), carried verbatim.
+    salesFunnelId: text("sales_funnel_id").notNull(),
+    // The funnel's NAME as features-service stated it at creation (display only; the id is the key).
+    salesFunnelName: text("sales_funnel_name").notNull(),
+    // 'ongoing' | 'stopped' — the same vocabulary as `campaigns.status`.
+    status: text("status").notNull(),
+    // STOP_REASONS (lib/stop-reason.ts), the same as on its units. NULL while ongoing.
+    stopReason: text("stop_reason"),
+    createdByUserId: text("created_by_user_id"),
+    parentRunId: text("parent_run_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uniq_sales_funnel_campaigns_identity").on(
+      table.orgId,
+      table.brandId,
+      table.offerId,
+      table.salesFunnelId,
+    ),
+    index("idx_sales_funnel_campaigns_org_status").on(table.orgId, table.status),
+  ],
+);
+
+export type SalesFunnelCampaign = typeof salesFunnelCampaigns.$inferSelect;
+export type NewSalesFunnelCampaign = typeof salesFunnelCampaigns.$inferInsert;
 
 // Brand pause transition log — a CLOSED record of the flag era.
 //

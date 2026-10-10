@@ -54,6 +54,10 @@ import {
   AnsweringCampaignResponse,
   AnsweringCampaignsBody,
   AnsweringCampaignsResponse,
+  CreateSalesFunnelCampaignBody,
+  UpdateSalesFunnelCampaignBody,
+  SalesFunnelCampaignsQuery,
+  SalesFunnelCampaignSchema,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -173,6 +177,73 @@ registry.registerPath({
     400: { description: "Refused — the reason is customer-facing English", content: { "application/json": { schema: ErrorResponse } } },
     409: { description: "Refused — nothing funds this pair, or nothing can run the channel yet", content: { "application/json": { schema: ErrorResponse } } },
     502: { description: "A sibling service could not be read — try again", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+const SALES_FUNNEL_CAMPAIGNS_DOC =
+  "SALES FUNNEL CAMPAIGNS (owner 2026-10-10, chat first). A campaign is brand x offer x SALES FUNNEL (features-service's sales funnel id, `GET /internal/catalogue/sales-funnels` rows[].id, its combinationKey, carried verbatim). It owns one UNIT per pipe of the funnel (`<channel slug>|<leg key>`): an ordinary campaign row stating `salesFunnelId` + `salesFunnelCampaignId`, run independently like every campaign (proactive pipes prospect, reactive pipes answer). Uniqueness is brand x offer x sales funnel x channel x leg: a pipe two funnels share is two units, one per funnel. A sourcing pipe (Start -> Lead found, a lead-source origin) is a SOURCE campaign unit: no workflow, its origin is ON for the offer while the funnel runs. A funnel with no sourcing pipe gets the offer's default lead source on its start, as every outreach start does. "
+  + "RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH/DELETE /campaigns/{id} refuse a unit's status or identity with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. "
+  + "SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. "
+  + "MONEY: a unit's money is its funnel's caps at billing (max budget + max volume, one-off / daily / weekly / monthly, keyed brand x offer x sales funnel), never a per-(offer, leg, channel) ceiling or the brand pot. Until billing serves those caps every unit is HELD as unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`) and spends nothing. Billing is not signalled per unit (no plan money moves). "
+  + "Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had.";
+
+registry.registerPath({
+  method: "post",
+  path: "/sales-funnel-campaigns",
+  tags: ["Sales funnel campaigns"],
+  summary: "Launch a sales funnel as one campaign (brand x offer x sales funnel)",
+  description: SALES_FUNNEL_CAMPAIGNS_DOC + " Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | pipe_not_runnable; 409 no_workflow | payment_declined | no_payment_method; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: CreateSalesFunnelCampaignBody } } } },
+  responses: {
+    201: { description: "Created (and started when status=ongoing)", content: { "application/json": { schema: z.object({ salesFunnelCampaign: SalesFunnelCampaignSchema, created: z.boolean(), started: z.boolean() }) } } },
+    200: { description: "This identity already had a funnel campaign: handed back", content: { "application/json": { schema: z.object({ salesFunnelCampaign: SalesFunnelCampaignSchema, created: z.boolean(), started: z.boolean() }) } } },
+    400: { description: "Refused", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string().optional() }) } } },
+    409: { description: "Refused", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), blockedReason: z.string().optional() }) } } },
+    502: { description: "A sibling could not be read — try again", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string() }) } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/sales-funnel-campaigns",
+  tags: ["Sales funnel campaigns"],
+  summary: "List the org's sales funnel campaigns, each with its units",
+  description: SALES_FUNNEL_CAMPAIGNS_DOC + " Header x-org-id. Filters are exact matches.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { query: SalesFunnelCampaignsQuery },
+  responses: {
+    200: { description: "Funnel campaigns, newest first", content: { "application/json": { schema: z.object({ salesFunnelCampaigns: z.array(SalesFunnelCampaignSchema) }) } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/sales-funnel-campaigns/{id}",
+  tags: ["Sales funnel campaigns"],
+  summary: "One sales funnel campaign with its units",
+  description: "Header x-org-id. The units' campaign ids are what spend, outcomes and runs are filed under: sum them for the funnel.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: "The funnel campaign", content: { "application/json": { schema: z.object({ salesFunnelCampaign: SalesFunnelCampaignSchema }) } } },
+    404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/sales-funnel-campaigns/{id}",
+  tags: ["Sales funnel campaigns"],
+  summary: "Run or pause the whole sales funnel",
+  description: "Body {status: activate | stop}. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { params: z.object({ id: z.string() }), body: { content: { "application/json": { schema: UpdateSalesFunnelCampaignBody } } } },
+  responses: {
+    200: { description: "The funnel campaign after the move", content: { "application/json": { schema: z.object({ salesFunnelCampaign: SalesFunnelCampaignSchema }) } } },
+    400: { description: "Missing headers", content: { "application/json": { schema: ErrorResponse } } },
+    404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "Payment hold", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), blockedReason: z.string().optional() }) } } },
   },
 });
 

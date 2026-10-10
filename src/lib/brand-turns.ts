@@ -10,6 +10,7 @@ import { buildProvisioningIdentity } from "./provisioning-identity.js";
 import { isOutboundSalesFeature, isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { acquisitionChannelForFeature } from "./campaign-identity.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
+import { salesFunnelUnitMoney } from "./sales-funnel-campaigns.js";
 import { isSourcedChannel } from "./source-campaigns.js";
 import { sourceCampaignsFeeding } from "./source-campaign-store.js";
 import { adoptOfferForPairSafely } from "./campaign-offer-adoption.js";
@@ -78,6 +79,9 @@ export interface ClaimedSalesCampaign {
   offerId?: string | null;
   /** The single LEG this campaign was bought for — features-service's identifier, never derived. */
   legKey?: string | null;
+  /** Set on a SALES FUNNEL unit (lib/sales-funnel-campaigns.ts): its money is its funnel's caps. */
+  salesFunnelCampaignId?: string | null;
+  salesFunnelId?: string | null;
 }
 
 /** One sales campaign in the running to take the brand's next turn. */
@@ -165,6 +169,20 @@ export async function planBrandTurns(
   const groups = new Map<string, ClaimedSalesCampaign[]>();
   for (const c of claimed) {
     if (!isSalesFamilyFeature(c.featureSlug)) continue;
+    // A SALES FUNNEL unit's money is its funnel's caps (lib/sales-funnel-campaigns.ts), never the
+    // brand's per-pipe ceilings, items or pot this planner reads: a unit its funnel does not fund is
+    // held here, on the funding cadence, and never enters the brand's turn.
+    if (c.salesFunnelCampaignId) {
+      const verdict = await salesFunnelUnitMoney(
+        { id: c.id, salesFunnelCampaignId: c.salesFunnelCampaignId, salesFunnelId: c.salesFunnelId ?? null },
+        now,
+      );
+      if (!verdict.run) {
+        deferred.set(c.id, verdict.nextRunAt);
+        holds.push({ campaign: c, reason: "unfunded", detail: verdict.detail, nextRunAt: verdict.nextRunAt });
+        continue;
+      }
+    }
     const brandId = c.brandIds?.[0];
     if (!brandId) continue;
     const key = `${c.orgId}::${brandId}`;

@@ -1,6 +1,12 @@
 import { and, eq, inArray, type SQL } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaigns, campaignStatusTransitions, type NewCampaignStatusTransition } from "../db/schema.js";
+import {
+  campaigns,
+  campaignStatusTransitions,
+  salesFunnelCampaigns,
+  type NewCampaignStatusTransition,
+  type SalesFunnelCampaign,
+} from "../db/schema.js";
 import { signalMissionStatusChanged, type StatusActor } from "./mission-status-notification.js";
 import { STOP_REASONS } from "./stop-reason.js";
 
@@ -67,6 +73,13 @@ export const TRANSITION_SOURCES = {
    * while a person starts an outreach campaign; never by a tick.
    */
   SOURCE_FOLLOWS_OUTREACH: "source_follows_outreach",
+  /**
+   * A SALES FUNNEL campaign moved, and every unit (pipe) of it with it, in one transaction (owner
+   * 2026-10-10, lib/sales-funnel-campaigns.ts): its birth, its run, its pause. A person's act, but
+   * NOT signalled to billing per pipe: a funnel's money is billing's funnel caps, so moving a
+   * subscriber's per-pipe plan money on a unit's move would be a money change nobody asked for.
+   */
+  SALES_FUNNEL: "sales_funnel",
   /** The payment-hold sweep: billing cannot charge the org's card (lib/payment-hold-sweep.ts). */
   PAYMENT_HOLD: "payment_hold",
   /** Migration 0057 opened the record by observing the PRESENT. Never written by the runtime. */
@@ -305,7 +318,7 @@ export async function stopOrgCampaignsWithHistory(
     .update(campaigns)
     .set({ status: "stopped", stopReason: reason, nextRunAt: null, updatedAt: new Date() })
     .where(predicate)
-    .returning({ id: campaigns.id });
+    .returning({ id: campaigns.id, salesFunnelCampaignId: campaigns.salesFunnelCampaignId });
 
   const statusById = new Map(before.map((c) => [c.id, c.status]));
   await tx.insert(campaignStatusTransitions).values(
@@ -319,7 +332,181 @@ export async function stopOrgCampaignsWithHistory(
     })),
   );
 
-  return updated;
+  // A SALES FUNNEL campaign and its units are one status (lib/sales-funnel-campaigns.ts): when an
+  // org-wide stop reaches a unit, the funnel campaign that owns it stops in the same transaction,
+  // with the same reason, so a funnel can never read "ongoing" over stopped pipes.
+  const parentIds = [
+    ...new Set(updated.map((c) => c.salesFunnelCampaignId).filter((id): id is string => !!id)),
+  ];
+  if (parentIds.length > 0) {
+    await tx
+      .update(salesFunnelCampaigns)
+      .set({ status: "stopped", stopReason: reason, updatedAt: new Date() })
+      .where(and(
+        eq(salesFunnelCampaigns.orgId, orgId),
+        eq(salesFunnelCampaigns.status, "ongoing"),
+        inArray(salesFunnelCampaigns.id, parentIds),
+      ));
+  }
+
+  return updated.map(({ id }) => ({ id }));
+}
+
+// === Sales funnel campaigns (owner 2026-10-10, lib/sales-funnel-campaigns.ts) ===
+
+/** One unit to be born with its funnel campaign: a pipe, already resolved. */
+export interface SalesFunnelUnitBirth {
+  featureSlug: string;
+  legKey: string;
+  workflowSlug: string | null;
+  name: string;
+  acquisitionChannel: string;
+}
+
+/**
+ * Called inside the transaction for every unit that is (now) ongoing, AFTER its status is written:
+ * the route's hook for what a person's start brings with it (an offer's lead sources). Kept as a
+ * callback because that module imports this one.
+ */
+export type OnUnitStarted = (tx: DbTransaction, unit: CampaignRow) => Promise<void>;
+
+/**
+ * A SALES FUNNEL campaign's BIRTH: the funnel row, one `campaigns` row per pipe, and each unit's
+ * birth transition (source `sales_funnel`), in ONE transaction. Every unit is born in the funnel's
+ * status: a funnel created stopped starts nothing.
+ */
+export async function insertSalesFunnelCampaignWithUnits(input: {
+  /** Minted by the caller so the units' names can carry it (names are unique per org). */
+  id: string;
+  orgId: string;
+  brandId: string;
+  offerId: string;
+  salesFunnelId: string;
+  salesFunnelName: string;
+  status: "ongoing" | "stopped";
+  createdByUserId: string | null;
+  parentRunId: string | null;
+  units: SalesFunnelUnitBirth[];
+  onUnitStarted?: OnUnitStarted;
+}): Promise<{ salesFunnelCampaign: SalesFunnelCampaign; units: CampaignRow[] }> {
+  return db.transaction(async (tx) => {
+    const now = new Date();
+    const [parent] = await tx
+      .insert(salesFunnelCampaigns)
+      .values({
+        id: input.id,
+        orgId: input.orgId,
+        brandId: input.brandId,
+        offerId: input.offerId,
+        salesFunnelId: input.salesFunnelId,
+        salesFunnelName: input.salesFunnelName,
+        status: input.status,
+        stopReason: input.status === "stopped" ? STOP_REASONS.MANUAL : null,
+        createdByUserId: input.createdByUserId,
+        parentRunId: input.parentRunId,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+
+    const units = await tx
+      .insert(campaigns)
+      .values(input.units.map((u) => ({
+        orgId: input.orgId,
+        createdByUserId: input.createdByUserId,
+        parentRunId: input.parentRunId,
+        name: u.name,
+        workflowSlug: u.workflowSlug,
+        brandIds: [input.brandId],
+        brandId: input.brandId,
+        acquisitionChannel: u.acquisitionChannel,
+        featureSlug: u.featureSlug,
+        offerId: input.offerId,
+        legKey: u.legKey,
+        salesFunnelId: input.salesFunnelId,
+        salesFunnelCampaignId: parent.id,
+        featureInputs: null,
+        status: input.status,
+        stopReason: input.status === "stopped" ? STOP_REASONS.MANUAL : null,
+        // A unit with no DAG is never due; a stopped one is not claimed whatever this says.
+        nextRunAt: input.status === "ongoing" && u.workflowSlug ? now : null,
+        createdAt: now,
+        updatedAt: now,
+      })))
+      .returning();
+
+    await tx.insert(campaignStatusTransitions).values(
+      units.map((u) => campaignBirthTransition(u.id, input.orgId, u.status, TRANSITION_SOURCES.SALES_FUNNEL)),
+    );
+    if (input.status === "ongoing" && input.onUnitStarted) {
+      for (const unit of units) await input.onUnitStarted(tx, unit);
+    }
+    return { salesFunnelCampaign: parent, units };
+  });
+}
+
+/**
+ * Run or pause a SALES FUNNEL campaign: the funnel row and EVERY unit move together, each unit's
+ * transition recorded (source `sales_funnel`), in ONE transaction. A unit already in the target
+ * status gets no transition (nothing moved). Returns null when the funnel campaign is not the org's.
+ */
+export async function setSalesFunnelCampaignStatus(write: {
+  salesFunnelCampaignId: string;
+  orgId: string;
+  toStatus: "ongoing" | "stopped";
+  reason: string | null;
+  onUnitStarted?: OnUnitStarted;
+}): Promise<{ salesFunnelCampaign: SalesFunnelCampaign; units: CampaignRow[]; moved: CampaignRow[] } | null> {
+  return db.transaction(async (tx) => {
+    const now = new Date();
+    const [parent] = await tx
+      .update(salesFunnelCampaigns)
+      .set({ status: write.toStatus, stopReason: write.reason, updatedAt: now })
+      .where(and(eq(salesFunnelCampaigns.id, write.salesFunnelCampaignId), eq(salesFunnelCampaigns.orgId, write.orgId)))
+      .returning();
+    if (!parent) return null;
+
+    const before = await tx
+      .select()
+      .from(campaigns)
+      .where(and(eq(campaigns.orgId, write.orgId), eq(campaigns.salesFunnelCampaignId, parent.id)));
+    const toMove = before.filter((u) => u.status !== write.toStatus);
+
+    const moved: CampaignRow[] = [];
+    for (const unit of toMove) {
+      const [row] = await tx
+        .update(campaigns)
+        .set({
+          status: write.toStatus,
+          stopReason: write.reason,
+          // Due now when it starts (the scheduler's planner decides whether it may spend); nothing
+          // due once stopped.
+          nextRunAt: write.toStatus === "ongoing" && unit.workflowSlug ? now : null,
+          updatedAt: now,
+        })
+        .where(eq(campaigns.id, unit.id))
+        .returning();
+      moved.push(row);
+    }
+    if (moved.length > 0) {
+      await tx.insert(campaignStatusTransitions).values(
+        moved.map((u) => ({
+          campaignId: u.id,
+          orgId: write.orgId,
+          fromStatus: toMove.find((b) => b.id === u.id)!.status,
+          toStatus: write.toStatus,
+          reason: write.reason,
+          source: TRANSITION_SOURCES.SALES_FUNNEL,
+        })),
+      );
+    }
+    if (write.toStatus === "ongoing" && write.onUnitStarted) {
+      for (const unit of moved) await write.onUnitStarted(tx, unit);
+    }
+    const movedById = new Map(moved.map((u) => [u.id, u]));
+    const units = before.map((u) => movedById.get(u.id) ?? u);
+    return { salesFunnelCampaign: parent, units, moved };
+  });
 }
 
 /**

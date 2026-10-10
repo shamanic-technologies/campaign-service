@@ -10,6 +10,7 @@ import { fetchCampaignSplitToday, isSplitCeiling, splitPartReached, SPLIT_GATE_R
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { globalSalesPotBlock } from "./global-sales-pot.js";
 import { salesItemsGate } from "./sales-items-pace.js";
+import { salesFunnelUnitMoney } from "./sales-funnel-campaigns.js";
 
 // THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
 // hours here against fifteen minutes there, and that gap is a full stop: the sweep re-fires a
@@ -56,6 +57,10 @@ export interface GateCheckInput {
   // With the channel (`featureSlug`) they are what billing states the campaign's ceiling at.
   offerId: string | null;
   legKey: string | null;
+  // Set on a SALES FUNNEL unit (lib/sales-funnel-campaigns.ts): its money is its funnel's caps and
+  // nothing else. Optional so a caller that predates funnels reads as a pre-funnel campaign.
+  salesFunnelCampaignId?: string | null;
+  salesFunnelId?: string | null;
   maxLeads: number | null;
 }
 
@@ -131,6 +136,20 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // 2. Running run check — only 1 run at a time per campaign
   if (runningRuns.some((r: Run) => r.status === "running")) {
     return { allowed: false, reason: "A run is already in progress" };
+  }
+
+  // 2b. A SALES FUNNEL unit spends only what its funnel's caps allow (lib/sales-funnel-campaigns.ts).
+  // Asked BEFORE every pre-funnel money path below (per-pipe ceiling, items, global pot, brand
+  // budget), none of which is its money. Fail-CLOSED, as everywhere else.
+  if (campaign.salesFunnelCampaignId) {
+    const verdict = await salesFunnelUnitMoney({
+      id: campaign.campaignId,
+      salesFunnelCampaignId: campaign.salesFunnelCampaignId,
+      salesFunnelId: campaign.salesFunnelId ?? null,
+    });
+    if (!verdict.run) {
+      return { allowed: false, reason: verdict.reason, reasonDetail: verdict.detail, nextRunAt: verdict.nextRunAt };
+    }
   }
 
   // 3. Campaign budget windows — enforced for EVERY feature EXCEPT the sales feature, which is

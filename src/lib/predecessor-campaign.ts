@@ -200,7 +200,18 @@ export async function resolvePredecessorCampaign(
 
   // The IN above is a superset across the outbound rename; each row is kept only when its own
   // channel names one of the preceding legs.
-  const siblings = rows.filter((row) => precedingLegKeys.some((k) => sameLeg(row.featureSlug, k, row.legKey)));
+  const onPrecedingLeg = rows.filter((row) => precedingLegKeys.some((k) => sameLeg(row.featureSlug, k, row.legKey)));
+  // SALES FUNNELS (lib/sales-funnel-campaigns.ts): a pipe two funnels share runs once per funnel,
+  // so the preceding leg can have one live campaign PER FUNNEL. A unit's predecessor is the unit of
+  // its OWN funnel campaign; when its funnel works no preceding pipe, a pre-funnel campaign of the
+  // offer (the customer's (leg x channel) campaign) — never another funnel's unit, whose people
+  // that funnel's own reactive unit answers. A pre-funnel campaign only ever sees pre-funnel ones,
+  // exactly what it saw before funnels existed.
+  const unowned = onPrecedingLeg.filter((row) => !row.salesFunnelCampaignId);
+  const sameParent = campaign.salesFunnelCampaignId
+    ? onPrecedingLeg.filter((row) => row.salesFunnelCampaignId === campaign.salesFunnelCampaignId)
+    : [];
+  const siblings = sameParent.length > 0 ? sameParent : unowned;
   const live = siblings.filter((row) => row.status === "ongoing");
   if (live.length > 1) {
     throw new PredecessorScopeError(

@@ -127,6 +127,9 @@ export async function reRunDueCampaigns(): Promise<number> {
       offerId: campaigns.offerId,
       // The single LEG this campaign was bought for — the other part of that grain.
       legKey: campaigns.legKey,
+      // A SALES FUNNEL unit is paced on its funnel's caps (lib/sales-funnel-campaigns.ts).
+      salesFunnelCampaignId: campaigns.salesFunnelCampaignId,
+      salesFunnelId: campaigns.salesFunnelId,
     });
 
   if (dueCampaigns.length === 0) return 0;

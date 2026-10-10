@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
+import { and, eq, isNotNull, ne, sql, isNull } from "drizzle-orm";
 import { campaigns } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { legIsReactive } from "./leg-identity.js";
@@ -108,6 +108,9 @@ export async function proactiveCampaignsToStop(
         eq(campaigns.status, "ongoing"),
         ne(campaigns.id, kept.id),
         isNotNull(campaigns.legKey),
+        // A SALES FUNNEL unit is paused only with its funnel (lib/sales-funnel-campaigns.ts): a
+        // (leg x channel) start never stops one.
+        isNull(campaigns.salesFunnelCampaignId),
       ),
     );
   // A live SOURCE campaign is never stopped by a proactive start, whatever the catalogue publishes.
