@@ -3,7 +3,7 @@ import { holdPaymentDeclinedOrgs, PAYMENT_HOLD_RECHECK_MS } from "./payment-hold
 import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
-import { resolveSelectionForTrigger, isWorkflowRotationEnabled } from "./features-workflow-projection-client.js";
+import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { listRuns, updateRun } from "@distribute/runs-client";
 import { planBrandTurns } from "./brand-turns.js";
@@ -220,11 +220,7 @@ export async function reRunDueCampaigns(): Promise<number> {
       // configured slug and no chosen audience on any failure (see resolveSelectionForTrigger) —
       // selection never blocks a run.
       try {
-        // Only a rotating feature picks an audience here, so only a rotating feature pays for
-        // this read — every other campaign makes no extra query at all.
-        const excludedAudienceIds = isWorkflowRotationEnabled(featureSlug)
-          ? await getFreshExhaustedAudienceIds(campaign.id)
-          : [];
+        const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
         const selection = await resolveSelectionForTrigger({
           featureSlug,
           primaryBrandId: campaign.brandIds![0],

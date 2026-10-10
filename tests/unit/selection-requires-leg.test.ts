@@ -115,14 +115,18 @@ describe("resolveSelectionForTrigger — the leg is the only pricing key", () =>
     expect(warnSpy).toHaveBeenCalled();
   });
 
-  it("does not call features-service at all for a non-rotating feature", async () => {
-    const fetchMock = vi.fn();
+  it("prices EVERY channel's pipe on the same leg-keyed read (no per-channel gate)", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ rows: [rawRow("aud-A", "ai-meeting-booking-rhodium", 30), rawRow("aud-A", "ai-meeting-booking-avior", 12)] }),
+    );
     vi.stubGlobal("fetch", fetchMock);
+    const LEG_OUT = ["conversation", "to", "meeting", "booked"].join("_");
 
     await expect(
-      resolveSelectionForTrigger({ ...baseArgs, featureSlug: "pr-expert-quote-outreach" }),
-    ).resolves.toEqual({ workflowSlug: "wf-configured", audienceId: null });
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(errSpy).not.toHaveBeenCalled();
+      resolveSelectionForTrigger({ ...baseArgs, featureSlug: "ai-meeting-booking", legKey: LEG_OUT }),
+    ).resolves.toEqual({ workflowSlug: "ai-meeting-booking-avior", audienceId: "aud-A" });
+    const url = new URL(String((fetchMock.mock.calls[0] as unknown[])[0]));
+    expect(url.pathname).toContain("/workflow-projection");
+    expect(url.searchParams.get("leg")).toBe(LEG_OUT);
   });
 });
