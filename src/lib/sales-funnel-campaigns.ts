@@ -44,10 +44,11 @@ import { legIdentity, sameLeg } from "./leg-identity.js";
  *   A unit's money is its FUNNEL's caps at billing (max budget + max volume, each one-off / daily /
  *   weekly / monthly, keyed brand x offer x sales funnel; `salesFunnelUnitMoney`), never the
  *   per-(offer, leg, channel) ceilings of the pre-funnel model and never the brand pot. No max
- *   budget stated = unfunded. Either cap `reached` = the funnel's proactive pipes stop making NEW
- *   first touches (held, status untouched: a system condition never changes a status); reactive
- *   pipes keep answering. An unmeasured consumption holds the proactive pipes, loudly. Nothing
- *   about what anything costs changes.
+ *   budget stated = unfunded. Owner 2026-10-10, "we should always respect the user budget": max
+ *   budget reached = EVERY pipe of the funnel stops spending, reactive included; max volume
+ *   reached = proactive pipes make no new first touch and reactive pipes take no new event. Held,
+ *   status untouched (a system condition never changes a status). An unmeasured consumption holds
+ *   every pipe, loudly. Nothing about what anything costs changes.
  *
  * POLL READS: a unit may pay a metered poll-trigger read (`salesFunnelPollRoom`): funnel max budget
  *   stated, consumption measured, consumed + the read's worst case under it. Billed like any payer.
@@ -283,32 +284,36 @@ export async function salesFunnelUnitMoney(
     return held("unfunded", "Sales funnel not funded", "the customer states no max budget for this sales funnel at billing. It waits for money.");
   }
 
+  // Owner 2026-10-10: "we should always respect the user budget". Every pipe of the funnel,
+  // REACTIVE included, stops spending once the max budget is reached, and stops taking new work
+  // once the max volume is reached; an unmeasured consumption holds them all (fail-closed).
   const pipe = caps.pipes?.find((p) => p.channelSlug === unit.featureSlug && sameLeg(unit.featureSlug, p.legKey, unit.legKey));
-  if (pipe?.mode === "reactive") return { run: true, pace: { spentCents: 0, ceilingCents: 1 } };
-
+  const reactive = pipe?.mode === "reactive";
   const budget = caps.maxBudget;
   const amountCents = caps.maxBudget.amountCents;
   if (budget.consumedCents === null || budget.reached === null) {
     console.error(
-      `[campaign-service] Sales funnel ${unit.salesFunnelId} max budget consumption unmeasured (${budget.consumedUnavailableReason}: ${budget.consumedUnavailableDetail ?? ""}) — proactive unit ${unit.id} held`,
+      `[campaign-service] Sales funnel ${unit.salesFunnelId} max budget consumption unmeasured (${budget.consumedUnavailableReason}: ${budget.consumedUnavailableDetail ?? ""}) — unit ${unit.id} held`,
     );
     return held("unreadable", "Sales funnel budget unavailable", `billing could not measure what its max budget consumed (${budget.consumedUnavailableReason}). Held rather than spent (fail-closed).`);
   }
   if (budget.reached) {
-    return held("cap_reached", "Sales funnel max budget reached", `its ${budget.period} max budget is reached (${budget.consumedCents} of ${amountCents} cents). New first touches wait; follow-ups go on.`);
+    return held("cap_reached", "Sales funnel max budget reached", `its ${budget.period} max budget is reached (${budget.consumedCents} of ${amountCents} cents). Every pipe of the funnel stops spending until the next period or a raise.`);
   }
   const volume = caps.maxVolume;
   if (volume) {
     if (volume.consumed === null || volume.reached === null) {
       console.error(
-        `[campaign-service] Sales funnel ${unit.salesFunnelId} max volume consumption unmeasured (${volume.consumedUnavailableReason}: ${volume.consumedUnavailableDetail ?? ""}) — proactive unit ${unit.id} held`,
+        `[campaign-service] Sales funnel ${unit.salesFunnelId} max volume consumption unmeasured (${volume.consumedUnavailableReason}: ${volume.consumedUnavailableDetail ?? ""}) — unit ${unit.id} held`,
       );
       return held("unreadable", "Sales funnel volume unavailable", `billing could not measure its max volume (${volume.consumedUnavailableReason}). Held rather than spent (fail-closed).`);
     }
     if (volume.reached) {
-      return held("cap_reached", "Sales funnel max volume reached", `its ${volume.period} max volume is reached (${volume.consumed} of ${volume.count} ${volume.unit}). New first touches wait; follow-ups go on.`);
+      return held("cap_reached", "Sales funnel max volume reached", `its ${volume.period} max volume is reached (${volume.consumed} of ${volume.count} ${volume.unit}). No new first touch and no new event is taken until the next period or a raise.`);
     }
   }
+  // A reactive pipe answers people already contacted: it ranks first in its cohort's turn.
+  if (reactive) return { run: true, pace: { spentCents: 0, ceilingCents: 1 } };
   return { run: true, pace: { spentCents: budget.consumedCents, ceilingCents: amountCents } };
 }
 

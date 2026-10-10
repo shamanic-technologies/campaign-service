@@ -147,20 +147,57 @@ describe("sales funnel campaigns (brand x offer x sales funnel, one unit per pip
     }
   });
 
-  it("refuses a unit's own run/pause, identity and delete; the funnel campaign is named instead", async () => {
+  it("a unit's run/pause moves its WHOLE funnel; its identity and delete are refused", async () => {
     const created = await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "stopped" }).expect(201);
     const fcId = created.body.salesFunnelCampaign.id;
-    const unitId = created.body.salesFunnelCampaign.units[0].campaignId;
+    const [first, second] = created.body.salesFunnelCampaign.units.map((u: { campaignId: string }) => u.campaignId);
 
-    const refused = await withPerson(request(app).patch(`/campaigns/${unitId}`)).send({ status: "activate" }).expect(409);
+    // A screen still showing the pipe pauses/runs the funnel: every unit moves.
+    const on = await withPerson(request(app).patch(`/campaigns/${first}`))
+      .set("x-brand-id", BRAND).set("x-feature-slug", COLD).send({ status: "activate" }).expect(200);
+    expect(on.body).toMatchObject({ campaign: { id: first, status: "ongoing" }, salesFunnelCampaignId: fcId });
+    expect((await unitsOf(fcId)).map((u) => u.status)).toEqual(["ongoing", "ongoing"]);
+    const [fc] = await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.id, fcId));
+    expect(fc.status).toBe("ongoing");
+
+    await withPerson(request(app).patch(`/campaigns/${second}`)).send({ status: "stop" }).expect(200);
+    expect((await unitsOf(fcId)).map((u) => u.status)).toEqual(["stopped", "stopped"]);
+
+    const refused = await withPerson(request(app).patch(`/campaigns/${first}`)).send({ legKey: "x" }).expect(409);
     expect(refused.body).toMatchObject({ reason: "sales_funnel_unit", salesFunnelCampaignId: fcId });
-    await withPerson(request(app).patch(`/campaigns/${unitId}`)).send({ legKey: "x" }).expect(409);
-    await withPerson(request(app).delete(`/campaigns/${unitId}`)).expect(409);
-    const [still] = await db.select().from(campaigns).where(eq(campaigns.id, unitId));
-    expect(still.status).toBe("stopped");
+    await withPerson(request(app).delete(`/campaigns/${first}`)).expect(409);
 
     // Its own settings are still its own.
-    await withPerson(request(app).patch(`/campaigns/${unitId}`)).send({ clickDestinationUrl: "https://x.test" }).expect(200);
+    await withPerson(request(app).patch(`/campaigns/${first}`)).send({ clickDestinationUrl: "https://x.test" }).expect(200);
+  });
+
+  it("a lead SOURCE unit keeps its own On/Off; a funnel start never restarts a source a person turned off", async () => {
+    mockPlan.mockResolvedValue({
+      ok: true,
+      plan: {
+        salesFunnelId: "unused", salesFunnelName: "Epiphany",
+        units: [
+          { pipeId: "sourcing-apollo-cold-filters|start_to_lead_found", featureSlug: "sourcing-apollo-cold-filters", legKey: "start_to_lead_found", mode: "reactive", workflowSlug: null },
+          { pipeId: `${COLD}|${ENTRY}`, featureSlug: COLD, legKey: ENTRY, mode: "proactive", workflowSlug: "aurora-v3" },
+        ],
+      },
+    });
+    const created = await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "ongoing" }).expect(201);
+    const fcId = created.body.salesFunnelCampaign.id;
+    const source = created.body.salesFunnelCampaign.units.find((u: { featureSlug: string }) => u.featureSlug.startsWith("sourcing-")).campaignId;
+
+    // A person turns the source off: it alone stops.
+    await withPerson(request(app).patch(`/campaigns/${source}`)).set("x-feature-slug", "sourcing-apollo-cold-filters").send({ status: "stop" }).expect(200);
+    let units = await unitsOf(fcId);
+    expect(units.find((u) => u.id === source)!.status).toBe("stopped");
+    expect(units.find((u) => u.id !== source)!.status).toBe("ongoing");
+
+    // Funnel paused then run again: the source a person turned off stays off.
+    await patchFunnel(fcId, "stop").expect(200);
+    await patchFunnel(fcId, "activate").expect(200);
+    units = await unitsOf(fcId);
+    expect(units.find((u) => u.id === source)!.status).toBe("stopped");
+    expect(units.find((u) => u.id !== source)!.status).toBe("ongoing");
   });
 
   it("never creates a funnel campaign twice: hands it back, started only when asked", async () => {
@@ -259,6 +296,20 @@ describe("sales funnel campaigns (brand x offer x sales funnel, one unit per pip
       const b = await resolvePredecessorCampaign(ids.bReactive, catalogue);
       expect(a.predecessor?.campaignId).toBe(ids.aEntry);
       expect(b.predecessor?.campaignId).toBe(ids.bEntry);
+    });
+
+    it("a REACTIVE-only funnel's unit answers the people the offer's PROACTIVE funnel found", async () => {
+      mockPlan.mockResolvedValue({ ok: true, plan: { salesFunnelId: "u", salesFunnelName: "Proactive", units: [
+        { pipeId: `${COLD}|${ENTRY}`, featureSlug: COLD, legKey: ENTRY, mode: "proactive", workflowSlug: "aurora-v3" },
+      ] } });
+      const p = await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "ongoing" }).expect(201);
+      mockPlan.mockResolvedValue({ ok: true, plan: { salesFunnelId: "u", salesFunnelName: "Reactive", units: [
+        { pipeId: `${BOOKING}|${REACTIVE}`, featureSlug: BOOKING, legKey: REACTIVE, mode: "reactive", workflowSlug: "booking-v1" },
+      ] } });
+      const r = await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: `${REACTIVE}@${BOOKING}+meeting_booked_to_paid_client`, status: "ongoing" }).expect(201);
+      const reactiveUnit = r.body.salesFunnelCampaign.units[0].campaignId;
+      const answer = await resolvePredecessorCampaign(reactiveUnit, catalogue);
+      expect(answer.predecessor?.campaignId).toBe(p.body.salesFunnelCampaign.units[0].campaignId);
     });
 
     it("dispatches ONE campaign per shared pipe for an event: the oldest; the other is named skipped", async () => {

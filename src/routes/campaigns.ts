@@ -27,6 +27,7 @@ import {
   campaignBirthTransition,
   signalCampaignBirth,
   setCampaignStatusWithStops,
+  setSalesFunnelCampaignStatus,
   signalDisplacedStops,
   stopDisplacedWithHistory,
   type DbTransaction,
@@ -62,7 +63,7 @@ type CampaignRow = typeof campaigns.$inferSelect;
  * funnel campaign to act on instead. Anything else (audiences, services, destination) stays the
  * unit's own. null = not a unit, or nothing refused.
  */
-const SALES_FUNNEL_UNIT_LOCKED_FIELDS = ["status", "offerId", "legKey", "featureSlug", "brandIds"] as const;
+const SALES_FUNNEL_UNIT_LOCKED_FIELDS = ["offerId", "legKey", "featureSlug", "brandIds"] as const;
 function salesFunnelUnitRefusal(
   existing: CampaignRow,
   body: Record<string, unknown>,
@@ -71,7 +72,7 @@ function salesFunnelUnitRefusal(
   const locked = SALES_FUNNEL_UNIT_LOCKED_FIELDS.filter((f) => body[f] !== undefined);
   if (locked.length === 0) return null;
   return {
-    error: "This campaign is a step of a sales funnel campaign: run or pause the sales funnel instead.",
+    error: "This campaign is a step of a sales funnel campaign: its offer, step and channel belong to that sales funnel.",
     reason: "sales_funnel_unit",
     salesFunnelCampaignId: existing.salesFunnelCampaignId,
   };
@@ -96,6 +97,11 @@ async function displaceOtherProactive(tx: DbTransaction, started: CampaignRow): 
   await ensureSourcesOnStart(tx, started);
   return toStop;
 }
+
+/** A funnel start brings the offer's lead sources with each unit (lib/source-campaign-store.ts). */
+const ensureUnitSourcesOnStart = async (tx: DbTransaction, unit: CampaignRow): Promise<void> => {
+  await ensureSourcesOnStart(tx, unit);
+};
 
 /** Inside an insert's own transaction: stop the proactive campaigns the new one replaces. */
 async function stopProactiveReplacedBy(tx: DbTransaction, inserted: CampaignRow): Promise<CampaignRow[]> {
@@ -1061,6 +1067,27 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCa
         detail: `Updating campaign ${id} — fields: ${Object.keys(req.body).join(", ")}`,
         data: { campaignId: id, fields: Object.keys(req.body) },
       }, req.headers).catch(() => {});
+    }
+
+    // A SALES FUNNEL unit's run/pause IS its funnel's (owner 2026-10-10: no run/pause at pipe level):
+    // the move is applied to the whole funnel campaign, so a screen still showing the pipe keeps
+    // working. A lead SOURCE unit keeps its own On/Off (one origin), on the ordinary path below.
+    if (existing.salesFunnelCampaignId && req.body.status && !isSourceOriginSlug(existing.featureSlug)) {
+      const { status: _status, ...otherFields } = req.body as Record<string, unknown>;
+      if (Object.keys(otherFields).length > 0) {
+        await db.update(campaigns).set({ ...otherFields, updatedAt: new Date() }).where(eq(campaigns.id, id));
+      }
+      const moved = await setSalesFunnelCampaignStatus({
+        salesFunnelCampaignId: existing.salesFunnelCampaignId,
+        orgId: req.orgId!,
+        toStatus: req.body.status === "activate" ? "ongoing" : "stopped",
+        reason: req.body.status === "stop" ? STOP_REASONS.MANUAL : null,
+        ...(req.body.status === "activate" ? { onUnitStarted: ensureUnitSourcesOnStart } : {}),
+      });
+      if (!moved) return res.status(404).json({ error: "Campaign not found" });
+      if (req.body.status === "activate") wakeScheduler();
+      const unit = moved.units.find((u) => u.id === id) ?? existing;
+      return res.json({ campaign: unit, salesFunnelCampaignId: existing.salesFunnelCampaignId });
     }
 
     const statusMap: Record<string, string> = { activate: "ongoing", stop: "stopped" };

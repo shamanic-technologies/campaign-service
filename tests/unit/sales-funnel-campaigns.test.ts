@@ -107,14 +107,17 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
     errors.mockRestore();
   });
 
-  it("lets a REACTIVE pipe (billing's pipes[].mode) keep answering past a reached cap", async () => {
+  it("holds a REACTIVE pipe too once the max budget is reached (owner: always respect the user budget)", async () => {
     const reactive = { ...unit, featureSlug: "ai-meeting-booking", legKey: REACTIVE };
-    const { verdict } = await withCaps(
-      { stated: true, maxBudget: budget("1000", "1200", true), maxVolume: null, pipes: [{ pipeId: "p", channelSlug: "ai-meeting-booking", legKey: REACTIVE, mode: "reactive", campaignIds: [] }] },
-      true,
-      reactive,
-    );
-    expect(verdict).toEqual({ run: true, pace: { spentCents: 0, ceilingCents: 1 } });
+    const pipes = [{ pipeId: "p", channelSlug: "ai-meeting-booking", legKey: REACTIVE, mode: "reactive", campaignIds: [] }];
+    const reached = await withCaps({ stated: true, maxBudget: budget("1000", "1200", true), maxVolume: null, pipes }, true, reactive);
+    expect(reached.verdict).toMatchObject({ run: false, kind: "cap_reached", reason: "Sales funnel max budget reached" });
+    // Volume reached: no new event either.
+    const volume = await withCaps({ stated: true, maxBudget: budget("1000", "10", false), maxVolume: { count: 5, period: "daily", unit: "first_contacts", consumed: 5, reached: true, consumedUnavailableReason: null }, pipes }, true, reactive);
+    expect(volume.verdict).toMatchObject({ run: false, kind: "cap_reached", reason: "Sales funnel max volume reached" });
+    // Under both caps it answers, first in its cohort's turn.
+    const under = await withCaps({ stated: true, maxBudget: budget("1000", "10", false), maxVolume: null, pipes }, true, reactive);
+    expect(under.verdict).toEqual({ run: true, pace: { spentCents: 0, ceilingCents: 1 } });
   });
 
   it("holds every unit when billing cannot be read (fail-closed)", async () => {
@@ -157,7 +160,7 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
         ? { ok: false as const, notFound: true as const, detail: "404" }
         : pipeIds === "down"
           ? { ok: false as const, notFound: false as const, detail: "HTTP 503" }
-          : { ok: true as const, value: { id: "f@x", name: "Epiphany", pipeIds } }),
+          : { ok: true as const, value: { id: "f@x", name: "Epiphany", pipeIds, legs: pipeIds.map((id) => ({ legKey: id.split("|")[1], pipe: { id, mode: "proactive" as const } })) } }),
     pipe: vi.fn(async (id: string) =>
       pipes[id]
         ? { ok: true as const, value: { id, name: "Lumen", ...pipes[id] } }

@@ -176,6 +176,8 @@ function sourceCampaignValues(input: {
 const STOPS_NOBODY_CHOSE_ON_THE_SOURCE: ReadonlySet<string> = new Set([
   TRANSITION_SOURCES.SOURCE_MIRROR,
   TRANSITION_SOURCES.PAYMENT_HOLD,
+  // A sales funnel campaign stopped as a whole: nobody chose Off on the source itself.
+  TRANSITION_SOURCES.SALES_FUNNEL,
 ]);
 
 /**
