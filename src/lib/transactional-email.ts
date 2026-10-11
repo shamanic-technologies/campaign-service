@@ -177,7 +177,7 @@ async function hasPositiveDailyBudget(campaign: Campaign): Promise<boolean> {
     if (campaign.salesFunnelCampaignId) {
       const ref = salesFunnelUnitRef(campaign);
       if (!ref.brandId || !ref.offerId || !ref.salesFunnelId) return false;
-      const read = await fetchSalesFunnelCaps({ orgId: ref.orgId, brandId: ref.brandId, offerId: ref.offerId, salesFunnelId: ref.salesFunnelId });
+      const read = await fetchSalesFunnelCaps({ orgId: ref.orgId, brandId: ref.brandId, offerId: ref.offerId, salesFunnelId: ref.salesFunnelId, salesFunnelCampaignId: ref.salesFunnelCampaignId });
       return read.ok && read.caps.stated && !!read.caps.maxBudget && (read.caps.maxBudget.amountCents ?? 0) > 0;
     }
     if (campaign.dailyBudgetCents !== null && campaign.dailyBudgetCents !== undefined) {

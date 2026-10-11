@@ -149,10 +149,21 @@ export function resetSalesFunnelCapsCache(): void {
  * recomputed here.
  */
 export async function fetchSalesFunnelCaps(
-  scope: { orgId: string; brandId: string; offerId: string; salesFunnelId: string },
+  scope: {
+    orgId: string;
+    brandId: string;
+    offerId: string;
+    salesFunnelId: string;
+    /**
+     * The funnel CAMPAIGN asking (billing v0.83.25, migration 0083): the cap it is HELD to, its own
+     * when one is stated (consumption on its units only: two person follow-ups on one funnel each
+     * "send at most once"), else the funnel-wide one, byte-identical to the funnel read.
+     */
+    salesFunnelCampaignId?: string | null;
+  },
   nowMs: number = Date.now(),
 ): Promise<CapsRead> {
-  const key = `${scope.orgId}|${scope.brandId}|${scope.offerId}|${scope.salesFunnelId}`;
+  const key = `${scope.orgId}|${scope.brandId}|${scope.offerId}|${scope.salesFunnelId}|${scope.salesFunnelCampaignId ?? ""}`;
   const hit = capsCache.get(key);
   if (hit && nowMs - hit.at < CAPS_READ_TTL_MS) return hit.read;
   const read = (async (): Promise<CapsRead> => {
@@ -161,7 +172,9 @@ export async function fetchSalesFunnelCaps(
     if (!url || !apiKey) return { ok: false, detail: "billing-service not configured" };
     const path =
       `/internal/brands/${encodeURIComponent(scope.brandId)}/offers/${encodeURIComponent(scope.offerId)}` +
-      `/sales-funnels/${encodeURIComponent(scope.salesFunnelId)}/caps`;
+      `/sales-funnels/${encodeURIComponent(scope.salesFunnelId)}` +
+      (scope.salesFunnelCampaignId ? `/campaigns/${encodeURIComponent(scope.salesFunnelCampaignId)}` : "") +
+      "/caps";
     try {
       const res = await fetch(`${url.replace(/\/$/, "")}${path}`, {
         headers: { "x-api-key": apiKey, "x-org-id": scope.orgId },
@@ -292,7 +305,13 @@ export async function salesFunnelUnitMoney(
     return held("unreadable", "Sales funnel caps unavailable", "the unit states no brand, offer or sales funnel, so its caps cannot be asked.");
   }
   const read = await fetchSalesFunnelCaps(
-    { orgId: unit.orgId, brandId: unit.brandId, offerId: unit.offerId, salesFunnelId: unit.salesFunnelId },
+    {
+      orgId: unit.orgId,
+      brandId: unit.brandId,
+      offerId: unit.offerId,
+      salesFunnelId: unit.salesFunnelId,
+      salesFunnelCampaignId: unit.salesFunnelCampaignId,
+    },
     now.getTime(),
   );
   if (!read.ok) {
@@ -364,7 +383,13 @@ export async function salesFunnelPollRoom(
     return { ok: false, reason: "sales funnel unit states no brand, offer or sales funnel" };
   }
   const read = await fetchSalesFunnelCaps(
-    { orgId: unit.orgId, brandId: unit.brandId, offerId: unit.offerId, salesFunnelId: unit.salesFunnelId },
+    {
+      orgId: unit.orgId,
+      brandId: unit.brandId,
+      offerId: unit.offerId,
+      salesFunnelId: unit.salesFunnelId,
+      salesFunnelCampaignId: unit.salesFunnelCampaignId,
+    },
     now.getTime(),
   );
   if (!read.ok) return { ok: false, reason: `sales funnel caps unreadable (${read.detail})` };

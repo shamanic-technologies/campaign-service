@@ -201,7 +201,7 @@ describe("Gate Check", () => {
       expect(result).toMatchObject({ allowed: false, reason: "Sales funnel not funded" });
       expect(result.reasonDetail).toContain("funnel-campaign-1");
       expect(mockFetch.mock.calls[0][0]).toContain("/internal/brands/");
-      expect(mockFetch.mock.calls[0][0]).toContain("/sales-funnels/f%40x/caps");
+      expect(mockFetch.mock.calls[0][0]).toContain("/sales-funnels/f%40x/campaigns/funnel-campaign-1/caps");
       expect(mockItemsGate).not.toHaveBeenCalled();
     });
 
