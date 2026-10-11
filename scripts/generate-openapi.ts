@@ -190,7 +190,7 @@ registry.registerPath({
   path: "/sales-funnel-campaigns",
   tags: ["Sales funnel campaigns"],
   summary: "Launch a sales funnel as one campaign (brand x offer x sales funnel)",
-  description: SALES_FUNNEL_CAMPAIGNS_DOC + " Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | pipe_not_runnable; 409 no_workflow | payment_declined | no_payment_method; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable.",
+  description: SALES_FUNNEL_CAMPAIGNS_DOC + " Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | leg_without_channel (a leg of the funnel names no channel: owner 2026-10-11, a human leg is a \"Your team\" channel) | pipe_not_runnable; 409 no_workflow | payment_declined | no_payment_method; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: CreateSalesFunnelCampaignBody } } } },
   responses: {
@@ -213,6 +213,20 @@ registry.registerPath({
   responses: {
     200: { description: "The plan (or what was applied), per group", content: { "application/json": { schema: z.object({ applied: z.boolean(), groups: z.array(z.record(z.string(), z.unknown())), counts: z.object({ campaigns: z.number(), converted: z.number(), skipped: z.number() }) }) } } },
     502: { description: "The channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/sales-funnel-campaigns/complete-units",
+  tags: ["Sales funnel campaigns"],
+  summary: "Give every funnel campaign a unit on each \"Your team\" leg of its funnel (staff, dry run by default)",
+  description: "Owner 2026-10-11: a sales funnel never has a leg without a channel. Body {apply?: boolean (default false = dry run), orgId?: string}. For each funnel campaign, every customer-operated (\"Your team\") pipe of its catalogue funnel with no unit is born as a unit with no workflow, in the funnel's status (runs and spends nothing). Never creates a platform pipe (listed in `missingPlatformPipes`) and lists a catalogue leg naming no channel (`legsWithoutChannel`). Idempotent.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: z.object({ apply: z.boolean().optional(), orgId: z.string().optional() }) } } } },
+  responses: {
+    200: { description: "The funnel campaigns missing a leg's unit (or what was applied)", content: { "application/json": { schema: z.object({ applied: z.boolean(), funnelCampaigns: z.array(z.record(z.string(), z.unknown())), counts: z.object({ funnelCampaigns: z.number(), incomplete: z.number(), unitsAdded: z.number(), unresolved: z.number() }) }) } } },
+    502: { description: "The catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 

@@ -6,7 +6,7 @@ import { fundingFromBudgets } from "./campaign-funding.js";
 import { isSalesFamilyFeature, isServicePerformedFeature } from "./sales-outreach-campaign.js";
 import { fetchStartableWorkflowSlug } from "./startable-workflow-client.js";
 import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
-import { fetchPipe, fetchSalesFunnel } from "./sales-funnel-catalogue-client.js";
+import { fetchPipe, fetchSalesFunnel, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
 
 /**
  * CAN THE CUSTOMER START THE CAMPAIGN FOR THIS FUNDED (OFFER, LEG, CHANNEL), AND WHAT WOULD IT BE?
@@ -276,6 +276,7 @@ export interface SalesFunnelRefusal {
   code:
     | "unknown_sales_funnel"
     | "no_pipe"
+    | "leg_without_channel"
     | "pipe_not_runnable"
     | "no_workflow"
     | "catalogue_unavailable"
@@ -317,6 +318,17 @@ export async function resolveSalesFunnelPlan(
   }
   if (read.value.pipeIds.length === 0) {
     return refuseLaunch(400, "no_pipe", `The sales funnel "${read.value.name}" has no step we run, so there is nothing to launch.`);
+  }
+  // Owner 2026-10-11: a funnel never has a leg without a channel (a human leg is "Your team"). A
+  // hole means people reaching that step wait for nobody, so the funnel is never launched.
+  const holes = legsWithoutChannel(read.value);
+  if (holes.length > 0) {
+    console.error(`[campaign-service] Sales funnel ${salesFunnelId} names no channel on ${holes.join(", ")} — not launched`);
+    return refuseLaunch(
+      400,
+      "leg_without_channel",
+      `The sales funnel "${read.value.name}" has a step nobody works (${holes.join(", ")}), so it can't be launched.`,
+    );
   }
 
   const catalogue = await (deps.catalogue ?? fetchChannelCatalogue)();

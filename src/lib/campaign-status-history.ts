@@ -410,40 +410,56 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
       })
       .returning();
 
-    const units = await tx
-      .insert(campaigns)
-      .values(input.units.map((u) => ({
-        orgId: input.orgId,
-        createdByUserId: input.createdByUserId,
-        parentRunId: input.parentRunId,
-        name: u.name,
-        workflowSlug: u.workflowSlug,
-        brandIds: [input.brandId],
-        brandId: input.brandId,
-        acquisitionChannel: u.acquisitionChannel,
-        featureSlug: u.featureSlug,
-        offerId: input.offerId,
-        legKey: u.legKey,
-        salesFunnelId: input.salesFunnelId,
-        salesFunnelCampaignId: parent.id,
-        featureInputs: null,
-        status: input.status,
-        stopReason: input.status === "stopped" ? STOP_REASONS.MANUAL : null,
-        // A unit with no DAG is never due; a stopped one is not claimed whatever this says.
-        nextRunAt: input.status === "ongoing" && u.workflowSlug ? now : null,
-        createdAt: now,
-        updatedAt: now,
-      })))
-      .returning();
-
-    await tx.insert(campaignStatusTransitions).values(
-      units.map((u) => campaignBirthTransition(u.id, input.orgId, u.status, TRANSITION_SOURCES.SALES_FUNNEL)),
-    );
+    const units = await insertSalesFunnelUnits(tx, parent, input.units);
     if (input.status === "ongoing" && input.onUnitStarted) {
       for (const unit of units) await input.onUnitStarted(tx, unit);
     }
     return { salesFunnelCampaign: parent, units };
   });
+}
+
+/**
+ * Units born INTO an existing funnel campaign, in ITS status, each with its birth transition
+ * (source `sales_funnel`): the funnel's status is the customer's statement, a unit only mirrors it.
+ * Used by a funnel's birth, by the conversion (the "Your team" legs it had no row for) and by
+ * `completeSalesFunnelUnits`. The caller's transaction holds the funnel row.
+ */
+export async function insertSalesFunnelUnits(
+  tx: DbTransaction,
+  parent: SalesFunnelCampaign,
+  births: SalesFunnelUnitBirth[],
+): Promise<CampaignRow[]> {
+  if (births.length === 0) return [];
+  const now = new Date();
+  const units = await tx
+    .insert(campaigns)
+    .values(births.map((u) => ({
+      orgId: parent.orgId,
+      createdByUserId: parent.createdByUserId,
+      parentRunId: parent.parentRunId,
+      name: u.name,
+      workflowSlug: u.workflowSlug,
+      brandIds: [parent.brandId],
+      brandId: parent.brandId,
+      acquisitionChannel: u.acquisitionChannel,
+      featureSlug: u.featureSlug,
+      offerId: parent.offerId,
+      legKey: u.legKey,
+      salesFunnelId: parent.salesFunnelId,
+      salesFunnelCampaignId: parent.id,
+      featureInputs: null,
+      status: parent.status,
+      stopReason: parent.status === "stopped" ? (parent.stopReason ?? STOP_REASONS.MANUAL) : null,
+      // A unit with no DAG is never due; a stopped one is not claimed whatever this says.
+      nextRunAt: parent.status === "ongoing" && u.workflowSlug ? now : null,
+      createdAt: now,
+      updatedAt: now,
+    })))
+    .returning();
+  await tx.insert(campaignStatusTransitions).values(
+    units.map((u) => campaignBirthTransition(u.id, parent.orgId, u.status, TRANSITION_SOURCES.SALES_FUNNEL)),
+  );
+  return units;
 }
 
 /**

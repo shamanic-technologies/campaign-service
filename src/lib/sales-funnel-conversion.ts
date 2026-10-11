@@ -6,7 +6,17 @@ import { ceilingEntriesOf, fetchCampaignBudgets, type CampaignBudgetEntry } from
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
 import { legIsReactive, sameLeg } from "./leg-identity.js";
 import { fetchOfferCatalogueSalesPaths } from "./offer-catalogue-sales-paths.js";
-import { fetchPipe, fetchSalesFunnel, searchSalesFunnelIds, searchSalesPaths } from "./sales-funnel-catalogue-client.js";
+import {
+  fetchPipe,
+  fetchSalesFunnel,
+  isSourcingLeg,
+  legsWithoutChannel,
+  searchSalesFunnelIds,
+  searchSalesPaths,
+} from "./sales-funnel-catalogue-client.js";
+import { insertSalesFunnelUnits, type SalesFunnelUnitBirth } from "./campaign-status-history.js";
+import { acquisitionChannelForFeature, derivedCampaignName } from "./campaign-identity.js";
+import { storedLegKey } from "./leg-identity.js";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { isSourceOriginSlug } from "./source-campaigns.js";
 import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
@@ -48,6 +58,8 @@ export interface ConversionGroup {
   maxBudgetDailyCents: number | null;
   salesFunnelId: string | null;
   salesFunnelName: string | null;
+  /** The funnel's "Your team" pipes: each becomes a unit with no workflow on apply. */
+  customerPipes?: CustomerPipe[];
   /** How the funnel was chosen. */
   basis: "best_roi_path" | "reactive_funnel" | null;
   /** Why this group is NOT converted (null = converted / convertible). */
@@ -159,7 +171,7 @@ export async function convertToSalesFunnelCampaigns(opts: {
         const funnel = await proactiveFunnelOf(proactive[0], identity, catalogue.operatorBySlug);
         if (!funnel.ok) group.skipped = funnel.reason;
         else {
-          Object.assign(group, { salesFunnelId: funnel.id, salesFunnelName: funnel.name, basis: funnel.basis });
+          Object.assign(group, { salesFunnelId: funnel.id, salesFunnelName: funnel.name, basis: funnel.basis, customerPipes: funnel.customerPipes });
           group.skipped = modeRefusal ?? unnameable(group.ceilings);
         }
       }
@@ -182,7 +194,7 @@ export async function convertToSalesFunnelCampaigns(opts: {
         const funnel = await reactiveFunnelOf(r, catalogue.operatorBySlug);
         if (!funnel.ok) group.skipped = funnel.reason;
         else {
-          Object.assign(group, { salesFunnelId: funnel.id, salesFunnelName: funnel.name, basis: "reactive_funnel" });
+          Object.assign(group, { salesFunnelId: funnel.id, salesFunnelName: funnel.name, basis: "reactive_funnel", customerPipes: funnel.customerPipes });
           group.skipped = modeRefusal ?? unnameable(group.ceilings);
         }
       }
@@ -214,26 +226,27 @@ export async function convertToSalesFunnelCampaigns(opts: {
   };
 }
 
+/** A pipe of the funnel the CUSTOMER's own team works ("Your team"): a unit with no workflow. */
+export interface CustomerPipe {
+  featureSlug: string;
+  legKey: string;
+}
+
 /**
- * The catalogue funnel STARTING at `pipe` whose every other leg is worked by NO platform pipe (the
- * customer's own team), so the funnel's pipes are exactly this one: never mix proactive and
- * reactive pipes (owner), and billing measures the funnel's spend on its pipes, so a funnel naming
- * another live pipe would count that pipe's spend twice. Sales paths are tried in the order given
- * (the offer's ticked one, then its best ROI ones), then any path; the catalogue lists by ROI.
+ * The catalogue funnel STARTING at `pipe` (after its lead-source leg, if it lists one) whose every
+ * later leg is worked by the CUSTOMER's own team ("Your team" channels), so the only platform pipe
+ * of the funnel is this one: never mix proactive and reactive pipes (owner), and billing measures
+ * the funnel's spend on its pipes, so a funnel naming another live pipe would count that pipe's
+ * spend twice. A funnel with a leg NOBODY works is never chosen (owner 2026-10-11: a funnel never
+ * has a leg without a channel); the "Your team" pipes come back so they get their units.
+ * Sales paths are tried in the order given (the offer's ticked one, then its best ROI ones), then
+ * any path; the catalogue lists by ROI.
  */
 async function pureFunnelStartingAt(
   pipe: Row,
   salesPathIds: string[],
   operatorBySlug: ReadonlyMap<string, string>,
-): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }> {
-  // A leg is "nobody on the platform" when it has no pipe, or its pipe's channel is one the
-  // CUSTOMER operates (the channel catalogue's operator, e.g. your-team-meeting-attendance).
-  const offPlatform = async (leg: { pipe: { id: string } | null }): Promise<boolean | null> => {
-    if (leg.pipe === null) return true;
-    const read = await fetchPipe(leg.pipe.id);
-    if (!read.ok) return read.notFound ? false : null;
-    return operatorBySlug.get(read.value.channelSlug) === "customer";
-  };
+): Promise<{ ok: true; id: string; name: string; customerPipes: CustomerPipe[] } | { ok: false; reason: string }> {
   const pipeId = `${pipe.featureSlug}|${pipe.legKey}`;
   for (const pathId of [...salesPathIds, undefined]) {
     const found = await searchSalesFunnelIds(`${pipe.legKey}@${pipe.featureSlug}`, pipe.featureSlug!, pathId);
@@ -244,14 +257,40 @@ async function pureFunnelStartingAt(
         if (!funnel.notFound) return { ok: false, reason: `catalogue_unreadable: ${funnel.detail}` };
         continue;
       }
-      const [first, ...rest] = funnel.value.legs;
+      if (legsWithoutChannel(funnel.value).length > 0) continue;
+      const legs = funnel.value.legs.filter((leg) => !(leg.pipe === null && isSourcingLeg(leg)));
+      const [first, ...rest] = legs;
       if (first?.pipe?.id !== pipeId) continue;
-      const verdicts = await Promise.all(rest.map(offPlatform));
-      if (verdicts.some((v) => v === null)) return { ok: false, reason: "catalogue_unreadable: a pipe of the funnel could not be read" };
-      if (verdicts.every((v) => v === true)) return { ok: true, id: funnel.value.id, name: funnel.value.name };
+      const reads = await Promise.all(rest.map((leg) => fetchPipe(leg.pipe!.id)));
+      if (reads.some((r) => !r.ok && !r.notFound)) {
+        return { ok: false, reason: "catalogue_unreadable: a pipe of the funnel could not be read" };
+      }
+      const customerPipes = reads.flatMap((r) =>
+        r.ok && operatorBySlug.get(r.value.channelSlug) === "customer"
+          ? [{ featureSlug: r.value.channelSlug, legKey: r.value.legKey }]
+          : []);
+      if (customerPipes.length === rest.length) {
+        return { ok: true, id: funnel.value.id, name: funnel.value.name, customerPipes };
+      }
     }
   }
   return { ok: false, reason: "no_catalogue_funnel_with_only_this_pipe" };
+}
+
+/** The unit births of a funnel campaign's "Your team" pipes (no workflow: the customer works them). */
+export function customerUnitBirths(
+  parent: { id: string; brandId: string; offerId: string; salesFunnelName: string },
+  pipes: CustomerPipe[],
+): SalesFunnelUnitBirth[] {
+  const idTag = parent.id.slice(0, 8);
+  return pipes.map((p) => ({
+    featureSlug: p.featureSlug,
+    legKey: storedLegKey(p.featureSlug, p.legKey),
+    workflowSlug: null,
+    acquisitionChannel: acquisitionChannelForFeature(p.featureSlug)!,
+    // Same name as a launch gives it (names are unique per org; the funnel id keeps funnels apart).
+    name: `${parent.salesFunnelName} ${idTag} - ${derivedCampaignName(p.featureSlug, parent.brandId, parent.offerId, p.legKey)}`,
+  }));
 }
 
 /** The proactive funnel: the best-ROI path starting with the pipe. */
@@ -259,7 +298,7 @@ async function proactiveFunnelOf(
   pipe: Row,
   identity: { orgId: string; userId?: string; runId?: string; brandId: string },
   operatorBySlug: ReadonlyMap<string, string>,
-): Promise<{ ok: true; id: string; name: string; basis: "best_roi_path" } | { ok: false; reason: string }> {
+): Promise<{ ok: true; id: string; name: string; customerPipes: CustomerPipe[]; basis: "best_roi_path" } | { ok: false; reason: string }> {
   const paths = await fetchOfferCatalogueSalesPaths(pipe.offerId!, identity.brandId, identity);
   if (!paths.ok) return { ok: false, reason: `sales_paths_unreadable: ${paths.detail}` };
   const startsWithPipe = paths.value
@@ -277,7 +316,7 @@ async function proactiveFunnelOf(
 async function reactiveFunnelOf(
   pipe: Row,
   operatorBySlug: ReadonlyMap<string, string>,
-): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }> {
+): Promise<{ ok: true; id: string; name: string; customerPipes: CustomerPipe[] } | { ok: false; reason: string }> {
   // The REACTIVE sales paths through this leg (the catalogue's served `type`): the funnel list is
   // ranked by ROI and capped at 25, so a reactive-only funnel is looked for on its own path first.
   const paths = await searchSalesPaths(pipe.legKey!);
@@ -336,7 +375,7 @@ async function applyGroup(g: ConversionGroup, rows: Row[], actingEmail: string |
   const id = randomUUID();
   await db.transaction(async (tx) => {
     const now = new Date();
-    await tx.insert(salesFunnelCampaigns).values({
+    const [parent] = await tx.insert(salesFunnelCampaigns).values({
       id,
       orgId: g.orgId,
       brandId: g.brandId,
@@ -349,7 +388,7 @@ async function applyGroup(g: ConversionGroup, rows: Row[], actingEmail: string |
       parentRunId: owner?.parentRunId ?? null,
       createdAt: now,
       updatedAt: now,
-    });
+    }).returning();
     const linked = await tx
       .update(campaigns)
       .set({ salesFunnelId: g.salesFunnelId!, salesFunnelCampaignId: id, updatedAt: now })
@@ -358,6 +397,9 @@ async function applyGroup(g: ConversionGroup, rows: Row[], actingEmail: string |
     if (linked.length !== g.campaignIds.length) {
       throw new Error(`expected to link ${g.campaignIds.length} rows, linked ${linked.length} (a row moved meanwhile): rolled back`);
     }
+    // Every leg of the funnel has its channel (owner 2026-10-11): the "Your team" legs no live row
+    // stood for are born as units with no workflow, in the funnel's status.
+    await insertSalesFunnelUnits(tx, parent, customerUnitBirths(parent, g.customerPipes ?? []));
     if (g.maxBudgetDailyCents !== null && g.maxBudgetDailyCents > 0) {
       await putCapReplacingCeilings(g, headers);
       g.capWritten = true;
