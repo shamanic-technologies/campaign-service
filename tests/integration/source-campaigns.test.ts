@@ -190,7 +190,8 @@ describe("Source campaigns: an offer's lead sources are campaigns (owner 2026-10
       .set("x-org-id", ORG)
       .expect(200);
     expect(res.body.sourceLegKey).toBe(SOURCE_LEG);
-    expect(res.body.sourceCampaigns.map((s: { featureSlug: string }) => s.featureSlug)).toEqual([APOLLO, BUYING, SIGNALS, CRM_SOURCE]);
+    // The four origins and Lead Sourcing (owner 2026-10-11): every live source channel, absent = OFF.
+    expect(res.body.sourceCampaigns.map((s: { featureSlug: string }) => s.featureSlug)).toEqual([APOLLO, BUYING, SIGNALS, CRM_SOURCE, "lead-sourcing"]);
     const by = Object.fromEntries(res.body.sourceCampaigns.map((s: { featureSlug: string }) => [s.featureSlug, s]));
     expect(by[APOLLO]).toMatchObject({ campaignId: a.id, status: "ongoing", running: true, campaignKey: `campaign:${APOLLO}|${SOURCE_LEG}` });
     expect(by[SIGNALS]).toMatchObject({ campaignId: b.id, status: "stopped", running: false });
@@ -205,8 +206,9 @@ describe("Source campaigns: an offer's lead sources are campaigns (owner 2026-10
       expect.objectContaining({ campaignId: a.id, featureSlug: APOLLO, running: true }),
       expect.objectContaining({ campaignId: b.id, featureSlug: SIGNALS, running: false }),
     ]));
-    // CRM contacts never feed a cold-email campaign.
+    // CRM contacts never feed a cold-email campaign; Lead Sourcing does (it picks among its origins).
     expect(feeding.body.servedOrigins).not.toContain(CRM_SOURCE);
+    expect(feeding.body.servedOrigins).toContain("lead-sourcing");
   });
 
   it("a person's first outreach start on an offer with no source births its default source ON", async () => {
