@@ -394,6 +394,12 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
   status: "ongoing" | "stopped";
   createdByUserId: string | null;
   parentRunId: string | null;
+  /** The exact people it acts for (lib/sales-funnel-people.ts); null/absent = names nobody. */
+  people?: Array<{ email: string; leadId: string | null }> | null;
+  /** Their identity (lib/sales-funnel-people.ts `peopleKeyOf`); '' = names nobody. */
+  peopleKey?: string;
+  /** Free text every run of its units carries to the workflow. */
+  instruction?: string | null;
   units: SalesFunnelUnitBirth[];
   onUnitStarted?: OnUnitStarted;
 }): Promise<{ salesFunnelCampaign: SalesFunnelCampaign; units: CampaignRow[] }> {
@@ -412,6 +418,9 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
         stopReason: input.status === "stopped" ? STOP_REASONS.MANUAL : null,
         createdByUserId: input.createdByUserId,
         parentRunId: input.parentRunId,
+        people: input.people ?? null,
+        peopleKey: input.peopleKey ?? "",
+        instruction: input.instruction ?? null,
         createdAt: now,
         updatedAt: now,
       })

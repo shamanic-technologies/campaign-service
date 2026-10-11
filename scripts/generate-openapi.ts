@@ -190,7 +190,7 @@ registry.registerPath({
   path: "/sales-funnel-campaigns",
   tags: ["Sales funnel campaigns"],
   summary: "Launch a sales funnel as one campaign (brand x offer x sales funnel)",
-  description: SALES_FUNNEL_CAMPAIGNS_DOC + " Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | leg_without_channel (a leg of the funnel names no channel: owner 2026-10-11, a human leg is a \"Your team\" channel) | pipe_not_runnable; 409 no_workflow | payment_declined | no_payment_method; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable.",
+  description: SALES_FUNNEL_CAMPAIGNS_DOC + " NAMED PEOPLE + INSTRUCTION (2026-10-11, general to any funnel campaign): optional `people` [{email}] = the exact people it acts for (canonical lowercased; part of its identity: the same funnel naming another person is ANOTHER campaign, the same people again = handed back). A campaign naming people runs only reactive pipes (400 `people_need_reactive_funnel` naming the prospecting pipes, nothing written). When an event its pipe answers fires (trigger-for-step, POST /internal/trigger-events, delay/poll detectors), each named person is made DUE now on that unit's own lead-service follow-up queue (schedule-by-email) once the funnel's money allows a run, then the unit is dispatched; the workflow claims exactly them, once. Skips (trigger event detail): `event_names_another_person` (the event names a lead it does not name), `person_not_filed` (lead-service holds no row for the person on the unit), `ambiguous_person`, `followup_unavailable`. Campaigns naming people are never rationed against each other on a shared pipe. Optional `instruction` (<= 4000 chars) = free text every run of its units carries to the workflow: /start-run answers it top-level (`instruction`, plus `people`), read at each run, so an edit is used by the next run. A stated instruction on a hand-back rewords it. Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | leg_without_channel (a leg of the funnel names no channel: owner 2026-10-11, a human leg is a \"Your team\" channel) | pipe_not_runnable | people_need_reactive_funnel; 409 no_workflow | payment_declined | no_payment_method; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: CreateSalesFunnelCampaignBody } } } },
   responses: {
@@ -250,7 +250,7 @@ registry.registerPath({
   path: "/sales-funnel-campaigns",
   tags: ["Sales funnel campaigns"],
   summary: "List the org's sales funnel campaigns, each with its units",
-  description: SALES_FUNNEL_CAMPAIGNS_DOC + " Header x-org-id. Filters are exact matches.",
+  description: SALES_FUNNEL_CAMPAIGNS_DOC + " Header x-org-id. Filters are exact matches; `personEmail` = the campaigns that NAME this person (case-insensitive), e.g. `?personEmail=marie@x.com&status=ongoing` = that person's pending follow-ups.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { query: SalesFunnelCampaignsQuery },
   responses: {
@@ -276,8 +276,8 @@ registry.registerPath({
   method: "patch",
   path: "/sales-funnel-campaigns/{id}",
   tags: ["Sales funnel campaigns"],
-  summary: "Run or pause the whole sales funnel",
-  description: "Body {status: activate | stop}. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
+  summary: "Run or pause the whole sales funnel, and/or reword its instruction",
+  description: "Body {status?: activate | stop, instruction?: string | null} (at least one; 400 otherwise). `instruction` alone rewords (null clears) what every next run of its units carries to the workflow, status untouched. `stop` = cancel: no event dispatches a stopped campaign. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { params: z.object({ id: z.string() }), body: { content: { "application/json": { schema: UpdateSalesFunnelCampaignBody } } } },
   responses: {
