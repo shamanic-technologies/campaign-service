@@ -61,7 +61,7 @@ import {
   MirrorCatalogueUnavailableError,
   sourceCampaignsFeeding,
 } from "../lib/source-campaign-store.js";
-import { LEAD_FOUND_STEP, SOURCE_LEG_KEY, SOURCING_ORIGINS_BY_CHANNEL, sourceCampaignKey } from "../lib/source-campaigns.js";
+import { LEAD_FOUND_STEP, SOURCE_LEG_KEY, SOURCE_CAMPAIGNS_FEEDING_CHANNEL, sourceCampaignKey } from "../lib/source-campaigns.js";
 import { SourceCampaignsMirrorBody, SourceCampaignsQuery } from "../schemas.js";
 
 const router = Router();
@@ -1300,7 +1300,8 @@ router.get("/internal/campaigns/:campaignId/source-campaigns", requireApiKey, as
   try {
     const campaign = await db.query.campaigns.findFirst({ where: eq(campaigns.id, req.params.campaignId) });
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
-    const origins = campaign.featureSlug ? SOURCING_ORIGINS_BY_CHANNEL[campaign.featureSlug] ?? [] : [];
+    // Its origins and, on cold email, Lead Sourcing (lib/source-campaigns.ts SOURCE_CAMPAIGNS_FEEDING_CHANNEL).
+    const origins = campaign.featureSlug ? SOURCE_CAMPAIGNS_FEEDING_CHANNEL[campaign.featureSlug] ?? [] : [];
     const feeding = campaign.featureSlug ? await sourceCampaignsFeeding(campaign.id, campaign.featureSlug) : [];
     res.json({
       campaignId: campaign.id,

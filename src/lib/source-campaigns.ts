@@ -31,12 +31,22 @@ export const SOURCE_LEG_KEY = "start_to_lead_found";
 /** The step a source campaign ends at: the hand-off to the outreach campaigns it feeds. */
 export const LEAD_FOUND_STEP = "lead_found";
 
-/** The origins a customer can turn ON today. */
+/**
+ * LEAD SOURCING (features-service `LEAD_SOURCING_CHANNEL`, owner 2026-10-11): the sourcing channel that picks
+ * its own origins (human-service decides which, per brand). A sales funnel names ONE channel on Start -> Lead
+ * found: an origin below, or this one. Here it is a source campaign like the origins (same leg, same On/Off,
+ * same "feeds the cold email outreach"); lead-service files a serve under it when the origin the audience came
+ * from is one human-service chose for it.
+ */
+export const LEAD_SOURCING_SLUG = "lead-sourcing";
+
+/** The source channels a customer can turn ON today: the origins, and Lead Sourcing. */
 export const LIVE_SOURCE_ORIGIN_SLUGS = [
   "sourcing-apollo-cold-filters",
   "sourcing-apollo-buying-signals",
   "sourcing-linkedin-engagement-signals",
   "sourcing-crm-contacts",
+  LEAD_SOURCING_SLUG,
 ] as const;
 
 /** A retired origin: an existing row is still served (history), it can never be turned ON again. */
@@ -83,6 +93,20 @@ export const SOURCING_ORIGINS_BY_CHANNEL: Readonly<Record<string, readonly strin
   "feedback-request-cold-email-outreach": SEARCH_AND_SIGNAL_ORIGINS,
   "sales-crm-email-outreach": ["sourcing-crm-contacts"],
 };
+
+/**
+ * The SOURCE CAMPAIGNS that may feed an outreach channel: its origins, plus Lead Sourcing where it picks among
+ * several (the cold email channels; never CRM email, one origin there). Lead Sourcing is NOT in
+ * SOURCING_ORIGINS_BY_CHANNEL on purpose: that table widens SPEND reads by slug for serves filed under the
+ * OUTREACH campaign's id (the pre-2026-10-08 labelling), and a Lead Sourcing serve is always filed under its own
+ * campaign's id, so it adds nothing there and every gate-check read stays byte-identical.
+ */
+export const SOURCE_CAMPAIGNS_FEEDING_CHANNEL: Readonly<Record<string, readonly string[]>> = Object.fromEntries(
+  Object.entries(SOURCING_ORIGINS_BY_CHANNEL).map(([channel, origins]) => [
+    channel,
+    origins.length > 1 ? [...origins, LEAD_SOURCING_SLUG] : [...origins],
+  ]),
+);
 
 /**
  * The origin an outreach channel found its leads from before sources were campaigns: the source

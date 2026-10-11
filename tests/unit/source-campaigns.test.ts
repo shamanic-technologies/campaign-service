@@ -11,6 +11,8 @@ import {
   LIVE_SOURCE_ORIGIN_SLUGS,
   SOURCE_LEG_KEY,
   SOURCING_ORIGINS_BY_CHANNEL,
+  SOURCE_CAMPAIGNS_FEEDING_CHANNEL,
+  isLiveSourceOrigin,
   isSourceCampaign,
   sourceCampaignKey,
 } from "../../src/lib/source-campaigns.js";
@@ -45,6 +47,7 @@ describe("the LOCKED vocabulary", () => {
       "sourcing-apollo-buying-signals",
       "sourcing-linkedin-engagement-signals",
       "sourcing-crm-contacts",
+      "lead-sourcing",
     ]);
     expect(sourceCampaignKey(APOLLO)).toBe("campaign:sourcing-apollo-cold-filters|start_to_lead_found");
     expect(DEFAULT_SOURCE_ORIGIN_BY_CHANNEL).toEqual({
@@ -58,6 +61,15 @@ describe("the LOCKED vocabulary", () => {
     }
     expect(isSourceCampaign({ featureSlug: "sourcing-apify-search" })).toBe(true);
     expect(isSourceCampaign({ featureSlug: COLD })).toBe(false);
+  });
+
+  it("LEAD SOURCING (owner 2026-10-11) is a source campaign that feeds the cold email channels, never CRM email, and widens no spend read", () => {
+    expect(isSourceCampaign({ featureSlug: "lead-sourcing" })).toBe(true);
+    expect(isLiveSourceOrigin("lead-sourcing")).toBe(true);
+    expect(SOURCE_CAMPAIGNS_FEEDING_CHANNEL["sales-cold-email-outreach"]).toEqual([...SOURCING_ORIGINS_BY_CHANNEL["sales-cold-email-outreach"]!, "lead-sourcing"]);
+    expect(SOURCE_CAMPAIGNS_FEEDING_CHANNEL["feedback-request-cold-email-outreach"]).toContain("lead-sourcing");
+    expect(SOURCE_CAMPAIGNS_FEEDING_CHANNEL["sales-crm-email-outreach"]).toEqual(["sourcing-crm-contacts"]);
+    for (const origins of Object.values(SOURCING_ORIGINS_BY_CHANNEL)) expect(origins).not.toContain("lead-sourcing");
   });
 });
 
