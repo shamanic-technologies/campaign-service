@@ -23,6 +23,7 @@ import { ensureSourcesOnStart } from "../lib/source-campaign-store.js";
 import { serializeSalesFunnelCampaign } from "../lib/sales-funnel-campaigns.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { convertToSalesFunnelCampaigns } from "../lib/sales-funnel-conversion.js";
+import { completeSalesFunnelUnits } from "../lib/sales-funnel-unit-completion.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -301,6 +302,23 @@ router.post("/internal/sales-funnel-campaigns/convert", requireApiKey, async (re
     }));
   } catch (error) {
     console.error("[campaign-service] Sales funnel conversion error:", error);
+    res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+/**
+ * POST /internal/sales-funnel-campaigns/complete-units {apply?, orgId?} — give every funnel campaign
+ * a unit on each "Your team" leg of its funnel (owner 2026-10-11: a funnel never has a leg without
+ * a channel; lib/sales-funnel-unit-completion.ts). Dry run unless `apply: true`; idempotent. Lists
+ * what it cannot fix (a platform pipe without a unit, a catalogue leg naming no channel).
+ */
+router.post("/internal/sales-funnel-campaigns/complete-units", requireApiKey, async (req, res) => {
+  try {
+    const apply = req.body?.apply === true;
+    const orgId = typeof req.body?.orgId === "string" ? req.body.orgId : undefined;
+    res.json(await completeSalesFunnelUnits({ apply, orgId }));
+  } catch (error) {
+    console.error("[campaign-service] Sales funnel unit completion error:", error);
     res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
