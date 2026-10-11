@@ -79,7 +79,7 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
     const { verdict, fetchMock } = await withCaps({ stated: false, funded: false, fundedBy: null, maxBudget: null, maxVolume: null, pipes: null });
     expect(verdict).toMatchObject({ run: false, kind: "unfunded", reason: "Sales funnel not funded" });
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
-    expect(url).toBe("https://billing.test.local/internal/brands/brand/offers/offer/sales-funnels/f%40x/caps");
+    expect(url).toBe("https://billing.test.local/internal/brands/brand/offers/offer/sales-funnels/f%40x/campaigns/F1/caps");
     expect(init.headers["x-org-id"]).toBe("org");
   });
 

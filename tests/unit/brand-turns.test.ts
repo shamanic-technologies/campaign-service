@@ -277,7 +277,7 @@ describe("planBrandTurns", () => {
     );
     expect(deferred.get("unit-1")?.getTime()).toBe(now.getTime() + 10 * 60_000);
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(String(mockFetch.mock.calls[0][0])).toContain("/sales-funnels/f%40x/caps");
+    expect(String(mockFetch.mock.calls[0][0])).toContain("/sales-funnels/f%40x/campaigns/funnel-campaign-1/caps");
   });
 
   it("plans a sales funnel unit OUTSIDE the sales family on its funnel's caps (#608)", async () => {
