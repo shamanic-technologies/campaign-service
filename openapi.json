@@ -3483,7 +3483,7 @@
           "Sales funnel campaigns"
         ],
         "summary": "Launch a sales funnel as one campaign (brand x offer x sales funnel)",
-        "description": "SALES FUNNEL CAMPAIGNS (owner 2026-10-10, chat first). A campaign is brand x offer x SALES FUNNEL (features-service's sales funnel id, `GET /internal/catalogue/sales-funnels` rows[].id, its combinationKey, carried verbatim). It owns one UNIT per pipe of the funnel (`<channel slug>|<leg key>`): an ordinary campaign row stating `salesFunnelId` + `salesFunnelCampaignId`, run independently like every campaign (proactive pipes prospect, reactive pipes answer). Uniqueness is brand x offer x sales funnel x channel x leg: a pipe two funnels share is two units, one per funnel. A sourcing pipe (Start -> Lead found, a lead-source origin) is a SOURCE campaign unit: no workflow, its origin is ON for the offer while the funnel runs. A funnel with no sourcing pipe gets the offer's default lead source on its start, as every outreach start does. RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH /campaigns/{id} {status} on a unit moves its WHOLE funnel campaign (a lead source unit keeps its own On/Off); its identity fields and DELETE are refused with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. MONEY: a unit's money is its funnel's caps at billing (GET /internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps: max budget + max volume, one-off / daily / weekly / monthly), never a per-(offer, leg, channel) ceiling or the brand pot. No max budget stated = every unit held unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`). Either cap `reached` = EVERY pipe of the funnel, reactive included, stops (owner 2026-10-10: always respect the user budget; gate-check `Sales funnel max budget reached` / `Sales funnel max volume reached`, step trigger skip `sales_funnel_cap`). A consumption billing cannot measure holds every pipe (fail-closed, logged). Caps never change a status. Billing is not signalled per unit (no plan money moves). Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had. NAMED PEOPLE + INSTRUCTION (2026-10-11, general to any funnel campaign): optional `people` [{email}] = the exact people it acts for (canonical lowercased; part of its identity: the same funnel naming another person is ANOTHER campaign, the same people again = handed back). A campaign naming people runs only reactive pipes (400 `people_need_reactive_funnel` naming the prospecting pipes, nothing written). When an event its pipe answers fires (trigger-for-step, POST /internal/trigger-events, delay/poll detectors), each named person is made DUE now on that unit's own lead-service follow-up queue (schedule-by-email) once the funnel's money allows a run, then the unit is dispatched; the workflow claims exactly them, once. Skips (trigger event detail): `event_names_another_person` (the event names a lead it does not name), `person_not_filed` (lead-service holds no row for the person on the unit), `ambiguous_person`, `followup_unavailable`. Campaigns naming people are never rationed against each other on a shared pipe. Optional `instruction` (<= 4000 chars) = free text every run of its units carries to the workflow: /start-run answers it top-level (`instruction`, plus `people`), read at each run, so an edit is used by the next run. A stated instruction on a hand-back rewords it. Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | leg_without_channel (a leg of the funnel names no channel: owner 2026-10-11, a human leg is a \"Your team\" channel) | pipe_not_runnable | people_need_reactive_funnel; 409 no_workflow | payment_declined | no_payment_method; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable.",
+        "description": "SALES FUNNEL CAMPAIGNS (owner 2026-10-10, chat first). A campaign is brand x offer x SALES FUNNEL (features-service's sales funnel id, `GET /internal/catalogue/sales-funnels` rows[].id, its combinationKey, carried verbatim). It owns one UNIT per pipe of the funnel (`<channel slug>|<leg key>`): an ordinary campaign row stating `salesFunnelId` + `salesFunnelCampaignId`, run independently like every campaign (proactive pipes prospect, reactive pipes answer). Uniqueness is brand x offer x sales funnel x channel x leg: a pipe two funnels share is two units, one per funnel. A sourcing pipe (Start -> Lead found, a lead-source origin) is a SOURCE campaign unit: no workflow, its origin is ON for the offer while the funnel runs. A funnel with no sourcing pipe gets the offer's default lead source on its start, as every outreach start does. RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH /campaigns/{id} {status} on a unit moves its WHOLE funnel campaign (a lead source unit keeps its own On/Off); its identity fields and DELETE are refused with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. MONEY: a unit's money is its funnel's caps at billing (GET /internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps: max budget + max volume, one-off / daily / weekly / monthly), never a per-(offer, leg, channel) ceiling or the brand pot. No max budget stated = every unit held unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`). Either cap `reached` = EVERY pipe of the funnel, reactive included, stops (owner 2026-10-10: always respect the user budget; gate-check `Sales funnel max budget reached` / `Sales funnel max volume reached`, step trigger skip `sales_funnel_cap`). A consumption billing cannot measure holds every pipe (fail-closed, logged). Caps never change a status. Billing is not signalled per unit (no plan money moves). Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had. NAMED PEOPLE + INSTRUCTION (2026-10-11, general to any funnel campaign): optional `people` [{email}] = the exact people it acts for (canonical lowercased; part of its identity: the same funnel naming another person is ANOTHER campaign, the same people again = handed back). A campaign naming people runs only reactive pipes (400 `people_need_reactive_funnel` naming the prospecting pipes, nothing written). When an event its pipe answers fires (trigger-for-step, POST /internal/trigger-events, delay/poll detectors), each named person is made DUE now on that unit's own lead-service follow-up queue (schedule-by-email) once the funnel's money allows a run, then the unit is dispatched; the workflow claims exactly them, once. Skips (trigger event detail): `event_names_another_person` (the event names a lead it does not name), `person_not_filed` (lead-service holds no row for the person on the unit), `ambiguous_person`, `followup_unavailable`. At birth (and on a hand-back while someone is unfiled) each person is FILED as a lead of the brand on every unit with a workflow (lead-service); `people[].leadId` carries lead-service's id and the answer's `filing` [{email, campaignId, outcome: filed|already_filed|person_not_known|ambiguous_person|campaign_has_no_brand|filing_unavailable, leadId}] says what happened (the campaign is born either way; a person not filed is filed again when an event needs them). Campaigns naming people are never rationed against each other on a shared pipe. Optional `instruction` (<= 4000 chars) = free text every run of its units carries to the workflow: /start-run answers it top-level (`instruction`, plus `people`), read at each run, so an edit is used by the next run. A stated instruction on a hand-back rewords it. Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | leg_without_channel (a leg of the funnel names no channel: owner 2026-10-11, a human leg is a \"Your team\" channel) | pipe_not_runnable | people_need_reactive_funnel; 409 no_workflow | payment_declined | no_payment_method; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable.",
         "security": [
           {
             "apiKeyAuth": []
@@ -3514,6 +3514,33 @@
                     },
                     "started": {
                       "type": "boolean"
+                    },
+                    "filing": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "email": {
+                            "type": "string"
+                          },
+                          "campaignId": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "string"
+                          },
+                          "leadId": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "email",
+                          "campaignId",
+                          "outcome",
+                          "leadId"
+                        ]
+                      }
                     }
                   },
                   "required": [
@@ -3540,6 +3567,33 @@
                     },
                     "started": {
                       "type": "boolean"
+                    },
+                    "filing": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "email": {
+                            "type": "string"
+                          },
+                          "campaignId": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "string"
+                          },
+                          "leadId": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "email",
+                          "campaignId",
+                          "outcome",
+                          "leadId"
+                        ]
+                      }
                     }
                   },
                   "required": [

@@ -25,7 +25,8 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { convertToSalesFunnelCampaigns } from "../lib/sales-funnel-conversion.js";
 import { completeSalesFunnelUnits } from "../lib/sales-funnel-unit-completion.js";
 import { runLeadSourcingSwitch } from "../lib/sales-funnel-lead-sourcing-switch.js";
-import { canonicalEmail, namedPeople, peopleKeyOf } from "../lib/sales-funnel-people.js";
+import { canonicalEmail, namedPeople, peopleKeyOf, storedPeople } from "../lib/sales-funnel-people.js";
+import { fileSalesFunnelCampaignPeople, type FilingReport } from "../lib/sales-funnel-people-store.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -57,6 +58,29 @@ async function unitsOf(parentIds: string[], orgId: string): Promise<Map<string, 
 
 function missingPersonHeaders(req: AuthenticatedRequest): string[] {
   return [!req.userId ? "x-user-id" : null, !req.runId ? "x-run-id" : null].filter((h): h is string => !!h);
+}
+
+/**
+ * A campaign that NAMES its people files each one as a lead of its brand on every unit (lead-service), and
+ * keeps the lead ids (lib/sales-funnel-people.ts). Idempotent; only asked while somebody is not filed yet.
+ * The row handed back carries the lead ids; `filing` says, per person and unit, what lead-service answered.
+ */
+async function fileNamedPeopleOf(
+  row: SalesFunnelCampaign,
+  units: CampaignRow[],
+  req: AuthenticatedRequest,
+): Promise<{ row: SalesFunnelCampaign; filing: FilingReport[] | undefined }> {
+  const people = storedPeople(row.people);
+  if (!people || people.every((p) => p.leadId)) return { row, filing: undefined };
+  const filed = await fileSalesFunnelCampaignPeople({
+    salesFunnelCampaignId: row.id,
+    orgId: row.orgId,
+    people,
+    units,
+    userId: req.userId ?? row.createdByUserId,
+    runId: req.runId ?? row.parentRunId,
+  });
+  return { row: { ...row, people: filed.people }, filing: filed.filing };
 }
 
 /**
@@ -117,17 +141,21 @@ router.post(
             onUnitStarted: ensureUnitSources,
           });
           wakeScheduler();
+          const named = await fileNamedPeopleOf(started!.salesFunnelCampaign, started!.units, req);
           return res.status(200).json({
-            salesFunnelCampaign: serializeSalesFunnelCampaign(started!.salesFunnelCampaign, started!.units),
+            salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, started!.units),
             created: false,
             started: true,
+            ...(named.filing ? { filing: named.filing } : {}),
           });
         }
         const units = (await unitsOf([incumbent.id], orgId)).get(incumbent.id)!;
+        const named = await fileNamedPeopleOf(incumbent, units, req);
         return res.status(200).json({
-          salesFunnelCampaign: serializeSalesFunnelCampaign(incumbent, units),
+          salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, units),
           created: false,
           started: false,
+          ...(named.filing ? { filing: named.filing } : {}),
         });
       }
 
@@ -211,10 +239,12 @@ router.post(
         `[campaign-service] Sales funnel campaign ${born.salesFunnelCampaign.id} (${plan.salesFunnelName}) born ${status} — org=${orgId} brand=${brandId} offer=${offerId}, units ${born.units.map((u) => u.id).join(", ")}`,
       );
       if (status === "ongoing") wakeScheduler();
+      const named = await fileNamedPeopleOf(born.salesFunnelCampaign, born.units, req);
       return res.status(201).json({
-        salesFunnelCampaign: serializeSalesFunnelCampaign(born.salesFunnelCampaign, born.units),
+        salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, born.units),
         created: true,
         started: status === "ongoing",
+        ...(named.filing ? { filing: named.filing } : {}),
       });
     } catch (error) {
       console.error("[campaign-service] Launch sales funnel error:", error);
