@@ -69,6 +69,7 @@ describe("resolveSelectionForTrigger — the leg is the only pricing key", () =>
     await expect(resolveSelectionForTrigger(baseArgs)).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
+      noServeableAudience: false,
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(errSpy).toHaveBeenCalledTimes(1);
@@ -92,7 +93,7 @@ describe("resolveSelectionForTrigger — the leg is the only pricing key", () =>
 
     await expect(
       resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, requiredAudienceIds: ["aud-B"] }),
-    ).resolves.toEqual({ workflowSlug: "wf-E", audienceId: "aud-B" });
+    ).resolves.toEqual({ workflowSlug: "wf-E", audienceId: "aud-B", noServeableAudience: false });
     // ONE read, leg-keyed, naming neither a funnel nor a goal, and never the arbitration route.
     const urls = fetchMock.mock.calls.map((c) => new URL(String((c as unknown[])[0])));
     expect(urls).toHaveLength(1);
@@ -111,6 +112,7 @@ describe("resolveSelectionForTrigger — the leg is the only pricing key", () =>
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
+      noServeableAudience: false,
     });
     expect(warnSpy).toHaveBeenCalled();
   });
@@ -124,7 +126,7 @@ describe("resolveSelectionForTrigger — the leg is the only pricing key", () =>
 
     await expect(
       resolveSelectionForTrigger({ ...baseArgs, featureSlug: "ai-meeting-booking", legKey: LEG_OUT }),
-    ).resolves.toEqual({ workflowSlug: "ai-meeting-booking-avior", audienceId: "aud-A" });
+    ).resolves.toEqual({ workflowSlug: "ai-meeting-booking-avior", audienceId: "aud-A", noServeableAudience: false });
     const url = new URL(String((fetchMock.mock.calls[0] as unknown[])[0]));
     expect(url.pathname).toContain("/workflow-projection");
     expect(url.searchParams.get("leg")).toBe(LEG_OUT);

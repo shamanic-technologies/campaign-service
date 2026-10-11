@@ -1,6 +1,9 @@
 import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
-import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
+import { eq } from "drizzle-orm";
+import { db } from "../db/index.js";
+import { campaigns } from "../db/schema.js";
+import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 
 /**
@@ -21,8 +24,11 @@ import { replaceRetiredWorkflow } from "./retired-workflow.js";
  * slug stays what it always was on every other path: the configured fallback when nothing can be
  * ranked, so a selection failure never blocks a run. Nothing about the stored row changes.
  *
- * Returns the slug that was actually executed. Throws on a refused execution, like
- * `executeCampaignWorkflow` does — the fire-and-forget callers catch and log it.
+ * Returns the slug that was actually executed, or null when nothing was dispatched because every
+ * audience the grid lists is exhausted for now (a run would reach lead-service with nobody to
+ * serve): the campaign is parked on `NO_SERVEABLE_AUDIENCE_RECHECK_MS` and the scheduler takes it
+ * from there, holding it out loud. Throws on a refused execution, like `executeCampaignWorkflow`
+ * does — the fire-and-forget callers catch and log it.
  */
 export async function dispatchSelectedRun(
   campaign: {
@@ -38,7 +44,7 @@ export async function dispatchSelectedRun(
     brandProfileId: string | null;
   },
   identity: { orgId: string; userId: string; runId: string },
-): Promise<string> {
+): Promise<string | null> {
   const brandIds = campaign.brandIds ?? [];
   const brandIdCsv = brandIds.join(",");
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
@@ -60,6 +66,13 @@ export async function dispatchSelectedRun(
     requiredAudienceIds: campaign.audienceIds,
     excludedAudienceIds,
   });
+  if (selection.noServeableAudience) {
+    await db
+      .update(campaigns)
+      .set({ nextRunAt: new Date(Date.now() + NO_SERVEABLE_AUDIENCE_RECHECK_MS), updatedAt: new Date() })
+      .where(eq(campaigns.id, campaign.id));
+    return null;
+  }
   const inputs = {
     campaignId: campaign.id,
     orgId: identity.orgId,

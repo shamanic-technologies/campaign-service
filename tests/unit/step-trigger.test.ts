@@ -44,6 +44,7 @@ vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
 }));
 vi.mock("../../src/lib/audience-exhaustion.js", () => ({
   getFreshExhaustedAudienceIds: mockExhausted,
+  NO_SERVEABLE_AUDIENCE_RECHECK_MS: 10 * 60_000,
 }));
 vi.mock("../../src/lib/workflows.js", () => ({ executeCampaignWorkflow: mockExecute }));
 const { mockPotBlock } = vi.hoisted(() => ({ mockPotBlock: vi.fn() }));
@@ -260,6 +261,17 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     const outcome = await triggerCampaignsForStep(request);
 
     expect(outcome.skipped[0].reason).toBe(STEP_TRIGGER_SKIPS.NO_WORKFLOW);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("never dispatches a run with nobody to serve: every audience exhausted is a named skip", async () => {
+    mockFindMany.mockResolvedValue([campaign()]);
+    mockResolveSlug.mockResolvedValueOnce({ workflowSlug: "wf-x", audienceId: null, noServeableAudience: true });
+
+    const outcome = await triggerCampaignsForStep(request);
+
+    expect(outcome.triggered).toEqual([]);
+    expect(outcome.skipped[0].reason).toBe(STEP_TRIGGER_SKIPS.NO_SERVEABLE_AUDIENCE);
     expect(mockExecute).not.toHaveBeenCalled();
   });
 

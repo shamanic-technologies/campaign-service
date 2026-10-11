@@ -36,6 +36,7 @@ vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
 
 vi.mock("../../src/lib/audience-exhaustion.js", () => ({
   getFreshExhaustedAudienceIds: mockExhaustedAudienceIds,
+  NO_SERVEABLE_AUDIENCE_RECHECK_MS: 10 * 60_000,
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -291,6 +292,40 @@ describe("Scheduler - reRunDueCampaigns", () => {
     expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
     expect(mockReportTurnHolds).toHaveBeenCalledWith([
       expect.objectContaining({ reason: "sources_off", data: { sourceCampaignIds: ["s1"] } }),
+    ]);
+  });
+
+  // Prod 2026-10-09/10 (campaign 1e95a4c3): every audience freshly exhausted, the pick came back
+  // with none, and a run went to lead-service every 10 min with nobody to serve (120 runs).
+  it("holds, never dispatches, a campaign whose every audience is exhausted for now — and says so", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-dry",
+        orgId: "org-1",
+        workflowSlug: "sales-cold-email-outreach-compass",
+        brandIds: ["brand-1"],
+        createdByUserId: "user-1",
+        parentRunId: "anchor-1",
+        featureSlug: "sales-cold-email-outreach",
+        legKey: "lead_found_to_conversation",
+        audienceId: null,
+      },
+    ]);
+    mockExhaustedAudienceIds.mockResolvedValue(["aud-1", "aud-2"]);
+    mockResolveWorkflowSlug.mockResolvedValue({
+      workflowSlug: "sales-cold-email-outreach-compass",
+      audienceId: null,
+      noServeableAudience: true,
+    });
+
+    await reRunDueCampaigns();
+
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+    expect(mockReportTurnHolds).toHaveBeenCalledWith([
+      expect.objectContaining({
+        reason: "no_serveable_audience",
+        data: expect.objectContaining({ excludedAudienceIds: ["aud-1", "aud-2"] }),
+      }),
     ]);
   });
 

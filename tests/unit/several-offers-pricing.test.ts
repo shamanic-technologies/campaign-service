@@ -113,6 +113,7 @@ describe("a brand selling several offers still gets a PRICED pick", () => {
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "leg-cheap-wf",
       audienceId: "aud-A",
+      noServeableAudience: false,
     });
     expect(f.mock.calls).toHaveLength(1);
     expect(warn).not.toHaveBeenCalled();
@@ -127,6 +128,7 @@ describe("a brand selling several offers still gets a PRICED pick", () => {
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "leg-cheap-wf",
       audienceId: "aud-A",
+      noServeableAudience: false,
     });
   });
 
@@ -138,6 +140,7 @@ describe("a brand selling several offers still gets a PRICED pick", () => {
     await expect(resolveSelectionForTrigger(baseArgs)).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
+      noServeableAudience: false,
     });
     expect(f).not.toHaveBeenCalled();
     expect(err).toHaveBeenCalledTimes(1);
@@ -156,6 +159,7 @@ describe("a brand selling several offers still gets a PRICED pick", () => {
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
+      noServeableAudience: false,
     });
     expect(f.mock.calls.every(([u]) => !new URL(String(u)).searchParams.has("funnel"))).toBe(true);
     expect(warn).toHaveBeenCalledTimes(2);

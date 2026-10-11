@@ -618,6 +618,15 @@ export interface TriggerSelection {
    * audience exactly as it always has.
    */
   audienceId: string | null;
+  /**
+   * The grid ENUMERATES audiences for this campaign, yet its own constraints (the freshly-exhausted
+   * set, the hard targeting subset) leave none to serve. The run must NOT go out: with no audience
+   * it reaches lead-service, which answers `no_audience` and buys nothing (prod 2026-10-09/10,
+   * campaign 1e95a4c3: 120 wasted runs while every audience sat in a 24h exhaustion mark).
+   * Callers hold it on `NO_SERVEABLE_AUDIENCE_RECHECK_MS` instead. False on every fallback (no
+   * leg, unreadable or empty grid, a grid enumerating no audience): those run exactly as before.
+   */
+  noServeableAudience: boolean;
 }
 
 /**
@@ -691,7 +700,7 @@ export async function resolveSelectionForTrigger(args: {
         `or audience is selected; running the configured workflow ${fallbackSlug}. State the ` +
         `campaign's legKey.`,
     );
-    return { workflowSlug: fallbackSlug, audienceId: null };
+    return { workflowSlug: fallbackSlug, audienceId: null, noServeableAudience: false };
   }
   try {
     // A campaign bought for a LEG is ranked on that leg's own outcome — the leg-keyed body, which
@@ -712,7 +721,7 @@ export async function resolveSelectionForTrigger(args: {
           `${legKey} ${eligibility ? "enumerated NO rows" : "could not be read"} — running the ` +
           `configured workflow ${fallbackSlug}.`,
       );
-      return { workflowSlug: fallbackSlug, audienceId: null };
+      return { workflowSlug: fallbackSlug, audienceId: null, noServeableAudience: false };
     }
     const rows = eligibility.rows;
     // Applied to the ROWS, so the pooled audience column and the cell argmin are computed over the
@@ -726,12 +735,17 @@ export async function resolveSelectionForTrigger(args: {
       requiredAudienceIds: requiredAudienceIds ?? undefined,
       excludedAudienceIds: excludedAudienceIds ?? undefined,
     });
-    return { workflowSlug: cell.workflowSlug ?? fallbackSlug, audienceId: cell.audienceId };
+    const enumeratesAudiences = candidates.some((r) => r.audienceId != null);
+    return {
+      workflowSlug: cell.workflowSlug ?? fallbackSlug,
+      audienceId: cell.audienceId,
+      noServeableAudience: enumeratesAudiences && cell.audienceId == null,
+    };
   } catch (err) {
     console.warn(
       `[campaign-service] workflow bandit failed for brand ${primaryBrandId}, using configured workflow ${fallbackSlug}:`,
       err,
     );
-    return { workflowSlug: fallbackSlug, audienceId: null };
+    return { workflowSlug: fallbackSlug, audienceId: null, noServeableAudience: false };
   }
 }
