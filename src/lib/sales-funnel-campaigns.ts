@@ -1,6 +1,7 @@
 import type { Campaign, SalesFunnelCampaign } from "../db/schema.js";
 import { z } from "zod";
 import { legIdentity, sameLeg } from "./leg-identity.js";
+import { storedPeople } from "./sales-funnel-people.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS — the rules (owner 2026-10-10, "chat first").
@@ -487,6 +488,8 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
     status: row.status,
     stopReason: row.stopReason,
     createdByUserId: row.createdByUserId,
+    people: storedPeople(row.people),
+    instruction: row.instruction ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     units: units.map((u) => ({

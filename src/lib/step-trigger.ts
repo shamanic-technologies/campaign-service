@@ -19,6 +19,13 @@ import { hasLiveRunForCampaign, STUCK_RUN_FRESHNESS_THRESHOLD_MS } from "./sched
 import { globalSalesPotBlock } from "./global-sales-pot.js";
 import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
 import { itemVerdict } from "./sales-items-pace.js";
+import {
+  eventConcernsPeople,
+  scheduleNamedPersonDue,
+  unitPeople,
+  type NamedPerson,
+} from "./sales-funnel-people.js";
+import { targetingOfSalesFunnelCampaigns } from "./sales-funnel-people-store.js";
 
 /**
  * A LEAD JUST REACHED A STEP — RUN THE CAMPAIGN THAT WAS BOUGHT TO TAKE THEM OUT OF IT, NOW.
@@ -118,6 +125,17 @@ export const STEP_TRIGGER_SKIPS = {
    * subset: a run would reach lead-service with nobody to serve, so none is dispatched.
    */
   NO_SERVEABLE_AUDIENCE: "no_serveable_audience",
+  /**
+   * A campaign that NAMES its people (lib/sales-funnel-people.ts) and the event names a lead that is
+   * not one of them: the event is about somebody else.
+   */
+  EVENT_NAMES_ANOTHER_PERSON: "event_names_another_person",
+  /** A named person holds no row on this unit at lead-service yet (not filed), so nobody can be made due. */
+  PERSON_NOT_FILED: "person_not_filed",
+  /** A named person's address matches several rows on this unit at lead-service: who is owed is unclear. */
+  AMBIGUOUS_PERSON: "ambiguous_person",
+  /** lead-service could not record the named people's debt (unreachable, non-2xx): nothing dispatched. */
+  FOLLOWUP_UNAVAILABLE: "followup_unavailable",
 } as const;
 
 export type StepTriggerSkipReason = (typeof STEP_TRIGGER_SKIPS)[keyof typeof STEP_TRIGGER_SKIPS];
@@ -266,8 +284,16 @@ export async function runCampaignsInScope(
   // A pipe two SALES FUNNELS share has one live campaign per funnel; the oldest that can run answers
   // the event and the others are skipped (lib/sales-funnel-campaigns.ts). No shared pipe = the
   // original order, untouched.
-  const responsible = orderForSharedPipes(matched);
-  const sharedPipes = sharedSalesFunnelPipes(matched);
+  //
+  // A campaign that NAMES its people (lib/sales-funnel-people.ts) is never rationed against another on
+  // a shared pipe: it acts for different people. Read only when a funnel unit matched (pre-funnel
+  // brands: no read, byte-identical).
+  const unitParentIds = matched.flatMap((c) => (c.salesFunnelCampaignId ? [c.salesFunnelCampaignId] : []));
+  const targeting = unitParentIds.length > 0 ? await targetingOfSalesFunnelCampaigns(unitParentIds) : new Map();
+  const personal = matched.filter((c) => unitPeople(c, targeting));
+  const pooled = matched.filter((c) => !unitPeople(c, targeting));
+  const responsible = [...orderForSharedPipes(pooled), ...personal];
+  const sharedPipes = sharedSalesFunnelPipes(pooled);
   const firedPipes = new Map<string, string>();
 
   let offCampaignIds: string[] = [];
@@ -308,7 +334,13 @@ export async function runCampaignsInScope(
       continue;
     }
 
-    const pipe = sharedPipes.has(pipeKey(campaign)) ? pipeKey(campaign) : null;
+    const people = unitPeople(campaign, targeting);
+    if (people && !eventConcernsPeople(people, trigger?.leadId)) {
+      skip(STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON, `the event names lead ${trigger?.leadId}, not one of the people this campaign names`);
+      continue;
+    }
+
+    const pipe = !people && sharedPipes.has(pipeKey(campaign)) ? pipeKey(campaign) : null;
     const answeredBy = pipe ? firedPipes.get(pipe) : undefined;
     if (answeredBy) {
       skip(
@@ -385,6 +417,17 @@ export async function runCampaignsInScope(
         `${pot.detail}; the lead stays due and is worked by the first run the budget can pay for (next check ${pot.nextRunAt.toISOString()})`,
       );
       continue;
+    }
+
+    // A campaign naming its people: they are made DUE on this unit's own follow-up queue NOW, once its
+    // money allows a run (a capped or unfunded campaign owes nobody anything). The debt is durable: a
+    // dispatch skipped below (run or cohort in flight) leaves it for the unit's next run to claim.
+    if (people) {
+      const owed = await makePeopleDue(req.orgId, campaign.id, people, now);
+      if (!owed.ok) {
+        skip(owed.code, owed.detail);
+        continue;
+      }
     }
 
     if (await hasLiveRunForCampaign(req.orgId, campaign.id, freshnessCutoff)) {
@@ -489,4 +532,30 @@ export async function runCampaignsInScope(
   }
 
   return { ...outcome, offCampaignIds };
+}
+
+/**
+ * Make every named person of a unit due now (lib/sales-funnel-people.ts). At least one made due = ok
+ * (a failed one is logged); none = the first failure, named.
+ */
+async function makePeopleDue(
+  orgId: string,
+  campaignId: string,
+  people: readonly NamedPerson[],
+  now: Date,
+): Promise<{ ok: true } | { ok: false; code: StepTriggerSkipReason; detail: string }> {
+  let first: { code: StepTriggerSkipReason; detail: string } | null = null;
+  let owed = 0;
+  for (const person of people) {
+    const outcome = await scheduleNamedPersonDue({ orgId, campaignId, email: person.email, now });
+    if (outcome.ok) {
+      owed += 1;
+      continue;
+    }
+    console.error(
+      `[campaign-service] campaign ${campaignId}: named person ${person.email} not made due (${outcome.code}): ${outcome.detail}`,
+    );
+    first ??= { code: outcome.code, detail: `${person.email}: ${outcome.detail}` };
+  }
+  return owed > 0 || !first ? { ok: true } : { ok: false, ...first };
 }

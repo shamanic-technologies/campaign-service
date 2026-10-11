@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, salesFunnelCampaigns, type SalesFunnelCampaign } from "../db/schema.js";
 import { serviceAuth, requireApiKey, type AuthenticatedRequest } from "../middleware/auth.js";
@@ -25,6 +25,7 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { convertToSalesFunnelCampaigns } from "../lib/sales-funnel-conversion.js";
 import { completeSalesFunnelUnits } from "../lib/sales-funnel-unit-completion.js";
 import { runLeadSourcingSwitch } from "../lib/sales-funnel-lead-sourcing-switch.js";
+import { canonicalEmail, namedPeople, peopleKeyOf } from "../lib/sales-funnel-people.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -72,7 +73,11 @@ router.post(
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId, salesFunnelId, status } = CreateSalesFunnelCampaignBody.parse(req.body);
+      const { brandId, offerId, salesFunnelId, status, people: namedInput, instruction } =
+        CreateSalesFunnelCampaignBody.parse(req.body);
+      // A campaign that NAMES its people (lib/sales-funnel-people.ts): its people are part of its identity.
+      const people = namedInput ? namedPeople(namedInput) : null;
+      const peopleKey = peopleKeyOf(people);
       const missing = missingPersonHeaders(req);
       if (missing.length > 0) {
         return res.status(400).json({ error: `Cannot launch a sales funnel — missing required headers: ${missing.join(", ")}` });
@@ -86,10 +91,20 @@ router.post(
             eq(salesFunnelCampaigns.brandId, brandId),
             eq(salesFunnelCampaigns.offerId, offerId),
             eq(salesFunnelCampaigns.salesFunnelId, salesFunnelId),
+            eq(salesFunnelCampaigns.peopleKey, peopleKey),
           ),
         });
 
-      const incumbent = await findIncumbent();
+      let incumbent = await findIncumbent();
+      // Handed back with the instruction the caller states now (a stated instruction is the caller's
+      // words for what its runs should say; absent = untouched).
+      if (incumbent && instruction !== undefined && instruction !== incumbent.instruction) {
+        [incumbent] = await db
+          .update(salesFunnelCampaigns)
+          .set({ instruction, updatedAt: new Date() })
+          .where(eq(salesFunnelCampaigns.id, incumbent.id))
+          .returning();
+      }
       if (incumbent) {
         if (status === "ongoing" && incumbent.status !== "ongoing") {
           const refusal = await paymentStartRefusal(orgId);
@@ -136,6 +151,17 @@ router.post(
         return res.status(httpStatus).json({ error: message, reason: code });
       }
       const { plan } = resolved;
+      // A campaign naming its people only ANSWERS events for them: a pipe that prospects (an entry or
+      // sourcing pipe) would act on strangers, so such a funnel is refused, naming the pipe.
+      if (people) {
+        const prospecting = plan.units.filter((u) => u.mode !== "reactive");
+        if (prospecting.length > 0) {
+          return res.status(400).json({
+            error: `A campaign that names its people only answers triggers, but this sales funnel also finds new people (${prospecting.map((u) => u.pipeId).join(", ")}).`,
+            reason: "people_need_reactive_funnel",
+          });
+        }
+      }
 
       const id = randomUUID();
       const idTag = id.slice(0, 8);
@@ -151,6 +177,9 @@ router.post(
           status,
           createdByUserId: req.userId!,
           parentRunId: req.runId!,
+          people,
+          peopleKey,
+          instruction: instruction ?? null,
           units: plan.units.map((u) => ({
             featureSlug: u.featureSlug,
             legKey: u.legKey,
@@ -202,9 +231,14 @@ router.get(
   validateQuery(SalesFunnelCampaignsQuery),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId, salesFunnelId, status } = SalesFunnelCampaignsQuery.parse(req.query);
+      const { brandId, offerId, salesFunnelId, status, personEmail } = SalesFunnelCampaignsQuery.parse(req.query);
       const orgId = req.orgId!;
       const conditions = [eq(salesFunnelCampaigns.orgId, orgId)];
+      if (personEmail) {
+        conditions.push(
+          sql`${salesFunnelCampaigns.people} @> ${JSON.stringify([{ email: canonicalEmail(personEmail) }])}::jsonb`,
+        );
+      }
       if (brandId) conditions.push(eq(salesFunnelCampaigns.brandId, brandId));
       if (offerId) conditions.push(eq(salesFunnelCampaigns.offerId, offerId));
       if (salesFunnelId) conditions.push(eq(salesFunnelCampaigns.salesFunnelId, salesFunnelId));
@@ -251,12 +285,24 @@ router.patch(
   validateBody(UpdateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { status } = UpdateSalesFunnelCampaignBody.parse(req.body);
+      const { status, instruction } = UpdateSalesFunnelCampaignBody.parse(req.body);
       const orgId = req.orgId!;
       const existing = await db.query.salesFunnelCampaigns.findFirst({
         where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
       });
       if (!existing) return res.status(404).json({ error: "Sales funnel campaign not found" });
+
+      // Reword (or clear) the instruction its runs carry. Read by every run at /start-run, so the next
+      // message follows the new words. Status untouched unless stated too.
+      if (status === undefined) {
+        const [reworded] = await db
+          .update(salesFunnelCampaigns)
+          .set({ instruction: instruction ?? null, updatedAt: new Date() })
+          .where(and(eq(salesFunnelCampaigns.id, existing.id), eq(salesFunnelCampaigns.orgId, orgId)))
+          .returning();
+        const units = (await unitsOf([reworded.id], orgId)).get(reworded.id)!;
+        return res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(reworded, units) });
+      }
 
       if (status === "activate") {
         const missing = missingPersonHeaders(req);
@@ -275,8 +321,16 @@ router.patch(
         ...(status === "activate" ? { onUnitStarted: ensureUnitSources } : {}),
       });
       if (!written) return res.status(404).json({ error: "Sales funnel campaign not found" });
+      let parent = written.salesFunnelCampaign;
+      if (instruction !== undefined) {
+        [parent] = await db
+          .update(salesFunnelCampaigns)
+          .set({ instruction: instruction ?? null, updatedAt: new Date() })
+          .where(and(eq(salesFunnelCampaigns.id, existing.id), eq(salesFunnelCampaigns.orgId, orgId)))
+          .returning();
+      }
       if (status === "activate") wakeScheduler();
-      res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(written.salesFunnelCampaign, written.units) });
+      res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, written.units) });
     } catch (error) {
       console.error("[campaign-service] Update sales funnel campaign error:", error);
       res.status(500).json({ error: "Internal server error" });

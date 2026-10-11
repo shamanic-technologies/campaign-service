@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { targetingOfSalesFunnelCampaigns } from "../lib/sales-funnel-people-store.js";
 import { eq, and, sql, or, ne, isNotNull, gt, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { brandPauseTransitions, campaigns, triggerEvents } from "../db/schema.js";
@@ -402,6 +403,13 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       }, req.headers).catch(() => {});
     }
 
+    // A funnel unit carries what its funnel campaign NAMES (lib/sales-funnel-people.ts): the exact
+    // people it acts for and the instruction its message follows. Read at every run, so an edit is
+    // what the next run uses. A pre-funnel campaign makes no read and answers null for both.
+    const targeting = campaign.salesFunnelCampaignId
+      ? (await targetingOfSalesFunnelCampaigns([campaign.salesFunnelCampaignId])).get(campaign.salesFunnelCampaignId) ?? null
+      : null;
+
     // Return campaign data for downstream DAG nodes
     res.json({
       runId: run.id,
@@ -425,6 +433,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       audienceIds: campaign.audienceIds ?? null,
       servicesOffered: campaign.servicesOffered ?? null,
       clickDestinationUrl: campaign.clickDestinationUrl ?? null,
+      // Free text the writer of this run's message must follow (null = none). The funnel campaign's.
+      instruction: targeting?.instruction ?? null,
+      // The exact people this campaign acts for ([{email, leadId}]; null = whoever its pipes serve).
+      people: targeting?.people ?? null,
       searchParams,
     });
   } catch (error) {

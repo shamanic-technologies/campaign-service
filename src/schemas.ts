@@ -203,6 +203,12 @@ export const StoppedCampaignSchema = z.object({
 
 // --- Sales funnel campaigns (owner 2026-10-10, lib/sales-funnel-campaigns.ts) ---
 
+/** The longest instruction a funnel campaign carries (it rides every run into a writer's prompt). */
+export const MAX_INSTRUCTION_LENGTH = 4000;
+
+/** The most people one funnel campaign may name (lib/sales-funnel-people.ts). */
+export const MAX_NAMED_PEOPLE = 50;
+
 /**
  * A person (or the agent acting for them) launches a SALES FUNNEL as one campaign: brand x offer x
  * sales funnel. Everything else is resolved here: the pipes are features-service's statement of the
@@ -218,18 +224,35 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // REQUIRED: "ongoing" launches it now, "stopped" creates it switched off. Never defaulted: a
   // campaign the customer did not start must never start.
   status: CampaignStatusEnum,
+  // OPTIONAL (lib/sales-funnel-people.ts): the exact people this campaign acts for. Omitted = whoever
+  // its pipes serve (every campaign before). Named = reactive pipes only, its own identity (the same
+  // funnel naming other people is another campaign), its people made due on its trigger's events.
+  people: z.array(z.object({
+    email: z.string().trim().email("people[].email must be an email address"),
+  }).strict()).min(1, "people must name at least one person (omit it to name nobody)")
+    .max(MAX_NAMED_PEOPLE, `people names at most ${MAX_NAMED_PEOPLE} people`).optional(),
+  // OPTIONAL: free text every run of its units carries to the workflow (/start-run `instruction`).
+  instruction: z.string().trim().min(1, "instruction must not be empty (omit it)").max(MAX_INSTRUCTION_LENGTH).optional(),
 }).strict().openapi("CreateSalesFunnelCampaignBody");
 
-/** Run or pause the WHOLE funnel: every unit moves with it, in one transaction. */
+/**
+ * Run or pause the WHOLE funnel (every unit moves with it, in one transaction), and/or reword its
+ * instruction (null clears it). At least one of the two.
+ */
 export const UpdateSalesFunnelCampaignBody = z.object({
-  status: z.enum(["activate", "stop"], { error: 'status must be "activate" or "stop"' }),
-}).strict().openapi("UpdateSalesFunnelCampaignBody");
+  status: z.enum(["activate", "stop"], { error: 'status must be "activate" or "stop"' }).optional(),
+  instruction: z.string().trim().min(1, "instruction must not be empty (null clears it)").max(MAX_INSTRUCTION_LENGTH).nullable().optional(),
+}).strict().refine((b) => b.status !== undefined || b.instruction !== undefined, {
+  message: "state status and/or instruction",
+}).openapi("UpdateSalesFunnelCampaignBody");
 
 export const SalesFunnelCampaignsQuery = z.object({
   brandId: z.string().optional(),
   offerId: z.string().optional(),
   salesFunnelId: z.string().optional(),
   status: CampaignStatusEnum.optional(),
+  // The funnel campaigns that NAME this person (case-insensitive exact email).
+  personEmail: z.string().trim().email("personEmail must be an email address").optional(),
 }).openapi("SalesFunnelCampaignsQuery");
 
 /** One pipe of a funnel campaign: the `campaigns` row that runs it. */
@@ -259,6 +282,10 @@ export const SalesFunnelCampaignSchema = z.object({
   // STOP_REASONS: manual | org_teardown | payment_declined | no_payment_method; null while ongoing.
   stopReason: z.string().nullable(),
   createdByUserId: z.string().nullable(),
+  // The exact people it acts for (null = whoever its pipes serve). leadId null = not filed yet.
+  people: z.array(z.object({ email: z.string(), leadId: z.string().nullable() })).nullable(),
+  // Free text every run of its units carries to the workflow; null = none.
+  instruction: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   units: z.array(SalesFunnelUnitSchema),
@@ -422,6 +449,12 @@ export const StartRunResponse = z.object({
   audienceIds: z.array(z.string()).nullable(),
   servicesOffered: z.array(z.string()).nullable(),
   clickDestinationUrl: z.string().nullable(),
+  // A sales funnel unit: the free text its funnel campaign tells the writer of this run's message to
+  // follow (read at every run, so an edit is used by the next run). null = none / not a funnel unit.
+  instruction: z.string().nullable(),
+  // A sales funnel unit whose campaign NAMES its people: exactly them ([{email, leadId}]; leadId null =
+  // not filed at lead-service yet). null = whoever the campaign's pipes serve.
+  people: z.array(z.object({ email: z.string(), leadId: z.string().nullable() })).nullable(),
   searchParams: z.record(z.string(), z.unknown()).nullable(),
 }).openapi("StartRunResponse");
 
