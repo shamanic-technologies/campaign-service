@@ -9,7 +9,7 @@ import {
 } from "../db/schema.js";
 import { signalMissionStatusChanged, type StatusActor } from "./mission-status-notification.js";
 import { STOP_REASONS } from "./stop-reason.js";
-import { isSourceOriginSlug } from "./source-campaigns.js";
+import { answersInlineTrigger, isSourceOriginSlug } from "./source-campaigns.js";
 
 /** The transaction handle `db.transaction` hands its callback. */
 export type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -85,6 +85,13 @@ export const TRANSITION_SOURCES = {
   PAYMENT_HOLD: "payment_hold",
   /** Migration 0057 opened the record by observing the PRESENT. Never written by the runtime. */
   RECORD_OPENED: "record_opened",
+  /**
+   * The owner's Lead Sourcing switch (2026-10-11, lib/lead-sourcing-switch.ts): a funnel campaign running
+   * several lead sources had them replaced by ONE Lead Sourcing unit in one transaction (born with this source,
+   * the old source units stopped with it). Not a person's act on the unit, never a tick: a staff-run migration of
+   * the owner's decision, and a funnel start never brings those old source units back.
+   */
+  LEAD_SOURCING_SWITCH: "lead_sourcing_switch",
 } as const;
 
 export type TransitionSource = (typeof TRANSITION_SOURCES)[keyof typeof TRANSITION_SOURCES];
@@ -428,6 +435,7 @@ export async function insertSalesFunnelUnits(
   tx: DbTransaction,
   parent: SalesFunnelCampaign,
   births: SalesFunnelUnitBirth[],
+  source: TransitionSource = TRANSITION_SOURCES.SALES_FUNNEL,
 ): Promise<CampaignRow[]> {
   if (births.length === 0) return [];
   const now = new Date();
@@ -450,16 +458,44 @@ export async function insertSalesFunnelUnits(
       featureInputs: null,
       status: parent.status,
       stopReason: parent.status === "stopped" ? (parent.stopReason ?? STOP_REASONS.MANUAL) : null,
-      // A unit with no DAG is never due; a stopped one is not claimed whatever this says.
-      nextRunAt: parent.status === "ongoing" && u.workflowSlug ? now : null,
+      // A unit with no DAG is never due, nor one answering an INLINE trigger (a source: it runs inside the
+      // outreach run, lib/source-campaigns.ts); a stopped one is not claimed whatever this says.
+      nextRunAt: parent.status === "ongoing" && u.workflowSlug && !answersInlineTrigger(u.featureSlug) ? now : null,
       createdAt: now,
       updatedAt: now,
     })))
     .returning();
   await tx.insert(campaignStatusTransitions).values(
-    units.map((u) => campaignBirthTransition(u.id, parent.orgId, u.status, TRANSITION_SOURCES.SALES_FUNNEL)),
+    units.map((u) => campaignBirthTransition(u.id, parent.orgId, u.status, source)),
   );
   return units;
+}
+
+/**
+ * The owner's Lead Sourcing switch (2026-10-11, lib/sales-funnel-lead-sourcing-switch.ts): stop a funnel campaign's
+ * ON source units, replaced by its Lead Sourcing unit, each with its transition (reason `replaced_by_lead_sourcing`,
+ * source `lead_sourcing_switch`), inside the caller's transaction. Returns the ids it stopped.
+ */
+export async function stopSourceUnitsReplacedByLeadSourcing(tx: DbTransaction, orgId: string, ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const stopped = await tx
+    .update(campaigns)
+    .set({ status: "stopped", stopReason: STOP_REASONS.REPLACED_BY_LEAD_SOURCING, nextRunAt: null, updatedAt: new Date() })
+    .where(and(inArray(campaigns.id, ids), eq(campaigns.orgId, orgId), eq(campaigns.status, "ongoing")))
+    .returning({ id: campaigns.id });
+  if (stopped.length > 0) {
+    await tx.insert(campaignStatusTransitions).values(
+      stopped.map((s) => ({
+        campaignId: s.id,
+        orgId,
+        fromStatus: "ongoing",
+        toStatus: "stopped",
+        reason: STOP_REASONS.REPLACED_BY_LEAD_SOURCING,
+        source: TRANSITION_SOURCES.LEAD_SOURCING_SWITCH,
+      })),
+    );
+  }
+  return stopped.map((s) => s.id);
 }
 
 /**
@@ -503,7 +539,7 @@ export async function setSalesFunnelCampaignStatus(write: {
           stopReason: write.reason,
           // Due now when it starts (the scheduler's planner decides whether it may spend); nothing
           // due once stopped.
-          nextRunAt: write.toStatus === "ongoing" && unit.workflowSlug ? now : null,
+          nextRunAt: write.toStatus === "ongoing" && unit.workflowSlug && !answersInlineTrigger(unit.featureSlug) ? now : null,
           updatedAt: now,
         })
         .where(eq(campaigns.id, unit.id))

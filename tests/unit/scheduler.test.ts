@@ -86,6 +86,8 @@ vi.mock("drizzle-orm", () => ({
   lte: vi.fn(),
   isNotNull: vi.fn(),
   isNull: vi.fn(),
+  notInArray: vi.fn(),
+  or: vi.fn(),
 }));
 
 // The pause filter is exercised in tests/integration/brand-pause.test.ts against a real DB.

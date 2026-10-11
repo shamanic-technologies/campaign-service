@@ -21,6 +21,9 @@ describe("stop reasons", () => {
       ORG_TEARDOWN: "org_teardown",
       PAYMENT_DECLINED: "payment_declined",
       NO_PAYMENT_METHOD: "no_payment_method",
+      // The owner's Lead Sourcing switch (2026-10-11): written on replaced SOURCE units only, never on a campaign a
+      // customer runs (lib/sales-funnel-lead-sourcing-switch.ts).
+      REPLACED_BY_LEAD_SOURCING: "replaced_by_lead_sourcing",
     });
   });
 

@@ -1,7 +1,7 @@
 import { and, arrayContains, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaignAudienceAvailability, campaigns } from "../db/schema.js";
-import { isSourceCampaign } from "./source-campaigns.js";
+import { answersInlineTrigger, isSourceCampaign } from "./source-campaigns.js";
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
 import { legIsReactive, type CatalogueLegView } from "./leg-identity.js";
 
@@ -149,7 +149,9 @@ export async function recurringCampaignStatuses(scope: {
     const audience: CurrentAudience = !period ? "not_recorded" : period.hasAudience ? "available" : "exhausted";
 
     const running = c.status === "ongoing";
-    const executedByPlatform = c.workflowSlug !== null;
+    // A source unit carries its pipe's workflow but answers the INLINE lead_requested trigger: this platform never
+    // dispatches it (lib/source-campaigns.ts), so it is not executed here and never recurring itself, as before.
+    const executedByPlatform = c.workflowSlug !== null && !answersInlineTrigger(c.featureSlug);
     let recurring: boolean | null;
     let recurringUnknownReason: RecurringUnknownReason | undefined;
     if (!running || !executedByPlatform || kind === "reactive" || audience === "exhausted") {
