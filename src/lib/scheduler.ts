@@ -4,7 +4,7 @@ import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
-import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
+import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
 import { listRuns, updateRun } from "@distribute/runs-client";
 import { planBrandTurns } from "./brand-turns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
@@ -244,6 +244,24 @@ export async function reRunDueCampaigns(): Promise<number> {
           requiredAudienceIds: campaign.audienceIds,
           excludedAudienceIds,
         });
+        // Every audience the grid lists is freshly exhausted or outside the campaign's subset: a run
+        // would reach lead-service with no audience and buy nothing. Held on the exhaustion's own
+        // cadence and SAID, never run; status untouched.
+        if (selection.noServeableAudience) {
+          const nextRunAt = new Date(now.getTime() + NO_SERVEABLE_AUDIENCE_RECHECK_MS);
+          await db
+            .update(campaigns)
+            .set({ nextRunAt, updatedAt: new Date() })
+            .where(eq(campaigns.id, campaign.id));
+          await reportTurnHolds([{
+            campaign,
+            reason: "no_serveable_audience",
+            detail: `Campaign ${campaign.id} is held: every audience it may serve is exhausted for now, so a run would have nobody to contact. It is looked at again at ${nextRunAt.toISOString()}.`,
+            nextRunAt,
+            data: { excludedAudienceIds, requiredAudienceIds: campaign.audienceIds },
+          }]);
+          continue;
+        }
         const inputs = {
           campaignId: campaign.id,
           orgId: campaign.orgId,

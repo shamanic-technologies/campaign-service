@@ -350,6 +350,7 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     await expect(resolveSelectionForTrigger(baseArgs)).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
+      noServeableAudience: false,
     });
     expect((global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
     err.mockRestore();
@@ -399,6 +400,7 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
+      noServeableAudience: false,
     });
     expect(err).toHaveBeenCalledTimes(1);
     err.mockRestore();
@@ -416,11 +418,46 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
+      noServeableAudience: false,
     });
     // Wave C1: a LEG campaign never falls back to the funnel-keyed body.
     expect(f.mock.calls.every(([u]) => !new URL(String(u)).searchParams.has("funnel"))).toBe(true);
     // One warn from the unreadable verdict, one from the configured-workflow fallback.
     expect(warn).toHaveBeenCalledTimes(2);
     warn.mockRestore();
+  });
+
+  // Prod 2026-10-09/10 (campaign 1e95a4c3): every audience sat in a 24h exhaustion mark, the pick
+  // came back with no audience, and 120 runs went to lead-service with nobody to serve.
+  it("says noServeableAudience when the grid lists audiences but every one is excluded", async () => {
+    global.fetch = routeFetch({
+      legRows: [
+        rawLegRow("aud-A", "strong-wf", { eligible: true, modelAlias: "pro", modelTier: "strong" }),
+        rawLegRow("aud-B", "strong-wf", { eligible: true, modelAlias: "pro", modelTier: "strong" }),
+      ],
+    }) as unknown as typeof fetch;
+
+    await expect(
+      resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, excludedAudienceIds: ["aud-A", "aud-B"] }),
+    ).resolves.toEqual({ workflowSlug: "strong-wf", audienceId: null, noServeableAudience: true });
+    // Outside the hard targeting subset counts the same: nobody the campaign may serve.
+    await expect(
+      resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, requiredAudienceIds: ["aud-Z"] }),
+    ).resolves.toMatchObject({ audienceId: null, noServeableAudience: true });
+    // One audience left → it is served, nothing held.
+    await expect(
+      resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, excludedAudienceIds: ["aud-A"] }),
+    ).resolves.toEqual({ workflowSlug: "strong-wf", audienceId: "aud-B", noServeableAudience: false });
+  });
+
+  it("a grid listing NO audience is not a hold — the run goes out exactly as before", async () => {
+    global.fetch = routeFetch({
+      legRows: [rawLegRow(null, "strong-wf", { eligible: true, modelAlias: "pro", modelTier: "strong" })],
+    }) as unknown as typeof fetch;
+    await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
+      workflowSlug: "strong-wf",
+      audienceId: null,
+      noServeableAudience: false,
+    });
   });
 });
