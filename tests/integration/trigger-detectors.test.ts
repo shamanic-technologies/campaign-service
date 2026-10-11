@@ -73,6 +73,7 @@ function catalogue() {
     legs: [],
     triggers: new Map([
       ["lead_requested", { id: "lead_requested", label: "Lead requested", fromStepKey: null, firedBy: "lead-service", coded: true, kind: "event", origin: "code", params: null }],
+      ["on_demand", { id: "on_demand", label: "On Demand", fromStepKey: null, firedBy: "campaign-service", coded: true, kind: "event", origin: "code", params: null }],
       [DELAY, { id: DELAY, label: "No reply after 3 days", fromStepKey: "lead_found", firedBy: "campaign-service", coded: true, kind: "delay", origin: "declared", params: { afterStep: "lead_found", days: 3 } }],
       [POLL, { id: POLL, label: "Someone reacted", fromStepKey: null, firedBy: "campaign-service", coded: true, kind: "poll", origin: "declared", params: { source, everyMinutes: 5 } }],
     ]),
@@ -97,10 +98,11 @@ const campaignOn = (featureSlug: string, legKey: string) =>
   });
 
 /** lead-service found the person: what lead-service records at campaign-service today. */
-const leadFound = (leadId: string, at: Date) =>
+// `on_demand` since 2026-10-11 (the sourcing pipe's own run); `lead_requested` is its history and anchors the same way.
+const leadFound = (leadId: string, at: Date, triggerId: "on_demand" | "lead_requested" = "on_demand") =>
   db.insert(triggerEvents).values({
-    orgId: ORG, brandId: BRAND, offerId: OFFER, triggerId: "lead_requested", leadId,
-    idempotencyKey: `lead_requested:${leadId}`, recordedVia: "trigger_events", occurredAt: at, dueAt: at,
+    orgId: ORG, brandId: BRAND, offerId: OFFER, triggerId, leadId,
+    idempotencyKey: `${triggerId}:${leadId}`, recordedVia: "trigger_events", occurredAt: at, dueAt: at,
     status: "done", outcome: "ran", ranCampaignIds: ["source-campaign"], performedByCaller: true, processedAt: at,
   });
 
@@ -131,7 +133,7 @@ describe("generic trigger detectors", () => {
       const campaign = await campaignOn(FOLLOW_UP_SLUG, FOLLOW_UP_LEG);
       const t0 = new Date(Date.now() - 60 * 60_000);
       await leadFound("lead-quiet", t0);
-      await leadFound("lead-replied", t0);
+      await leadFound("lead-replied", t0, "lead_requested");
       mockLeadActivity.mockResolvedValue(foldLeadActivity([
         { ...quietRow, leadId: "lead-quiet" },
         { ...quietRow, leadId: "lead-replied", replied: true },

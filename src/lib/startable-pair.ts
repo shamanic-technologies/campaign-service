@@ -350,7 +350,7 @@ export async function resolveSalesFunnelPlan(
     const { channelSlug, legKey, mode, name } = pipe.value;
     // A SOURCING pipe (Start → Lead found, an origin or Lead Sourcing): its unit is a source campaign of
     // the funnel (lib/source-campaigns.ts). It takes its pipe's workflow like EVERY pipe (owner 2026-10-11:
-    // "the infra is homogeneous", sourcing ran with none); it answers the INLINE `lead_requested` trigger, so
+    // "the infra is homogeneous", sourcing ran with none); it answers the `on_demand` trigger, so
     // it is never dispatched by this service (`answersInlineTrigger`): lead-service serves inside the outreach
     // run and files the lead under the running source. While it is ON its origin(s) are ON for the offer.
     if (isSourceOriginSlug(channelSlug) && (!isLiveSourceOrigin(channelSlug) || storedLegKey(channelSlug, legKey) !== SOURCE_LEG_KEY)) {
@@ -381,7 +381,7 @@ export async function resolveSalesFunnelPlan(
 
 /**
  * The workflow a SOURCING pipe's unit carries (owner 2026-10-11: every pipe runs a workflow; a source unit answers
- * the inline `lead_requested` trigger, so it is never dispatched): the channel's newest active one, the read a launch
+ * the `on_demand` trigger, so it is never dispatched): the channel's newest active one, the read a launch
  * makes. Asked by a PERSON's act only: the staff-run Lead Sourcing switch (routes/sales-funnel-campaigns.ts).
  * null = the channel has none. Unreadable throws (nothing is written on a guess).
  */

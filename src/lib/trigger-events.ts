@@ -35,7 +35,7 @@ import type { WorkflowTriggerInput } from "./workflows.js";
  *  - Due LATER (a planned event, "meeting in 3h" due 3h before it): recorded `pending`, fired by the
  *    scheduler tick when due (`fireDueTriggerEvents`), same rules.
  *  - ALREADY PERFORMED (`performed`): the caller did the work in-process (lead-service serving a lead
- *    on `lead_requested`) and states what happened: `{outcome: "ran", campaignId}` or
+ *    on `on_demand`) and states what happened: `{outcome: "ran", campaignId}` or
  *    `{outcome: "skipped", reason, detail?}`. Recorded as is; nothing is dispatched here.
  *  - `idempotencyKey` (optional, unique per org): a retried call returns the first event, recorded
  *    once.
@@ -559,5 +559,40 @@ export function serializeTriggerEvent(e: TriggerEvent) {
     performedByCaller: e.performedByCaller,
     processedAt: e.processedAt ? e.processedAt.toISOString() : null,
     detail: e.detail ?? null,
+  };
+}
+
+/**
+ * FLEET (every org): for ONE trigger, how many events RAN each campaign, with the first and last time. What a pipe
+ * answering that trigger produced, per unit: for `on_demand` a ran event IS a lead found by the sourcing unit that
+ * served it (lead-service records it on the serve), so features-service measures a sourcing pipe on it. A read.
+ */
+export async function triggerRanCounts(triggerId: string): Promise<{
+  recordedSince: string | null;
+  counts: Array<{ campaignId: string; ran: number; firstAt: string; lastAt: string }>;
+}> {
+  const [rows, [first]] = await Promise.all([
+    db.execute<{ campaign_id: string; ran: string | number; first_at: Date | string; last_at: Date | string }>(sql`
+      SELECT c.campaign_id, count(*) AS ran, min(e.occurred_at) AS first_at, max(e.occurred_at) AS last_at
+      FROM "trigger_events" e, unnest(e.ran_campaign_ids) AS c(campaign_id)
+      WHERE e.trigger_id = ${triggerId} AND e.outcome = 'ran'
+      GROUP BY c.campaign_id
+      ORDER BY c.campaign_id`),
+    db
+      .select({ at: sql<string | null>`min(${triggerEvents.occurredAt})` })
+      .from(triggerEvents)
+      .where(eq(triggerEvents.triggerId, triggerId)),
+  ]);
+  const iso = (v: Date | string) => new Date(v).toISOString();
+  type Row = { campaign_id: string; ran: string | number; first_at: Date | string; last_at: Date | string };
+  const list = Array.from(rows as unknown as Iterable<Row>);
+  return {
+    recordedSince: first?.at ? iso(first.at) : null,
+    counts: list.map((r) => ({
+      campaignId: r.campaign_id,
+      ran: Number(r.ran),
+      firstAt: iso(r.first_at),
+      lastAt: iso(r.last_at),
+    })),
   };
 }

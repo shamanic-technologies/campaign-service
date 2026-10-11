@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, triggerEvents, type TriggerEvent } from "../db/schema.js";
 import type { CatalogueTriggerTransition, CatalogueTriggerType, ChannelCatalogueRead } from "./channel-operator-client.js";
@@ -22,14 +22,15 @@ import { sameLeg } from "./leg-identity.js";
  *
  * WHAT "REACHED afterStep" MEANS, from what this service records (`trigger_events`, any channel):
  *  - an event stating `step = afterStep` for the lead (the step route, an event trigger's from-step);
- *  - for `lead_found`: a `lead_requested` event that RAN for the lead (lead-service served the person).
+ *  - for `lead_found`: an `on_demand` event (a sourcing pipe asked by the outreach run, owner 2026-10-11) or a
+ *    `lead_requested` event (its name before 2026-10-11) that RAN for the lead (lead-service served the person).
  *
  * ── FIRE (the scheduler's due-event tick, `fireDueTriggerEvents`) ───────────────────────────────
  *
  * Before running anything, "NOTHING HAPPENED since the anchor" is checked at lead x OFFER grain,
  * any channel (`delayGuard`). Something happened = a recorded skip, nothing dispatched:
  *  - `lead_progressed`: any later event for the lead on the offer (another step, another trigger;
- *    a re-serve by `lead_requested` is not the lead doing anything), or a click measured after
+ *    a re-serve (`on_demand` / `lead_requested`) is not the lead doing anything), or a click measured after
  *    `lead_found`;
  *  - `lead_replied`: lead-service measured a reply (after `lead_found`: any reply), or the CRM dates
  *    a positive reply after the anchor;
@@ -54,6 +55,10 @@ export const DELAY_PLAN_LATE_MS = 2 * 24 * 60 * 60_000;
 
 export const LEAD_FOUND_STEP = "lead_found";
 export const LEAD_REQUESTED_TRIGGER_ID = "lead_requested";
+/** The trigger a sourcing pipe answers since 2026-10-11 (features-service `channel-triggers.ts`): its ran event is a serve. */
+export const ON_DEMAND_TRIGGER_ID = "on_demand";
+/** Every trigger whose ran event is lead-service SERVING the lead: `on_demand`, and `lead_requested` (its history). */
+export const LEAD_SERVE_TRIGGER_IDS: readonly string[] = [ON_DEMAND_TRIGGER_ID, LEAD_REQUESTED_TRIGGER_ID];
 
 export const DELAY_SKIPS = {
   LEAD_REPLIED: "lead_replied",
@@ -171,7 +176,7 @@ function reachedStep(step: string) {
   if (step !== LEAD_FOUND_STEP) return byStep;
   return or(
     byStep,
-    and(eq(triggerEvents.triggerId, LEAD_REQUESTED_TRIGGER_ID), eq(triggerEvents.outcome, "ran")),
+    and(inArray(triggerEvents.triggerId, [...LEAD_SERVE_TRIGGER_IDS]), eq(triggerEvents.outcome, "ran")),
   )!;
 }
 
@@ -274,7 +279,7 @@ export async function delayGuard(event: TriggerEvent, cache: LeadActivityCache =
       gt(triggerEvents.occurredAt, anchor.anchorAt),
       ne(triggerEvents.id, event.id),
       notInArray(triggerEvents.recordedVia, [...DETECTOR_RECORDED_VIA]),
-      sql`${triggerEvents.triggerId} IS DISTINCT FROM ${LEAD_REQUESTED_TRIGGER_ID}`,
+      or(isNull(triggerEvents.triggerId), notInArray(triggerEvents.triggerId, [...LEAD_SERVE_TRIGGER_IDS])),
       ...(anchor.anchorEventId ? [ne(triggerEvents.id, anchor.anchorEventId)] : []),
     ))
     .orderBy(triggerEvents.occurredAt)
