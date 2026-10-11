@@ -18,6 +18,7 @@ import {
   RETIRED_SOURCE_ORIGIN_SLUGS,
   SOURCE_LEG_KEY,
   SOURCING_ORIGINS_BY_CHANNEL,
+  SOURCE_CAMPAIGNS_FEEDING_CHANNEL,
   isLiveSourceOrigin,
   isSourcedChannel,
   sourceCampaignKey,
@@ -51,7 +52,8 @@ export interface FeedingSourceCampaign {
  * [] when the campaign is not an outreach campaign of a sourced channel or states no offer.
  */
 export async function sourceCampaignsFeeding(campaignId: string, featureSlug: string): Promise<FeedingSourceCampaign[]> {
-  const origins = SOURCING_ORIGINS_BY_CHANNEL[featureSlug];
+  // Every source campaign that may feed the channel: its origins and, on cold email, Lead Sourcing.
+  const origins = SOURCE_CAMPAIGNS_FEEDING_CHANNEL[featureSlug];
   if (!origins || origins.length === 0) return [];
   const outreach = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaignId) });
   if (!outreach || !outreach.offerId) return [];
@@ -222,7 +224,7 @@ export async function ensureSourcesOnStart(
 
   let toFollow: string[] = [];
   if (existing.length > 0) {
-    const served = SOURCING_ORIGINS_BY_CHANNEL[started.featureSlug!] ?? [];
+    const served = SOURCE_CAMPAIGNS_FEEDING_CHANNEL[started.featureSlug!] ?? [];
     const off = existing.filter((r) => r.status === "stopped" && isLiveSourceOrigin(r.featureSlug) && served.includes(r.featureSlug!));
     if (off.length === 0) return [];
     const history = await tx
