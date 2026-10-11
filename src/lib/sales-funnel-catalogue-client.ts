@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isSourceOriginSlug } from "./source-campaigns.js";
 
 /**
  * features-service's AGENT CATALOGUE, read for what a sales funnel campaign is made of (owner
@@ -27,8 +28,12 @@ export interface SalesFunnelFromCatalogue {
   name: string;
   /** Pipe ids, in leg order, of the legs a platform channel works. Legs with no pipe are skipped. */
   pipeIds: string[];
-  /** Every leg in order, with its pipe (null = the customer's own team works it). */
-  legs: Array<{ legKey: string; pipe: { id: string; mode: "proactive" | "reactive" } | null }>;
+  /**
+   * Every leg in order, with its pipe and the channels the catalogue lists on it. A leg names no
+   * pipe either because several lead SOURCES feed it (Start → Lead found) or because nothing works
+   * it: the second is a funnel with a hole (`legsWithoutChannel`), never launched or converted.
+   */
+  legs: Array<{ legKey: string; pipe: { id: string; mode: "proactive" | "reactive" } | null; channelIds: string[] }>;
 }
 
 export interface PipeFromCatalogue {
@@ -46,6 +51,7 @@ const SalesFunnelResponse = z.object({
     z.object({
       legKey: z.string().min(1),
       pipe: z.object({ id: z.string().min(1), mode: z.enum(["proactive", "reactive"]) }).nullable(),
+      channels: z.array(z.object({ id: z.string().min(1) })),
     }),
   ),
 });
@@ -82,9 +88,30 @@ export async function fetchSalesFunnel(salesFunnelId: string): Promise<Catalogue
       id: parsed.id,
       name: parsed.name,
       pipeIds: parsed.legs.flatMap((leg) => (leg.pipe ? [leg.pipe.id] : [])),
-      legs: parsed.legs.map((leg) => ({ legKey: leg.legKey, pipe: leg.pipe ? { id: leg.pipe.id, mode: leg.pipe.mode } : null })),
+      legs: parsed.legs.map((leg) => ({
+        legKey: leg.legKey,
+        pipe: leg.pipe ? { id: leg.pipe.id, mode: leg.pipe.mode } : null,
+        channelIds: leg.channels.map((c) => c.id),
+      })),
     };
   });
+}
+
+/**
+ * A leg is a SOURCING leg when every channel it lists is a lead-source origin: the catalogue names
+ * no single pipe on it because several sources may feed it at once (lib/source-campaigns.ts).
+ */
+export function isSourcingLeg(leg: Pick<SalesFunnelFromCatalogue["legs"][number], "channelIds">): boolean {
+  return leg.channelIds.length > 0 && leg.channelIds.every(isSourceOriginSlug);
+}
+
+/**
+ * The legs of a funnel NOTHING works (owner 2026-10-11: "a sales funnel never has a leg without a
+ * channel; a human leg is the channel Your team"). A sourcing leg is not one of them. A funnel
+ * listing any is refused at launch and never chosen by the conversion.
+ */
+export function legsWithoutChannel(funnel: Pick<SalesFunnelFromCatalogue, "legs">): string[] {
+  return funnel.legs.filter((leg) => leg.pipe === null && !isSourcingLeg(leg)).map((leg) => leg.legKey);
 }
 
 export async function fetchPipe(pipeId: string): Promise<CatalogueRead<PipeFromCatalogue>> {

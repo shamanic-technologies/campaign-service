@@ -160,7 +160,7 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
         ? { ok: false as const, notFound: true as const, detail: "404" }
         : pipeIds === "down"
           ? { ok: false as const, notFound: false as const, detail: "HTTP 503" }
-          : { ok: true as const, value: { id: "f@x", name: "Epiphany", pipeIds, legs: pipeIds.map((id) => ({ legKey: id.split("|")[1], pipe: { id, mode: "proactive" as const } })) } }),
+          : { ok: true as const, value: { id: "f@x", name: "Epiphany", pipeIds, legs: pipeIds.map((id) => ({ legKey: id.split("|")[1], pipe: { id, mode: "proactive" as const }, channelIds: [id.split("|")[0]] })) } }),
     pipe: vi.fn(async (id: string) =>
       pipes[id]
         ? { ok: true as const, value: { id, name: "Lumen", ...pipes[id] } }
@@ -214,6 +214,20 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
   it("refuses the whole launch, naming the pipe, when one pipe cannot be run here", async () => {
     const res = await resolveSalesFunnelPlan("f@x", identity, deps([`${COLD}|${ENTRY}`, "google-ads-unknown|x"]));
     expect(res).toMatchObject({ ok: false, refusal: { status: 400, code: "pipe_not_runnable" } });
+  });
+
+  it("refuses a funnel with a leg NOBODY works; a lead-source leg naming no single pipe is fine (owner 2026-10-11)", async () => {
+    const funnelWith = (extra: { legKey: string; pipe: null; channelIds: string[] }) => ({
+      ...deps([`${COLD}|${ENTRY}`]),
+      salesFunnel: vi.fn(async () => ({
+        ok: true as const,
+        value: { id: "f@x", name: "Bliss", pipeIds: [`${COLD}|${ENTRY}`], legs: [extra, { legKey: ENTRY, pipe: { id: `${COLD}|${ENTRY}`, mode: "proactive" as const }, channelIds: [COLD] }] },
+      })),
+    });
+    const holed = await resolveSalesFunnelPlan("f@x", identity, funnelWith({ legKey: REACTIVE, pipe: null, channelIds: [] }));
+    expect(holed).toMatchObject({ ok: false, refusal: { status: 400, code: "leg_without_channel" } });
+    const sourced = await resolveSalesFunnelPlan("f@x", identity, funnelWith({ legKey: "start_to_lead_found", pipe: null, channelIds: ["sourcing-apollo-cold-filters", "sourcing-crm-contacts"] }));
+    expect(sourced.ok).toBe(true);
   });
 
   it("names an unknown funnel, a funnel with no pipe and an unreadable catalogue apart", async () => {
