@@ -119,6 +119,18 @@ export const DEFAULT_SOURCE_ORIGIN_BY_CHANNEL: Readonly<Record<string, string>> 
   "sales-crm-email-outreach": "sourcing-crm-contacts",
 };
 
+/**
+ * A pipe answering an INLINE trigger (features-service `channel-triggers.ts` `inline`: `lead_requested`, owner
+ * 2026-10-11) runs INSIDE the run that fires it: a source answers the lead request of the outreach run that needs
+ * the lead (lead-service `POST /orgs/buffer/next`). So its unit carries the workflow features-service chose for its
+ * pipe like every unit, but this service NEVER dispatches it: not due at birth or start (`nextRunAt` null), never
+ * claimed by the scheduler nor by the stuck sweep. The source channels are exactly those pipes.
+ */
+export const INLINE_TRIGGER_FEATURE_SLUGS: readonly string[] = [...LIVE_SOURCE_ORIGIN_SLUGS, ...RETIRED_SOURCE_ORIGIN_SLUGS];
+export function answersInlineTrigger(featureSlug?: string | null): boolean {
+  return isSourceOriginSlug(featureSlug);
+}
+
 /** True when campaigns of this channel are FED by source campaigns (it works found leads). */
 export function isSourcedChannel(featureSlug?: string | null): boolean {
   return !!featureSlug && featureSlug in SOURCING_ORIGINS_BY_CHANNEL;

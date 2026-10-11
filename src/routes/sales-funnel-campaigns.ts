@@ -17,13 +17,14 @@ import {
   setSalesFunnelCampaignStatus,
   type OnUnitStarted,
 } from "../lib/campaign-status-history.js";
-import { resolveSalesFunnelPlan } from "../lib/startable-pair.js";
+import { resolveSalesFunnelPlan, sourcingPipeWorkflow } from "../lib/startable-pair.js";
 import { acquisitionChannelForFeature, derivedCampaignName } from "../lib/campaign-identity.js";
 import { ensureSourcesOnStart } from "../lib/source-campaign-store.js";
 import { serializeSalesFunnelCampaign } from "../lib/sales-funnel-campaigns.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { convertToSalesFunnelCampaigns } from "../lib/sales-funnel-conversion.js";
 import { completeSalesFunnelUnits } from "../lib/sales-funnel-unit-completion.js";
+import { runLeadSourcingSwitch } from "../lib/sales-funnel-lead-sourcing-switch.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -302,6 +303,34 @@ router.post("/internal/sales-funnel-campaigns/convert", requireApiKey, async (re
     }));
   } catch (error) {
     console.error("[campaign-service] Sales funnel conversion error:", error);
+    res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+/**
+ * POST /internal/sales-funnel-campaigns/lead-sourcing-switch {apply?, orgId?} — the owner's Lead Sourcing switch
+ * (2026-10-11, lib/lead-sourcing-switch.ts): a funnel campaign running several sources gets ONE Lead Sourcing unit
+ * (the old source units stopped, same transaction); a single-source one stored under a legacy id is re-spelled to
+ * name its source; every ON source unit takes its pipe's workflow. Dry run unless `apply: true`; idempotent.
+ * Requires a REAL staff identity (x-org-id, x-user-id, x-run-id): the workflow read is workflow-service's.
+ */
+router.post("/internal/sales-funnel-campaigns/lead-sourcing-switch", requireApiKey, async (req, res) => {
+  const orgId = req.headers["x-org-id"];
+  const userId = req.headers["x-user-id"];
+  const runId = req.headers["x-run-id"];
+  if (typeof orgId !== "string" || typeof userId !== "string" || typeof runId !== "string" || !orgId || !userId || !runId) {
+    return res.status(400).json({ error: "x-org-id, x-user-id and x-run-id are required (a real staff run): the workflow read is workflow-service's" });
+  }
+  try {
+    const identity = { orgId, userId, runId };
+    const result = await runLeadSourcingSwitch({
+      apply: req.body?.apply === true,
+      orgId: typeof req.body?.orgId === "string" ? req.body.orgId : undefined,
+      workflowOf: (slug) => sourcingPipeWorkflow(slug, identity),
+    });
+    res.json(result);
+  } catch (error) {
+    console.error("[campaign-service] Lead Sourcing switch error:", error);
     res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
