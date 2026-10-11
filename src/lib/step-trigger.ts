@@ -25,7 +25,7 @@ import {
   unitPeople,
   type NamedPerson,
 } from "./sales-funnel-people.js";
-import { targetingOfSalesFunnelCampaigns } from "./sales-funnel-people-store.js";
+import { fileSalesFunnelCampaignPeople, targetingOfSalesFunnelCampaigns } from "./sales-funnel-people-store.js";
 
 /**
  * A LEAD JUST REACHED A STEP — RUN THE CAMPAIGN THAT WAS BOUGHT TO TAKE THEM OUT OF IT, NOW.
@@ -423,7 +423,7 @@ export async function runCampaignsInScope(
     // money allows a run (a capped or unfunded campaign owes nobody anything). The debt is durable: a
     // dispatch skipped below (run or cohort in flight) leaves it for the unit's next run to claim.
     if (people) {
-      const owed = await makePeopleDue(req.orgId, campaign.id, people, now);
+      const owed = await makePeopleDue(campaign, people, now);
       if (!owed.ok) {
         skip(owed.code, owed.detail);
         continue;
@@ -539,21 +539,34 @@ export async function runCampaignsInScope(
  * (a failed one is logged); none = the first failure, named.
  */
 async function makePeopleDue(
-  orgId: string,
-  campaignId: string,
+  unit: Campaign,
   people: readonly NamedPerson[],
   now: Date,
 ): Promise<{ ok: true } | { ok: false; code: StepTriggerSkipReason; detail: string }> {
   let first: { code: StepTriggerSkipReason; detail: string } | null = null;
   let owed = 0;
+  let refiled = false;
   for (const person of people) {
-    const outcome = await scheduleNamedPersonDue({ orgId, campaignId, email: person.email, now });
+    let outcome = await scheduleNamedPersonDue({ orgId: unit.orgId, campaignId: unit.id, email: person.email, now });
+    // Not filed on this unit yet (born before lead-service could file them): file now, then make due.
+    if (!outcome.ok && outcome.code === "person_not_filed" && unit.salesFunnelCampaignId && !refiled) {
+      refiled = true;
+      await fileSalesFunnelCampaignPeople({
+        salesFunnelCampaignId: unit.salesFunnelCampaignId,
+        orgId: unit.orgId,
+        people,
+        units: [unit],
+        userId: unit.createdByUserId,
+        runId: unit.parentRunId,
+      });
+      outcome = await scheduleNamedPersonDue({ orgId: unit.orgId, campaignId: unit.id, email: person.email, now });
+    }
     if (outcome.ok) {
       owed += 1;
       continue;
     }
     console.error(
-      `[campaign-service] campaign ${campaignId}: named person ${person.email} not made due (${outcome.code}): ${outcome.detail}`,
+      `[campaign-service] campaign ${unit.id}: named person ${person.email} not made due (${outcome.code}): ${outcome.detail}`,
     );
     first ??= { code: outcome.code, detail: `${person.email}: ${outcome.detail}` };
   }
