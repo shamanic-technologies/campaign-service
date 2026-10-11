@@ -201,6 +201,9 @@ export const campaigns = pgTable(
         table.brandId,
         sql`coalesce(${table.offerId}, '')`,
         sql`coalesce(${table.salesFunnelId}, '')`,
+        // Widened by the funnel CAMPAIGN (migration 0067): two funnel campaigns on one funnel (each
+        // naming its own people) each own their pipe.
+        sql`coalesce(${table.salesFunnelCampaignId}, '')`,
         sql`coalesce(${table.legKey}, '')`,
         table.acquisitionChannel,
       )
@@ -242,6 +245,14 @@ export const salesFunnelCampaigns = pgTable(
     stopReason: text("stop_reason"),
     createdByUserId: text("created_by_user_id"),
     parentRunId: text("parent_run_id"),
+    // The exact people this campaign acts for ([{email, leadId}]; migration 0067). NULL = whoever its
+    // pipes serve, as every campaign before. lib/sales-funnel-people.ts.
+    people: jsonb("people"),
+    // The people's canonical identity (sorted lowercased emails joined by ","; '' = names nobody).
+    // Part of the identity: the same funnel naming other people is another campaign.
+    peopleKey: text("people_key").notNull().default(""),
+    // Free text every run of its units carries to the workflow (/start-run `instruction`). Editable.
+    instruction: text("instruction"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -251,6 +262,7 @@ export const salesFunnelCampaigns = pgTable(
       table.brandId,
       table.offerId,
       table.salesFunnelId,
+      table.peopleKey,
     ),
     index("idx_sales_funnel_campaigns_org_status").on(table.orgId, table.status),
   ],
