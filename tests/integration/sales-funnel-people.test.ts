@@ -227,6 +227,23 @@ describe("a sales funnel campaign that names its people and carries an instructi
       expect(out.skipped.some((s) => s.reason === STEP_TRIGGER_SKIPS.PIPE_HANDLED_BY_ANOTHER_CAMPAIGN)).toBe(false);
     });
 
+    it("a REPORTED event naming one lead runs only the campaign naming that lead", async () => {
+      const marie = await followUp("marie@example.com").expect(201);
+      await followUp("paul@example.com").expect(201);
+      const marieUnit = marie.body.salesFunnelCampaign.units[0].campaignId;
+      const out = await runCampaignsInScope(
+        { orgId: ORG, brandId: BRAND, offerId: OFFER },
+        isFollowUpPipe,
+        "test event",
+        undefined,
+        "lead-marie@example.com",
+      );
+      expect(out.triggered.map((t) => t.campaignId)).toEqual([marieUnit]);
+      expect(out.skipped.map((s) => s.reason)).toEqual([STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON]);
+      expect(mockSchedule).toHaveBeenCalledTimes(1);
+      expect(mockSchedule).toHaveBeenCalledWith(expect.objectContaining({ email: "marie@example.com" }));
+    });
+
     it("an event naming another lead does not concern it", async () => {
       await followUp("marie@example.com").expect(201);
       const out = await runCampaignsInScope(

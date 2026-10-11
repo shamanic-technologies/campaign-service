@@ -147,6 +147,8 @@ export interface StepTriggerRequest {
   offerId: string;
   /** The step the lead just REACHED. features-service's step key, carried verbatim. */
   step: string;
+  /** The lead who reached it, when the caller says (picks which campaign naming its people it concerns). */
+  leadId?: string;
 }
 
 export interface StepTriggerOutcome {
@@ -241,6 +243,8 @@ export async function runStep(
     // Either outbound spelling names the same leg (lib/leg-identity.ts).
     (c) => legKeys.some((k) => sameLeg(c.featureSlug, k, c.legKey)),
     `step ${req.step}`,
+    undefined,
+    req.leadId,
   );
   outcome.triggered = run.triggered;
   outcome.skipped = run.skipped;
@@ -259,6 +263,11 @@ export async function runCampaignsInScope(
   label: string,
   /** The detector-fired event this dispatch answers (lib/trigger-detectors.ts); rides `/execute` inputs. */
   trigger?: WorkflowTriggerInput,
+  /**
+   * The lead the event NAMES when it is not a detector event (a reported trigger, a step reached).
+   * Read only to pick which campaign naming its people the event concerns; never sent anywhere.
+   */
+  eventLeadId?: string | null,
 ): Promise<Pick<StepTriggerOutcome, "triggered" | "skipped"> & { offCampaignIds: string[] }> {
   const outcome: Pick<StepTriggerOutcome, "triggered" | "skipped"> = { triggered: [], skipped: [] };
 
@@ -335,8 +344,9 @@ export async function runCampaignsInScope(
     }
 
     const people = unitPeople(campaign, targeting);
-    if (people && !eventConcernsPeople(people, trigger?.leadId)) {
-      skip(STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON, `the event names lead ${trigger?.leadId}, not one of the people this campaign names`);
+    const namedLeadId = trigger?.leadId ?? eventLeadId ?? null;
+    if (people && !eventConcernsPeople(people, namedLeadId)) {
+      skip(STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON, `the event names lead ${namedLeadId}, not one of the people this campaign names`);
       continue;
     }
 
