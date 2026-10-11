@@ -149,7 +149,7 @@ export async function recurringCampaignStatuses(scope: {
     const audience: CurrentAudience = !period ? "not_recorded" : period.hasAudience ? "available" : "exhausted";
 
     const running = c.status === "ongoing";
-    // A source unit carries its pipe's workflow but answers the INLINE lead_requested trigger: this platform never
+    // A source unit carries its pipe's workflow but answers the on_demand trigger: this platform never
     // dispatches it (lib/source-campaigns.ts), so it is not executed here and never recurring itself, as before.
     const executedByPlatform = c.workflowSlug !== null && !answersInlineTrigger(c.featureSlug);
     let recurring: boolean | null;

@@ -120,11 +120,12 @@ export const DEFAULT_SOURCE_ORIGIN_BY_CHANNEL: Readonly<Record<string, string>> 
 };
 
 /**
- * A pipe answering an INLINE trigger (features-service `channel-triggers.ts` `inline`: `lead_requested`, owner
- * 2026-10-11) runs INSIDE the run that fires it: a source answers the lead request of the outreach run that needs
- * the lead (lead-service `POST /orgs/buffer/next`). So its unit carries the workflow features-service chose for its
- * pipe like every unit, but this service NEVER dispatches it: not due at birth or start (`nextRunAt` null), never
- * claimed by the scheduler nor by the stuck sweep. The source channels are exactly those pipes.
+ * A pipe answering an INLINE trigger (features-service `channel-triggers.ts` `inline`: `on_demand`, owner 2026-10-11)
+ * runs only when another pipe asks for it, inside that ask: a source answers the lead request of the outreach run
+ * that needs the lead (lead-service `POST /orgs/buffer/next`), as its OWN run (`lib/on-demand-runs.ts`). So its unit
+ * carries the workflow features-service chose for its pipe like every unit, but this service NEVER schedules it: not
+ * due at birth or start (`nextRunAt` null), never claimed by the scheduler nor by the stuck sweep. The source
+ * channels are exactly those pipes.
  */
 export const INLINE_TRIGGER_FEATURE_SLUGS: readonly string[] = [...LIVE_SOURCE_ORIGIN_SLUGS, ...RETIRED_SOURCE_ORIGIN_SLUGS];
 export function answersInlineTrigger(featureSlug?: string | null): boolean {

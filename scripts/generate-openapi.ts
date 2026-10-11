@@ -45,6 +45,10 @@ import {
   RecordTriggerEventBody,
   RecordTriggerEventResponse,
   OfferTriggerEventsSummaryQuery,
+  OpenOnDemandRunBody,
+  OpenOnDemandRunResponse,
+  TriggerRanCountsQuery,
+  TriggerRanCountsResponse,
   OfferTriggerEventsSummaryResponse,
   OfferTriggerEventsListQuery,
   OfferTriggerEventsListResponse,
@@ -235,7 +239,7 @@ registry.registerPath({
   path: "/internal/sales-funnel-campaigns/lead-sourcing-switch",
   tags: ["Sales funnel campaigns"],
   summary: "The owner's Lead Sourcing switch (staff, dry run by default)",
-  description: "Owner GO 2026-10-11 (one channel per leg). Body {apply?: boolean (default false = dry run), orgId?: string}; headers x-org-id + x-user-id + x-run-id of a REAL staff run (the workflow read is workflow-service's). A funnel campaign with 2+ source units ON gets ONE `lead-sourcing` unit (its pipe's workflow, the funnel's status, never dispatched: it answers the inline lead_requested trigger) and the old source units stop (`replaced_by_lead_sourcing`), in ONE transaction; its sales funnel id and status do not move (billing's caps are keyed on it; features-service resolves it to the Lead Sourcing funnel). A single-source funnel the catalogue answers with another id moves to the id features-service mints for its pipes with its own source, unless billing holds a cap under the old id. Every ON source unit with no workflow takes its pipe's. Idempotent.",
+  description: "Owner GO 2026-10-11 (one channel per leg). Body {apply?: boolean (default false = dry run), orgId?: string}; headers x-org-id + x-user-id + x-run-id of a REAL staff run (the workflow read is workflow-service's). A funnel campaign with 2+ source units ON gets ONE `lead-sourcing` unit (its pipe's workflow, the funnel's status, never dispatched: it answers the on_demand trigger) and the old source units stop (`replaced_by_lead_sourcing`), in ONE transaction; its sales funnel id and status do not move (billing's caps are keyed on it; features-service resolves it to the Lead Sourcing funnel). A single-source funnel the catalogue answers with another id moves to the id features-service mints for its pipes with its own source, unless billing holds a cap under the old id. Every ON source unit with no workflow takes its pipe's. Idempotent.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: z.object({ apply: z.boolean().optional(), orgId: z.string().optional() }) } } } },
   responses: {
@@ -243,6 +247,33 @@ registry.registerPath({
     400: { description: "Missing staff identity", content: { "application/json": { schema: ErrorResponse } } },
     502: { description: "workflow-service or features-service unreadable", content: { "application/json": { schema: ErrorResponse } } },
   },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/on-demand-runs",
+  tags: ["Internal"],
+  summary: "Open ONE run of a unit answering the on_demand trigger",
+  description: "Owner 2026-10-11: a pipe whose trigger is `on_demand` (the sourcing channels: an origin or Lead Sourcing) runs only when another pipe asks for it, inside that ask (lead-service serving the lead a cold email run needs). Each ask is its own unit run: a ROOT run in runs-service (`campaign-service` / task = the unit's campaign id) carrying the unit's campaign, brand, channel and workflow, so what it spends is its own pipe's. The caller does the work under it and closes it (PATCH runs-service). Headers x-org-id + x-user-id + x-run-id (the ASKING pipe's run, traced, never the parent). A unit carrying no workflow: 409 `no_workflow`.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: OpenOnDemandRunBody } } } },
+  responses: {
+    201: { description: "Opened", content: { "application/json": { schema: OpenOnDemandRunResponse } } },
+    400: { description: "Missing identity or malformed body", content: { "application/json": { schema: ErrorResponse } } },
+    404: { description: "`unknown_campaign`", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "`not_on_demand` | `campaign_off` | `no_brand` | `no_workflow`", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/trigger-events/ran-counts",
+  tags: ["Internal"],
+  summary: "Fleet: per campaign, how many events of one trigger ran it",
+  description: "Every org. For `on_demand`, a ran event is a lead found by the sourcing unit that served it: the outcome features-service measures a sourcing pipe on. A read.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { query: TriggerRanCountsQuery },
+  responses: { 200: { description: "Counts", content: { "application/json": { schema: TriggerRanCountsResponse } } } },
 });
 
 registry.registerPath({
