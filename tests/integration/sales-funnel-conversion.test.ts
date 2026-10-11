@@ -54,6 +54,14 @@ const MEET_FUNNEL = `${MEET}@${AMB}+meeting_booked_to_paid_client`;
 // The cold email pipe THEN the meeting-booking pipe: mixes proactive and reactive, never chosen.
 const MIXED_FUNNEL = `${ENTRY}@${COLD}+${MEET}@${AMB}+meeting_booked_to_paid_client`;
 
+const REPLY_CLOSING = "your-team-reply-closing|conversation_to_paid_client";
+const ATTENDANCE = "your-team-meeting-attendance|meeting_booked_to_meeting_attended";
+const CLOSING = "your-team-closing-calls|meeting_attended_to_paid_client";
+const BOOKING_CALLS = "your-team-booking-calls|booking_call_to_paid_client";
+const YOUR_TEAM = ["your-team-reply-closing", "your-team-meeting-attendance", "your-team-closing-calls", "your-team-booking-calls"];
+const leg = (legKey: string, pipeId: string | null, mode: "proactive" | "reactive" = "reactive") =>
+  ({ legKey, pipe: pipeId ? { id: pipeId, mode } : null, channelIds: pipeId ? [pipeId.split("|")[0]] : [] });
+
 const row = (featureSlug: string, legKey: string, status = "ongoing") =>
   insertTestCampaign(ORG, {
     brandIds: [BRAND], brandId: BRAND, featureSlug, offerId: OFFER, legKey, status,
@@ -84,7 +92,7 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
       ],
       legsBySlug: new Map([[COLD, new Set([ENTRY])], [AMB, new Set([MEET])], [AIC, new Set([CALL])]]),
       reactiveBySlug: new Map([[COLD, new Map([[ENTRY, false]])], [AMB, new Map([[MEET, true]])], [AIC, new Map([[CALL, true]])]]),
-      operatorBySlug: new Map([["your-team-meeting-attendance", "customer"]]),
+      operatorBySlug: new Map(YOUR_TEAM.map((slug) => [slug, "customer"])),
       stepKeys: new Set(),
     });
     mockBudgets.mockResolvedValue({
@@ -102,10 +110,12 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
       { combinationKey: PROACTIVE_FUNNEL, roi: 3, legs: [{ legKey: ENTRY, reactive: false, workedBy: "platform", channelSlug: COLD, channelManaged: true }] },
     ] });
     mockFunnel.mockImplementation(async (id: string) => {
-      if (id === PROACTIVE_FUNNEL) return { ok: true, value: { id, name: "Zenith", pipeIds: [`${COLD}|${ENTRY}`], legs: [{ legKey: ENTRY, pipe: { id: `${COLD}|${ENTRY}`, mode: "proactive" } }, { legKey: "conversation_to_paid_client", pipe: null }] } };
-      if (id === MIXED_FUNNEL) return { ok: true, value: { id, name: "Victory", pipeIds: [`${COLD}|${ENTRY}`, `${AMB}|${MEET}`], legs: [{ legKey: ENTRY, pipe: { id: `${COLD}|${ENTRY}`, mode: "proactive" } }, { legKey: MEET, pipe: { id: `${AMB}|${MEET}`, mode: "reactive" } }] } };
-      // A reactive-only funnel whose next leg is the CUSTOMER's own team (a customer-operated pipe).
-      if (id === MEET_FUNNEL) return { ok: true, value: { id, name: "Motivate", pipeIds: [`${AMB}|${MEET}`, "your-team-meeting-attendance|meeting_booked_to_meeting_attended"], legs: [{ legKey: MEET, pipe: { id: `${AMB}|${MEET}`, mode: "reactive" } }, { legKey: "meeting_booked_to_meeting_attended", pipe: { id: "your-team-meeting-attendance|meeting_booked_to_meeting_attended", mode: "reactive" } }, { legKey: "meeting_attended_to_paid_client", pipe: null }] } };
+      // The lead-source leg first (no single pipe: several sources may feed it), then the cold email
+      // pipe, then the customer's own team ("Your team", a customer-operated pipe).
+      if (id === PROACTIVE_FUNNEL) return { ok: true, value: { id, name: "Zenith", pipeIds: [`${COLD}|${ENTRY}`, REPLY_CLOSING], legs: [{ legKey: SOURCE_LEG, pipe: null, channelIds: [SOURCE] }, leg(ENTRY, `${COLD}|${ENTRY}`, "proactive"), leg("conversation_to_paid_client", REPLY_CLOSING)] } };
+      if (id === MIXED_FUNNEL) return { ok: true, value: { id, name: "Victory", pipeIds: [`${COLD}|${ENTRY}`, `${AMB}|${MEET}`], legs: [leg(ENTRY, `${COLD}|${ENTRY}`, "proactive"), leg(MEET, `${AMB}|${MEET}`)] } };
+      // A reactive-only funnel whose next legs are the CUSTOMER's own team (customer-operated pipes).
+      if (id === MEET_FUNNEL) return { ok: true, value: { id, name: "Motivate", pipeIds: [`${AMB}|${MEET}`, ATTENDANCE, CLOSING], legs: [leg(MEET, `${AMB}|${MEET}`), leg("meeting_booked_to_meeting_attended", ATTENDANCE), leg("meeting_attended_to_paid_client", CLOSING)] } };
       return { ok: false, notFound: true, detail: "404" };
     });
     mockPipe.mockImplementation(async (id: string) => ({ ok: true, value: { id, name: "Bird", channelSlug: id.split("|")[0], legKey: id.split("|")[1], mode: "reactive" } }));
@@ -164,7 +174,18 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     expect(byId.get(cold.id)!.salesFunnelCampaignId).toBe(byId.get(src.id)!.salesFunnelCampaignId);
     expect(byId.get(amb.id)!.salesFunnelId).toBe(MEET_FUNNEL);
     expect(byId.get(aic.id)!.salesFunnelCampaignId).toBeNull();
-    expect(await db.select().from(campaignStatusTransitions)).toHaveLength(before.length);
+    // Every leg has its channel (owner 2026-10-11): the "Your team" legs are born as units with no
+    // workflow, in their funnel's status; the linked rows' history is untouched.
+    const born = after.filter((c) => ![cold.id, src.id, amb.id, aic.id].includes(c.id));
+    expect(born.map((c) => [c.featureSlug, c.legKey, c.workflowSlug, c.nextRunAt]).sort()).toEqual([
+      ["your-team-closing-calls", "meeting_attended_to_paid_client", null, null],
+      ["your-team-meeting-attendance", "meeting_booked_to_meeting_attended", null, null],
+      ["your-team-reply-closing", "conversation_to_paid_client", null, null],
+    ]);
+    expect(born.find((c) => c.featureSlug === "your-team-reply-closing")!.salesFunnelCampaignId).toBe(byId.get(cold.id)!.salesFunnelCampaignId);
+    const transitions = await db.select().from(campaignStatusTransitions);
+    expect(transitions).toHaveLength(before.length + born.length);
+    expect(transitions.filter((t) => born.some((b) => b.id === t.campaignId)).every((t) => t.source === "sales_funnel" && t.toStatus === "ongoing")).toBe(true);
     expect(report.counts).toMatchObject({ campaigns: 4, converted: 3, skipped: 1 });
 
     billingCalls.length = 0;
@@ -207,7 +228,7 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     const CALL_FUNNEL = `${CALL}@${AIC}+booking_call_to_paid_client`;
     const base = mockFunnel.getMockImplementation()!;
     mockFunnel.mockImplementation(async (id: string) => id === CALL_FUNNEL
-      ? { ok: true, value: { id, name: "Moving", pipeIds: [`${AIC}|${CALL}`], legs: [{ legKey: CALL, pipe: { id: `${AIC}|${CALL}`, mode: "reactive" } }, { legKey: "booking_call_to_paid_client", pipe: null }] } }
+      ? { ok: true, value: { id, name: "Moving", pipeIds: [`${AIC}|${CALL}`, BOOKING_CALLS], legs: [leg(CALL, `${AIC}|${CALL}`), leg("booking_call_to_paid_client", BOOKING_CALLS)] } }
       : base(id));
     mockSearch.mockImplementation(async (_q: string, channel: string) => ({ ok: true, value: channel === AIC ? [CALL_FUNNEL] : [] }));
     const kept = await convertToSalesFunnelCampaigns({ apply: false });
@@ -256,12 +277,25 @@ describe("converting the live (leg x channel) campaigns into sales funnel campai
     }));
     const base = mockFunnel.getMockImplementation()!;
     mockFunnel.mockImplementation(async (id: string) => id === TICKED
-      ? { ok: true, value: { id, name: "Ticked", pipeIds: [`${COLD}|${ENTRY}`], legs: [{ legKey: ENTRY, pipe: { id: `${COLD}|${ENTRY}`, mode: "proactive" } }, { legKey: "conversation_to_signup", pipe: null }, { legKey: "signup_to_paid_client", pipe: null }] } }
+      ? { ok: true, value: { id, name: "Ticked", pipeIds: [`${COLD}|${ENTRY}`], legs: [leg(ENTRY, `${COLD}|${ENTRY}`, "proactive"), leg("conversation_to_signup", null), leg("signup_to_paid_client", null)] } }
       : base(id));
     // The per-offer ticked path is retired (2026-10-10): the best path's PURE funnel, skipping the
     // mixed one listed first, whatever was once ticked.
     const best = await convertToSalesFunnelCampaigns({ apply: false });
     expect(best.groups[0]).toMatchObject({ salesFunnelId: PROACTIVE_FUNNEL, basis: "best_roi_path" });
+  });
+
+  it("never takes a funnel with a leg NOBODY works (owner 2026-10-11)", async () => {
+    await row(COLD, ENTRY);
+    const HOLED = `${ENTRY}@${COLD}+conversation_to_meeting_booked+meeting_booked_to_paid_client`;
+    mockSearch.mockImplementation(async (_q: string, channel: string) => ({ ok: true, value: channel === COLD ? [HOLED] : [] }));
+    const base = mockFunnel.getMockImplementation()!;
+    mockFunnel.mockImplementation(async (id: string) => id === HOLED
+      ? { ok: true, value: { id, name: "Bliss", pipeIds: [`${COLD}|${ENTRY}`, CLOSING], legs: [leg(ENTRY, `${COLD}|${ENTRY}`, "proactive"), leg(MEET, null), leg("meeting_booked_to_paid_client", CLOSING)] } }
+      : base(id));
+    const report = await convertToSalesFunnelCampaigns({ apply: true });
+    expect(report.groups[0]).toMatchObject({ salesFunnelId: null, skipped: "no_catalogue_funnel_with_only_this_pipe" });
+    expect(await db.select().from(salesFunnelCampaigns)).toEqual([]);
   });
 
   it("leaves a reactive pipe as it is while the catalogue has no reactive-only funnel for it", async () => {
