@@ -348,17 +348,13 @@ export async function resolveSalesFunnelPlan(
       return unavailable();
     }
     const { channelSlug, legKey, mode, name } = pipe.value;
-    // A SOURCING pipe (Start → Lead found, worked by a lead-source ORIGIN): its unit is a source
-    // campaign of the funnel (lib/source-campaigns.ts) — no workflow, never scheduled; lead-service
-    // finds the leads inside the outreach run and files them under the running source. While it is
-    // ON its origin is ON for the offer. A funnel with no sourcing pipe still gets its leads: a
-    // person's start of its entry pipe brings the offer's default source (ensureSourcesOnStart).
-    if (isSourceOriginSlug(channelSlug)) {
-      if (!isLiveSourceOrigin(channelSlug) || storedLegKey(channelSlug, legKey) !== SOURCE_LEG_KEY) {
-        return refuseLaunch(400, "pipe_not_runnable", `We can't run the lead source "${name ?? pipeId}" of this sales funnel.`);
-      }
-      units.push({ pipeId, featureSlug: channelSlug, legKey: SOURCE_LEG_KEY, mode, workflowSlug: null });
-      continue;
+    // A SOURCING pipe (Start → Lead found, an origin or Lead Sourcing): its unit is a source campaign of
+    // the funnel (lib/source-campaigns.ts). It takes its pipe's workflow like EVERY pipe (owner 2026-10-11:
+    // "the infra is homogeneous", sourcing ran with none); it answers the INLINE `lead_requested` trigger, so
+    // it is never dispatched by this service (`answersInlineTrigger`): lead-service serves inside the outreach
+    // run and files the lead under the running source. While it is ON its origin(s) are ON for the offer.
+    if (isSourceOriginSlug(channelSlug) && (!isLiveSourceOrigin(channelSlug) || storedLegKey(channelSlug, legKey) !== SOURCE_LEG_KEY)) {
+      return refuseLaunch(400, "pipe_not_runnable", `We can't run the lead source "${name ?? pipeId}" of this sales funnel.`);
     }
     const workflow = await resolveReactiveDefaultWorkflow(channelSlug, legKey, identity, catalogue, { workflow: deps.workflow }, { pacedBySalesFunnelCaps: true });
     if (!workflow.ok) {
@@ -381,4 +377,16 @@ export async function resolveSalesFunnelPlan(
   }
 
   return { ok: true, plan: { salesFunnelId: read.value.id, salesFunnelName: read.value.name, units } };
+}
+
+/**
+ * The workflow a SOURCING pipe's unit carries (owner 2026-10-11: every pipe runs a workflow; a source unit answers
+ * the inline `lead_requested` trigger, so it is never dispatched): the channel's newest active one, the read a launch
+ * makes. Asked by a PERSON's act only: the staff-run Lead Sourcing switch (routes/sales-funnel-campaigns.ts).
+ * null = the channel has none. Unreadable throws (nothing is written on a guess).
+ */
+export async function sourcingPipeWorkflow(channelSlug: string, identity: IdentityHeaders & { userId: string; runId: string }): Promise<string | null> {
+  const read = await fetchStartableWorkflowSlug(channelSlug, identity);
+  if (!read.ok) throw new Error(`workflow-service unreadable for ${channelSlug}: ${read.detail}`);
+  return read.workflowSlug;
 }

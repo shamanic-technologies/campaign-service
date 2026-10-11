@@ -59,6 +59,24 @@ describe("Scheduler - reRunDueCampaigns (integration)", () => {
     await closeDb();
   });
 
+  it("never dispatches a SOURCE unit, workflow or not (it answers the inline lead_requested trigger, owner 2026-10-11)", async () => {
+    const pastDate = new Date(Date.now() - 60_000);
+    const source = await insertTestCampaign(orgId, {
+      status: "ongoing",
+      nextRunAt: pastDate,
+      featureSlug: "lead-sourcing",
+      workflowSlug: "lead-sourcing-vega",
+      createdByUserId: "user_scheduler_test",
+    });
+    expect(await reRunDueCampaigns()).toBe(0);
+    expect(mockExecute).not.toHaveBeenCalled();
+    const { claimStuckCampaigns } = await import("../../src/lib/scheduler.js");
+    await db.update(campaigns).set({ nextRunAt: null }).where(eq(campaigns.id, source.id));
+    expect(await claimStuckCampaigns()).toBe(0);
+    const [row] = await db.select().from(campaigns).where(eq(campaigns.id, source.id));
+    expect(row.nextRunAt).toBeNull();
+  });
+
   it("should not trigger anything when no campaigns are due", async () => {
     await insertTestCampaign(orgId, {
       status: "ongoing",

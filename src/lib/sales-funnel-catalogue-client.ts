@@ -114,6 +114,30 @@ export function legsWithoutChannel(funnel: Pick<SalesFunnelFromCatalogue, "legs"
   return funnel.legs.filter((leg) => leg.pipe === null && !isSourcingLeg(leg)).map((leg) => leg.legKey);
 }
 
+/**
+ * The funnel id of a chain of pipes, one per leg (features-service `POST /internal/catalogue/sales-funnels`:
+ * idempotent, 200 with the existing funnel, 201 when it declares it). The catalogue mints the id; this service
+ * never builds one.
+ */
+export async function declareSalesFunnel(pipeIds: string[], createdBy: string): Promise<CatalogueRead<{ id: string }>> {
+  const baseUrl = process.env.FEATURES_SERVICE_URL;
+  const apiKey = process.env.FEATURES_SERVICE_API_KEY;
+  if (!baseUrl || !apiKey) return { ok: false, notFound: false, detail: "features-service not configured" };
+  const path = "/internal/catalogue/sales-funnels";
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey, "content-type": "application/json" },
+      body: JSON.stringify({ pipeIds, createdBy }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) return { ok: false, notFound: res.status === 404, detail: `features-service HTTP ${res.status} on POST ${path}: ${(await res.text()).slice(0, 300)}` };
+    return { ok: true, value: z.object({ id: z.string().min(1) }).parse(await res.json()) };
+  } catch (err) {
+    return { ok: false, notFound: false, detail: `POST ${path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
 export async function fetchPipe(pipeId: string): Promise<CatalogueRead<PipeFromCatalogue>> {
   return readCatalogue(`/internal/catalogue/pipes/${encodeURIComponent(pipeId)}`, (body) => PipeResponse.parse(body));
 }

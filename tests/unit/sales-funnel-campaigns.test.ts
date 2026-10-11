@@ -145,7 +145,7 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
   const identity = { orgId: "org", userId: "user", runId: "run", brandId: "brand" };
   const catalogue: ChannelCatalogueRead = {
     ok: true,
-    legsBySlug: new Map([[COLD, new Set([ENTRY])], ["ai-meeting-booking", new Set([REACTIVE])]]),
+    legsBySlug: new Map([[COLD, new Set([ENTRY])], ["ai-meeting-booking", new Set([REACTIVE])], ["sourcing-apollo-cold-filters", new Set(["start_to_lead_found"])]]),
     operatorBySlug: new Map(),
   } as unknown as ChannelCatalogueRead;
   const pipes: Record<string, { channelSlug: string; legKey: string; mode: "proactive" | "reactive" }> = {
@@ -180,13 +180,13 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
     ]);
   });
 
-  it("runs a SOURCING pipe as a source campaign unit: no workflow, never asked of workflow-service", async () => {
+  it("a SOURCING pipe's unit takes its pipe's workflow like every pipe (owner 2026-10-11); a retired source is refused", async () => {
     const d = deps(["sourcing-apollo-cold-filters|start_to_lead_found", `${COLD}|${ENTRY}`]);
     const res = await resolveSalesFunnelPlan("f@x", identity, d);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.plan.units[0]).toMatchObject({ featureSlug: "sourcing-apollo-cold-filters", legKey: "start_to_lead_found", workflowSlug: null });
-    expect(d.workflow).toHaveBeenCalledTimes(1);
+    expect(res.plan.units[0]).toMatchObject({ featureSlug: "sourcing-apollo-cold-filters", legKey: "start_to_lead_found", workflowSlug: "aurora-v3" });
+    expect(d.workflow).toHaveBeenCalledTimes(2);
   });
 
   it("launches a pipe OUTSIDE the sales family (LinkedIn Posting, #608): its funnel's caps pace it", async () => {

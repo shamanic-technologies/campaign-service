@@ -36,6 +36,12 @@ export const STOP_REASONS = {
    * "add a payment method" instead of "your card was declined" (owner rule, 2026-09-27).
    */
   NO_PAYMENT_METHOD: "no_payment_method",
+  /**
+   * The owner's decision 2026-10-11 ("Migration A", lib/lead-sourcing-switch.ts): a funnel campaign running
+   * several lead sources had them REPLACED by one Lead Sourcing unit that keeps the same sources on. Written on
+   * those old source units only, never on a campaign a customer runs; nothing restarts them.
+   */
+  REPLACED_BY_LEAD_SOURCING: "replaced_by_lead_sourcing",
 } as const;
 
 export type StopReason = (typeof STOP_REASONS)[keyof typeof STOP_REASONS];
