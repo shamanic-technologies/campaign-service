@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 
-const { mockExecute, mockPlan, mockFunnelMoney, mockSchedule } = vi.hoisted(() => ({
+const { mockExecute, mockPlan, mockFunnelMoney, mockSchedule, mockFile } = vi.hoisted(() => ({
   mockExecute: vi.fn(),
   mockPlan: vi.fn(),
   mockFunnelMoney: vi.fn(),
   mockSchedule: vi.fn(),
+  mockFile: vi.fn(),
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -45,7 +46,7 @@ vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
 
 vi.mock("../../src/lib/sales-funnel-people.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/sales-funnel-people.js")>();
-  return { ...original, scheduleNamedPersonDue: mockSchedule };
+  return { ...original, scheduleNamedPersonDue: mockSchedule, fileNamedPerson: mockFile };
 });
 
 import app from "../../src/index.js";
@@ -95,6 +96,7 @@ describe("a sales funnel campaign that names its people and carries an instructi
     mockExecute.mockResolvedValue(undefined);
     mockFunnelMoney.mockResolvedValue({ run: true });
     mockSchedule.mockResolvedValue({ ok: true });
+    mockFile.mockImplementation(async ({ email }: { email: string }) => ({ ok: true, leadId: `lead-${email}`, filed: true }));
   });
 
   afterAll(async () => {
@@ -108,15 +110,30 @@ describe("a sales funnel campaign that names its people and carries an instructi
     expect(res.body).toMatchObject({ created: true, started: true });
     expect(fc).toMatchObject({
       status: "ongoing",
-      people: [{ email: "marie@example.com", leadId: null }],
+      people: [{ email: "marie@example.com", leadId: "lead-marie@example.com" }],
       instruction: "Give Marie her exact cost per booked meeting.",
     });
     expect(fc.units).toHaveLength(1);
+    expect(fc.people).toEqual([{ email: "marie@example.com", leadId: null }].map((p) => ({ ...p, leadId: "lead-marie@example.com" })));
+    expect(mockFile).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG, campaignId: fc.units[0].campaignId, email: "marie@example.com" }));
+    expect(res.body.filing).toEqual([
+      { email: "marie@example.com", campaignId: fc.units[0].campaignId, outcome: "filed", leadId: "lead-marie@example.com" },
+    ]);
 
+    mockFile.mockClear();
     const again = await followUp("marie@example.com").expect(200);
+    expect(mockFile).not.toHaveBeenCalled();
     expect(again.body).toMatchObject({ created: false, started: false });
     expect(again.body.salesFunnelCampaign.id).toBe(fc.id);
     expect(again.body.salesFunnelCampaign.instruction).toBe("Give Marie her exact cost per booked meeting.");
+  });
+
+  it("a person the brand does not know is still born, said in `filing`, leadId null", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mockFile.mockResolvedValue({ ok: false, code: "person_not_known", detail: "lead-service 404" });
+    const res = await followUp("stranger@example.com").expect(201);
+    expect(res.body.salesFunnelCampaign.people).toEqual([{ email: "stranger@example.com", leadId: null }]);
+    expect(res.body.filing[0].outcome).toBe("person_not_known");
   });
 
   it("another person on the SAME funnel is another campaign, both live; a campaign naming nobody coexists", async () => {
@@ -191,7 +208,7 @@ describe("a sales funnel campaign that names its people and carries an instructi
       })
       .expect(200);
     expect(run.body.instruction).toBe("edited");
-    expect(run.body.people).toEqual([{ email: "marie@example.com", leadId: null }]);
+    expect(run.body.people).toEqual([{ email: "marie@example.com", leadId: "lead-marie@example.com" }]);
   });
 
   describe("an event its pipe answers", () => {
@@ -222,6 +239,16 @@ describe("a sales funnel campaign that names its people and carries an instructi
       expect(out.skipped.map((s) => s.reason)).toEqual([STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON]);
       expect(mockSchedule).not.toHaveBeenCalled();
       expect(mockExecute).not.toHaveBeenCalled();
+    });
+
+    it("a person not filed on the unit is filed at the event, then made due and dispatched", async () => {
+      await followUp("marie@example.com").expect(201);
+      mockSchedule.mockResolvedValueOnce({ ok: false, code: "person_not_filed", detail: "lead-service 404" }).mockResolvedValueOnce({ ok: true });
+      mockFile.mockClear();
+      const out = await runCampaignsInScope({ orgId: ORG, brandId: BRAND, offerId: OFFER }, isFollowUpPipe, "test event");
+      expect(mockFile).toHaveBeenCalledTimes(1);
+      expect(mockSchedule).toHaveBeenCalledTimes(2);
+      expect(out.triggered).toHaveLength(1);
     });
 
     it("a person lead-service does not hold on the unit is a named skip, nothing dispatched", async () => {

@@ -19,6 +19,7 @@ import {
   recordRunSuccess,
   type RecordedFailure,
 } from "../lib/run-failure-backoff.js";
+import { OpenOnDemandRunBody, TriggerRanCountsQuery } from "../schemas.js";
 import { AnsweringCampaignsBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import type { z } from "zod";
 import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
@@ -39,9 +40,11 @@ import {
   recordTriggerEvent,
   serializeTriggerEvent,
   summarizeOfferTriggerEvents,
+  triggerRanCounts,
   triggerStepAndRecord,
   TriggerEventError,
 } from "../lib/trigger-events.js";
+import { openOnDemandRun, OnDemandRunError } from "../lib/on-demand-runs.js";
 import { resolvePredecessorCampaign, PredecessorScopeError } from "../lib/predecessor-campaign.js";
 import {
   resolveAnsweringCampaign,
@@ -926,6 +929,58 @@ router.post("/internal/trigger-events", requireApiKey, serviceAuth, validateBody
       return res.status(error.status).json({ error: error.message, reason: error.reason });
     }
     console.error("[campaign-service] trigger-events error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/on-demand-runs  (x-org-id, x-user-id, x-run-id = the ASKING pipe's run; lib/on-demand-runs.ts)
+ *
+ * Open ONE run of a unit whose pipe answers the `on_demand` trigger (a sourcing unit asked for a lead by the cold
+ * email run that needs it): a ROOT run of the unit (its campaign, brand, channel, workflow), so what it spends is its
+ * own pipe's. The caller does the work under it and closes it. Nothing is dispatched or scheduled here.
+ *   201 — opened: {runId, campaignId, featureSlug, workflowSlug, brandIds}
+ *   400 — missing identity or malformed body
+ *   404 — `unknown_campaign`; 409 — `not_on_demand` | `campaign_off` | `no_brand` | `no_workflow`
+ */
+router.post("/internal/on-demand-runs", requireApiKey, serviceAuth, validateBody(OpenOnDemandRunBody), async (req: AuthenticatedRequest, res) => {
+  const userId = req.headers["x-user-id"];
+  const callerRunId = req.headers["x-run-id"];
+  if (typeof userId !== "string" || !userId || typeof callerRunId !== "string" || !callerRunId) {
+    return res.status(400).json({ error: "x-user-id and x-run-id (the asking pipe's run) are required" });
+  }
+  const b = req.body as z.infer<typeof OpenOnDemandRunBody>;
+  try {
+    const run = await openOnDemandRun({ orgId: req.orgId!, userId, callerRunId, campaignId: b.campaignId, audienceId: b.audienceId });
+    traceEvent(run.runId, {
+      service: "campaign-service",
+      event: "on-demand-run-opened",
+      detail: `unit ${run.campaignId} (${run.featureSlug}, workflow ${run.workflowSlug}) asked by run ${callerRunId}`,
+      data: { campaignId: run.campaignId, featureSlug: run.featureSlug, workflowSlug: run.workflowSlug, callerRunId },
+    }, req.headers).catch(() => {});
+    res.status(201).json(run);
+  } catch (error) {
+    if (error instanceof OnDemandRunError) {
+      console.warn(`[campaign-service] ${error.status} ${error.reason} on /internal/on-demand-runs: ${error.message}`);
+      return res.status(error.status).json({ error: error.message, reason: error.reason });
+    }
+    console.error(`[campaign-service] on-demand run of ${b.campaignId} failed to open:`, error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /internal/trigger-events/ran-counts?triggerId=  (fleet, every org; a read)
+ *
+ * Per campaign, how many events of ONE trigger ran it (first and last time). For `on_demand`: the leads each
+ * sourcing unit found, the outcome features-service measures a sourcing pipe on.
+ */
+router.get("/internal/trigger-events/ran-counts", requireApiKey, validateQuery(TriggerRanCountsQuery), async (req, res) => {
+  try {
+    const { triggerId } = req.query as { triggerId: string };
+    res.json({ triggerId, ...(await triggerRanCounts(triggerId)) });
+  } catch (error) {
+    console.error("[campaign-service] trigger-events ran-counts error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

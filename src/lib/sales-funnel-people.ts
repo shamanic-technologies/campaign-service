@@ -125,3 +125,63 @@ export async function scheduleNamedPersonDue(input: {
     return { ok: false, code: "followup_unavailable", detail: err instanceof Error ? err.message : String(err) };
   }
 }
+
+export type FileNamedPersonOutcome =
+  | { ok: true; leadId: string; filed: boolean }
+  | {
+      ok: false;
+      code: "person_not_known" | "ambiguous_person" | "campaign_has_no_brand" | "filing_unavailable";
+      detail: string;
+    };
+
+/**
+ * FILE one named person under a unit at lead-service (`POST /orgs/campaigns/:id/leads/by-email`): the
+ * person becomes a lead of the campaign's brand on that unit, with no purchase and no serve (lead-service
+ * refuses an address its brand does not know: `person_not_known`). Idempotent there (201 filed, 200
+ * already filed). Never throws: the caller names the outcome.
+ */
+export async function fileNamedPerson(input: {
+  orgId: string;
+  campaignId: string;
+  email: string;
+  userId?: string | null;
+  runId?: string | null;
+}): Promise<FileNamedPersonOutcome> {
+  const url = process.env.LEAD_SERVICE_URL;
+  const apiKey = process.env.LEAD_SERVICE_API_KEY;
+  if (!url || !apiKey) {
+    return { ok: false, code: "filing_unavailable", detail: "LEAD_SERVICE_URL or LEAD_SERVICE_API_KEY is not set" };
+  }
+  const headers: Record<string, string> = { "Content-Type": "application/json", "x-api-key": apiKey, "x-org-id": input.orgId };
+  if (input.userId) headers["x-user-id"] = input.userId;
+  if (input.runId) headers["x-run-id"] = input.runId;
+  try {
+    const res = await fetch(
+      `${url.replace(/\/$/, "")}/orgs/campaigns/${encodeURIComponent(input.campaignId)}/leads/by-email`,
+      { method: "POST", headers, body: JSON.stringify({ email: input.email }), signal: AbortSignal.timeout(30_000) },
+    );
+    const text = await res.text().catch(() => "");
+    if (res.ok) {
+      const body = JSON.parse(text) as { leadId?: unknown; status?: unknown };
+      if (typeof body.leadId !== "string" || !body.leadId) {
+        return { ok: false, code: "filing_unavailable", detail: `lead-service ${res.status} answered no leadId` };
+      }
+      return { ok: true, leadId: body.leadId, filed: body.status === "filed" };
+    }
+    const code = (() => {
+      try { return (JSON.parse(text) as { code?: unknown }).code; } catch { return undefined; }
+    })();
+    const detail = `lead-service ${res.status} ${text.slice(0, 300)}`;
+    if (code === "person_not_known") return { ok: false, code: "person_not_known", detail };
+    if (code === "ambiguous_lead") return { ok: false, code: "ambiguous_person", detail };
+    if (code === "campaign_has_no_brand") return { ok: false, code: "campaign_has_no_brand", detail };
+    return { ok: false, code: "filing_unavailable", detail };
+  } catch (err) {
+    return { ok: false, code: "filing_unavailable", detail: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** The people with the lead ids filing answered, matched by email. Pure. */
+export function withFiledLeadIds(people: readonly NamedPerson[], filed: ReadonlyMap<string, string>): NamedPerson[] {
+  return people.map((p) => ({ email: p.email, leadId: filed.get(p.email) ?? p.leadId }));
+}

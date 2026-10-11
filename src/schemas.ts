@@ -724,6 +724,34 @@ export const RecordTriggerEventResponse = z.object({
   replayed: z.boolean(),
 }).openapi("RecordTriggerEventResponse");
 
+/** `POST /internal/on-demand-runs` (lib/on-demand-runs.ts): open ONE run of a unit answering the `on_demand` trigger. */
+export const OpenOnDemandRunBody = z.object({
+  /** The unit (campaign) of the pipe answering on demand (a source unit: an origin or Lead Sourcing). */
+  campaignId: z.string().uuid("campaignId must be a valid UUID"),
+  /** The audience the ask serves from, stamped on the run like a scheduled run's. */
+  audienceId: z.string().min(1).optional(),
+}).openapi("OpenOnDemandRunBody");
+
+export const OpenOnDemandRunResponse = z.object({
+  runId: z.string(),
+  campaignId: z.string(),
+  featureSlug: z.string(),
+  workflowSlug: z.string(),
+  brandIds: z.array(z.string()),
+}).openapi("OpenOnDemandRunResponse");
+
+/** `GET /internal/trigger-events/ran-counts?triggerId=` (fleet, every org): ran events per campaign that ran. */
+export const TriggerRanCountsQuery = z.object({
+  triggerId: z.string().min(1, "triggerId is required"),
+}).openapi("TriggerRanCountsQuery");
+
+export const TriggerRanCountsResponse = z.object({
+  triggerId: z.string(),
+  /** When this service recorded its first event of this trigger (null = none yet). */
+  recordedSince: z.string().nullable(),
+  counts: z.array(z.object({ campaignId: z.string(), ran: z.number().int(), firstAt: z.string(), lastAt: z.string() })),
+}).openapi("TriggerRanCountsResponse");
+
 export const OfferTriggerEventsSummaryQuery = z.object({
   brandId: z.string().uuid("brandId must be a valid UUID"),
   from: isoDateTime("from"),

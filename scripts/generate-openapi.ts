@@ -45,6 +45,10 @@ import {
   RecordTriggerEventBody,
   RecordTriggerEventResponse,
   OfferTriggerEventsSummaryQuery,
+  OpenOnDemandRunBody,
+  OpenOnDemandRunResponse,
+  TriggerRanCountsQuery,
+  TriggerRanCountsResponse,
   OfferTriggerEventsSummaryResponse,
   OfferTriggerEventsListQuery,
   OfferTriggerEventsListResponse,
@@ -190,12 +194,12 @@ registry.registerPath({
   path: "/sales-funnel-campaigns",
   tags: ["Sales funnel campaigns"],
   summary: "Launch a sales funnel as one campaign (brand x offer x sales funnel)",
-  description: SALES_FUNNEL_CAMPAIGNS_DOC + " NAMED PEOPLE + INSTRUCTION (2026-10-11, general to any funnel campaign): optional `people` [{email}] = the exact people it acts for (canonical lowercased; part of its identity: the same funnel naming another person is ANOTHER campaign, the same people again = handed back). A campaign naming people runs only reactive pipes (400 `people_need_reactive_funnel` naming the prospecting pipes, nothing written). When an event its pipe answers fires (trigger-for-step, POST /internal/trigger-events, delay/poll detectors), each named person is made DUE now on that unit's own lead-service follow-up queue (schedule-by-email) once the funnel's money allows a run, then the unit is dispatched; the workflow claims exactly them, once. Skips (trigger event detail): `event_names_another_person` (the event names a lead it does not name), `person_not_filed` (lead-service holds no row for the person on the unit), `ambiguous_person`, `followup_unavailable`. Campaigns naming people are never rationed against each other on a shared pipe. Optional `instruction` (<= 4000 chars) = free text every run of its units carries to the workflow: /start-run answers it top-level (`instruction`, plus `people`), read at each run, so an edit is used by the next run. A stated instruction on a hand-back rewords it. Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | leg_without_channel (a leg of the funnel names no channel: owner 2026-10-11, a human leg is a \"Your team\" channel) | pipe_not_runnable | people_need_reactive_funnel; 409 no_workflow | payment_declined | no_payment_method; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable.",
+  description: SALES_FUNNEL_CAMPAIGNS_DOC + " NAMED PEOPLE + INSTRUCTION (2026-10-11, general to any funnel campaign): optional `people` [{email}] = the exact people it acts for (canonical lowercased; part of its identity: the same funnel naming another person is ANOTHER campaign, the same people again = handed back). A campaign naming people runs only reactive pipes (400 `people_need_reactive_funnel` naming the prospecting pipes, nothing written). When an event its pipe answers fires (trigger-for-step, POST /internal/trigger-events, delay/poll detectors), each named person is made DUE now on that unit's own lead-service follow-up queue (schedule-by-email) once the funnel's money allows a run, then the unit is dispatched; the workflow claims exactly them, once. Skips (trigger event detail): `event_names_another_person` (the event names a lead it does not name), `person_not_filed` (lead-service holds no row for the person on the unit), `ambiguous_person`, `followup_unavailable`. At birth (and on a hand-back while someone is unfiled) each person is FILED as a lead of the brand on every unit with a workflow (lead-service); `people[].leadId` carries lead-service's id and the answer's `filing` [{email, campaignId, outcome: filed|already_filed|person_not_known|ambiguous_person|campaign_has_no_brand|filing_unavailable, leadId}] says what happened (the campaign is born either way; a person not filed is filed again when an event needs them). Campaigns naming people are never rationed against each other on a shared pipe. Optional `instruction` (<= 4000 chars) = free text every run of its units carries to the workflow: /start-run answers it top-level (`instruction`, plus `people`), read at each run, so an edit is used by the next run. A stated instruction on a hand-back rewords it. Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | leg_without_channel (a leg of the funnel names no channel: owner 2026-10-11, a human leg is a \"Your team\" channel) | pipe_not_runnable | people_need_reactive_funnel; 409 no_workflow | payment_declined | no_payment_method; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: CreateSalesFunnelCampaignBody } } } },
   responses: {
-    201: { description: "Created (and started when status=ongoing)", content: { "application/json": { schema: z.object({ salesFunnelCampaign: SalesFunnelCampaignSchema, created: z.boolean(), started: z.boolean() }) } } },
-    200: { description: "This identity already had a funnel campaign: handed back", content: { "application/json": { schema: z.object({ salesFunnelCampaign: SalesFunnelCampaignSchema, created: z.boolean(), started: z.boolean() }) } } },
+    201: { description: "Created (and started when status=ongoing)", content: { "application/json": { schema: z.object({ salesFunnelCampaign: SalesFunnelCampaignSchema, created: z.boolean(), started: z.boolean(), filing: z.array(z.object({ email: z.string(), campaignId: z.string(), outcome: z.string(), leadId: z.string().nullable() })).optional() }) } } },
+    200: { description: "This identity already had a funnel campaign: handed back", content: { "application/json": { schema: z.object({ salesFunnelCampaign: SalesFunnelCampaignSchema, created: z.boolean(), started: z.boolean(), filing: z.array(z.object({ email: z.string(), campaignId: z.string(), outcome: z.string(), leadId: z.string().nullable() })).optional() }) } } },
     400: { description: "Refused", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string().optional() }) } } },
     409: { description: "Refused", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), blockedReason: z.string().optional() }) } } },
     502: { description: "A sibling could not be read — try again", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string() }) } } },
@@ -235,7 +239,7 @@ registry.registerPath({
   path: "/internal/sales-funnel-campaigns/lead-sourcing-switch",
   tags: ["Sales funnel campaigns"],
   summary: "The owner's Lead Sourcing switch (staff, dry run by default)",
-  description: "Owner GO 2026-10-11 (one channel per leg). Body {apply?: boolean (default false = dry run), orgId?: string}; headers x-org-id + x-user-id + x-run-id of a REAL staff run (the workflow read is workflow-service's). A funnel campaign with 2+ source units ON gets ONE `lead-sourcing` unit (its pipe's workflow, the funnel's status, never dispatched: it answers the inline lead_requested trigger) and the old source units stop (`replaced_by_lead_sourcing`), in ONE transaction; its sales funnel id and status do not move (billing's caps are keyed on it; features-service resolves it to the Lead Sourcing funnel). A single-source funnel the catalogue answers with another id moves to the id features-service mints for its pipes with its own source, unless billing holds a cap under the old id. Every ON source unit with no workflow takes its pipe's. Idempotent.",
+  description: "Owner GO 2026-10-11 (one channel per leg). Body {apply?: boolean (default false = dry run), orgId?: string}; headers x-org-id + x-user-id + x-run-id of a REAL staff run (the workflow read is workflow-service's). A funnel campaign with 2+ source units ON gets ONE `lead-sourcing` unit (its pipe's workflow, the funnel's status, never dispatched: it answers the on_demand trigger) and the old source units stop (`replaced_by_lead_sourcing`), in ONE transaction; its sales funnel id and status do not move (billing's caps are keyed on it; features-service resolves it to the Lead Sourcing funnel). A single-source funnel the catalogue answers with another id moves to the id features-service mints for its pipes with its own source, unless billing holds a cap under the old id. Every ON source unit with no workflow takes its pipe's. Idempotent.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: z.object({ apply: z.boolean().optional(), orgId: z.string().optional() }) } } } },
   responses: {
@@ -243,6 +247,33 @@ registry.registerPath({
     400: { description: "Missing staff identity", content: { "application/json": { schema: ErrorResponse } } },
     502: { description: "workflow-service or features-service unreadable", content: { "application/json": { schema: ErrorResponse } } },
   },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/on-demand-runs",
+  tags: ["Internal"],
+  summary: "Open ONE run of a unit answering the on_demand trigger",
+  description: "Owner 2026-10-11: a pipe whose trigger is `on_demand` (the sourcing channels: an origin or Lead Sourcing) runs only when another pipe asks for it, inside that ask (lead-service serving the lead a cold email run needs). Each ask is its own unit run: a ROOT run in runs-service (`campaign-service` / task = the unit's campaign id) carrying the unit's campaign, brand, channel and workflow, so what it spends is its own pipe's. The caller does the work under it and closes it (PATCH runs-service). Headers x-org-id + x-user-id + x-run-id (the ASKING pipe's run, traced, never the parent). A unit carrying no workflow: 409 `no_workflow`.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: OpenOnDemandRunBody } } } },
+  responses: {
+    201: { description: "Opened", content: { "application/json": { schema: OpenOnDemandRunResponse } } },
+    400: { description: "Missing identity or malformed body", content: { "application/json": { schema: ErrorResponse } } },
+    404: { description: "`unknown_campaign`", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "`not_on_demand` | `campaign_off` | `no_brand` | `no_workflow`", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/trigger-events/ran-counts",
+  tags: ["Internal"],
+  summary: "Fleet: per campaign, how many events of one trigger ran it",
+  description: "Every org. For `on_demand`, a ran event is a lead found by the sourcing unit that served it: the outcome features-service measures a sourcing pipe on. A read.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { query: TriggerRanCountsQuery },
+  responses: { 200: { description: "Counts", content: { "application/json": { schema: TriggerRanCountsResponse } } } },
 });
 
 registry.registerPath({

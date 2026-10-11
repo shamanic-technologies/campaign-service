@@ -9,7 +9,7 @@
  *
  * Per funnel campaign, ONE transaction:
  *   - a `lead-sourcing` unit is born in the funnel's status, with the workflow features-service's pipe holds (like
- *     every unit; it answers the INLINE `lead_requested` trigger, so it is never due here), source
+ *     every unit; it answers the `on_demand` trigger, so it is never due here), source
  *     `lead_sourcing_switch`;
  *   - every ONGOING old source unit of it is stopped, reason `replaced_by_lead_sourcing`, same source. A funnel
  *     start never brings them back (`ensureSourcesOnStart` only revives a stop nobody chose on the source).
