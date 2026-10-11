@@ -321,15 +321,23 @@ describe("GET /brands/:brandId/pause answers from the money", () => {
 
   it("NOT held when the brand is funded only by a SALES FUNNEL max budget", async () => {
     billingAnswers([], null, [
-      { offerId: OFFER, salesFunnelId: "f@x", maxBudget: { amountCents: "7000", period: "weekly", dailyBudgetCents: "1000" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
+      { offerId: OFFER, salesFunnelId: "f@x", funded: true, fundedBy: "max_budget", maxBudget: { amountCents: "7000", period: "weekly", dailyBudgetCents: "1000" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
     ]);
     const res = await getPause(crypto.randomUUID()).expect(200);
     expect(res.body.paused).toBe(false);
   });
 
-  it("still held when the only funnel cap is a volume (no money)", async () => {
+  it("NOT held when the only funnel cap is a max volume (owner 2026-10-11: max $ AND/OR max volume)", async () => {
     billingAnswers([], null, [
-      { offerId: OFFER, salesFunnelId: "f@x", maxBudget: null, maxVolume: { count: 5, period: "daily", unit: "first_contacts" }, updatedAt: "2026-10-10T00:00:00Z" },
+      { offerId: OFFER, salesFunnelId: "f@x", funded: true, fundedBy: "max_volume", maxBudget: null, maxVolume: { count: 5, period: "daily", unit: "first_contacts" }, updatedAt: "2026-10-10T00:00:00Z" },
+    ]);
+    const res = await getPause(crypto.randomUUID()).expect(200);
+    expect(res.body.paused).toBe(false);
+  });
+
+  it("still held when billing says the funnel is not funded", async () => {
+    billingAnswers([], null, [
+      { offerId: OFFER, salesFunnelId: "f@x", funded: false, fundedBy: null, maxBudget: null, maxVolume: { count: 0, period: "daily", unit: "first_contacts" }, updatedAt: "2026-10-10T00:00:00Z" },
     ]);
     const res = await getPause(crypto.randomUUID()).expect(200);
     expect(res.body.paused).toBe(true);

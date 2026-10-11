@@ -196,7 +196,7 @@ describe("Gate Check", () => {
     });
 
     it("refuses when no max budget is stated, before any pre-funnel money path is read", async () => {
-      capsAnswer({ stated: false, maxBudget: null });
+      capsAnswer({ stated: false, funded: false, fundedBy: null, maxBudget: null });
       const result = await runGateChecks(unitInput());
       expect(result).toMatchObject({ allowed: false, reason: "Sales funnel not funded" });
       expect(result.reasonDetail).toContain("funnel-campaign-1");
@@ -206,18 +206,18 @@ describe("Gate Check", () => {
     });
 
     it("refuses a proactive pipe once the max budget is reached (new first touches stop)", async () => {
-      capsAnswer({ stated: true, maxBudget: budget("1000", true) });
+      capsAnswer({ stated: true, funded: true, fundedBy: "max_budget", maxBudget: budget("1000", true) });
       expect(await runGateChecks(unitInput())).toMatchObject({ allowed: false, reason: "Sales funnel max budget reached" });
     });
 
     it("refuses a proactive pipe when the consumption cannot be measured (fail-closed, never 'not reached')", async () => {
-      capsAnswer({ stated: true, maxBudget: budget(null, null) });
+      capsAnswer({ stated: true, funded: true, fundedBy: "max_budget", maxBudget: budget(null, null) });
       expect(await runGateChecks(unitInput())).toMatchObject({ allowed: false, reason: "Sales funnel budget unavailable" });
     });
 
     it("refuses a REACTIVE pipe too once the cap is reached (owner: always respect the user budget)", async () => {
       capsAnswer({
-        stated: true,
+        stated: true, funded: true, fundedBy: "max_budget",
         maxBudget: budget("1000", true),
         pipes: [{ pipeId: "ai-meeting-booking|x", channelSlug: "ai-meeting-booking", legKey: "conversation_to_meeting_booked", mode: "reactive", campaignIds: [] }],
       });
@@ -227,7 +227,7 @@ describe("Gate Check", () => {
     });
 
     it("runs a proactive pipe under its caps, reading none of the pre-funnel money", async () => {
-      capsAnswer({ stated: true, maxBudget: budget("400", false), maxVolume: { count: 100, period: "monthly", unit: "first_contacts", consumed: 10, reached: false, consumedUnavailableReason: null } });
+      capsAnswer({ stated: true, funded: true, fundedBy: "both", maxBudget: budget("400", false), maxVolume: { count: 100, period: "monthly", unit: "first_contacts", consumed: 10, reached: false, consumedUnavailableReason: null } });
       expect((await runGateChecks(unitInput())).allowed).toBe(true);
       expect(mockGetStatsBudget).not.toHaveBeenCalled();
     });
