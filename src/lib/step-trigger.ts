@@ -113,6 +113,11 @@ export const STEP_TRIGGER_SKIPS = {
    * Only a proactive pipe is ever held on it; the lead is not dropped.
    */
   SALES_FUNNEL_CAP: "sales_funnel_cap",
+  /**
+   * Every audience the grid lists for the campaign is freshly exhausted or outside its targeting
+   * subset: a run would reach lead-service with nobody to serve, so none is dispatched.
+   */
+  NO_SERVEABLE_AUDIENCE: "no_serveable_audience",
 } as const;
 
 export type StepTriggerSkipReason = (typeof STEP_TRIGGER_SKIPS)[keyof typeof STEP_TRIGGER_SKIPS];
@@ -426,6 +431,13 @@ export async function runCampaignsInScope(
         requiredAudienceIds: campaign.audienceIds,
         excludedAudienceIds,
       });
+      if (selection.noServeableAudience) {
+        skip(
+          STEP_TRIGGER_SKIPS.NO_SERVEABLE_AUDIENCE,
+          "every audience it may serve is exhausted for now, so a run would have nobody to contact",
+        );
+        continue;
+      }
       let workflowSlug = selection.workflowSlug;
       const inputs = {
         campaignId: campaign.id,

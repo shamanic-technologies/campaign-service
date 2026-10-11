@@ -40,7 +40,13 @@ export type TurnHoldReason =
    * Every lead SOURCE of the campaign's offer is OFF (a person's choice), so lead-service refuses
    * every serve. Held, not run, until a source is turned back on (lib/sources-off-hold.ts).
    */
-  | "sources_off";
+  | "sources_off"
+  /**
+   * The grid lists audiences for the campaign but every one is freshly exhausted (24h mark) or
+   * outside its targeting subset: a run would reach lead-service with nobody to serve. Held, not
+   * run, until a mark lapses or an audience is added (lib/features-workflow-projection-client.ts).
+   */
+  | "no_serveable_audience";
 
 /** The campaign fields an event needs to be attributable. A structural subset of a claimed row. */
 export interface TurnHoldCampaign {
