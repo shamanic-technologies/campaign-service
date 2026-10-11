@@ -82,7 +82,8 @@ export type SalesFunnelMoneyVerdict =
       /**
        * What the turn planner ranks it on: the funnel's consumed vs its max budget (a proactive
        * pipe), or 0 of 1 for a reactive pipe, which answers people already contacted and takes its
-       * cohort's turn first (bottom of the funnel first).
+       * cohort's turn first (bottom of the funnel first). A VOLUME-ONLY funnel has no $ figure: its
+       * proactive pipe ranks on volume consumed vs max volume (a ratio, never cents).
        */
       pace: { spentCents: number; ceilingCents: number };
     }
@@ -96,8 +97,15 @@ export type SalesFunnelMoneyVerdict =
 
 const CapPeriod = z.enum(["one_off", "daily", "weekly", "monthly"]);
 const Figure = z.union([z.string(), z.number()]).nullable().transform((v) => (v === null ? null : Number(v)));
+/**
+ * billing's funding verdict on a funnel's caps (billing v0.83.21): funded ⟺ a max budget AND/OR a
+ * max volume is stated, every stated cap above 0. Read, never re-derived here.
+ */
+const FundedBy = z.enum(["max_budget", "max_volume", "both"]);
 const SalesFunnelCapsResponse = z.object({
   stated: z.boolean(),
+  funded: z.boolean(),
+  fundedBy: FundedBy.nullable(),
   maxBudget: z
     .object({
       amountCents: Figure,
@@ -182,6 +190,11 @@ export interface StatedSalesFunnelCap {
    * a daily spend). Read, never recomputed here, so both services count the same money.
    */
   maxBudget: { amountCents: number; period: z.infer<typeof CapPeriod>; dailyBudgetCents: number } | null;
+  /**
+   * billing's verdict on what funds the funnel (null = not funded). A `max_volume` funnel spends
+   * from the org's balance with NO $ figure: it adds 0 to every $/day total, yet it is funded.
+   */
+  fundedBy: z.infer<typeof FundedBy> | null;
 }
 
 const BrandSalesFunnelCapsResponse = z.object({
@@ -189,6 +202,8 @@ const BrandSalesFunnelCapsResponse = z.object({
     z.object({
       offerId: z.string(),
       salesFunnelId: z.string(),
+      funded: z.boolean(),
+      fundedBy: FundedBy.nullable(),
       maxBudget: z.object({ amountCents: Figure, period: CapPeriod, dailyBudgetCents: Figure }).nullable(),
     }),
   ),
@@ -219,17 +234,26 @@ export async function fetchBrandSalesFunnelCaps(
     if (missing) return { ok: false, detail: `billing serves no maxBudget.dailyBudgetCents for sales funnel ${missing.salesFunnelId}` };
     return {
       ok: true,
-      caps: parsed.data.caps.map((c) => ({
-        offerId: c.offerId,
-        salesFunnelId: c.salesFunnelId,
-        maxBudget: c.maxBudget && c.maxBudget.amountCents !== null && Number.isFinite(c.maxBudget.amountCents)
+      caps: parsed.data.caps.map((c) => {
+        const maxBudget = c.maxBudget && c.maxBudget.amountCents !== null && Number.isFinite(c.maxBudget.amountCents)
           ? { amountCents: c.maxBudget.amountCents, period: c.maxBudget.period, dailyBudgetCents: c.maxBudget.dailyBudgetCents ?? NaN }
-          : null,
-      })),
+          : null;
+        return {
+          offerId: c.offerId,
+          salesFunnelId: c.salesFunnelId,
+          maxBudget,
+          fundedBy: c.funded ? c.fundedBy : null,
+        };
+      }),
     };
   } catch (err) {
     return { ok: false, detail: `${path}: ${err instanceof Error ? err.message : String(err)}` };
   }
+}
+
+/** Which stated cap funds the funnel, as billing says (null = not funded). */
+export function salesFunnelFundedBy(caps: SalesFunnelCaps): z.infer<typeof FundedBy> | null {
+  return caps.funded ? caps.fundedBy : null;
 }
 
 /**
@@ -237,7 +261,10 @@ export async function fetchBrandSalesFunnelCaps(
  * trigger and gate-check ask it before any pre-funnel money path (none of which is its money).
  *
  *   - caps unreadable                         → every unit held (`unreadable`, fail-closed, logged)
- *   - no max budget stated                    → every unit held (`unfunded`: money starts nothing)
+ *   - billing says not funded                 → every unit held (`unfunded`: money starts nothing).
+ *     Owner 2026-10-11: a campaign needs a max $ AND/OR a max volume. A VOLUME-ONLY funnel is
+ *     funded: it spends from the org's balance (balance / payment holds apply as for any run)
+ *     until its max volume is reached; no $ cap is read or made up for it.
  *   - REACTIVE pipe (billing's `pipes[].mode`) → runs: it answers people already contacted, and
  *     stopping a funnel stops NEW first touches only (follow-ups go on, the existing rule)
  *   - PROACTIVE pipe (or a pipe billing does not name): held when the max budget OR the max volume
@@ -272,8 +299,15 @@ export async function salesFunnelUnitMoney(
     return held("unreadable", "Sales funnel caps unavailable", `billing's caps could not be read (${read.detail}). Held rather than spent (fail-closed).`);
   }
   const { caps } = read;
-  if (!caps.stated || !caps.maxBudget || caps.maxBudget.amountCents === null || !(caps.maxBudget.amountCents > 0)) {
-    return held("unfunded", "Sales funnel not funded", "the customer states no max budget for this sales funnel at billing. It waits for money.");
+  const fundedBy = salesFunnelFundedBy(caps);
+  if (!fundedBy) {
+    return held("unfunded", "Sales funnel not funded", "the customer states no max budget and no max volume for this sales funnel at billing. It waits for one.");
+  }
+  const budgetBinds = fundedBy !== "max_volume";
+  const volumeOnly = fundedBy === "max_volume";
+  if ((budgetBinds && (!caps.maxBudget || caps.maxBudget.amountCents === null)) || (volumeOnly && !caps.maxVolume)) {
+    console.error(`[campaign-service] Sales funnel ${unit.salesFunnelId} funded by ${fundedBy} but billing serves no such cap — unit ${unit.id} held`);
+    return held("unreadable", "Sales funnel caps unavailable", `billing says it is funded by ${fundedBy} but serves no such cap. Held rather than spent (fail-closed).`);
   }
 
   // Owner 2026-10-10: "we should always respect the user budget". Every pipe of the funnel,
@@ -281,15 +315,15 @@ export async function salesFunnelUnitMoney(
   // once the max volume is reached; an unmeasured consumption holds them all (fail-closed).
   const pipe = caps.pipes?.find((p) => p.channelSlug === unit.featureSlug && sameLeg(unit.featureSlug, p.legKey, unit.legKey));
   const reactive = pipe?.mode === "reactive";
-  const budget = caps.maxBudget;
-  const amountCents = caps.maxBudget.amountCents;
-  if (budget.consumedCents === null || budget.reached === null) {
+  const budget = budgetBinds ? caps.maxBudget! : null;
+  const amountCents = budget ? budget.amountCents! : 0;
+  if (budget && (budget.consumedCents === null || budget.reached === null)) {
     console.error(
       `[campaign-service] Sales funnel ${unit.salesFunnelId} max budget consumption unmeasured (${budget.consumedUnavailableReason}: ${budget.consumedUnavailableDetail ?? ""}) — unit ${unit.id} held`,
     );
     return held("unreadable", "Sales funnel budget unavailable", `billing could not measure what its max budget consumed (${budget.consumedUnavailableReason}). Held rather than spent (fail-closed).`);
   }
-  if (budget.reached) {
+  if (budget?.reached) {
     return held("cap_reached", "Sales funnel max budget reached", `its ${budget.period} max budget is reached (${budget.consumedCents} of ${amountCents} cents). Every pipe of the funnel stops spending until the next period or a raise.`);
   }
   const volume = caps.maxVolume;
@@ -306,15 +340,18 @@ export async function salesFunnelUnitMoney(
   }
   // A reactive pipe answers people already contacted: it ranks first in its cohort's turn.
   if (reactive) return { run: true, pace: { spentCents: 0, ceilingCents: 1 } };
-  return { run: true, pace: { spentCents: budget.consumedCents, ceilingCents: amountCents } };
+  if (!budget) return { run: true, pace: { spentCents: volume!.consumed!, ceilingCents: volume!.count } };
+  return { run: true, pace: { spentCents: budget.consumedCents!, ceilingCents: amountCents } };
 }
 
 /**
  * May this UNIT pay for one metered poll-trigger read (lib/poll-trigger-detector.ts `pollPayer`)?
  * The read is spend filed under the unit, so it is judged on the unit's money, its funnel's caps:
- * a max budget is stated, its consumption is measured, and the read's worst-case cost still fits
- * under it (consumed + call <= max budget). Volume is not consumed by a read (it counts first
- * contacts). Unreadable or unmeasured = no (fail-closed). Billed exactly as any payer: the unit's
+ * a max budget binds (budget or both): its consumption is measured and the read's worst-case cost
+ * still fits under it (consumed + call <= max budget). VOLUME-ONLY: the read spends from the org's
+ * balance like any run of the funnel, so it has room while the max volume is measured and not
+ * reached (a read consumes no volume: it counts first contacts). Not funded, unreadable or
+ * unmeasured = no (fail-closed). Billed exactly as any payer: the unit's
  * own org (= its funnel campaign's), on the unit's ancestor run.
  */
 export async function salesFunnelPollRoom(
@@ -330,10 +367,19 @@ export async function salesFunnelPollRoom(
     now.getTime(),
   );
   if (!read.ok) return { ok: false, reason: `sales funnel caps unreadable (${read.detail})` };
-  const budget = read.caps.maxBudget;
-  if (!read.caps.stated || !budget || budget.amountCents === null || !(budget.amountCents > 0)) {
-    return { ok: false, reason: "sales funnel states no max budget" };
+  const fundedBy = salesFunnelFundedBy(read.caps);
+  if (!fundedBy) return { ok: false, reason: "sales funnel states no max budget and no max volume" };
+  if (fundedBy === "max_volume") {
+    const volume = read.caps.maxVolume;
+    if (!volume) return { ok: false, reason: "sales funnel funded by max volume serves no max volume" };
+    if (volume.consumed === null || volume.reached === null) {
+      return { ok: false, reason: `sales funnel volume unmeasured (${volume.consumedUnavailableReason})` };
+    }
+    if (volume.reached) return { ok: false, reason: `sales funnel ${volume.period} max volume reached: ${volume.consumed} of ${volume.count}` };
+    return { ok: true };
   }
+  const budget = read.caps.maxBudget;
+  if (!budget || budget.amountCents === null) return { ok: false, reason: `sales funnel funded by ${fundedBy} serves no max budget` };
   if (budget.consumedCents === null) {
     return { ok: false, reason: `sales funnel budget unmeasured (${budget.consumedUnavailableReason})` };
   }

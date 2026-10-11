@@ -64,7 +64,7 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
       return;
     }
 
-    // A brand funded by a SALES FUNNEL max budget is not held either (billing counts it funded).
+    // A brand with a FUNDED sales funnel (max budget and/or max volume, billing's verdict) is not held.
     let paused = brandHeldFromBudgets(budgets);
     if (paused) {
       const caps = await fetchBrandSalesFunnelCaps(orgId, brandId);
@@ -72,7 +72,7 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
         res.status(502).json({ error: "Brand funding unavailable" });
         return;
       }
-      if (caps.caps.some((c) => c.maxBudget && c.maxBudget.amountCents > 0)) paused = false;
+      if (caps.caps.some((c) => c.fundedBy !== null)) paused = false;
     }
 
     res.json({

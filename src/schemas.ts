@@ -529,6 +529,9 @@ export const SpendableBudgetSalesFunnel = z.object({
   status: z.string().nullable(),
   running: z.boolean(),
   maxBudget: z.object({ amountCents: z.number(), period: z.enum(["one_off", "daily", "weekly", "monthly"]) }).nullable(),
+  // billing's verdict on what funds the funnel (null = not funded). A `max_volume` funnel is funded
+  // (it spends from the org's balance until its max volume) and adds 0 to every $/day figure.
+  fundedBy: z.enum(["max_budget", "max_volume", "both"]).nullable(),
   dailyBudgetCents: z.number(),
   recurring: z.boolean(),
   unitCampaignIds: z.array(z.string()),

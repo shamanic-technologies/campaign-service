@@ -53,6 +53,8 @@ export interface SpendableSalesFunnelLine {
   /** True ⟺ the funnel campaign exists AND is ongoing. */
   running: boolean;
   maxBudget: { amountCents: number; period: string } | null;
+  /** billing's verdict: which cap funds it (null = not funded). `max_volume` = funded, $0/day. */
+  fundedBy: "max_budget" | "max_volume" | "both" | null;
   dailyBudgetCents: number;
   /** False for a one-off or REACTIVE max budget: a real ceiling, but never a daily figure (adds 0). */
   recurring: boolean;
@@ -289,6 +291,7 @@ export function computeSpendableBudget(
       status: fc?.status ?? null,
       running,
       maxBudget: cap.maxBudget ? { amountCents: cap.maxBudget.amountCents, period: cap.maxBudget.period } : null,
+      fundedBy: cap.fundedBy,
       dailyBudgetCents,
       recurring: dailyBudgetCents > 0,
       unitCampaignIds,

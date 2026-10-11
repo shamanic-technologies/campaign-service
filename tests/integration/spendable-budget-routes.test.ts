@@ -70,12 +70,12 @@ describe("Brand spendable budget", () => {
       orgId, brandId: BRAND, offerId: OFFER, salesFunnelId: "f-monthly", salesFunnelName: "Bliss", status: "stopped",
     });
     funnelCaps = [
-      { offerId: OFFER, salesFunnelId: "f-weekly", maxBudget: { amountCents: "7000", period: "weekly", dailyBudgetCents: "1000" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
-      { offerId: OFFER, salesFunnelId: "f-monthly", maxBudget: { amountCents: "30000", period: "monthly", dailyBudgetCents: "1000" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
-      { offerId: OFFER, salesFunnelId: "f-once", maxBudget: { amountCents: "50000", period: "one_off", dailyBudgetCents: "0" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
+      { offerId: OFFER, salesFunnelId: "f-weekly", funded: true, fundedBy: "max_budget", maxBudget: { amountCents: "7000", period: "weekly", dailyBudgetCents: "1000" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
+      { offerId: OFFER, salesFunnelId: "f-monthly", funded: true, fundedBy: "max_budget", maxBudget: { amountCents: "30000", period: "monthly", dailyBudgetCents: "1000" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
+      { offerId: OFFER, salesFunnelId: "f-once", funded: true, fundedBy: "max_budget", maxBudget: { amountCents: "50000", period: "one_off", dailyBudgetCents: "0" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
       // A REACTIVE funnel: billing serves its daily figure as 0 (a reactive budget is a ceiling).
-      { offerId: OFFER, salesFunnelId: "f-reactive", maxBudget: { amountCents: "2000", period: "daily", dailyBudgetCents: "0" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
-      { offerId: OFFER, salesFunnelId: "f-volume", maxBudget: null, maxVolume: { count: 10, period: "daily", unit: "first_contacts" }, updatedAt: "2026-10-10T00:00:00Z" },
+      { offerId: OFFER, salesFunnelId: "f-reactive", funded: true, fundedBy: "max_budget", maxBudget: { amountCents: "2000", period: "daily", dailyBudgetCents: "0" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
+      { offerId: OFFER, salesFunnelId: "f-volume", funded: true, fundedBy: "max_volume", maxBudget: null, maxVolume: { count: 10, period: "daily", unit: "first_contacts" }, updatedAt: "2026-10-10T00:00:00Z" },
     ];
     fetchMock.mockResolvedValue(billingPayload({
       brandId: BRAND,
@@ -94,7 +94,7 @@ describe("Brand spendable budget", () => {
     expect(line("f-weekly")).toMatchObject({ salesFunnelCampaignId: weekly.id, running: true, dailyBudgetCents: 1000, recurring: true, unitCampaignIds: [unit.id] });
     expect(line("f-monthly")).toMatchObject({ status: "stopped", running: false, dailyBudgetCents: 1000 });
     expect(line("f-once")).toMatchObject({ salesFunnelCampaignId: null, dailyBudgetCents: 0, recurring: false });
-    expect(line("f-volume")).toMatchObject({ dailyBudgetCents: 0 });
+    expect(line("f-volume")).toMatchObject({ fundedBy: "max_volume", maxBudget: null, dailyBudgetCents: 0, recurring: false });
     expect(line("f-reactive")).toMatchObject({ dailyBudgetCents: 0, recurring: false, maxBudget: { amountCents: 2000, period: "daily" } });
     // The unit is named, with NO budget of its own.
     expect(res.body.campaigns.find((c: { campaignId: string }) => c.campaignId === unit.id)).toMatchObject({

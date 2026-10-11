@@ -1009,6 +1009,16 @@
               "period"
             ]
           },
+          "fundedBy": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "max_budget",
+              "max_volume",
+              "both",
+              null
+            ]
+          },
           "dailyBudgetCents": {
             "type": "number"
           },
@@ -1029,6 +1039,7 @@
           "status",
           "running",
           "maxBudget",
+          "fundedBy",
           "dailyBudgetCents",
           "recurring",
           "unitCampaignIds"
