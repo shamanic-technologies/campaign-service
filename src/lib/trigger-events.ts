@@ -136,6 +136,8 @@ export async function fireTrigger(
   triggerId: string,
   catalogue: Extract<ChannelCatalogueRead, { ok: true }>,
   trigger?: WorkflowTriggerInput,
+  /** The lead a non-detector event names (lib/sales-funnel-people.ts): who the event is about. */
+  eventLeadId?: string | null,
 ): Promise<ScopeAnswer> {
   const transitions = (catalogue.triggerTransitions ?? []).filter((t) => t.triggerId === triggerId);
   const legKeys = [...new Set(transitions.map((t) => t.legKey))];
@@ -145,6 +147,7 @@ export async function fireTrigger(
     (c) => transitions.some((t) => t.featureSlug === c.featureSlug && sameLeg(c.featureSlug, t.legKey, c.legKey)),
     `trigger ${triggerId}`,
     trigger,
+    eventLeadId,
   );
   return { ...run, legKeys };
 }
@@ -354,7 +357,7 @@ export async function fireClaimedEvent(
         const trigger: WorkflowTriggerInput | undefined = detected
           ? { eventId: event.id, triggerId: event.triggerId, leadId: event.leadId, item: context.item ?? null }
           : undefined;
-        verdict = eventVerdict(await fireTrigger(event, event.triggerId, catalogue, trigger));
+        verdict = eventVerdict(await fireTrigger(event, event.triggerId, catalogue, trigger, event.leadId));
       }
     }
     const own = event.detail && typeof event.detail === "object" && !Array.isArray(event.detail)
