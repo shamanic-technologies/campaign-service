@@ -298,7 +298,7 @@ describe("generic trigger detectors", () => {
 
       it("pays the read on the unit (its own org, its own run) and fires the new item on it", async () => {
         const unit = await funnelUnitOn(REACT_SLUG, REACT_LEG);
-        vi.stubGlobal("fetch", capsFetch({ stated: true, maxBudget: budget("100") }));
+        vi.stubGlobal("fetch", capsFetch({ stated: true, funded: true, fundedBy: "max_budget", maxBudget: budget("100") }));
         try {
           const treg = vi.fn().mockResolvedValueOnce(answer(["a"])).mockResolvedValueOnce(answer(["a", "b"]));
           const t0 = new Date();
@@ -317,7 +317,7 @@ describe("generic trigger detectors", () => {
       it("holds the read when the funnel states no max budget, or the read would not fit under it", async () => {
         await funnelUnitOn(REACT_SLUG, REACT_LEG);
         const treg = vi.fn();
-        vi.stubGlobal("fetch", capsFetch({ stated: false, maxBudget: null }));
+        vi.stubGlobal("fetch", capsFetch({ stated: false, funded: false, fundedBy: null, maxBudget: null }));
         try {
           expect(await pollDueTriggers(catalogue() as never, new Date(), treg)).toMatchObject({ held: 1, polled: 0 });
         } finally {
@@ -328,7 +328,7 @@ describe("generic trigger detectors", () => {
 
         await db.update(triggerPollCursors).set({ nextPollAt: new Date(0) }).where(eq(triggerPollCursors.id, cursor.id));
         resetSalesFunnelCapsCache();
-        vi.stubGlobal("fetch", capsFetch({ stated: true, maxBudget: budget("999.9") }));
+        vi.stubGlobal("fetch", capsFetch({ stated: true, funded: true, fundedBy: "max_budget", maxBudget: budget("999.9") }));
         try {
           expect(await pollDueTriggers(catalogue() as never, new Date(), treg)).toMatchObject({ held: 1, polled: 0 });
         } finally {

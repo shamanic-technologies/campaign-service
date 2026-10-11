@@ -269,7 +269,7 @@ describe("planBrandTurns", () => {
   it("HOLDS a SALES FUNNEL unit on its funnel's money, without reading the brand's per-pipe ceilings", async () => {
     // The brand funds this pipe generously in the pre-funnel model; a unit never runs on that money:
     // its funnel states no max budget at billing, so it waits.
-    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ stated: false, maxBudget: null, maxVolume: null, pipes: null }) });
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ stated: false, funded: false, fundedBy: null, maxBudget: null, maxVolume: null, pipes: null }) });
     const now = new Date("2026-10-10T10:00:00Z");
     const deferred = await planBrandTurns(
       [claimed({ id: "unit-1", offerId: OFFER, salesFunnelCampaignId: "funnel-campaign-1", salesFunnelId: "f@x" })],
@@ -281,7 +281,7 @@ describe("planBrandTurns", () => {
   });
 
   it("plans a sales funnel unit OUTSIDE the sales family on its funnel's caps (#608)", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ stated: false, maxBudget: null, maxVolume: null, pipes: null }) });
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ stated: false, funded: false, fundedBy: null, maxBudget: null, maxVolume: null, pipes: null }) });
     const now = new Date("2026-10-10T10:00:00Z");
     const deferred = await planBrandTurns(
       [claimed({ id: "li-unit", featureSlug: "organic-linkedin-publishing", offerId: OFFER, salesFunnelCampaignId: "fc-li", salesFunnelId: "f@li" })],
@@ -295,7 +295,7 @@ describe("planBrandTurns", () => {
       ok: true,
       status: 200,
       json: async () => ({
-        stated: true,
+        stated: true, funded: true, fundedBy: "max_budget",
         maxBudget: { amountCents: "1000", period: "weekly", consumedCents: "100", reached: false, consumedUnavailableReason: null },
         maxVolume: null,
         pipes: null,
