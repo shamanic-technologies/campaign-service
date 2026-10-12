@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, salesFunnelCampaigns, type SalesFunnelCampaign } from "../db/schema.js";
 import { serviceAuth, requireApiKey, type AuthenticatedRequest } from "../middleware/auth.js";
@@ -27,6 +27,9 @@ import { completeSalesFunnelUnits } from "../lib/sales-funnel-unit-completion.js
 import { runLeadSourcingSwitch } from "../lib/sales-funnel-lead-sourcing-switch.js";
 import { canonicalEmail, namedPeople, peopleKeyOf, storedPeople } from "../lib/sales-funnel-people.js";
 import { fileSalesFunnelCampaignPeople, type FilingReport } from "../lib/sales-funnel-people-store.js";
+import { GITHUB_ISSUE_IN_PROD_KIND, githubIssueKey, parseGithubIssue } from "../lib/github-issue-trigger.js";
+import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
+import { sameLeg } from "../lib/leg-identity.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -97,8 +100,14 @@ router.post(
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId, salesFunnelId, status, people: namedInput, instruction } =
+      const { brandId, offerId, salesFunnelId, status, people: namedInput, instruction, githubIssue: issueInput } =
         CreateSalesFunnelCampaignBody.parse(req.body);
+      // The GitHub issue it waits on (lib/github-issue-trigger.ts): part of its identity too.
+      const issueRef = issueInput ? parseGithubIssue(issueInput) : null;
+      if (issueInput && !issueRef) {
+        return res.status(400).json({ error: "githubIssue must name a repository (owner/name) and an issue number.", reason: "invalid_github_issue" });
+      }
+      const githubIssue = issueRef ? githubIssueKey(issueRef) : null;
       // A campaign that NAMES its people (lib/sales-funnel-people.ts): its people are part of its identity.
       const people = namedInput ? namedPeople(namedInput) : null;
       const peopleKey = peopleKeyOf(people);
@@ -116,6 +125,7 @@ router.post(
             eq(salesFunnelCampaigns.offerId, offerId),
             eq(salesFunnelCampaigns.salesFunnelId, salesFunnelId),
             eq(salesFunnelCampaigns.peopleKey, peopleKey),
+            githubIssue ? eq(salesFunnelCampaigns.githubIssue, githubIssue) : isNull(salesFunnelCampaigns.githubIssue),
           ),
         });
 
@@ -191,6 +201,28 @@ router.post(
         }
       }
 
+      // A campaign waiting on a GitHub issue must own a pipe a `github_issue_in_prod` trigger fires, or it would
+      // wait forever: refused, nothing written.
+      if (githubIssue) {
+        const catalogue = await fetchChannelCatalogue();
+        if (!catalogue.ok) {
+          return res.status(502).json({ error: "The channel catalogue could not be read. Try again.", reason: "catalogue_unavailable" });
+        }
+        const issueTriggers = new Set(
+          [...(catalogue.triggers?.values() ?? [])].filter((t) => t.kind === GITHUB_ISSUE_IN_PROD_KIND).map((t) => t.id),
+        );
+        const answers = plan.units.some((u) =>
+          (catalogue.triggerTransitions ?? []).some((t) =>
+            issueTriggers.has(t.triggerId) && t.featureSlug === u.featureSlug && sameLeg(u.featureSlug, t.legKey, u.legKey)),
+        );
+        if (!answers) {
+          return res.status(400).json({
+            error: "This sales funnel has no step that runs when a GitHub issue reaches production, so it would never run.",
+            reason: "github_issue_needs_github_trigger",
+          });
+        }
+      }
+
       const id = randomUUID();
       const idTag = id.slice(0, 8);
       let born;
@@ -208,6 +240,7 @@ router.post(
           people,
           peopleKey,
           instruction: instruction ?? null,
+          githubIssue,
           units: plan.units.map((u) => ({
             featureSlug: u.featureSlug,
             legKey: u.legKey,

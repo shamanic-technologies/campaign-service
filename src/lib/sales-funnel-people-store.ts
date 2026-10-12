@@ -23,10 +23,13 @@ export async function targetingOfSalesFunnelCampaigns(
       id: salesFunnelCampaigns.id,
       people: salesFunnelCampaigns.people,
       instruction: salesFunnelCampaigns.instruction,
+      githubIssue: salesFunnelCampaigns.githubIssue,
     })
     .from(salesFunnelCampaigns)
     .where(inArray(salesFunnelCampaigns.id, ids));
-  for (const r of rows) out.set(r.id, { people: storedPeople(r.people), instruction: r.instruction ?? null });
+  for (const r of rows) {
+    out.set(r.id, { people: storedPeople(r.people), instruction: r.instruction ?? null, githubIssue: r.githubIssue ?? null });
+  }
   return out;
 }
 

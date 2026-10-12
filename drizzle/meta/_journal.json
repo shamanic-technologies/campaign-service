@@ -477,6 +477,13 @@
       "when": 1779200000000,
       "tag": "0067_sales_funnel_campaign_people_instruction",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1779300000000,
+      "tag": "0068_sales_funnel_campaign_github_issue",
+      "breakpoints": true
     }
   ]
 }
