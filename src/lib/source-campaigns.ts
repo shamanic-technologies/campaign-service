@@ -16,9 +16,10 @@
  *   - it is PROACTIVE (it starts from nothing) and ends at step `lead_found`, which is a hand-off, not
  *     a funnel step: the catalogue publishes no such leg, so nothing here asks the catalogue about it.
  *
- * WHAT A SOURCE CAMPAIGN IS IN THIS SERVICE: a status and an id. It has NO workflow (lead-service
+ * WHAT A SOURCE CAMPAIGN IS IN THIS SERVICE: a status and an id. A pre-funnel one has NO workflow (lead-service
  * finds the leads inside the outreach campaign's run, under the source campaign's id), so it is never
- * scheduled, triggered or gate-checked, exactly like a service-performed channel. It is never one of
+ * scheduled, triggered or gate-checked. A SALES FUNNEL source unit carries its pipe's workflow and runs on its
+ * own once the catalogue reads its leg proactive (lib/on-demand-mode.ts). It is never one of
  * the offer's "one proactive campaign" (lib/single-proactive.ts): it neither stops nor is stopped by
  * the outreach campaign or another source. It is NOT in the sales family: no money path here paces it;
  * the sourcing it pays for is still counted in the outreach campaign that the found lead feeds
@@ -120,17 +121,11 @@ export const DEFAULT_SOURCE_ORIGIN_BY_CHANNEL: Readonly<Record<string, string>> 
 };
 
 /**
- * A pipe answering an INLINE trigger (features-service `channel-triggers.ts` `inline`: `on_demand`, owner 2026-10-11)
- * runs only when another pipe asks for it, inside that ask: a source answers the lead request of the outreach run
- * that needs the lead (lead-service `POST /orgs/buffer/next`), as its OWN run (`lib/on-demand-runs.ts`). So its unit
- * carries the workflow features-service chose for its pipe like every unit, but this service NEVER schedules it: not
- * due at birth or start (`nextRunAt` null), never claimed by the scheduler nor by the stuck sweep. The source
- * channels are exactly those pipes.
+ * WHO DISPATCHES A SOURCE UNIT is lib/on-demand-mode.ts (owner 2026-10-12, "every pipe is independent"): the
+ * catalogue's reading of its leg. Reactive on `on_demand` = it answers the lead request of the outreach run that needs
+ * the lead (lib/on-demand-runs.ts); proactive = the scheduler dispatches it like every unit, and it finds leads on its
+ * own inside its funnel campaign's caps.
  */
-export const INLINE_TRIGGER_FEATURE_SLUGS: readonly string[] = [...LIVE_SOURCE_ORIGIN_SLUGS, ...RETIRED_SOURCE_ORIGIN_SLUGS];
-export function answersInlineTrigger(featureSlug?: string | null): boolean {
-  return isSourceOriginSlug(featureSlug);
-}
 
 /** True when campaigns of this channel are FED by source campaigns (it works found leads). */
 export function isSourcedChannel(featureSlug?: string | null): boolean {

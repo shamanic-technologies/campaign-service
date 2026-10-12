@@ -5,6 +5,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
+import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./on-demand-mode.js";
 
 /**
  * A RUN A PERSON STARTED GOES THROUGH THE SAME SELECTION AS EVERY OTHER RUN.
@@ -27,7 +28,8 @@ import { replaceRetiredWorkflow } from "./retired-workflow.js";
  * Returns the slug that was actually executed, or null when nothing was dispatched because every
  * audience the grid lists is exhausted for now (a run would reach lead-service with nobody to
  * serve): the campaign is parked on `NO_SERVEABLE_AUDIENCE_RECHECK_MS` and the scheduler takes it
- * from there, holding it out loud. Throws on a refused execution, like `executeCampaignWorkflow`
+ * from there, holding it out loud. Also null for a campaign answering on demand (lib/on-demand-mode.ts: another pipe
+ * runs it when it needs it): nothing dispatched, parked on `ON_DEMAND_RECHECK_MS` like the scheduler parks it. Throws on a refused execution, like `executeCampaignWorkflow`
  * does — the fire-and-forget callers catch and log it.
  */
 export async function dispatchSelectedRun(
@@ -42,9 +44,17 @@ export async function dispatchSelectedRun(
     audienceId: string | null;
     activeGoalId: string | null;
     brandProfileId: string | null;
+    salesFunnelCampaignId?: string | null;
   },
   identity: { orgId: string; userId: string; runId: string },
 ): Promise<string | null> {
+  if (answersOnDemand(campaign, await readDispatchCatalogue())) {
+    await db
+      .update(campaigns)
+      .set({ nextRunAt: new Date(Date.now() + ON_DEMAND_RECHECK_MS), updatedAt: new Date() })
+      .where(eq(campaigns.id, campaign.id));
+    return null;
+  }
   const brandIds = campaign.brandIds ?? [];
   const brandIdCsv = brandIds.join(",");
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);

@@ -2137,6 +2137,10 @@
           "stopReason": {
             "type": "string",
             "nullable": true
+          },
+          "runsOnItsOwn": {
+            "type": "boolean",
+            "description": "Dispatched by campaign-service on its own (finds leads with nobody asking). false = answers on demand."
           }
         },
         "required": [
@@ -2148,7 +2152,8 @@
           "name",
           "status",
           "running",
-          "stopReason"
+          "stopReason",
+          "runsOnItsOwn"
         ]
       },
       "RunningSourceCampaign": {
@@ -2162,12 +2167,16 @@
           },
           "campaignKey": {
             "type": "string"
+          },
+          "runsOnItsOwn": {
+            "type": "boolean"
           }
         },
         "required": [
           "featureSlug",
           "campaignId",
-          "campaignKey"
+          "campaignKey",
+          "runsOnItsOwn"
         ]
       },
       "CampaignSourceCampaignsResponse": {
@@ -2215,6 +2224,10 @@
                 },
                 "running": {
                   "type": "boolean"
+                },
+                "runsOnItsOwn": {
+                  "type": "boolean",
+                  "description": "Finds leads on its own: serve the leads it already found, never ask it on demand."
                 }
               },
               "required": [
@@ -2222,7 +2235,8 @@
                 "campaignId",
                 "campaignKey",
                 "status",
-                "running"
+                "running",
+                "runsOnItsOwn"
               ]
             }
           }

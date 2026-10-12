@@ -1050,12 +1050,14 @@ export const OfferSourceCampaignSchema = z.object({
   status: z.string().nullable(),
   running: z.boolean(),
   stopReason: z.string().nullable(),
+  runsOnItsOwn: z.boolean().openapi({ description: "Dispatched by campaign-service on its own (finds leads with nobody asking). false = answers on demand." }),
 }).openapi("OfferSourceCampaign");
 
 export const RunningSourceCampaignSchema = z.object({
   featureSlug: z.string(),
   campaignId: z.string(),
   campaignKey: z.string(),
+  runsOnItsOwn: z.boolean(),
 }).openapi("RunningSourceCampaign");
 
 export const OfferSourceCampaignsResponse = z.object({
@@ -1081,6 +1083,7 @@ export const CampaignSourceCampaignsResponse = z.object({
     campaignKey: z.string(),
     status: z.string(),
     running: z.boolean(),
+    runsOnItsOwn: z.boolean().openapi({ description: "Finds leads on its own: serve the leads it already found, never ask it on demand." }),
   })),
 }).openapi("CampaignSourceCampaignsResponse");
 
