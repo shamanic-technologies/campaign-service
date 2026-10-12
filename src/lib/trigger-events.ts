@@ -134,7 +134,9 @@ export function eventVerdict(answer: ScopeAnswer): EventVerdict {
   if (answer.triggered.length > 0) {
     return { outcome: "ran", skipReason: null, ranCampaignIds: answer.triggered.map((t) => t.campaignId), detail };
   }
-  const skipReason = answer.skipped[0]?.reason
+  // A campaign the customer's own team operates (no workflow, by design) never names the outcome while
+  // another campaign the event reached skipped for a reason of its own.
+  const skipReason = (answer.skipped.find((s) => s.reason !== "no_workflow") ?? answer.skipped[0])?.reason
     ?? (answer.offCampaignIds.length > 0 ? TRIGGER_EVENT_SKIPS.CAMPAIGN_OFF
       : answer.legKeys.length > 0 ? TRIGGER_EVENT_SKIPS.NO_CAMPAIGN
       : TRIGGER_EVENT_SKIPS.NO_LEG);
@@ -156,6 +158,8 @@ export async function fireTrigger(
   onlySalesFunnelCampaignId?: string | null,
   /** The person the event names by identity (lib/trigger-person.ts). */
   person?: EventPerson | null,
+  /** A retry of a person event: only these campaigns (the ones held back last time) are asked again. */
+  onlyCampaignIds?: readonly string[] | null,
 ): Promise<ScopeAnswer> {
   const transitions = (catalogue.triggerTransitions ?? []).filter((t) => t.triggerId === triggerId);
   const legKeys = [...new Set(transitions.map((t) => t.legKey))];
@@ -164,6 +168,7 @@ export async function fireTrigger(
     scope,
     (c) =>
       (!onlySalesFunnelCampaignId || c.salesFunnelCampaignId === onlySalesFunnelCampaignId) &&
+      (!onlyCampaignIds || onlyCampaignIds.includes(c.id)) &&
       transitions.some((t) => t.featureSlug === c.featureSlug && sameLeg(c.featureSlug, t.legKey, c.legKey)),
     `trigger ${triggerId}`,
     trigger,
@@ -390,6 +395,11 @@ export async function fireClaimedEvent(
     // A reported event naming a person by identity / carrying an item (lib/trigger-person.ts).
     const person = storedEventPerson(own?.person);
     const carries = person !== null || (own !== null && "item" in own);
+    // A retried person event re-asks ONLY the campaigns held back last time; the ones that already ran
+    // are kept and never dispatched twice.
+    const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+    const retryCampaignIds = person && Array.isArray(own?.retryCampaignIds) ? strings(own?.retryCampaignIds) : null;
+    const priorRanCampaignIds = person ? strings(own?.priorRanCampaignIds) : [];
     if (!event.triggerId || !catalogue.triggers?.has(event.triggerId)) {
       verdict = skipped(TRIGGER_EVENT_SKIPS.TRIGGER_NOT_DECLARED);
     } else {
@@ -403,27 +413,34 @@ export async function fireClaimedEvent(
           ? { eventId: event.id, triggerId: event.triggerId, leadId: event.leadId, item, ...(person ? { person } : {}) }
           : undefined;
         verdict = eventVerdict(
-          await fireTrigger(event, event.triggerId, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId, person),
+          await fireTrigger(event, event.triggerId, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId, person, retryCampaignIds),
         );
       }
     }
-    if (own) verdict = { ...verdict, detail: { ...own, ...verdict.detail } as EventVerdict["detail"] };
-    // Held back for a passing reason (person not known to the brand YET, a run in flight): try again
-    // shortly while the event is young, so it gets its own run carrying its person and item.
-    if (
-      person &&
-      verdict.outcome === "skipped" &&
-      verdict.skipReason !== null &&
-      PERSON_EVENT_RETRY_SKIPS.has(verdict.skipReason) &&
-      now.getTime() - event.occurredAt.getTime() < PERSON_NOT_KNOWN_WAIT_MS
-    ) {
+    // Campaigns that ran on an earlier attempt still count.
+    const ranCampaignIds = [...new Set([...priorRanCampaignIds, ...verdict.ranCampaignIds])];
+    if (ranCampaignIds.length > 0) verdict = { ...verdict, outcome: "ran", skipReason: null, ranCampaignIds };
+    if (own) {
+      const { retryCampaignIds: _r, priorRanCampaignIds: _p, ...rest } = own;
+      verdict = { ...verdict, detail: { ...rest, ...verdict.detail } as EventVerdict["detail"] };
+    }
+    // ANY campaign held back for a passing reason (person not known to the brand YET, a run in flight, a
+    // failure backoff): the event tries again shortly for those campaigns only, while it is young, so
+    // each gets its own run carrying the person and item.
+    const heldBack = person ? verdict.detail.skipped.filter((sk) => PERSON_EVENT_RETRY_SKIPS.has(sk.reason)) : [];
+    if (person && heldBack.length > 0 && now.getTime() - event.occurredAt.getTime() < PERSON_NOT_KNOWN_WAIT_MS) {
       const [back] = await db
         .update(triggerEvents)
         .set({
           status: "pending",
           dueAt: new Date(now.getTime() + PERSON_NOT_KNOWN_RETRY_MS),
           claimedAt: null,
-          lastError: `${verdict.skipReason}: ${person.email}, retried in 2 min`.slice(0, 500),
+          detail: {
+            ...verdict.detail,
+            retryCampaignIds: heldBack.map((sk) => sk.campaignId),
+            priorRanCampaignIds: ranCampaignIds,
+          },
+          lastError: `${heldBack.map((sk) => `${sk.campaignId} ${sk.reason}`).join(", ")}: ${person.email}, retried in 2 min`.slice(0, 500),
         })
         .where(eq(triggerEvents.id, event.id))
         .returning();

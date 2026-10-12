@@ -62,7 +62,11 @@ function catalogue() {
     stepKeys: new Set([FORM, "meeting_booked"]),
     legs: [{ legKey: LEG, fromStepKey: FORM, toStepKey: "meeting_booked" }],
     triggers: new Map([[FORM, { id: FORM, label: "Form Submitted", fromStepKey: FORM, firedBy: "crm-service", coded: true }]]),
-    triggerTransitions: [{ featureSlug: "ai-meeting-booking", legKey: LEG, triggerId: FORM }],
+    triggerTransitions: [
+      { featureSlug: "ai-meeting-booking", legKey: LEG, triggerId: FORM },
+      { featureSlug: "your-team-meeting-booking", legKey: LEG, triggerId: FORM },
+      { featureSlug: "other-meeting-booking", legKey: LEG, triggerId: FORM },
+    ],
   };
 }
 
@@ -194,6 +198,51 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     expect(res.body.event.status).toBe("pending");
     expect(mockFile).not.toHaveBeenCalled();
     expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("a your-team campaign beside a held-back AI campaign: the event retries for the AI one only", async () => {
+    const yourTeam = await insertTestCampaign(ORG, {
+      brandIds: [BRAND], brandId: BRAND, status: "ongoing", featureSlug: "your-team-meeting-booking",
+      createdByUserId: USER, offerId: OFFER, legKey: LEG,
+    });
+    const { campaigns } = await import("../../src/db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    await db.update(campaigns).set({ workflowSlug: null }).where(eq(campaigns.id, yourTeam.id));
+    const ai = await meetingBooking("ongoing");
+    mockListRuns.mockImplementation(async (p: { campaignId?: string }) => ({ runs: p.campaignId === ai.id ? [{ id: "run-live" }] : [] }));
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(res.body.event.status).toBe("pending");
+    expect(res.body.event.detail.retryCampaignIds).toEqual([ai.id]);
+    expect(res.body.event.detail.skipped.map((x: { reason: string }) => x.reason).sort()).toEqual(["no_workflow", "run_in_flight"]);
+
+    mockListRuns.mockResolvedValue({ runs: [] });
+    expect(await fireDueTriggerEvents(new Date(new Date(res.body.event.dueAt).getTime() + 1000))).toBe(1);
+    const [event] = await allEvents();
+    expect(event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [ai.id] });
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect((event.detail as Record<string, unknown>).retryCampaignIds).toBeUndefined();
+  });
+
+  it("one campaign ran, another was held back: the retry asks only the held-back one, and both count as ran", async () => {
+    const first = await meetingBooking("ongoing");
+    const second = await insertTestCampaign(ORG, {
+      brandIds: [BRAND], brandId: BRAND, status: "ongoing", featureSlug: "other-meeting-booking",
+      workflowSlug: "other-v1", createdByUserId: USER, parentRunId: "9f0d1c22-0000-4000-8000-000000000030", offerId: OFFER, legKey: LEG,
+    });
+    mockListRuns.mockImplementation(async (p: { campaignId?: string }) => ({ runs: p.campaignId === second.id ? [{ id: "run-live" }] : [] }));
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(res.body.event.status).toBe("pending");
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(mockExecute.mock.calls[0][1].campaignId).toBe(first.id);
+
+    mockListRuns.mockResolvedValue({ runs: [] });
+    expect(await fireDueTriggerEvents(new Date(new Date(res.body.event.dueAt).getTime() + 1000))).toBe(1);
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+    expect(mockExecute.mock.calls[1][1].campaignId).toBe(second.id);
+    const [event] = await allEvents();
+    expect(event.status).toBe("done");
+    expect(event.outcome).toBe("ran");
+    expect([...(event.ranCampaignIds ?? [])].sort()).toEqual([first.id, second.id].sort());
   });
 
   it("still unknown after the wait: recorded skipped `person_not_known`", async () => {
