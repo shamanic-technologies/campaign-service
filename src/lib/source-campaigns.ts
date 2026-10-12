@@ -90,9 +90,10 @@ const SEARCH_AND_SIGNAL_ORIGINS = [
  * path, see lib/channel-spend.ts).
  */
 export const SOURCING_ORIGINS_BY_CHANNEL: Readonly<Record<string, readonly string[]>> = {
-  "sales-cold-email-outreach": SEARCH_AND_SIGNAL_ORIGINS,
+  "sales-cold-email-outreach": [...SEARCH_AND_SIGNAL_ORIGINS, "sourcing-crm-contacts"],
   "feedback-request-cold-email-outreach": SEARCH_AND_SIGNAL_ORIGINS,
   "sales-crm-email-outreach": ["sourcing-crm-contacts"],
+  "cold-whatsapp-outreach": ["sourcing-crm-contacts"],
 };
 
 /**
@@ -118,6 +119,7 @@ export const DEFAULT_SOURCE_ORIGIN_BY_CHANNEL: Readonly<Record<string, string>> 
   "sales-cold-email-outreach": "sourcing-apollo-cold-filters",
   "feedback-request-cold-email-outreach": "sourcing-apollo-cold-filters",
   "sales-crm-email-outreach": "sourcing-crm-contacts",
+  "cold-whatsapp-outreach": "sourcing-crm-contacts",
 };
 
 /**

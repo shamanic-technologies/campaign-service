@@ -54,7 +54,11 @@ describe("the LOCKED vocabulary", () => {
       "sales-cold-email-outreach": APOLLO,
       "feedback-request-cold-email-outreach": APOLLO,
       "sales-crm-email-outreach": "sourcing-crm-contacts",
+      "cold-whatsapp-outreach": "sourcing-crm-contacts",
     });
+    // The brand's own CRM contacts feed WhatsApp (only) and the sales cold email (features-service parity, 2026-10-12).
+    expect(SOURCING_ORIGINS_BY_CHANNEL["cold-whatsapp-outreach"]).toEqual(["sourcing-crm-contacts"]);
+    expect(SOURCING_ORIGINS_BY_CHANNEL["sales-cold-email-outreach"]).toContain("sourcing-crm-contacts");
     // Every default is an origin its channel serves.
     for (const [channel, origin] of Object.entries(DEFAULT_SOURCE_ORIGIN_BY_CHANNEL)) {
       expect(SOURCING_ORIGINS_BY_CHANNEL[channel]).toContain(origin);
