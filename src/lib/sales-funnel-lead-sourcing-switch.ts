@@ -9,7 +9,7 @@
  *
  * Per funnel campaign, ONE transaction:
  *   - a `lead-sourcing` unit is born in the funnel's status, with the workflow features-service's pipe holds (like
- *     every unit; it answers the `on_demand` trigger, so it is never due here), source
+ *     every unit; who dispatches it is lib/on-demand-mode.ts), source
  *     `lead_sourcing_switch`;
  *   - every ONGOING old source unit of it is stopped, reason `replaced_by_lead_sourcing`, same source. A funnel
  *     start never brings them back (`ensureSourcesOnStart` only revives a stop nobody chose on the source).
@@ -182,7 +182,8 @@ export async function runLeadSourcingSwitch(opts: {
     if (opts.apply) {
       await db
         .update(campaigns)
-        .set({ workflowSlug: wf, nextRunAt: null, updatedAt: new Date() })
+        // Due now: the scheduler parks it while its leg answers on demand (lib/on-demand-mode.ts).
+        .set({ workflowSlug: wf, nextRunAt: new Date(), updatedAt: new Date() })
         .where(and(eq(campaigns.id, u.id), isNull(campaigns.workflowSlug)));
     }
   }

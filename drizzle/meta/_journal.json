@@ -484,6 +484,13 @@
       "when": 1779300000000,
       "tag": "0068_sales_funnel_campaign_github_issue",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1779400000000,
+      "tag": "0069_source_units_due",
+      "breakpoints": true
     }
   ]
 }

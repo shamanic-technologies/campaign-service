@@ -2,8 +2,8 @@
  * ON-DEMAND RUNS (owner 2026-10-11: "ça ne changera rien si le pipe a un trigger de type 'on demand' -> only exécuté
  * quand par ex le pipe cold email l'appelle").
  *
- * A pipe answering the `on_demand` trigger (features-service `channel-triggers.ts`; today the sourcing channels: an
- * origin or Lead Sourcing) is never dispatched by this service's scheduler (`answersInlineTrigger`): it runs WHEN
+ * A pipe answering the `on_demand` trigger (features-service `channel-triggers.ts`; the sourcing channels until
+ * features-service reads them proactive, lib/on-demand-mode.ts) is never dispatched by this service's scheduler: it runs WHEN
  * another pipe asks for it, inside that ask (lead-service serving the lead a cold email run needs, the same instant
  * as before). Each ask is still ITS OWN unit run, like every unit's: the performer asks this service to open it
  * (`POST /internal/on-demand-runs`), a ROOT run in runs-service with the shape `/start-run` gives a scheduled unit
@@ -21,7 +21,7 @@ import { and, eq } from "drizzle-orm";
 import { createRun } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
-import { answersInlineTrigger } from "./source-campaigns.js";
+import { isSourceOriginSlug } from "./source-campaigns.js";
 
 export class OnDemandRunError extends Error {
   constructor(
@@ -65,7 +65,10 @@ export async function openOnDemandRun(req: OnDemandRunRequest, deps: OnDemandRun
     where: and(eq(campaigns.id, req.campaignId), eq(campaigns.orgId, req.orgId)),
   });
   if (!campaign) throw new OnDemandRunError(`campaign ${req.campaignId} is not a campaign of org ${req.orgId}`, 404, "unknown_campaign");
-  if (!campaign.featureSlug || !answersInlineTrigger(campaign.featureSlug)) {
+  // Any SOURCE unit is answered, whichever way the catalogue reads its leg today: during the switch to sources running
+  // on their own (owner 2026-10-12) lead-service may still ask for one, and refusing would leave an outreach run
+  // with nobody to contact.
+  if (!campaign.featureSlug || !isSourceOriginSlug(campaign.featureSlug)) {
     throw new OnDemandRunError(
       `campaign ${req.campaignId} runs channel ${campaign.featureSlug ?? "none"}, whose pipe does not answer on demand: the scheduler runs it`,
       409,

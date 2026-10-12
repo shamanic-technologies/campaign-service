@@ -4,6 +4,7 @@ import { campaigns, triggerEvents, type TriggerEvent } from "../db/schema.js";
 import type { CatalogueTriggerTransition, CatalogueTriggerType, ChannelCatalogueRead } from "./channel-operator-client.js";
 import { fetchOfferLeadActivity, type LeadActivityByLead } from "./lead-activity-client.js";
 import { sameLeg } from "./leg-identity.js";
+import { ON_DEMAND_TRIGGER_ID } from "./on-demand-mode.js";
 
 /**
  * THE GENERIC `delay` DETECTOR (owner 2026-10-09): "N days after a lead reached step X, if nothing
@@ -58,7 +59,7 @@ export const DELAY_PLAN_LATE_MS = 2 * 24 * 60 * 60_000;
 export const LEAD_FOUND_STEP = "lead_found";
 export const LEAD_REQUESTED_TRIGGER_ID = "lead_requested";
 /** The trigger a sourcing pipe answers since 2026-10-11 (features-service `channel-triggers.ts`): its ran event is a serve. */
-export const ON_DEMAND_TRIGGER_ID = "on_demand";
+export { ON_DEMAND_TRIGGER_ID };
 /** Every trigger whose ran event is lead-service SERVING the lead: `on_demand`, and `lead_requested` (its history). */
 export const LEAD_SERVE_TRIGGER_IDS: readonly string[] = [ON_DEMAND_TRIGGER_ID, LEAD_REQUESTED_TRIGGER_ID];
 

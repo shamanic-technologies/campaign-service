@@ -1,4 +1,4 @@
-import { and, eq, inArray, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   campaigns,
@@ -9,7 +9,7 @@ import {
 } from "../db/schema.js";
 import { signalMissionStatusChanged, type StatusActor } from "./mission-status-notification.js";
 import { STOP_REASONS } from "./stop-reason.js";
-import { answersInlineTrigger, isSourceOriginSlug } from "./source-campaigns.js";
+import { isSourceOriginSlug } from "./source-campaigns.js";
 
 /** The transaction handle `db.transaction` hands its callback. */
 export type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -93,6 +93,17 @@ export const TRANSITION_SOURCES = {
    */
   LEAD_SOURCING_SWITCH: "lead_sourcing_switch",
 } as const;
+
+/**
+ * Stops of a SOURCE campaign that no person chose on the source itself: the 10-07 mirror's inherited copy of its
+ * outreach campaign's pause, the payment hold, a sales funnel campaign stopped as a whole. A source in that state
+ * comes back ON with what started again (lib/source-campaign-store.ts, setSalesFunnelCampaignStatus).
+ */
+export const SOURCE_STOPS_NOBODY_CHOSE: ReadonlySet<string> = new Set([
+  TRANSITION_SOURCES.SOURCE_MIRROR,
+  TRANSITION_SOURCES.PAYMENT_HOLD,
+  TRANSITION_SOURCES.SALES_FUNNEL,
+]);
 
 export type TransitionSource = (typeof TRANSITION_SOURCES)[keyof typeof TRANSITION_SOURCES];
 
@@ -222,8 +233,7 @@ export async function stopDisplacedWithHistory(
 /**
  * Start the SOURCE campaigns a person's outreach start brings back ON (stopped, never by a person:
  * lib/source-campaign-store.ts decides which), recording one `source_follows_outreach` transition
- * each, inside the transaction that started the outreach campaign. A source has no workflow, so
- * nothing is scheduled. Returns the started rows.
+ * each, inside the transaction that started the outreach campaign. Returns the started rows.
  */
 export async function startFollowingSourcesWithHistory(
   tx: DbTransaction,
@@ -233,7 +243,9 @@ export async function startFollowingSourcesWithHistory(
   if (ids.length === 0) return [];
   const started = await tx
     .update(campaigns)
-    .set({ status: "ongoing", stopReason: null, nextRunAt: null, updatedAt: new Date() })
+    // A source with a workflow (a funnel unit) is due now: the scheduler parks it while it answers on demand, runs it
+    // once it runs on its own (lib/on-demand-mode.ts). One with none is never due.
+    .set({ status: "ongoing", stopReason: null, nextRunAt: sql`CASE WHEN ${campaigns.workflowSlug} IS NOT NULL THEN now() ELSE NULL END`, updatedAt: new Date() })
     .where(and(eq(campaigns.orgId, orgId), eq(campaigns.status, "stopped"), inArray(campaigns.id, ids)))
     .returning();
   if (started.length === 0) return [];
@@ -470,9 +482,9 @@ export async function insertSalesFunnelUnits(
       featureInputs: null,
       status: parent.status,
       stopReason: parent.status === "stopped" ? (parent.stopReason ?? STOP_REASONS.MANUAL) : null,
-      // A unit with no DAG is never due, nor one answering an INLINE trigger (a source: it runs inside the
-      // outreach run, lib/source-campaigns.ts); a stopped one is not claimed whatever this says.
-      nextRunAt: parent.status === "ongoing" && u.workflowSlug && !answersInlineTrigger(u.featureSlug) ? now : null,
+      // A unit with no DAG is never due; a stopped one is not claimed whatever this says. A unit answering on demand
+      // is parked by the scheduler when claimed (lib/on-demand-mode.ts: the catalogue decides, not the birth).
+      nextRunAt: parent.status === "ongoing" && u.workflowSlug ? now : null,
       createdAt: now,
       updatedAt: now,
     })))
@@ -536,10 +548,25 @@ export async function setSalesFunnelCampaignStatus(write: {
       .from(campaigns)
       .where(and(eq(campaigns.orgId, write.orgId), eq(campaigns.salesFunnelCampaignId, parent.id)));
     // A lead SOURCE unit keeps its own On/Off (a person turns one origin off; lib/source-campaigns.ts):
-    // a funnel STOP stops it with the rest, a funnel START leaves it to `onUnitStarted`
-    // (ensureSourcesOnStart brings back the sources nobody turned off, a funnel stop included).
+    // a funnel STOP stops it with the rest; a funnel START brings back the source units NOBODY turned off on the
+    // source itself (latest stop = the funnel's, the mirror or the payment hold), so a leads-only funnel (no
+    // outreach unit whose start would bring them, owner 2026-10-12) finds leads again; a person's Off stays off.
+    const sourcesBack = new Set<string>();
+    const stoppedSources = write.toStatus === "ongoing"
+      ? before.filter((u) => u.status !== "ongoing" && isSourceOriginSlug(u.featureSlug))
+      : [];
+    if (stoppedSources.length > 0) {
+      const history = await tx
+        .select({ campaignId: campaignStatusTransitions.campaignId, source: campaignStatusTransitions.source })
+        .from(campaignStatusTransitions)
+        .where(inArray(campaignStatusTransitions.campaignId, stoppedSources.map((u) => u.id)))
+        .orderBy(desc(campaignStatusTransitions.occurredAt));
+      const latest = new Map<string, string>();
+      for (const t of history) if (!latest.has(t.campaignId)) latest.set(t.campaignId, t.source);
+      for (const u of stoppedSources) if (SOURCE_STOPS_NOBODY_CHOSE.has(latest.get(u.id) ?? "")) sourcesBack.add(u.id);
+    }
     const toMove = before.filter(
-      (u) => u.status !== write.toStatus && !(write.toStatus === "ongoing" && isSourceOriginSlug(u.featureSlug)),
+      (u) => u.status !== write.toStatus && (!(write.toStatus === "ongoing" && isSourceOriginSlug(u.featureSlug)) || sourcesBack.has(u.id)),
     );
 
     const moved: CampaignRow[] = [];
@@ -551,7 +578,7 @@ export async function setSalesFunnelCampaignStatus(write: {
           stopReason: write.reason,
           // Due now when it starts (the scheduler's planner decides whether it may spend); nothing
           // due once stopped.
-          nextRunAt: write.toStatus === "ongoing" && unit.workflowSlug && !answersInlineTrigger(unit.featureSlug) ? now : null,
+          nextRunAt: write.toStatus === "ongoing" && unit.workflowSlug ? now : null,
           updatedAt: now,
         })
         .where(eq(campaigns.id, unit.id))

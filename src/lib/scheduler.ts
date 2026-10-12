@@ -1,8 +1,8 @@
 import { db } from "../db/index.js";
 import { holdPaymentDeclinedOrgs, PAYMENT_HOLD_RECHECK_MS } from "./payment-hold-sweep.js";
 import { campaigns } from "../db/schema.js";
-import { eq, and, lte, isNotNull, isNull, notInArray, or } from "drizzle-orm";
-import { INLINE_TRIGGER_FEATURE_SLUGS } from "./source-campaigns.js";
+import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
+import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./on-demand-mode.js";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
@@ -17,9 +17,6 @@ import { sourcesOffHold, SOURCES_OFF_RECHECK_MS } from "./sources-off-hold.js";
 import { reportTurnHolds } from "./turn-hold-event.js";
 import { fireDueTriggerEvents, nextPendingTriggerDueAt } from "./trigger-events.js";
 import { alertSilentTriggers } from "./trigger-silence.js";
-
-/** Not a unit answering an INLINE trigger (lib/source-campaigns.ts): those are never dispatched by this service. */
-const notInlineTriggered = or(isNull(campaigns.featureSlug), notInArray(campaigns.featureSlug, [...INLINE_TRIGGER_FEATURE_SLUGS]));
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -106,9 +103,6 @@ export async function reRunDueCampaigns(): Promise<number> {
         // themselves. NOT a filter on a list of slugs: the row states the absence, and the
         // catalogue decided it at provisioning time.
         isNotNull(campaigns.workflowSlug),
-        // A unit answering an INLINE trigger (a source, lib/source-campaigns.ts) runs inside the run that fires
-        // it: never claimed here, whatever its nextRunAt says.
-        notInlineTriggered,
         isNotNull(campaigns.nextRunAt),
         lte(campaigns.nextRunAt, now),
       ),
@@ -141,13 +135,34 @@ export async function reRunDueCampaigns(): Promise<number> {
 
   if (dueCampaigns.length === 0) return 0;
 
+  // A campaign answering ON DEMAND (lib/on-demand-mode.ts: features-service reads its leg reactive on `on_demand`,
+  // today the sourcing pipes) runs only when another pipe asks for it: parked on its recheck cadence, never
+  // dispatched. Every other claimed campaign goes on. One catalogue read per tick that claimed something; unreadable =
+  // the source campaigns are parked (today's behaviour), the rest go on. Not logged per campaign (routine).
+  const catalogue = await readDispatchCatalogue();
+  if (!catalogue.ok) console.warn(`[campaign-service] scheduler: catalogue unreadable (${catalogue.detail}); source campaigns parked as on demand this tick`);
+  const parkedUntil = new Date(now.getTime() + ON_DEMAND_RECHECK_MS);
+  const runnable: typeof dueCampaigns = [];
+  for (const campaign of dueCampaigns) {
+    if (!answersOnDemand(campaign, catalogue)) {
+      runnable.push(campaign);
+      continue;
+    }
+    try {
+      await db.update(campaigns).set({ nextRunAt: parkedUntil, updatedAt: new Date() }).where(eq(campaigns.id, campaign.id));
+    } catch (err) {
+      console.error(`[campaign-service] Failed to park on-demand campaign ${campaign.id}:`, err);
+    }
+  }
+  if (runnable.length === 0) return dueCampaigns.length;
+
   // Per-campaign funding + turn-taking. HOLDS every sales campaign the customer funds nothing for,
   // holds each brand cohort to ONE run in flight, and hands the turn to the funded campaign with
   // the lowest spent-today/ceiling ratio. Campaigns absent from the map fire
   // as they always have — every non-sales campaign is untouched.
-  const turnDefers = await planBrandTurns(dueCampaigns, now);
+  const turnDefers = await planBrandTurns(runnable, now);
 
-  for (const campaign of dueCampaigns) {
+  for (const campaign of runnable) {
     try {
       const turnDefer = turnDefers.get(campaign.id);
       if (turnDefer) {
@@ -334,8 +349,6 @@ export async function claimStuckCampaigns(): Promise<number> {
       // channel the customer operates — there is nothing to run, so nothing is stuck. Claiming it
       // here would set nextRunAt=now every tick forever for a campaign that must never fire.
       isNotNull(campaigns.workflowSlug),
-      // A source unit rests at nextRunAt=NULL forever (it runs inside the outreach run): never "stuck".
-      notInlineTriggered,
       isNull(campaigns.nextRunAt),
     ),
     // Everything the recovery event needs to be attributable, for the same reason the turn
@@ -505,7 +518,7 @@ async function loadOngoingSnapshot(): Promise<Array<{ nextRunAt: Date | null }>>
     // pinning the 60s active cadence — and is still looked at without anyone asking.
     // A campaign with no workflow rests at nextRunAt=NULL forever. Counting it would read as
     // "something is in flight" and pin the 60s active cadence for a service with nothing to do.
-    where: and(eq(campaigns.status, "ongoing"), isNotNull(campaigns.workflowSlug), notInlineTriggered),
+    where: and(eq(campaigns.status, "ongoing"), isNotNull(campaigns.workflowSlug)),
     columns: { nextRunAt: true },
   });
 }

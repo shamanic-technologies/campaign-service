@@ -6,11 +6,13 @@ import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-oper
 import { campaignIdentityColumns, derivedCampaignName } from "./campaign-identity.js";
 import {
   campaignBirthTransition,
+  SOURCE_STOPS_NOBODY_CHOSE,
   startFollowingSourcesWithHistory,
   TRANSITION_SOURCES,
   type DbTransaction,
 } from "./campaign-status-history.js";
 import { isEntryLeg } from "./single-proactive.js";
+import { sourceRunsOnItsOwn } from "./on-demand-mode.js";
 import { STOP_REASONS } from "./stop-reason.js";
 import {
   DEFAULT_SOURCE_ORIGIN_BY_CHANNEL,
@@ -44,6 +46,8 @@ export interface FeedingSourceCampaign {
   id: string;
   featureSlug: string;
   status: string;
+  /** The sales funnel campaign it is a unit of (null = a pre-funnel source): part of whether it runs on its own. */
+  salesFunnelCampaignId: string | null;
 }
 
 /**
@@ -60,7 +64,7 @@ export async function sourceCampaignsFeeding(campaignId: string, featureSlug: st
   const brandId = brandOf(outreach);
   if (!brandId) return [];
   const rows = await db
-    .select({ id: campaigns.id, featureSlug: campaigns.featureSlug, status: campaigns.status })
+    .select({ id: campaigns.id, featureSlug: campaigns.featureSlug, status: campaigns.status, salesFunnelCampaignId: campaigns.salesFunnelCampaignId })
     .from(campaigns)
     .where(
       and(
@@ -71,7 +75,7 @@ export async function sourceCampaignsFeeding(campaignId: string, featureSlug: st
         inArray(campaigns.featureSlug, [...origins]),
       ),
     );
-  return rows.map((r) => ({ id: r.id, featureSlug: r.featureSlug!, status: r.status }));
+  return rows.map((r) => ({ id: r.id, featureSlug: r.featureSlug!, status: r.status, salesFunnelCampaignId: r.salesFunnelCampaignId ?? null }));
 }
 
 /** One origin of an offer, as served to the dashboard and to sibling services. */
@@ -89,6 +93,11 @@ export interface OfferSourceCampaign {
   status: string | null;
   running: boolean;
   stopReason: string | null;
+  /**
+   * This service dispatches it on its own: it finds leads with nobody asking (lib/on-demand-mode.ts, owner 2026-10-12).
+   * false = it answers on demand (the outreach run asks lead-service for a lead and the source finds it then).
+   */
+  runsOnItsOwn: boolean;
 }
 
 /**
@@ -96,11 +105,14 @@ export interface OfferSourceCampaign {
  * ones only when the offer has a row. When an origin has several rows (history), the live one wins,
  * else the latest.
  */
-export async function listOfferSourceCampaigns(scope: {
-  orgId: string;
-  brandId: string;
-  offerId: string;
-}): Promise<OfferSourceCampaign[]> {
+export async function listOfferSourceCampaigns(
+  scope: {
+    orgId: string;
+    brandId: string;
+    offerId: string;
+  },
+  catalogue: ChannelCatalogueRead = { ok: false, detail: "not read" },
+): Promise<OfferSourceCampaign[]> {
   const rows = await db
     .select()
     .from(campaigns)
@@ -134,6 +146,7 @@ export async function listOfferSourceCampaigns(scope: {
       status: c?.status ?? null,
       running: c?.status === "ongoing",
       stopReason: c?.stopReason ?? null,
+      runsOnItsOwn: !!c && c.workflowSlug !== null && sourceRunsOnItsOwn(c, catalogue),
     };
   });
 }
@@ -169,18 +182,8 @@ function sourceCampaignValues(input: {
   };
 }
 
-/**
- * Who stopped a source campaign, when it was not a person acting on the SOURCE itself: the mirror's
- * inherited copy of its outreach campaign's pause (10-07, `source_mirror`) or the payment hold. A
- * source in that state is OFF because of something that happened to the OUTREACH campaign, so it
- * follows the outreach campaign back ON when a person starts it.
- */
-const STOPS_NOBODY_CHOSE_ON_THE_SOURCE: ReadonlySet<string> = new Set([
-  TRANSITION_SOURCES.SOURCE_MIRROR,
-  TRANSITION_SOURCES.PAYMENT_HOLD,
-  // A sales funnel campaign stopped as a whole: nobody chose Off on the source itself.
-  TRANSITION_SOURCES.SALES_FUNNEL,
-]);
+/** Who stopped a source campaign when no person acted on the source itself (lib/campaign-status-history.ts). */
+const STOPS_NOBODY_CHOSE_ON_THE_SOURCE = SOURCE_STOPS_NOBODY_CHOSE;
 
 /**
  * A PERSON turned ON an outreach campaign of a sourced channel on an ENTRY leg. In the same

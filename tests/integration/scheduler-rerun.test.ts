@@ -25,6 +25,13 @@ vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
   };
 });
 
+// A sales funnel unit is paced on its funnel's caps (billing): funded here, so the dispatch decision under test is
+// the catalogue's reading alone.
+vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>()),
+  salesFunnelUnitMoney: vi.fn().mockResolvedValue({ run: true, pace: { spentCents: 0, ceilingCents: 500 } }),
+}));
+
 vi.mock("@distribute/runs-client", () => ({
   listRuns: vi.fn().mockResolvedValue({ runs: [] }),
   createRun: mockCreateRun,
@@ -59,22 +66,44 @@ describe("Scheduler - reRunDueCampaigns (integration)", () => {
     await closeDb();
   });
 
-  it("never dispatches a SOURCE unit, workflow or not (it answers the inline lead_requested trigger, owner 2026-10-11)", async () => {
+  it("parks, never dispatches, a SOURCE unit whose leg answers on demand (today's catalogue)", async () => {
     const pastDate = new Date(Date.now() - 60_000);
     const source = await insertTestCampaign(orgId, {
       status: "ongoing",
       nextRunAt: pastDate,
       featureSlug: "lead-sourcing",
+      legKey: "start_to_lead_found",
       workflowSlug: "lead-sourcing-vega",
       createdByUserId: "user_scheduler_test",
     });
-    expect(await reRunDueCampaigns()).toBe(0);
+    await reRunDueCampaigns();
     expect(mockExecute).not.toHaveBeenCalled();
-    const { claimStuckCampaigns } = await import("../../src/lib/scheduler.js");
-    await db.update(campaigns).set({ nextRunAt: null }).where(eq(campaigns.id, source.id));
-    expect(await claimStuckCampaigns()).toBe(0);
     const [row] = await db.select().from(campaigns).where(eq(campaigns.id, source.id));
-    expect(row.nextRunAt).toBeNull();
+    expect(row.nextRunAt!.getTime()).toBeGreaterThan(Date.now() + 9 * 60_000);
+  });
+
+  it("dispatches a SALES FUNNEL source unit like any campaign once the catalogue reads its leg proactive (LEADS-ONLY, owner 2026-10-12)", async () => {
+    const { readDispatchCatalogue } = await import("../../src/lib/on-demand-mode.js");
+    vi.mocked(readDispatchCatalogue).mockResolvedValueOnce({
+      ok: true,
+      operatorBySlug: new Map(),
+      legsBySlug: new Map([["lead-sourcing", new Set(["start_to_lead_found"])]]),
+      legs: [],
+      stepKeys: new Set(),
+      triggerTransitions: [],
+    });
+    const source = await insertTestCampaign(orgId, {
+      status: "ongoing",
+      nextRunAt: new Date(Date.now() - 60_000),
+      featureSlug: "lead-sourcing",
+      legKey: "start_to_lead_found",
+      workflowSlug: "lead-sourcing-vega",
+      createdByUserId: "user_scheduler_test",
+    });
+    // A unit of a sales funnel campaign: the only source with money of its own.
+    await db.update(campaigns).set({ salesFunnelCampaignId: "00000000-0000-4000-8000-00000000f001" }).where(eq(campaigns.id, source.id));
+    await reRunDueCampaigns();
+    expect(mockExecute).toHaveBeenCalledWith("lead-sourcing-vega", expect.objectContaining({ campaignId: source.id }));
   });
 
   it("should not trigger anything when no campaigns are due", async () => {
