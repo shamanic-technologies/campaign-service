@@ -204,7 +204,7 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
 });
 
 describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
-  const identity = { orgId: "org", userId: "user", runId: "run", brandId: "brand" };
+  const identity = { orgId: "org", userId: "user", runId: "run", brandId: "brand", offerId: "offer" };
   const catalogue: ChannelCatalogueRead = {
     ok: true,
     legsBySlug: new Map([[COLD, new Set([ENTRY])], ["ai-meeting-booking", new Set([REACTIVE])], ["sourcing-apollo-cold-filters", new Set(["start_to_lead_found"])]]),
@@ -217,6 +217,7 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
     "google-ads-unknown|x": { channelSlug: "pr-cold-email-outreach", legKey: ENTRY, mode: "proactive" },
   };
   const deps = (pipeIds: string[] | "404" | "down") => ({
+    offerSteps: vi.fn(async () => ({ ok: true as const, stated: false as const })),
     salesFunnel: vi.fn(async () =>
       pipeIds === "404"
         ? { ok: false as const, notFound: true as const, detail: "404" }
@@ -296,6 +297,95 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
     expect(await resolveSalesFunnelPlan("nope", identity, deps("404"))).toMatchObject({ refusal: { status: 400, code: "unknown_sales_funnel" } });
     expect(await resolveSalesFunnelPlan("f@x", identity, deps([]))).toMatchObject({ refusal: { status: 400, code: "no_pipe" } });
     expect(await resolveSalesFunnelPlan("f@x", identity, deps("down"))).toMatchObject({ refusal: { status: 502, code: "catalogue_unavailable" } });
+  });
+});
+
+describe("resolveSalesFunnelPlan — the steps the offer's business has (owner 2026-10-12)", () => {
+  const identity = { orgId: "org", userId: "user", runId: "run", brandId: "brand", offerId: "offer" };
+  const step = (key: string | null) => key;
+  // The catalogue's published legs, as features-service served them on 2026-10-12.
+  const legs = [
+    { legKey: "start_to_website_visit", fromStepKey: step(null), toStepKey: "website_visit" },
+    { legKey: "website_visit_to_purchase", fromStepKey: "website_visit", toStepKey: "purchase" },
+    { legKey: "purchase_to_paid_client", fromStepKey: "purchase", toStepKey: "paid_client" },
+    { legKey: "website_visit_to_meeting_booked", fromStepKey: "website_visit", toStepKey: "meeting_booked" },
+    { legKey: "meeting_booked_to_meeting_attended", fromStepKey: "meeting_booked", toStepKey: "meeting_attended" },
+    { legKey: "meeting_attended_to_paid_client", fromStepKey: "meeting_attended", toStepKey: "paid_client" },
+    { legKey: "start_to_lead_found", fromStepKey: null, toStepKey: "lead_found" },
+    { legKey: "lead_found_to_website_visit", fromStepKey: "lead_found", toStepKey: "website_visit" },
+  ];
+  const LI = "organic-linkedin-publishing";
+  const catalogue = {
+    ok: true,
+    legsBySlug: new Map([[LI, new Set(["start_to_website_visit"])], ["your-team", new Set(legs.map((l) => l.legKey))]]),
+    operatorBySlug: new Map([[LI, "platform"], ["your-team", "customer"]]),
+    legs,
+    stepKeys: new Set(["website_visit", "purchase", "meeting_booked", "meeting_attended", "paid_client", "lead_found"]),
+  } as unknown as ChannelCatalogueRead;
+  // Every leg is one pipe here (the entry by LinkedIn, the rest by the customer's own team).
+  const funnelOf = (name: string, legKeys: string[]) => ({
+    ok: true as const,
+    value: {
+      id: legKeys.join("+"),
+      name,
+      pipeIds: legKeys.map((k) => (k.startsWith("start_") ? `${LI}|${k}` : `your-team|${k}`)),
+      legs: legKeys.map((k) => ({ legKey: k, pipe: { id: k.startsWith("start_") ? `${LI}|${k}` : `your-team|${k}`, mode: "proactive" as const }, channelIds: [k.startsWith("start_") ? LI : "your-team"] })),
+    },
+  });
+  const PURCHASE = ["start_to_website_visit", "website_visit_to_purchase", "purchase_to_paid_client"];
+  const MEETING = ["start_to_website_visit", "website_visit_to_meeting_booked", "meeting_booked_to_meeting_attended", "meeting_attended_to_paid_client"];
+  const DOC_DINNERS = ["conversation", "booking_call", "meeting_booked", "meeting_attended", "website_visit"];
+  const deps = (legKeys: string[], offerSteps: Awaited<ReturnType<typeof import("../../src/lib/sales-funnel-offer-steps.js").fetchOfferSteps>>) => ({
+    offerSteps: vi.fn(async () => offerSteps),
+    salesFunnel: vi.fn(async () => funnelOf("Philanthropy", legKeys)),
+    pipe: vi.fn(async (id: string) => {
+      const [channelSlug, legKey] = id.split("|");
+      return { ok: true as const, value: { id, name: null, channelSlug, legKey, mode: "proactive" as const } };
+    }),
+    catalogue: vi.fn(async () => catalogue),
+    workflow: vi.fn(async () => ({ ok: true as const, workflowSlug: "aurora-v3" })),
+  });
+
+  it("refuses a funnel through a step the offer's business has not stated, naming it, and asks for nothing else", async () => {
+    const d = deps(PURCHASE, { ok: true, stated: true, steps: DOC_DINNERS });
+    const res = await resolveSalesFunnelPlan("f", identity, d);
+    expect(res).toMatchObject({
+      ok: false,
+      refusal: { status: 409, code: "offer_lacks_steps", missingSteps: ["purchase"], offerSteps: DOC_DINNERS },
+    });
+    if (res.ok) return;
+    expect(res.refusal.message).toContain("purchase");
+    expect(res.refusal.message).toContain("Philanthropy");
+    expect(d.offerSteps).toHaveBeenCalledWith("brand", "offer", identity);
+    // Refused before any pipe's workflow is resolved.
+    expect(d.workflow).not.toHaveBeenCalled();
+  });
+
+  it("launches a funnel whose every step is stated; Start, lead found and paid client always count as present", async () => {
+    expect((await resolveSalesFunnelPlan("f", identity, deps(MEETING, { ok: true, stated: true, steps: DOC_DINNERS }))).ok).toBe(true);
+    const sourced = ["lead_found_to_website_visit", "website_visit_to_meeting_booked", "meeting_booked_to_meeting_attended", "meeting_attended_to_paid_client"];
+    expect((await resolveSalesFunnelPlan("f", identity, deps(sourced, { ok: true, stated: true, steps: ["website_visit", "meeting_booked", "meeting_attended"] }))).ok).toBe(true);
+  });
+
+  it("names every missing step once, in funnel order; a stated EMPTY list is a statement too", async () => {
+    const res = await resolveSalesFunnelPlan("f", identity, deps(MEETING, { ok: true, stated: true, steps: [] }));
+    expect(res).toMatchObject({ refusal: { code: "offer_lacks_steps", missingSteps: ["website_visit", "meeting_booked", "meeting_attended"], offerSteps: [] } });
+  });
+
+  it("leaves an offer that never stated its steps unchanged (nothing filtered)", async () => {
+    expect((await resolveSalesFunnelPlan("f", identity, deps(PURCHASE, { ok: true, stated: false }))).ok).toBe(true);
+  });
+
+  it("fails LOUD when the steps cannot be read, and names an offer not on the brand apart", async () => {
+    expect(await resolveSalesFunnelPlan("f", identity, deps(PURCHASE, { ok: false, notFound: false, detail: "HTTP 503" })))
+      .toMatchObject({ ok: false, refusal: { status: 502, code: "offer_steps_unavailable" } });
+    expect(await resolveSalesFunnelPlan("f", identity, deps(PURCHASE, { ok: false, notFound: true, detail: "HTTP 404" })))
+      .toMatchObject({ ok: false, refusal: { status: 400, code: "offer_not_found" } });
+  });
+
+  it("refuses rather than guesses when a leg of the funnel is not in the catalogue (steps unknown)", async () => {
+    const d = deps(["start_to_website_visit", "website_visit_to_mystery"], { ok: true, stated: true, steps: DOC_DINNERS });
+    expect(await resolveSalesFunnelPlan("f", identity, d)).toMatchObject({ ok: false, refusal: { status: 502, code: "sales_funnel_steps_unknown" } });
   });
 });
 
