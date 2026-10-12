@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { campaigns, triggerEvents, type TriggerEvent } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { sameLeg } from "./leg-identity.js";
-import { DELAY_DETECTOR_RECORDED_VIA, delayGuard, type LeadActivityCache } from "./delay-trigger-detector.js";
+import { DELAY_DETECTOR_RECORDED_VIA, GITHUB_ISSUE_RECORDED_VIA, delayGuard, type LeadActivityCache } from "./delay-trigger-detector.js";
 import {
   runCampaignsInScope,
   runStep,
@@ -69,6 +69,8 @@ export const TRIGGER_EVENT_RECORDED_VIA = {
   DELAY_DETECTOR: "delay_detector",
   /** One new item seen by the generic `poll` detector (lib/poll-trigger-detector.ts). */
   POLL_DETECTOR: "poll_detector",
+  /** A GitHub issue a funnel campaign waits on reached prod (lib/github-issue-trigger-detector.ts). */
+  GITHUB_ISSUE_DETECTOR: "github_issue_detector",
 } as const;
 
 const POLL_RECORDED_VIA = TRIGGER_EVENT_RECORDED_VIA.POLL_DETECTOR;
@@ -138,13 +140,17 @@ export async function fireTrigger(
   trigger?: WorkflowTriggerInput,
   /** The lead a non-detector event names (lib/sales-funnel-people.ts): who the event is about. */
   eventLeadId?: string | null,
+  /** The event is for ONE sales funnel campaign's units only (a github issue it waits on). */
+  onlySalesFunnelCampaignId?: string | null,
 ): Promise<ScopeAnswer> {
   const transitions = (catalogue.triggerTransitions ?? []).filter((t) => t.triggerId === triggerId);
   const legKeys = [...new Set(transitions.map((t) => t.legKey))];
   if (transitions.length === 0) return { triggered: [], skipped: [], offCampaignIds: [], legKeys };
   const run = await runCampaignsInScope(
     scope,
-    (c) => transitions.some((t) => t.featureSlug === c.featureSlug && sameLeg(c.featureSlug, t.legKey, c.legKey)),
+    (c) =>
+      (!onlySalesFunnelCampaignId || c.salesFunnelCampaignId === onlySalesFunnelCampaignId) &&
+      transitions.some((t) => t.featureSlug === c.featureSlug && sameLeg(c.featureSlug, t.legKey, c.legKey)),
     `trigger ${triggerId}`,
     trigger,
     eventLeadId,
@@ -344,7 +350,17 @@ export async function fireClaimedEvent(
       ranCampaignIds: [],
       detail: { legKeys: [], triggered: [], skipped: [], offCampaignIds: [], ...extra },
     });
-    const detected = event.recordedVia === DELAY_DETECTOR_RECORDED_VIA || event.recordedVia === POLL_RECORDED_VIA;
+    const detected = event.recordedVia === DELAY_DETECTOR_RECORDED_VIA || event.recordedVia === POLL_RECORDED_VIA
+      || event.recordedVia === GITHUB_ISSUE_RECORDED_VIA;
+    const own = event.detail && typeof event.detail === "object" && !Array.isArray(event.detail)
+      ? (event.detail as Record<string, unknown>)
+      : null;
+    // A detector event that states its item / funnel campaign on the row (the github issue detector) is
+    // fired with them on a retry too, when the caller's context is gone.
+    const item = context.item ?? own?.item ?? null;
+    const onlySalesFunnelCampaignId = event.recordedVia === GITHUB_ISSUE_RECORDED_VIA && typeof own?.salesFunnelCampaignId === "string"
+      ? own.salesFunnelCampaignId
+      : null;
     if (!event.triggerId || !catalogue.triggers?.has(event.triggerId)) {
       verdict = skipped(TRIGGER_EVENT_SKIPS.TRIGGER_NOT_DECLARED);
     } else {
@@ -355,14 +371,11 @@ export async function fireClaimedEvent(
         verdict = skipped(guard.reason, { guardDetail: guard.detail });
       } else {
         const trigger: WorkflowTriggerInput | undefined = detected
-          ? { eventId: event.id, triggerId: event.triggerId, leadId: event.leadId, item: context.item ?? null }
+          ? { eventId: event.id, triggerId: event.triggerId, leadId: event.leadId, item }
           : undefined;
-        verdict = eventVerdict(await fireTrigger(event, event.triggerId, catalogue, trigger, event.leadId));
+        verdict = eventVerdict(await fireTrigger(event, event.triggerId, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId));
       }
     }
-    const own = event.detail && typeof event.detail === "object" && !Array.isArray(event.detail)
-      ? (event.detail as Record<string, unknown>)
-      : null;
     if (own) verdict = { ...verdict, detail: { ...own, ...verdict.detail } as EventVerdict["detail"] };
     const [done] = await db
       .update(triggerEvents)

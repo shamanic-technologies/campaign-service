@@ -209,6 +209,13 @@ export const MAX_INSTRUCTION_LENGTH = 4000;
 /** The most people one funnel campaign may name (lib/sales-funnel-people.ts). */
 export const MAX_NAMED_PEOPLE = 50;
 
+/** A GitHub issue (or pull request) a funnel campaign waits on. */
+export const GithubIssueRefSchema = z.object({
+  // `owner/name`, e.g. "shamanic-technologies/campaign-service".
+  repo: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/, "githubIssue.repo must be owner/name"),
+  number: z.number().int().positive("githubIssue.number must be a positive whole number"),
+}).strict().openapi("GithubIssueRef");
+
 /**
  * A person (or the agent acting for them) launches a SALES FUNNEL as one campaign: brand x offer x
  * sales funnel. Everything else is resolved here: the pipes are features-service's statement of the
@@ -233,6 +240,10 @@ export const CreateSalesFunnelCampaignBody = z.object({
     .max(MAX_NAMED_PEOPLE, `people names at most ${MAX_NAMED_PEOPLE} people`).optional(),
   // OPTIONAL: free text every run of its units carries to the workflow (/start-run `instruction`).
   instruction: z.string().trim().min(1, "instruction must not be empty (omit it)").max(MAX_INSTRUCTION_LENGTH).optional(),
+  // OPTIONAL (lib/github-issue-trigger.ts): the GitHub issue this campaign WAITS ON. Its units answering a
+  // `github_issue_in_prod` trigger run once this issue is in prod (closed as completed by a merge to the
+  // default branch AND served by every deploy target of the repo on the box). Part of its identity.
+  githubIssue: GithubIssueRefSchema.optional(),
 }).strict().openapi("CreateSalesFunnelCampaignBody");
 
 /**
@@ -286,6 +297,19 @@ export const SalesFunnelCampaignSchema = z.object({
   people: z.array(z.object({ email: z.string(), leadId: z.string().nullable() })).nullable(),
   // Free text every run of its units carries to the workflow; null = none.
   instruction: z.string().nullable(),
+  // The GitHub issue it waits on (lowercased), or null.
+  githubIssue: GithubIssueRefSchema.nullable(),
+  // The detector's latest verdict on that issue (null = not checked yet / waits on none). `state`:
+  // open | closed_not_completed | closed_without_merge | merged_not_deployed | in_prod | not_served_by_box |
+  // github_unreadable | served_unreadable. Once `in_prod` the event fires and the check is no longer updated.
+  githubIssueCheck: z.object({
+    state: z.string(),
+    detail: z.string(),
+    checkedAt: z.string(),
+    mergeSha: z.string().optional(),
+    mergedBy: z.string().optional(),
+    served: z.array(z.object({ target: z.string(), sha: z.string(), containsMerge: z.boolean() })).optional(),
+  }).nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   units: z.array(SalesFunnelUnitSchema),

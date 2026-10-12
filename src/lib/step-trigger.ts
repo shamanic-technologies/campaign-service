@@ -26,6 +26,7 @@ import {
   type NamedPerson,
 } from "./sales-funnel-people.js";
 import { fileSalesFunnelCampaignPeople, targetingOfSalesFunnelCampaigns } from "./sales-funnel-people-store.js";
+import { eventConcernsGithubIssue } from "./github-issue-trigger.js";
 
 /**
  * A LEAD JUST REACHED A STEP — RUN THE CAMPAIGN THAT WAS BOUGHT TO TAKE THEM OUT OF IT, NOW.
@@ -130,6 +131,11 @@ export const STEP_TRIGGER_SKIPS = {
    * not one of them: the event is about somebody else.
    */
   EVENT_NAMES_ANOTHER_PERSON: "event_names_another_person",
+  /**
+   * A campaign WAITING ON a GitHub issue (lib/github-issue-trigger.ts) and the event does not name that issue
+   * reaching prod: it is not what the campaign waits for.
+   */
+  EVENT_NAMES_ANOTHER_ISSUE: "event_names_another_issue",
   /** A named person holds no row on this unit at lead-service yet (not filed), so nobody can be made due. */
   PERSON_NOT_FILED: "person_not_filed",
   /** A named person's address matches several rows on this unit at lead-service: who is owed is unclear. */
@@ -347,6 +353,12 @@ export async function runCampaignsInScope(
     const namedLeadId = trigger?.leadId ?? eventLeadId ?? null;
     if (people && !eventConcernsPeople(people, namedLeadId)) {
       skip(STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON, `the event names lead ${namedLeadId}, not one of the people this campaign names`);
+      continue;
+    }
+
+    const waitsOn = campaign.salesFunnelCampaignId ? targeting.get(campaign.salesFunnelCampaignId)?.githubIssue ?? null : null;
+    if (!eventConcernsGithubIssue(waitsOn, trigger?.item)) {
+      skip(STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_ISSUE, `this campaign waits on GitHub issue ${waitsOn} reaching prod; the event does not name it`);
       continue;
     }
 

@@ -253,6 +253,12 @@ export const salesFunnelCampaigns = pgTable(
     peopleKey: text("people_key").notNull().default(""),
     // Free text every run of its units carries to the workflow (/start-run `instruction`). Editable.
     instruction: text("instruction"),
+    // The GitHub issue this campaign WAITS ON (migration 0068, lib/github-issue-trigger.ts): canonical
+    // `owner/repo#number`; NULL = none. A unit answering the `github_issue_in_prod` kind runs only for
+    // an event naming this issue. Part of the identity.
+    githubIssue: text("github_issue"),
+    // The detector's latest verdict on that issue ({state, detail, checkedAt, ...}); a read, decides nothing.
+    githubIssueCheck: jsonb("github_issue_check"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -263,6 +269,7 @@ export const salesFunnelCampaigns = pgTable(
       table.offerId,
       table.salesFunnelId,
       table.peopleKey,
+      sql`coalesce(${table.githubIssue}, '')`,
     ),
     index("idx_sales_funnel_campaigns_org_status").on(table.orgId, table.status),
   ],
