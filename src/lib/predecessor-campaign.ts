@@ -40,18 +40,21 @@ import { catalogueLegOf, sameLeg, withOtherOutboundSpellings } from "./leg-ident
  * leg states no step before it, so the answer is a named ABSENCE, never the closest-looking
  * sibling. Same for a campaign that states no leg, no offer or no brand — each is a
  * true statement about the data and each says which one it is. And "there is no predecessor" is
- * kept strictly apart from "it could not be worked out": an unreadable catalogue, a leg the
- * catalogue does not publish, and two live siblings that both end where this one begins are
- * REFUSALS, because answering any of them with `null` would make an outage look exactly like a
- * journey with one leg.
+ * kept strictly apart from "it could not be worked out": an unreadable catalogue and a leg the
+ * catalogue does not publish are REFUSALS, because answering either with `null` would make an
+ * outage look exactly like a journey with one leg.
  *
  * ── WHICH SIBLING, WHEN THERE ARE SEVERAL ROWS ──────────────────────────────────────────────────
  *
- * The LIVE campaign of the preceding leg wins; when none is live, the most recently created
- * STOPPED one does — the history the caller is looking for is filed under it, and production
- * carries hundreds of stopped rows per identity from before this was one campaign. Two LIVE
- * siblings (two channels performing the same preceding leg for one offer) is genuinely ambiguous
- * and is refused rather than resolved by a tie-break nobody agreed to.
+ * EVERY LIVE campaign of the preceding leg is a predecessor (`predecessors`, oldest first); when
+ * none is live, the most recently created STOPPED one is — the history the caller is looking for
+ * is filed under it, and production carries hundreds of stopped rows per identity from before this
+ * was one campaign. Several live siblings (cold email AND cold WhatsApp both opening conversations
+ * for one offer) are a normal setup, not an ambiguity: the people owed an answer are filed under
+ * each, and the answering campaign answers all of them (owner 2026-10-12: every campaign runs
+ * independently, a campaign never fails on how many others exist). It used to be a 409 refusal,
+ * and the answering run failed on every tick (67a0eb30, 2026-10-12: 11 failed runs, nobody
+ * answered). `predecessor` stays the first entry for callers that read one.
  */
 
 /** Why there is no predecessor. Every one is an ordinary, true statement about the data. */
@@ -89,7 +92,10 @@ export interface PredecessorOutcome {
   fromStepKey: string | null;
   /** Every published leg that ENDS at that step, as features-service names them. */
   precedingLegKeys: string[];
+  /** `predecessors[0]`, for callers that read one. */
   predecessor: PredecessorCampaign | null;
+  /** Every live campaign of the preceding leg, oldest first; else the latest stopped one; else none. */
+  predecessors: PredecessorCampaign[];
   /** Names WHY there is none. `null` exactly when `predecessor` is not null. */
   absence: PredecessorAbsence | null;
 }
@@ -138,6 +144,7 @@ export async function resolvePredecessorCampaign(
     fromStepKey: null,
     precedingLegKeys: [],
     predecessor: null,
+    predecessors: [],
     absence,
     ...extra,
   });
@@ -206,25 +213,28 @@ export async function resolvePredecessorCampaign(
   // its OWN funnel campaign when its funnel works the preceding pipe. Otherwise (a pre-funnel
   // campaign, or a REACTIVE funnel: owner 2026-10-10, proactive and reactive pipes never share a
   // funnel) it is whichever campaign of the offer works the preceding leg, funnel or not, exactly
-  // as before funnels existed: the live one; two live = the 409 below; none live = latest stopped.
+  // as before funnels existed: every live one; none live = latest stopped.
   const sameParent = campaign.salesFunnelCampaignId
     ? onPrecedingLeg.filter((row) => row.salesFunnelCampaignId === campaign.salesFunnelCampaignId)
     : [];
   const siblings = sameParent.length > 0 ? sameParent : onPrecedingLeg;
-  const live = siblings.filter((row) => row.status === "ongoing");
-  if (live.length > 1) {
-    throw new PredecessorScopeError(
-      `${live.length} live campaigns run the leg preceding ${JSON.stringify(campaign.legKey)} for this offer (${live.map((c) => c.id).join(", ")})`,
-      409,
-      "several_predecessor_campaigns",
-    );
-  }
+  const live = siblings
+    .filter((row) => row.status === "ongoing")
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+  const latestStopped = [...siblings].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+  const chosen = live.length > 0 ? live : latestStopped ? [latestStopped] : [];
 
-  const chosen =
-    live[0] ??
-    [...siblings].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+  if (chosen.length === 0) return answer(PREDECESSOR_ABSENCES.NO_CAMPAIGN, partial);
 
-  if (!chosen) return answer(PREDECESSOR_ABSENCES.NO_CAMPAIGN, partial);
+  const predecessors: PredecessorCampaign[] = chosen.map((row) => ({
+    campaignId: row.id,
+    // Narrowed by the `inArray` above; restated so the caller reads what was matched.
+    legKey: row.legKey as string,
+    status: row.status,
+    acquisitionChannel: row.acquisitionChannel,
+    featureSlug: row.featureSlug,
+    workflowSlug: row.workflowSlug,
+  }));
 
   return {
     campaignId: campaign.id,
@@ -233,15 +243,8 @@ export async function resolvePredecessorCampaign(
     brandId,
     fromStepKey,
     precedingLegKeys,
-    predecessor: {
-      campaignId: chosen.id,
-      // Narrowed by the `inArray` above; restated so the caller reads what was matched.
-      legKey: chosen.legKey as string,
-      status: chosen.status,
-      acquisitionChannel: chosen.acquisitionChannel,
-      featureSlug: chosen.featureSlug,
-      workflowSlug: chosen.workflowSlug,
-    },
+    predecessor: predecessors[0],
+    predecessors,
     absence: null,
   };
 }

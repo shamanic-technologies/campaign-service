@@ -1267,11 +1267,11 @@ router.post(
  * Nothing is written and nothing about funding, gating, scheduling or triggering is touched.
  *
  * Returns:
- *   200 — the predecessor, or `predecessor: null` with `absence` naming why there is none
+ *   200 — `predecessors` (every live campaign of the preceding leg, oldest first; else the latest
+ *         stopped one) + `predecessor` (the first), or `predecessor: null` with `absence` naming why
  *   401 — bad api key
  *   404 — no such campaign
- *   409 — the question cannot be answered: a leg features-service no longer publishes, or two
- *         live siblings both running the preceding leg for this offer
+ *   409 — the question cannot be answered: a leg features-service no longer publishes
  *   502 — the acquisition-channel catalogue could not be read
  *   500 — internal error
  */
@@ -1295,14 +1295,14 @@ router.get("/internal/campaigns/:campaignId/predecessor", requireApiKey, async (
  * GET /internal/campaigns/:campaignId/answerer
  *
  * WHO ANSWERS THE PEOPLE THIS CAMPAIGN HOLDS — the live campaign on the leg that continues where
- * this one ends AND whose predecessor resolves to this campaign (the claim path's own rule), or a
+ * this one ends AND whose predecessors include this campaign (the claim path's own rule), or a
  * named absence. See `lib/answering-campaign.ts`. Nothing is written, started or funded.
  *
  * Returns:
  *   200 — `answeredBy`, or `answeredBy: null` with `absence` naming why nobody answers
  *   401 — bad api key
  *   404 — no such campaign
- *   409 — a leg features-service does not publish, or a candidate whose predecessor is ambiguous
+ *   409 — a leg features-service does not publish
  *   502 — the acquisition-channel catalogue could not be read
  *   500 — internal error
  */
