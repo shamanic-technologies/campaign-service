@@ -180,13 +180,18 @@ router.post(
         userId: req.userId!,
         runId: req.runId!,
         brandId,
+        offerId,
       });
       if (!resolved.ok) {
-        const { status: httpStatus, code, message } = resolved.refusal;
+        const { status: httpStatus, code, message, missingSteps, offerSteps } = resolved.refusal;
         console.warn(
           `[campaign-service] Not launching sales funnel ${salesFunnelId} — org=${orgId} brand=${brandId} offer=${offerId}: ${code}`,
         );
-        return res.status(httpStatus).json({ error: message, reason: code });
+        return res.status(httpStatus).json({
+          error: message,
+          reason: code,
+          ...(missingSteps ? { missingSteps, offerSteps } : {}),
+        });
       }
       const { plan } = resolved;
       // A campaign naming its people only ANSWERS events for them: a pipe that prospects (an entry or

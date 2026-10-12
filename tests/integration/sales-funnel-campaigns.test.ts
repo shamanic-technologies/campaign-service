@@ -127,6 +127,43 @@ describe("sales funnel campaigns (brand x offer x sales funnel, one unit per pip
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
+  it("refuses a funnel through a step the offer's business has not stated: 409 naming the steps, nothing written (owner 2026-10-12)", async () => {
+    mockPlan.mockResolvedValueOnce({
+      ok: false,
+      refusal: {
+        status: 409,
+        code: "offer_lacks_steps",
+        message: 'The sales funnel "Philanthropy" goes through a step this offer\'s business has not said it has: purchase.',
+        missingSteps: ["purchase"],
+        offerSteps: ["conversation", "website_visit"],
+      },
+    });
+    const res = await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "ongoing" }).expect(409);
+    expect(res.body).toEqual({
+      error: 'The sales funnel "Philanthropy" goes through a step this offer\'s business has not said it has: purchase.',
+      reason: "offer_lacks_steps",
+      missingSteps: ["purchase"],
+      offerSteps: ["conversation", "website_visit"],
+    });
+    // The plan is asked for THIS offer's steps.
+    expect(mockPlan).toHaveBeenCalledWith(EPIPHANY, expect.objectContaining({ orgId: ORG, brandId: BRAND, offerId: OFFER }));
+    expect(await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.orgId, ORG))).toEqual([]);
+    expect(await db.select().from(campaigns).where(eq(campaigns.orgId, ORG))).toEqual([]);
+
+    // Any other refusal keeps its shape (no step fields).
+    mockPlan.mockResolvedValueOnce({ ok: false, refusal: { status: 502, code: "offer_steps_unavailable", message: "x" } });
+    const down = await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "ongoing" }).expect(502);
+    expect(down.body).toEqual({ error: "x", reason: "offer_steps_unavailable" });
+  });
+
+  it("hands an EXISTING funnel campaign back without asking its steps again (existing campaigns are not touched)", async () => {
+    const created = await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "stopped" }).expect(201);
+    mockPlan.mockClear();
+    const again = await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "stopped" }).expect(200);
+    expect(again.body.salesFunnelCampaign.id).toBe(created.body.salesFunnelCampaign.id);
+    expect(mockPlan).not.toHaveBeenCalled();
+  });
+
   it("runs and pauses every unit TOGETHER, only at the funnel", async () => {
     const created = await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "stopped" }).expect(201);
     const id = created.body.salesFunnelCampaign.id;
