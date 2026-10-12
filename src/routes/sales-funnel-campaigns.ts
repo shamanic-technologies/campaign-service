@@ -25,6 +25,7 @@ import { wakeScheduler } from "../lib/scheduler.js";
 import { convertToSalesFunnelCampaigns } from "../lib/sales-funnel-conversion.js";
 import { completeSalesFunnelUnits } from "../lib/sales-funnel-unit-completion.js";
 import { runLeadSourcingSwitch } from "../lib/sales-funnel-lead-sourcing-switch.js";
+import { runSalesFunnelNameRepair } from "../lib/sales-funnel-name.js";
 import { canonicalEmail, namedPeople, peopleKeyOf, storedPeople } from "../lib/sales-funnel-people.js";
 import { fileSalesFunnelCampaignPeople, type FilingReport } from "../lib/sales-funnel-people-store.js";
 import { GITHUB_ISSUE_IN_PROD_KIND, githubIssueKey, parseGithubIssue } from "../lib/github-issue-trigger.js";
@@ -453,6 +454,24 @@ router.post("/internal/sales-funnel-campaigns/lead-sourcing-switch", requireApiK
     res.json(result);
   } catch (error) {
     console.error("[campaign-service] Lead Sourcing switch error:", error);
+    res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+/**
+ * POST /internal/sales-funnel-campaigns/name-repair {apply?, orgId?} — a funnel campaign whose stored name differs
+ * from the name features-service serves for its EXACT id takes that name, on the row and its units' prefix
+ * (lib/sales-funnel-name.ts). Legacy ids and unreadable funnels are listed under `skipped`, never renamed. Dry run
+ * unless `apply: true`; idempotent; no status or billing write.
+ */
+router.post("/internal/sales-funnel-campaigns/name-repair", requireApiKey, async (req, res) => {
+  try {
+    res.json(await runSalesFunnelNameRepair({
+      apply: req.body?.apply === true,
+      orgId: typeof req.body?.orgId === "string" ? req.body.orgId : undefined,
+    }));
+  } catch (error) {
+    console.error("[campaign-service] Sales funnel name repair error:", error);
     res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });

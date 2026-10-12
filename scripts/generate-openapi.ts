@@ -236,10 +236,24 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
+  path: "/internal/sales-funnel-campaigns/name-repair",
+  tags: ["Sales funnel campaigns"],
+  summary: "A funnel campaign takes the name features-service serves for its funnel id (staff, dry run by default)",
+  description: "Owner 2026-10-13: a sales funnel name is a unique identifier fleet-wide. Body {apply?: boolean (default false = dry run), orgId?: string}. A funnel campaign whose stored name differs from the name features-service serves for its EXACT funnel id takes that name, on the funnel campaign and the `<name> <idTag> - ` prefix of its units (one transaction each; a unit name already taken in the org = `error`, rolled back). A legacy id (the catalogue answers it with another id) and an unreadable funnel are listed in `skipped`, never renamed. No status or billing write. Idempotent.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: z.object({ apply: z.boolean().optional(), orgId: z.string().optional() }) } } } },
+  responses: {
+    200: { description: "The renames (or what was applied) and what was skipped", content: { "application/json": { schema: z.object({ applied: z.boolean(), renamed: z.array(z.record(z.string(), z.unknown())), skipped: z.array(z.record(z.string(), z.unknown())) }) } } },
+    502: { description: "The campaign database could not be read", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
   path: "/internal/sales-funnel-campaigns/lead-sourcing-switch",
   tags: ["Sales funnel campaigns"],
   summary: "The owner's Lead Sourcing switch (staff, dry run by default)",
-  description: "Owner GO 2026-10-11 (one channel per leg). Body {apply?: boolean (default false = dry run), orgId?: string}; headers x-org-id + x-user-id + x-run-id of a REAL staff run (the workflow read is workflow-service's). A funnel campaign with 2+ source units ON gets ONE `lead-sourcing` unit (its pipe's workflow, the funnel's status, never dispatched: it answers the on_demand trigger) and the old source units stop (`replaced_by_lead_sourcing`), in ONE transaction; its sales funnel id and status do not move (billing's caps are keyed on it; features-service resolves it to the Lead Sourcing funnel). A single-source funnel the catalogue answers with another id moves to the id features-service mints for its pipes with its own source, unless billing holds a cap under the old id. Every ON source unit with no workflow takes its pipe's. Idempotent.",
+  description: "Owner GO 2026-10-11 (one channel per leg). Body {apply?: boolean (default false = dry run), orgId?: string}; headers x-org-id + x-user-id + x-run-id of a REAL staff run (the workflow read is workflow-service's). A funnel campaign with 2+ source units ON gets ONE `lead-sourcing` unit (its pipe's workflow, the funnel's status, never dispatched: it answers the on_demand trigger) and the old source units stop (`replaced_by_lead_sourcing`), in ONE transaction; its sales funnel id and status do not move (billing's caps are keyed on it; features-service resolves it to the Lead Sourcing funnel). A single-source funnel the catalogue answers with another id moves to the id features-service mints for its pipes with its own source, unless billing holds a cap under the old id; the funnel name (row + units' prefix) moves with the id to the name features-service serves for it. Every ON source unit with no workflow takes its pipe's. Idempotent.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { body: { content: { "application/json": { schema: z.object({ apply: z.boolean().optional(), orgId: z.string().optional() }) } } } },
   responses: {
