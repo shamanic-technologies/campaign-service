@@ -198,7 +198,8 @@ const STOPS_NOBODY_CHOSE_ON_THE_SOURCE = SOURCE_STOPS_NOBODY_CHOSE;
  *     hold) is turned back ON, source `source_follows_outreach` (owner 2026-10-09: a source being OFF
  *     is a decision someone took on the source itself; prod: Novemiq restarted its outreach and
  *     served 0 leads for 5 hours behind a source the mirror had born OFF);
- *   - a source a person turned off (`patch`) stays off.
+ *   - a source a person turned off (`patch`) stays off;
+ *   - a source unit of a sales funnel is only ever turned back ON by a start of ITS OWN funnel.
  *
  * Never reached by a tick. The catalogue is read only when something would be written; unreadable =
  * nothing written, logged loud (a start is never refused for this). Returns the sources turned ON.
@@ -229,7 +230,7 @@ export async function ensureSourcesOnStart(
   // funnel never turns ON another campaign's sources, and births no offer-level default (its funnel made its sources).
   const ownSalesFunnelCampaignId = started.salesFunnelCampaignId ?? null;
   const existing = await tx
-    .select({ id: campaigns.id, featureSlug: campaigns.featureSlug, status: campaigns.status })
+    .select({ id: campaigns.id, featureSlug: campaigns.featureSlug, status: campaigns.status, salesFunnelCampaignId: campaigns.salesFunnelCampaignId })
     .from(campaigns)
     .where(
       and(
@@ -245,7 +246,17 @@ export async function ensureSourcesOnStart(
   if (ownSalesFunnelCampaignId && existing.length === 0) return [];
   let toFollow: string[] = [];
   if (existing.length > 0) {
-    const off = existing.filter((r) => r.status === "stopped" && isLiveSourceOrigin(r.featureSlug) && served.includes(r.featureSlug!));
+    // A source unit of a sales funnel belongs to ITS funnel: a start outside that funnel (a legacy outreach
+    // campaign, no funnel) never turns it back ON. Its funnel's stop is the person's stop of that funnel, and
+    // turning it ON resumes the audiences it paused (LEAK-1012: a CRM funnel start revived the stopped
+    // "Smiling" Apollo source and its paused "Small teams 11-50" audience, 2026-10-12).
+    const off = existing.filter(
+      (r) =>
+        r.status === "stopped" &&
+        isLiveSourceOrigin(r.featureSlug) &&
+        served.includes(r.featureSlug!) &&
+        (r.salesFunnelCampaignId ?? null) === ownSalesFunnelCampaignId,
+    );
     if (off.length === 0) return [];
     const history = await tx
       .select({ campaignId: campaignStatusTransitions.campaignId, source: campaignStatusTransitions.source, occurredAt: campaignStatusTransitions.occurredAt })
