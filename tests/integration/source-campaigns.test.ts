@@ -206,8 +206,9 @@ describe("Source campaigns: an offer's lead sources are campaigns (owner 2026-10
       expect.objectContaining({ campaignId: a.id, featureSlug: APOLLO, running: true }),
       expect.objectContaining({ campaignId: b.id, featureSlug: SIGNALS, running: false }),
     ]));
-    // CRM contacts never feed a cold-email campaign; Lead Sourcing does (it picks among its origins).
-    expect(feeding.body.servedOrigins).not.toContain(CRM_SOURCE);
+    // The brand's own CRM contacts feed the sales cold email too (features-service, 2026-10-12: "Your CRM
+    // Contacts -> Sales Cold Email Outreach"); Lead Sourcing never picks them (features-service's rule).
+    expect(feeding.body.servedOrigins).toContain(CRM_SOURCE);
     expect(feeding.body.servedOrigins).toContain("lead-sourcing");
   });
 
