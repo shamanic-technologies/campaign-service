@@ -11,6 +11,13 @@ import {
   type StepTriggerRequest,
 } from "./step-trigger.js";
 import type { WorkflowTriggerInput } from "./workflows.js";
+import {
+  PERSON_EVENT_RETRY_SKIPS,
+  PERSON_NOT_KNOWN_RETRY_MS,
+  PERSON_NOT_KNOWN_WAIT_MS,
+  storedEventPerson,
+  type EventPerson,
+} from "./trigger-person.js";
 
 /**
  * THE TRIGGER EVENTS — ONE ROW PER OCCURRENCE, AND WHAT IT DID (owner 2026-10-09).
@@ -39,6 +46,11 @@ import type { WorkflowTriggerInput } from "./workflows.js";
  *    `{outcome: "skipped", reason, detail?}`. Recorded as is; nothing is dispatched here.
  *  - `idempotencyKey` (optional, unique per org): a retried call returns the first event, recorded
  *    once.
+ *  - `person` + `item` (optional, any trigger; lib/trigger-person.ts): the person the occurrence is
+ *    about by IDENTITY (email, name, phone, CRM contact) and what they asked (any JSON). Kept on the row
+ *    (`detail.person`, `detail.item`); each campaign reached files the person as a lead at lead-service,
+ *    makes them due, and receives both on `/execute` `trigger`. A person the brand does not know YET
+ *    keeps the event `pending` on a short retry, then `skipped` `person_not_known`.
  *  The step route (`trigger-for-step`) records its call the same way, typed with the trigger whose
  *  `fromStep` is that step (none declared = recorded with no type), and answers exactly as before.
  *
@@ -142,6 +154,8 @@ export async function fireTrigger(
   eventLeadId?: string | null,
   /** The event is for ONE sales funnel campaign's units only (a github issue it waits on). */
   onlySalesFunnelCampaignId?: string | null,
+  /** The person the event names by identity (lib/trigger-person.ts). */
+  person?: EventPerson | null,
 ): Promise<ScopeAnswer> {
   const transitions = (catalogue.triggerTransitions ?? []).filter((t) => t.triggerId === triggerId);
   const legKeys = [...new Set(transitions.map((t) => t.legKey))];
@@ -154,6 +168,7 @@ export async function fireTrigger(
     `trigger ${triggerId}`,
     trigger,
     eventLeadId,
+    person,
   );
   return { ...run, legKeys };
 }
@@ -219,6 +234,10 @@ export interface RecordTriggerEventInput {
   occurredAt?: Date;
   dueAt?: Date;
   performed?: PerformedStatement;
+  /** The person the occurrence is about, by identity (lib/trigger-person.ts). */
+  person?: EventPerson;
+  /** What the occurrence carries (a form's name and answers...), opaque JSON handed to the workflow. */
+  item?: unknown;
 }
 
 export interface RecordTriggerEventResult {
@@ -294,6 +313,10 @@ export async function recordTriggerEvent(
     recordedVia: TRIGGER_EVENT_RECORDED_VIA.TRIGGER_ROUTE,
     occurredAt,
     dueAt,
+    // Kept on the row so a planned event and a retry fire with them (fireClaimedEvent reads `detail`).
+    ...(input.person || input.item !== undefined
+      ? { detail: { ...(input.person ? { person: input.person } : {}), ...(input.item !== undefined ? { item: input.item } : {}) } }
+      : {}),
   };
 
   let values: typeof triggerEvents.$inferInsert;
@@ -305,7 +328,10 @@ export async function recordTriggerEvent(
       outcome: p.outcome,
       skipReason: p.outcome === "skipped" ? p.reason : null,
       ranCampaignIds: p.outcome === "ran" ? [p.campaignId] : [],
-      detail: p.outcome === "skipped" && p.detail ? { performedDetail: p.detail } : null,
+      detail: {
+        ...((base as { detail?: Record<string, unknown> }).detail ?? {}),
+        ...(p.outcome === "skipped" && p.detail ? { performedDetail: p.detail } : {}),
+      },
       performedByCaller: true,
       processedAt: now,
     };
@@ -361,6 +387,9 @@ export async function fireClaimedEvent(
     const onlySalesFunnelCampaignId = event.recordedVia === GITHUB_ISSUE_RECORDED_VIA && typeof own?.salesFunnelCampaignId === "string"
       ? own.salesFunnelCampaignId
       : null;
+    // A reported event naming a person by identity / carrying an item (lib/trigger-person.ts).
+    const person = storedEventPerson(own?.person);
+    const carries = person !== null || (own !== null && "item" in own);
     if (!event.triggerId || !catalogue.triggers?.has(event.triggerId)) {
       verdict = skipped(TRIGGER_EVENT_SKIPS.TRIGGER_NOT_DECLARED);
     } else {
@@ -370,13 +399,36 @@ export async function fireClaimedEvent(
       if (guard) {
         verdict = skipped(guard.reason, { guardDetail: guard.detail });
       } else {
-        const trigger: WorkflowTriggerInput | undefined = detected
-          ? { eventId: event.id, triggerId: event.triggerId, leadId: event.leadId, item }
+        const trigger: WorkflowTriggerInput | undefined = detected || carries
+          ? { eventId: event.id, triggerId: event.triggerId, leadId: event.leadId, item, ...(person ? { person } : {}) }
           : undefined;
-        verdict = eventVerdict(await fireTrigger(event, event.triggerId, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId));
+        verdict = eventVerdict(
+          await fireTrigger(event, event.triggerId, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId, person),
+        );
       }
     }
     if (own) verdict = { ...verdict, detail: { ...own, ...verdict.detail } as EventVerdict["detail"] };
+    // Held back for a passing reason (person not known to the brand YET, a run in flight): try again
+    // shortly while the event is young, so it gets its own run carrying its person and item.
+    if (
+      person &&
+      verdict.outcome === "skipped" &&
+      verdict.skipReason !== null &&
+      PERSON_EVENT_RETRY_SKIPS.has(verdict.skipReason) &&
+      now.getTime() - event.occurredAt.getTime() < PERSON_NOT_KNOWN_WAIT_MS
+    ) {
+      const [back] = await db
+        .update(triggerEvents)
+        .set({
+          status: "pending",
+          dueAt: new Date(now.getTime() + PERSON_NOT_KNOWN_RETRY_MS),
+          claimedAt: null,
+          lastError: `${verdict.skipReason}: ${person.email}, retried in 2 min`.slice(0, 500),
+        })
+        .where(eq(triggerEvents.id, event.id))
+        .returning();
+      return back;
+    }
     const [done] = await db
       .update(triggerEvents)
       .set({

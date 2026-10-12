@@ -1,3 +1,4 @@
+import type { EventPerson } from "./trigger-person.js";
 import { WorkflowExecutionRefusedError } from "./workflow-refusal.js";
 
 export interface WorkflowExecutionInputs {
@@ -23,6 +24,8 @@ export interface WorkflowTriggerInput {
   triggerId: string;
   leadId: string | null;
   item: unknown;
+  /** The person an event names by identity (lib/trigger-person.ts); absent otherwise. */
+  person?: EventPerson | null;
 }
 
 const REQUIRED_FIELDS: (keyof WorkflowExecutionInputs)[] = [

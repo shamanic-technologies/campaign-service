@@ -44,6 +44,7 @@ import {
   triggerStepAndRecord,
   TriggerEventError,
 } from "../lib/trigger-events.js";
+import { eventPerson } from "../lib/trigger-person.js";
 import { openOnDemandRun, OnDemandRunError } from "../lib/on-demand-runs.js";
 import { resolvePredecessorCampaign, PredecessorScopeError } from "../lib/predecessor-campaign.js";
 import {
@@ -950,6 +951,8 @@ router.post("/internal/trigger-events", requireApiKey, serviceAuth, validateBody
       occurredAt: b.occurredAt ? new Date(b.occurredAt) : undefined,
       dueAt: b.dueAt ? new Date(b.dueAt) : undefined,
       performed: b.performed,
+      person: b.person ? eventPerson(b.person) : undefined,
+      item: b.item,
     });
     if (!result.replayed && result.event.status === "pending") wakeScheduler();
     res.status(result.replayed ? 200 : 201).json({ event: serializeTriggerEvent(result.event), replayed: result.replayed });
