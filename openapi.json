@@ -2462,6 +2462,43 @@
               "workflowSlug"
             ]
           },
+          "predecessors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "campaignId": {
+                  "type": "string"
+                },
+                "legKey": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "acquisitionChannel": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "featureSlug": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "workflowSlug": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "campaignId",
+                "legKey",
+                "status",
+                "acquisitionChannel",
+                "featureSlug",
+                "workflowSlug"
+              ]
+            }
+          },
           "absence": {
             "type": "string",
             "nullable": true
@@ -2475,6 +2512,7 @@
           "fromStepKey",
           "precedingLegKeys",
           "predecessor",
+          "predecessors",
           "absence"
         ]
       },

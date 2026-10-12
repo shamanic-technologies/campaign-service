@@ -221,9 +221,8 @@ export async function resolveAnsweringCampaign(
     return answer(ANSWERING_ABSENCES.STOPPED, { ...partial, candidate: asAnswering(latest) });
   }
 
-  // The verdict is the claim path's own: a live candidate answers H exactly when its predecessor
-  // resolves to H. A resolver refusal (two live predecessors) is propagated — the worker cannot
-  // claim either, so "answered" would be false and "nobody" would hide a real disagreement.
+  // The verdict is the claim path's own: a live candidate answers H exactly when H is one of its
+  // predecessors. A resolver refusal (unreadable catalogue, unpublished leg) is propagated.
   let servesAnother: { candidate: AnsweringCampaign; answers: string | null } | null = null;
   for (const row of live) {
     let resolved;
@@ -239,7 +238,7 @@ export async function resolveAnsweringCampaign(
       }
       throw err;
     }
-    if (resolved.predecessor?.campaignId === campaign.id) {
+    if (resolved.predecessors.some((p) => p.campaignId === campaign.id)) {
       return { ...answer(ANSWERING_ABSENCES.NO_CAMPAIGN, partial), answeredBy: asAnswering(row), absence: null };
     }
     servesAnother ??= { candidate: asAnswering(row), answers: resolved.predecessor?.campaignId ?? null };
