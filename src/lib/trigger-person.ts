@@ -46,11 +46,18 @@ export const PERSON_NOT_KNOWN_RETRY_MS = 2 * 60_000;
 export const PERSON_NOT_KNOWN_WAIT_MS = 60 * 60_000;
 /**
  * The skips that make an event naming a person RETRY rather than record: the person is not known to the
- * brand yet, or a run of the campaign (or its cohort) is in flight. The person is filed and made due only
+ * brand yet, a run of the campaign (or its cohort) is in flight, or the campaign waits out a failure backoff. The person is filed and made due only
  * right before a dispatch, so every such event gets its OWN run carrying its person and item, never a
  * later run that would claim them without what they asked.
  */
-export const PERSON_EVENT_RETRY_SKIPS: ReadonlySet<string> = new Set(["person_not_known", "run_in_flight", "cohort_run_in_flight"]);
+export const PERSON_EVENT_RETRY_SKIPS: ReadonlySet<string> = new Set([
+  "person_not_known",
+  "run_in_flight",
+  "cohort_run_in_flight",
+  // The campaign waits out a failure backoff: the person was never made due, so nothing else would
+  // answer them; the event retries until the backoff ends (prod 2026-10-12, staff probe).
+  "failure_backoff",
+]);
 
 /** The caller's person, canonical. Pure. */
 export function eventPerson(input: {
