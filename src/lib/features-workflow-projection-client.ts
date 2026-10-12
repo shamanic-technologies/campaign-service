@@ -461,6 +461,19 @@ export interface ProjectionCell {
 }
 
 /**
+ * The workflow when NOTHING in the grid is rankable (no row carries a cost per outcome: a brand-new
+ * leg, a brand with no return economics). The configured workflow runs only if the grid LISTS it;
+ * otherwise the grid's first workflow, in features-service's order. A configured slug the leg's grid
+ * does not list is a workflow features-service does not assign to this leg (2026-10-12: a unit born
+ * before its pipe's own workflow existed kept the channel's reply DAG and ran it on every form event).
+ * An EMPTY grid (nothing listed, or every workflow ineligible) keeps the configured workflow. Pure.
+ */
+export function unrankedPick(rows: readonly ProjectionRow[], fallbackSlug: string): string {
+  if (rows.length === 0 || rows.some((r) => r.workflow.workflowDynastySlug === fallbackSlug)) return fallbackSlug;
+  return rows[0].workflow.workflowDynastySlug;
+}
+
+/**
  * The best CELL of the grid for this run: the audience first, then the cheapest workflow within
  * that audience's column.
  *
@@ -737,7 +750,7 @@ export async function resolveSelectionForTrigger(args: {
     });
     const enumeratesAudiences = candidates.some((r) => r.audienceId != null);
     return {
-      workflowSlug: cell.workflowSlug ?? fallbackSlug,
+      workflowSlug: cell.workflowSlug ?? unrankedPick(candidates, fallbackSlug),
       audienceId: cell.audienceId,
       noServeableAudience: enumeratesAudiences && cell.audienceId == null,
     };
