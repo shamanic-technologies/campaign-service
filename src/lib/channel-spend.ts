@@ -1,5 +1,5 @@
 import { getStatsBudget, type BudgetWindowResult, type StatsBudgetParams, type StatsBudgetResponse } from "@distribute/runs-client";
-import { SOURCING_ORIGINS_BY_CHANNEL } from "./source-campaigns.js";
+import { readSourcingMap } from "./sourcing-origins-client.js";
 import { sourceCampaignsFeeding, type FeedingSourceCampaign } from "./source-campaign-store.js";
 
 /**
@@ -17,22 +17,19 @@ import { sourceCampaignsFeeding, type FeedingSourceCampaign } from "./source-cam
  * slug, hence one read per slug, in parallel; a channel that sources nothing is ONE read, byte-
  * identical to before.
  *
- * Which origins source for which channel is features-service's statement
- * (`lib/sourcing-origins.ts` SOURCING_ORIGINS_BY_CHANNEL; its public `GET /public/sourcing-origins`
- * lists the origins and the sourcing channels but not the pairing). The table (lib/source-campaigns.ts) mirrors it: a
- * channel that starts serving another origin must be listed in BOTH places, or its spend reads lose
- * that sourcing cost. Read statically on purpose: it sits on gate-check's money path, where an
- * unreadable catalogue must never change what a budget counts.
+ * Which origins source for which channel is features-service's statement, READ at its public
+ * `GET /public/sourcing-origins` (lib/sourcing-origins-client.ts, cached). An unreadable map THROWS here, exactly
+ * like an unreadable runs-service: every caller already fails CLOSED on a throw (gate-check refuses, the pot and
+ * items paces read null, turn planning holds), so an unknown map never reads as "no sourcing spend".
  *
  * Residual (brand-scoped reads only, no campaign id): two channels sharing an origin under one brand
  * (sales and feedback-request cold email) would count each other's sourcing. feedback-request has
  * served nothing since 2026-08-25; campaign-scoped reads are exact.
  */
-export { SOURCING_ORIGINS_BY_CHANNEL };
-
-/** The slugs a spend read about `featureSlug` must count: itself, then the origins it sources from. */
-export function spendFeatureSlugs(featureSlug: string): string[] {
-  return [featureSlug, ...(SOURCING_ORIGINS_BY_CHANNEL[featureSlug] ?? []).filter((s) => s !== featureSlug)];
+/** The slugs a spend read about `featureSlug` must count: itself, then the origins it sources from. Throws when unreadable. */
+export async function spendFeatureSlugs(featureSlug: string): Promise<string[]> {
+  const { originsByChannel } = await readSourcingMap();
+  return [featureSlug, ...(originsByChannel[featureSlug] ?? []).filter((s) => s !== featureSlug)];
 }
 
 const SCALE = 10;
@@ -72,7 +69,7 @@ export async function getChannelStatsBudget(
   params: StatsBudgetParams,
   deps: { feeding?: (campaignId: string, featureSlug: string) => Promise<FeedingSourceCampaign[]> } = {},
 ): Promise<StatsBudgetResponse> {
-  const slugs = params.featureSlug ? spendFeatureSlugs(params.featureSlug) : [];
+  const slugs = params.featureSlug ? await spendFeatureSlugs(params.featureSlug) : [];
   if (slugs.length <= 1) return getStatsBudget(params);
 
   const reads: StatsBudgetParams[] = slugs.map((featureSlug) => ({ ...params, featureSlug }));

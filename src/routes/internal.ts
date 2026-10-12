@@ -65,7 +65,8 @@ import {
   MirrorCatalogueUnavailableError,
   sourceCampaignsFeeding,
 } from "../lib/source-campaign-store.js";
-import { LEAD_FOUND_STEP, SOURCE_LEG_KEY, SOURCE_CAMPAIGNS_FEEDING_CHANNEL, isSourcedChannel, sourceCampaignKey } from "../lib/source-campaigns.js";
+import { LEAD_FOUND_STEP, SOURCE_LEG_KEY, sourceCampaignKey } from "../lib/source-campaigns.js";
+import { readSourcingMap, SourcingMapUnavailableError } from "../lib/sourcing-origins-client.js";
 import { readDispatchCatalogue, sourceRunsOnItsOwn } from "../lib/on-demand-mode.js";
 import { SourceCampaignsMirrorBody, SourceCampaignsQuery } from "../schemas.js";
 
@@ -516,7 +517,7 @@ async function fedBySelfRunningSource(campaignId: string, orgId: string): Promis
     where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
     columns: { featureSlug: true },
   });
-  if (!campaign?.featureSlug || !isSourcedChannel(campaign.featureSlug)) return false;
+  if (!campaign?.featureSlug) return false;
   const feeding = (await sourceCampaignsFeeding(campaignId, campaign.featureSlug)).filter((f) => f.status === "ongoing" && f.salesFunnelCampaignId);
   if (feeding.length === 0) return false;
   const catalogue = await readDispatchCatalogue();
@@ -1396,8 +1397,9 @@ router.get("/internal/campaigns/:campaignId/source-campaigns", requireApiKey, as
   try {
     const campaign = await db.query.campaigns.findFirst({ where: eq(campaigns.id, req.params.campaignId) });
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
-    // Its origins and, on cold email, Lead Sourcing (lib/source-campaigns.ts SOURCE_CAMPAIGNS_FEEDING_CHANNEL).
-    const origins = campaign.featureSlug ? SOURCE_CAMPAIGNS_FEEDING_CHANNEL[campaign.featureSlug] ?? [] : [];
+    // Its origins and, where features-service lists it, Lead Sourcing (lib/sourcing-origins-client.ts). Unreadable
+    // map = 502, never `sourced: false` (that answer once served a live campaign nobody, 2026-10-12).
+    const origins = campaign.featureSlug ? (await readSourcingMap()).feedingByChannel[campaign.featureSlug] ?? [] : [];
     const feeding = campaign.featureSlug ? await sourceCampaignsFeeding(campaign.id, campaign.featureSlug) : [];
     // Whether each source finds leads on its own (lib/on-demand-mode.ts): lead-service then serves this campaign the
     // leads those sources already found instead of asking them on demand. Unreadable catalogue = false (on demand).
@@ -1419,6 +1421,7 @@ router.get("/internal/campaigns/:campaignId/source-campaigns", requireApiKey, as
       })),
     });
   } catch (error) {
+    if (error instanceof SourcingMapUnavailableError) return res.status(502).json({ error: error.message });
     console.error("[campaign-service] campaign source campaigns error:", error);
     res.status(500).json({ error: "Internal server error" });
   }

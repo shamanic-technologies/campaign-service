@@ -15,23 +15,20 @@ import { isEntryLeg } from "./single-proactive.js";
 import { sourceRunsOnItsOwn } from "./on-demand-mode.js";
 import { STOP_REASONS } from "./stop-reason.js";
 import {
-  DEFAULT_SOURCE_ORIGIN_BY_CHANNEL,
   LIVE_SOURCE_ORIGIN_SLUGS,
   RETIRED_SOURCE_ORIGIN_SLUGS,
   SOURCE_LEG_KEY,
-  SOURCING_ORIGINS_BY_CHANNEL,
-  SOURCE_CAMPAIGNS_FEEDING_CHANNEL,
   isLiveSourceOrigin,
-  isSourcedChannel,
   sourceCampaignKey,
 } from "./source-campaigns.js";
+import { readSourcingMap, type SourcingMap } from "./sourcing-origins-client.js";
 
 /**
  * Reads and writes of SOURCE CAMPAIGNS (rules in lib/source-campaigns.ts).
  *
  * Everything here keys on (org, brand, offer): a source campaign belongs to the offer it finds leads
  * for, and an outreach campaign is fed by the source campaigns of ITS offer whose origin serves its
- * channel (SOURCING_ORIGINS_BY_CHANNEL).
+ * channel (features-service's map, lib/sourcing-origins-client.ts).
  */
 
 type CampaignRow = typeof campaigns.$inferSelect;
@@ -53,11 +50,12 @@ export interface FeedingSourceCampaign {
 /**
  * The source campaigns that feed one OUTREACH campaign: same org, brand and offer, an origin that
  * serves the outreach channel, any status (a source stopped at noon still spent this morning).
- * [] when the campaign is not an outreach campaign of a sourced channel or states no offer.
+ * [] when the campaign is not an outreach campaign of a sourced channel or states no offer. Throws when features-service's
+ * map is unreadable (every caller holds: an unknown map is never "fed by nothing").
  */
 export async function sourceCampaignsFeeding(campaignId: string, featureSlug: string): Promise<FeedingSourceCampaign[]> {
-  // Every source campaign that may feed the channel: its origins and, on cold email, Lead Sourcing.
-  const origins = SOURCE_CAMPAIGNS_FEEDING_CHANNEL[featureSlug];
+  // Every source campaign that may feed the channel: its origins and, where features lists it, Lead Sourcing.
+  const origins = (await readSourcingMap()).feedingByChannel[featureSlug];
   if (!origins || origins.length === 0) return [];
   const outreach = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaignId) });
   if (!outreach || !outreach.offerId) return [];
@@ -73,6 +71,10 @@ export async function sourceCampaignsFeeding(campaignId: string, featureSlug: st
         eq(campaigns.offerId, outreach.offerId),
         eq(campaigns.legKey, SOURCE_LEG_KEY),
         inArray(campaigns.featureSlug, [...origins]),
+        // A unit of a sales funnel campaign draws ONLY from its own funnel's source units (owner 2026-10-12: "Worldly"'s
+        // email unit was served Apollo units of OTHER campaigns of the offer). A legacy outreach campaign (no funnel)
+        // keeps the offer-wide read.
+        ...(outreach.salesFunnelCampaignId ? [eq(campaigns.salesFunnelCampaignId, outreach.salesFunnelCampaignId)] : []),
       ),
     );
   return rows.map((r) => ({ id: r.id, featureSlug: r.featureSlug!, status: r.status, salesFunnelCampaignId: r.salesFunnelCampaignId ?? null }));
@@ -204,14 +206,28 @@ const STOPS_NOBODY_CHOSE_ON_THE_SOURCE = SOURCE_STOPS_NOBODY_CHOSE;
 export async function ensureSourcesOnStart(
   tx: DbTransaction,
   started: CampaignRow,
-  deps: { catalogue?: () => Promise<ChannelCatalogueRead> } = {},
+  deps: { catalogue?: () => Promise<ChannelCatalogueRead>; sourcingMap?: () => Promise<SourcingMap> } = {},
 ): Promise<CampaignRow[]> {
-  if (started.status !== "ongoing" || !isSourcedChannel(started.featureSlug)) return [];
+  if (started.status !== "ongoing" || !started.featureSlug) return [];
   const brandId = brandOf(started);
   if (!started.offerId || !started.legKey || !brandId) return [];
-  const origin = DEFAULT_SOURCE_ORIGIN_BY_CHANNEL[started.featureSlug!];
+  let map: SourcingMap;
+  try {
+    map = await (deps.sourcingMap ?? readSourcingMap)();
+  } catch (err) {
+    console.error(
+      `[campaign-service] Source campaigns of offer ${started.offerId} NOT checked with campaign ${started.id}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return [];
+  }
+  const served = map.feedingByChannel[started.featureSlug] ?? [];
+  if (served.length === 0) return [];
+  const origin = map.defaultOriginByChannel[started.featureSlug];
   if (!origin) return [];
 
+  // A unit of a sales funnel campaign only ever touches ITS OWN funnel's source units (owner 2026-10-12): starting one
+  // funnel never turns ON another campaign's sources, and births no offer-level default (its funnel made its sources).
+  const ownSalesFunnelCampaignId = started.salesFunnelCampaignId ?? null;
   const existing = await tx
     .select({ id: campaigns.id, featureSlug: campaigns.featureSlug, status: campaigns.status })
     .from(campaigns)
@@ -222,12 +238,13 @@ export async function ensureSourcesOnStart(
         eq(campaigns.offerId, started.offerId),
         eq(campaigns.legKey, SOURCE_LEG_KEY),
         inArray(campaigns.featureSlug, ALL_ORIGINS),
+        ...(ownSalesFunnelCampaignId ? [eq(campaigns.salesFunnelCampaignId, ownSalesFunnelCampaignId)] : []),
       ),
     );
 
+  if (ownSalesFunnelCampaignId && existing.length === 0) return [];
   let toFollow: string[] = [];
   if (existing.length > 0) {
-    const served = SOURCE_CAMPAIGNS_FEEDING_CHANNEL[started.featureSlug!] ?? [];
     const off = existing.filter((r) => r.status === "stopped" && isLiveSourceOrigin(r.featureSlug) && served.includes(r.featureSlug!));
     if (off.length === 0) return [];
     const history = await tx
@@ -337,13 +354,14 @@ export async function mirrorSourceCampaigns(
   const now = opts.now ?? new Date();
   const since = new Date(now.getTime() - OBSERVED_SOURCING_WINDOW_MS);
   const observed = deps.observed ?? observedSourcing;
+  const { originsByChannel, defaultOriginByChannel } = await readSourcingMap();
 
   const outreach = await db
     .select()
     .from(campaigns)
     .where(
       and(
-        inArray(campaigns.featureSlug, Object.keys(SOURCING_ORIGINS_BY_CHANNEL)),
+        inArray(campaigns.featureSlug, Object.keys(originsByChannel)),
         isNotNull(campaigns.offerId),
         isNotNull(campaigns.legKey),
       ),
@@ -374,13 +392,13 @@ export async function mirrorSourceCampaigns(
   for (const g of groups.values()) {
     const origins = new Map<string, "default" | "observed">();
     for (const c of g.rows) {
-      const d = DEFAULT_SOURCE_ORIGIN_BY_CHANNEL[c.featureSlug!];
+      const d = defaultOriginByChannel[c.featureSlug!];
       if (d) origins.set(d, "default");
     }
     // Only a campaign that could have run in the window is asked.
     const recent = g.rows.filter((c) => c.status === "ongoing" || (c.updatedAt?.getTime() ?? 0) >= since.getTime());
     for (const c of recent) {
-      for (const origin of SOURCING_ORIGINS_BY_CHANNEL[c.featureSlug!] ?? []) {
+      for (const origin of originsByChannel[c.featureSlug!] ?? []) {
         if (!isLiveSourceOrigin(origin) || origins.has(origin)) continue;
         if (await observed({ orgId: c.orgId, campaignId: c.id }, origin, since)) origins.set(origin, "observed");
       }
@@ -390,7 +408,7 @@ export async function mirrorSourceCampaigns(
         alreadyPresent++;
         continue;
       }
-      const served = g.rows.filter((c) => (SOURCING_ORIGINS_BY_CHANNEL[c.featureSlug!] ?? []).includes(origin));
+      const served = g.rows.filter((c) => (originsByChannel[c.featureSlug!] ?? []).includes(origin));
       const live = served.filter((c) => c.status === "ongoing");
       const latest = [...served].sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))[0];
       plan.push({

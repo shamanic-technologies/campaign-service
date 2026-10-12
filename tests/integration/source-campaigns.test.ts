@@ -308,6 +308,60 @@ describe("Source campaigns: an offer's lead sources are campaigns (owner 2026-10
     });
   });
 
+  describe("a sales funnel campaign draws ONLY from its own source units (owner 2026-10-12, 'Worldly')", () => {
+    const F1 = crypto.randomUUID();
+    const F2 = crypto.randomUUID();
+    const unit = async (funnel: string | null, featureSlug: string, legKey: string, status: string) => {
+      const row = await insertTestCampaign(ORG, {
+        status, brandIds: [BRAND], brandId: BRAND, offerId: OFFER, legKey, featureSlug,
+        acquisitionChannel: featureSlug === COLD ? "cold_email" : null, maxBudgetDailyUsd: undefined,
+      });
+      if (funnel) await db.update(campaigns).set({ salesFunnelCampaignId: funnel }).where(eq(campaigns.id, row.id));
+      return rowOf(row.id);
+    };
+    const servedTo = async (id: string) =>
+      (await request(app).get(`/internal/campaigns/${id}/source-campaigns`).set("x-api-key", API_KEY).expect(200)).body;
+
+    it("two funnels on one offer (CRM -> email, Apollo -> email): each outreach unit lists only its own funnel's source unit", async () => {
+      const crm1 = await unit(F1, CRM_SOURCE, SOURCE_LEG, "ongoing");
+      const email1 = await unit(F1, COLD, OUTREACH_LEG, "ongoing");
+      const apollo2 = await unit(F2, APOLLO, SOURCE_LEG, "ongoing");
+      const email2 = await unit(F2, COLD, OUTREACH_LEG, "ongoing");
+
+      const one = await servedTo(email1.id);
+      expect(one.sourced).toBe(true);
+      expect(one.sourceCampaigns.map((s: { campaignId: string }) => s.campaignId)).toEqual([crm1.id]);
+      const two = await servedTo(email2.id);
+      expect(two.sourceCampaigns.map((s: { campaignId: string }) => s.campaignId)).toEqual([apollo2.id]);
+      // The legacy outreach campaign (no funnel) keeps the offer-wide read.
+      const legacy = await jubilation();
+      expect((await servedTo(legacy.id)).sourceCampaigns.map((s: { campaignId: string }) => s.campaignId).sort()).toEqual([crm1.id, apollo2.id].sort());
+    });
+
+    it("starting one funnel's outreach unit never turns ON another campaign's sources, nor births a default", async () => {
+      const crm1 = await unit(F1, CRM_SOURCE, SOURCE_LEG, "stopped");
+      await db.insert(campaignStatusTransitions).values({ campaignId: crm1.id, orgId: ORG, fromStatus: null, toStatus: "stopped", reason: "manual", source: "source_mirror" });
+      const otherApollo = await unit(F2, APOLLO, SOURCE_LEG, "stopped");
+      await db.insert(campaignStatusTransitions).values({ campaignId: otherApollo.id, orgId: ORG, fromStatus: null, toStatus: "stopped", reason: "manual", source: "source_mirror" });
+      const legacyApollo = await unit(null, APOLLO, SOURCE_LEG, "stopped");
+      await db.insert(campaignStatusTransitions).values({ campaignId: legacyApollo.id, orgId: ORG, fromStatus: null, toStatus: "stopped", reason: "manual", source: "source_mirror" });
+      const email1 = await unit(F1, COLD, OUTREACH_LEG, "ongoing");
+
+      const actual = await vi.importActual<typeof import("../../src/lib/source-campaign-store.js")>("../../src/lib/source-campaign-store.js");
+      const followed = await db.transaction((tx) => actual.ensureSourcesOnStart(tx, email1, { catalogue: async () => CATALOGUE as never }));
+
+      expect(followed.map((c) => c.id)).toEqual([crm1.id]);
+      expect((await rowOf(otherApollo.id)).status).toBe("stopped");
+      expect((await rowOf(legacyApollo.id)).status).toBe("stopped");
+
+      // A funnel with no source unit of its own births nothing at the offer level.
+      const email3 = await unit(crypto.randomUUID(), COLD, OUTREACH_LEG, "ongoing");
+      expect(await db.transaction((tx) => actual.ensureSourcesOnStart(tx, email3, { catalogue: async () => CATALOGUE as never }))).toEqual([]);
+      const sources = await db.select().from(campaigns).where(and(eq(campaigns.offerId, OFFER), eq(campaigns.legKey, SOURCE_LEG)));
+      expect(sources).toHaveLength(3);
+    });
+  });
+
   describe("migration of today's state (POST /internal/source-campaigns/mirror)", () => {
     const mirror = (apply?: boolean) =>
       request(app).post("/internal/source-campaigns/mirror").set("x-api-key", API_KEY).send(apply === undefined ? {} : { apply });
