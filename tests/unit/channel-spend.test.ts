@@ -92,13 +92,15 @@ describe("a channel's spend includes the sourcing that found its leads", () => {
       windows: [featureSlug === SALES ? { label: "today", totalCostInUsdCents: "5", actualCostInUsdCents: "5", provisionedCostInUsdCents: "0" } : window("1")],
     }));
     const [w] = (await getChannelStatsBudget({ orgId: "org-1", campaignId: "c-1", featureSlug: SALES, windows: TODAY })).windows;
-    expect(w.totalCostInUsdCents).toBe("9.0000000000");
+    // SALES "5" + one "1" per origin it counts (4 search/signal origins + the brand's CRM contacts).
+    expect(w.totalCostInUsdCents).toBe("10.0000000000");
     expect(w.netTotalCostInUsdCents).toBeUndefined();
   });
 
   it("each channel counts only its own origins", () => {
     expect(spendFeatureSlugs("sales-crm-email-outreach")).toEqual(["sales-crm-email-outreach", "sourcing-crm-contacts"]);
-    expect(spendFeatureSlugs(SALES)).not.toContain("sourcing-crm-contacts");
+    expect(spendFeatureSlugs("cold-whatsapp-outreach")).toEqual(["cold-whatsapp-outreach", "sourcing-crm-contacts"]);
+    expect(spendFeatureSlugs("feedback-request-cold-email-outreach")).not.toContain("sourcing-crm-contacts");
     expect(spendFeatureSlugs("ai-meeting-booking")).toEqual(["ai-meeting-booking"]);
     for (const origins of Object.values(SOURCING_ORIGINS_BY_CHANNEL)) for (const o of origins) expect(o.startsWith("sourcing-")).toBe(true);
   });
