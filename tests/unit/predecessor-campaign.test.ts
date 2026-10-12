@@ -207,17 +207,31 @@ describe("resolvePredecessorCampaign", () => {
     });
   });
 
-  it("REFUSES rather than tie-breaks when two LIVE siblings run the preceding leg", async () => {
+  it("answers EVERY live sibling running the preceding leg, oldest first, never a refusal", async () => {
     mockFindFirst.mockResolvedValue(campaign());
     mockFindMany.mockResolvedValue([
-      sibling({ id: "one", acquisitionChannel: "cold_email" }),
-      sibling({ id: "two", acquisitionChannel: "feedback_request_email" }),
+      sibling({ id: "two", acquisitionChannel: "feedback_request_email", createdAt: new Date("2026-10-12T14:43:50Z") }),
+      sibling({ id: "stopped", status: "stopped", createdAt: new Date("2026-10-12T15:00:00Z") }),
+      sibling({ id: "one", acquisitionChannel: "cold_email", createdAt: new Date("2026-10-12T13:33:55Z") }),
     ]);
 
-    await expect(resolvePredecessorCampaign("8c748ddd-0000-4000-8000-000000000010")).rejects.toMatchObject({
-      status: 409,
-      reason: "several_predecessor_campaigns",
-    });
+    const out = await resolvePredecessorCampaign("8c748ddd-0000-4000-8000-000000000010");
+
+    expect(out.predecessors.map((p) => p.campaignId)).toEqual(["one", "two"]);
+    expect(out.predecessor?.campaignId).toBe("one");
+    expect(out.absence).toBeNull();
+  });
+
+  it("answers the latest stopped sibling alone when none is live", async () => {
+    mockFindFirst.mockResolvedValue(campaign());
+    mockFindMany.mockResolvedValue([
+      sibling({ id: "old", status: "stopped", createdAt: new Date("2026-10-01T00:00:00Z") }),
+      sibling({ id: "new", status: "stopped", createdAt: new Date("2026-10-10T00:00:00Z") }),
+    ]);
+
+    const out = await resolvePredecessorCampaign("8c748ddd-0000-4000-8000-000000000010");
+
+    expect(out.predecessors.map((p) => p.campaignId)).toEqual(["new"]);
   });
 
   it("404s an unknown campaign", async () => {

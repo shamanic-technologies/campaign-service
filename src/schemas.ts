@@ -847,6 +847,15 @@ export const OfferTriggerEventsListResponse = z.object({
  * sibling. "There is none" and "it could not be worked out" stay different answers — the second is
  * a 409 or a 502, never a null.
  */
+const PredecessorCampaignEntry = z.object({
+  campaignId: z.string(),
+  legKey: z.string(),
+  status: z.string(),
+  acquisitionChannel: z.string().nullable(),
+  featureSlug: z.string().nullable(),
+  workflowSlug: z.string().nullable(),
+});
+
 export const PredecessorCampaignResponse = z.object({
   campaignId: z.string(),
   legKey: z.string().nullable(),
@@ -856,14 +865,14 @@ export const PredecessorCampaignResponse = z.object({
   fromStepKey: z.string().nullable(),
   /** Every published leg ending at that step, as features-service names them. */
   precedingLegKeys: z.array(z.string()),
-  predecessor: z.object({
-    campaignId: z.string(),
-    legKey: z.string(),
-    status: z.string(),
-    acquisitionChannel: z.string().nullable(),
-    featureSlug: z.string().nullable(),
-    workflowSlug: z.string().nullable(),
-  }).nullable(),
+  /** `predecessors[0]`, for callers that read one. */
+  predecessor: PredecessorCampaignEntry.nullable(),
+  /**
+   * EVERY live campaign of the preceding leg, oldest first (several channels opening conversations
+   * for one offer is normal: the answering campaign answers the people of each); none live = the
+   * latest stopped one; none at all = empty, with `absence` saying why.
+   */
+  predecessors: z.array(PredecessorCampaignEntry),
   /**
    * `entry_leg` | `campaign_states_no_leg` |
    * `campaign_states_no_offer` | `campaign_states_no_brand` | `no_campaign_for_preceding_leg`

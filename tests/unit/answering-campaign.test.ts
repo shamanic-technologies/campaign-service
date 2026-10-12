@@ -116,6 +116,21 @@ describe("resolveAnsweringCampaign", () => {
     expect(out.toStepKey).toBe("conversation");
   });
 
+  it("two live campaigns open conversations for one offer: the answering campaign answers EACH", async () => {
+    const whatsapp = held({
+      id: "4af21454-0000-4000-8000-000000000030",
+      acquisitionChannel: "cold_whatsapp",
+      featureSlug: "sales-cold-email-outreach",
+      createdAt: new Date("2026-09-02T00:00:00Z"),
+    });
+    world([held(), whatsapp, answerer()]);
+    for (const id of [HELD_ID, whatsapp.id]) {
+      const out = await resolveAnsweringCampaign(id);
+      expect(out.absence).toBeNull();
+      expect(out.answeredBy?.campaignId).toBe(ANSWERER_ID);
+    }
+  });
+
   it("says nobody bought the answering leg, and which channels could — the prod case of #485", async () => {
     world([held()]);
     const out = await resolveAnsweringCampaign(HELD_ID);
