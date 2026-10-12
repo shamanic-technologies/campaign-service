@@ -12,6 +12,7 @@ import {
   resolveSelectionForTrigger,
   selectCellFromProjection,
   selectAudiencePooled,
+  unrankedPick,
   type LegModelEligibility,
   type ProjectionRow,
 } from "../../src/lib/features-workflow-projection-client.js";
@@ -459,5 +460,22 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
       audienceId: null,
       noServeableAudience: false,
     });
+  });
+});
+
+describe("unrankedPick — nothing in the grid is priced", () => {
+  it("runs the configured workflow when the grid lists it", () => {
+    expect(unrankedPick([row(null, "other-wf", null), row(null, "wf-configured", null)], "wf-configured")).toBe("wf-configured");
+  });
+  it("runs the grid's first workflow when the configured one is not assigned to this leg", () => {
+    expect(unrankedPick([row(null, "fulu", null), row(null, "other-wf", null)], "rhodium-v18")).toBe("fulu");
+  });
+  it("an empty grid keeps the configured workflow", () => {
+    expect(unrankedPick([], "wf-configured")).toBe("wf-configured");
+  });
+  it("selection reaches it: an unpriced grid listing only another workflow never runs the configured one", () => {
+    const cell = selectCellFromProjection([row(null, "fulu", null)]);
+    expect(cell.workflowSlug).toBeNull();
+    expect(unrankedPick([row(null, "fulu", null)], "rhodium-v18")).toBe("fulu");
   });
 });
