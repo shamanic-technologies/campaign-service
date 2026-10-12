@@ -23,20 +23,23 @@ const BS = "sourcing-apollo-buying-signals";
 const LI = "sourcing-linkedin-engagement-signals";
 const BLISS = `${ENTRY}@${COLD}+closing`;
 
-const unit = (featureSlug: string, legKey: string, workflowSlug: string | null) => ({
+// A launch names a unit `<funnel name> <idTag> - <derived>`; a source unit linked by the conversion carries no prefix.
+const unit = (featureSlug: string, legKey: string, workflowSlug: string | null, prefix = "") => ({
   featureSlug,
   legKey,
   workflowSlug,
-  name: `Bliss ${randomUUID()}`,
+  name: `${prefix}${featureSlug} ${randomUUID()}`,
   acquisitionChannel: featureSlug.replace(/-/g, "_"),
 });
 
-const born = (sources: string[], status: "ongoing" | "stopped" = "ongoing", salesFunnelId = BLISS) =>
-  insertSalesFunnelCampaignWithUnits({
-    id: randomUUID(), orgId: ORG, brandId: BRAND, offerId: OFFER, salesFunnelId, salesFunnelName: "Bliss",
+const born = (sources: string[], status: "ongoing" | "stopped" = "ongoing", salesFunnelId = BLISS) => {
+  const id = randomUUID();
+  return insertSalesFunnelCampaignWithUnits({
+    id, orgId: ORG, brandId: BRAND, offerId: OFFER, salesFunnelId, salesFunnelName: "Bliss",
     status, createdByUserId: null, parentRunId: null,
-    units: [unit(COLD, ENTRY, "cold-v1"), ...sources.map((s) => unit(s, SRC_LEG, null))],
+    units: [unit(COLD, ENTRY, "cold-v1", `Bliss ${id.slice(0, 8)} - `), ...sources.map((s) => unit(s, SRC_LEG, null))],
   });
+};
 
 const WORKFLOWS: Record<string, string> = { "lead-sourcing": "lead-sourcing-vega", [CF]: "sourcing-apollo-cold-filters-rigel", [BS]: "sourcing-apollo-buying-signals-deneb" };
 const noCaps = vi.fn(async () => ({ ok: true as const, caps: { stated: false } as never }));
@@ -99,9 +102,12 @@ describe("the Lead Sourcing switch", () => {
     expect((await db.select().from(campaigns).where(eq(campaigns.featureSlug, "lead-sourcing")))).toHaveLength(0);
   });
 
-  it("a single-source funnel the catalogue answers with another id moves to the id naming its source; with a billing cap it does not", async () => {
+  it("a single-source funnel the catalogue answers with another id moves to the id naming its source, AND to that id's name; with a billing cap it does not", async () => {
     const { salesFunnelCampaign: parent } = await born([CF]);
-    const fetchSalesFunnel = vi.fn(async () => ({
+    const fetchSalesFunnel = vi.fn(async (id: string) => id.startsWith("minted:") ? ({
+      ok: true as const,
+      value: { id, name: "Philanthropy", pipeIds: [], legs: [] },
+    }) : ({
       ok: true as const,
       value: {
         id: `${SRC_LEG}@lead-sourcing+${BLISS}`, name: "Bliss", pipeIds: [],
@@ -123,8 +129,29 @@ describe("the Lead Sourcing switch", () => {
     expect(moved.respelled[0]).toMatchObject({ from: BLISS, to });
     const [funnel] = await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.id, parent.id));
     expect(funnel.salesFunnelId).toBe(to);
+    expect(funnel.salesFunnelName).toBe("Philanthropy");
+    expect(moved.respelled[0]).toMatchObject({ toName: "Philanthropy" });
     const units = await db.select().from(campaigns).where(eq(campaigns.salesFunnelCampaignId, parent.id));
     expect(units.every((u) => u.salesFunnelId === to)).toBe(true);
+    const tag = parent.id.slice(0, 8);
+    expect(units.find((u) => u.featureSlug === COLD)!.name).toMatch(new RegExp(`^Philanthropy ${tag} - ${COLD} `));
+    // A unit carrying no funnel prefix keeps its name.
+    expect(units.find((u) => u.featureSlug === CF)!.name).toMatch(new RegExp(`^${CF} `));
+  });
+
+  it("the new id's name unreadable: nothing moves, said why", async () => {
+    const { salesFunnelCampaign: parent } = await born([CF]);
+    const fetchSalesFunnel = vi.fn(async (id: string) => id.startsWith("minted:")
+      ? ({ ok: false as const, notFound: false as const, detail: "features-service HTTP 503" })
+      : ({ ok: true as const, value: { id: `${SRC_LEG}@lead-sourcing+${BLISS}`, name: "Bliss", pipeIds: [], legs: [
+          { legKey: SRC_LEG, pipe: { id: `lead-sourcing|${SRC_LEG}`, mode: "reactive" as const }, channelIds: ["lead-sourcing"] },
+          { legKey: ENTRY, pipe: { id: `${COLD}|${ENTRY}`, mode: "proactive" as const }, channelIds: [COLD] },
+        ] } }));
+    const declareSalesFunnel = vi.fn(async (pipeIds: string[]) => ({ ok: true as const, value: { id: `minted:${pipeIds.join(",")}` } }));
+    const res = await run(true, { catalogue: { fetchSalesFunnel, declareSalesFunnel } });
+    expect(res.respelled[0].skipped).toContain("funnel_name_unreadable");
+    const [funnel] = await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.id, parent.id));
+    expect(funnel).toMatchObject({ salesFunnelId: BLISS, salesFunnelName: "Bliss" });
   });
 
   it("every ON source unit with no workflow takes its pipe's, due now (the scheduler decides who dispatches it)", async () => {
