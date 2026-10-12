@@ -1949,6 +1949,48 @@
                 "additionalProperties": false
               }
             ]
+          },
+          "person": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "format": "email"
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "phone": {
+                "type": "string",
+                "maxLength": 50
+              },
+              "crmContact": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "contactId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "provider",
+                  "contactId"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "email"
+            ],
+            "additionalProperties": false
+          },
+          "item": {
+            "nullable": true
           }
         },
         "required": [

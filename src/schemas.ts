@@ -708,6 +708,27 @@ export const RecordTriggerEventBody = z.object({
     z.object({ outcome: z.literal("ran"), campaignId: z.string().min(1) }).strict(),
     z.object({ outcome: z.literal("skipped"), reason: z.string().min(1), detail: z.string().optional() }).strict(),
   ]).optional(),
+  /**
+   * The person the occurrence is about, by IDENTITY (any trigger; src/lib/trigger-person.ts), when they
+   * may not be a lead yet. Each campaign the trigger reaches files them as a lead of the brand at
+   * lead-service (the brand must know the address: a CRM fact), makes them due, and receives them on
+   * `/execute` `trigger.person` (+ `trigger.leadId`). Not known yet = the event retries every 2 min for
+   * 60 min (also while a run of the campaign is in flight, so each event gets its own run), then is skipped with that reason.
+   */
+  person: z.object({
+    email: z.string().trim().email("person.email must be an email address"),
+    name: z.string().max(300).optional(),
+    phone: z.string().max(50).optional(),
+    /** The contact in the brand's own CRM the person came from, carried verbatim. */
+    crmContact: z.object({ provider: z.string().min(1), contactId: z.string().min(1) }).strict().optional(),
+  }).strict().optional(),
+  /**
+   * What the occurrence carries (e.g. a form: `{formName, answers, submittedAt}`), opaque JSON kept on the
+   * event and handed to the workflow verbatim as `/execute` `trigger.item`. At most 20,000 characters.
+   */
+  item: z.unknown().optional().refine((v) => v === undefined || JSON.stringify(v).length <= 20_000, {
+    message: "item must serialize to at most 20,000 characters",
+  }),
 }).strict().refine((b) => !(b.performed && b.dueAt), {
   message: "an event already performed has no due time: send `performed` or `dueAt`, not both",
 }).openapi("RecordTriggerEventBody");

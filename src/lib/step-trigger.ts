@@ -27,6 +27,7 @@ import {
 } from "./sales-funnel-people.js";
 import { fileSalesFunnelCampaignPeople, targetingOfSalesFunnelCampaigns } from "./sales-funnel-people-store.js";
 import { eventConcernsGithubIssue } from "./github-issue-trigger.js";
+import { oweEventPerson, type EventPerson } from "./trigger-person.js";
 
 /**
  * A LEAD JUST REACHED A STEP — RUN THE CAMPAIGN THAT WAS BOUGHT TO TAKE THEM OUT OF IT, NOW.
@@ -142,6 +143,11 @@ export const STEP_TRIGGER_SKIPS = {
   AMBIGUOUS_PERSON: "ambiguous_person",
   /** lead-service could not record the named people's debt (unreachable, non-2xx): nothing dispatched. */
   FOLLOWUP_UNAVAILABLE: "followup_unavailable",
+  /**
+   * The event names a person by identity (lib/trigger-person.ts) the brand does not know yet at
+   * lead-service (their CRM fact has not landed): nobody could be filed. The event is retried shortly.
+   */
+  PERSON_NOT_KNOWN: "person_not_known",
 } as const;
 
 export type StepTriggerSkipReason = (typeof STEP_TRIGGER_SKIPS)[keyof typeof STEP_TRIGGER_SKIPS];
@@ -274,6 +280,11 @@ export async function runCampaignsInScope(
    * Read only to pick which campaign naming its people the event concerns; never sent anywhere.
    */
   eventLeadId?: string | null,
+  /**
+   * The person the event names by IDENTITY (lib/trigger-person.ts): filed and made due on each campaign
+   * it reaches, then riding `/execute` as `trigger.person` with the lead id lead-service filed them as.
+   */
+  person?: EventPerson | null,
 ): Promise<Pick<StepTriggerOutcome, "triggered" | "skipped"> & { offCampaignIds: string[] }> {
   const outcome: Pick<StepTriggerOutcome, "triggered" | "skipped"> = { triggered: [], skipped: [] };
 
@@ -351,7 +362,11 @@ export async function runCampaignsInScope(
 
     const people = unitPeople(campaign, targeting);
     const namedLeadId = trigger?.leadId ?? eventLeadId ?? null;
-    if (people && !eventConcernsPeople(people, namedLeadId)) {
+    if (people && person && !people.some((p) => p.email === person.email)) {
+      skip(STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON, `the event names ${person.email}, not one of the people this campaign names`);
+      continue;
+    }
+    if (people && !person && !eventConcernsPeople(people, namedLeadId)) {
       skip(STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON, `the event names lead ${namedLeadId}, not one of the people this campaign names`);
       continue;
     }
@@ -444,7 +459,7 @@ export async function runCampaignsInScope(
     // A campaign naming its people: they are made DUE on this unit's own follow-up queue NOW, once its
     // money allows a run (a capped or unfunded campaign owes nobody anything). The debt is durable: a
     // dispatch skipped below (run or cohort in flight) leaves it for the unit's next run to claim.
-    if (people) {
+    if (!person && people) {
       const owed = await makePeopleDue(campaign, people, now);
       if (!owed.ok) {
         skip(owed.code, owed.detail);
@@ -467,6 +482,19 @@ export async function runCampaignsInScope(
         `a run of the brand's ${cohort} campaigns is already in flight`,
       );
       continue;
+    }
+
+    // An event naming a person by identity: THAT person (and only them) is filed and made due here, only
+    // once nothing holds the dispatch back, so the run carrying their item is the one that claims them
+    // (a held event is retried as a whole: lib/trigger-events.ts).
+    let campaignTrigger = trigger;
+    if (person) {
+      const owed = await oweEventPerson(campaign, person, now);
+      if (!owed.ok) {
+        skip(owed.code, owed.detail);
+        continue;
+      }
+      if (campaignTrigger) campaignTrigger = { ...campaignTrigger, leadId: owed.leadId, person };
     }
 
     try {
@@ -514,7 +542,7 @@ export async function runCampaignsInScope(
         activeGoalId: campaign.activeGoalId,
         brandProfileId: campaign.brandProfileId,
         audienceId: selection.audienceId ?? campaign.audienceId,
-        ...(trigger ? { trigger } : {}),
+        ...(campaignTrigger ? { trigger: campaignTrigger } : {}),
       };
       try {
         await executeCampaignWorkflow(workflowSlug, inputs);
