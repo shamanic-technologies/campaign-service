@@ -7,6 +7,7 @@ import { isSalesFamilyFeature, isServicePerformedFeature } from "./sales-outreac
 import { fetchStartableWorkflowSlug } from "./startable-workflow-client.js";
 import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
 import { fetchPipe, fetchSalesFunnel, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
+import { fetchOfferSteps, missingOfferSteps } from "./sales-funnel-offer-steps.js";
 
 /**
  * CAN THE CUSTOMER START THE CAMPAIGN FOR THIS FUNDED (OFFER, LEG, CHANNEL), AND WHAT WOULD IT BE?
@@ -280,8 +281,16 @@ export interface SalesFunnelRefusal {
     | "pipe_not_runnable"
     | "no_workflow"
     | "catalogue_unavailable"
-    | "workflow_unavailable";
+    | "workflow_unavailable"
+    | "offer_not_found"
+    | "offer_steps_unavailable"
+    | "sales_funnel_steps_unknown"
+    | "offer_lacks_steps";
   message: string;
+  /** `offer_lacks_steps` only: the funnel's steps the offer's business has not stated, in funnel order. */
+  missingSteps?: string[];
+  /** `offer_lacks_steps` only: the steps the offer's business HAS stated (brand-service, verbatim). */
+  offerSteps?: string[];
 }
 
 /**
@@ -297,8 +306,9 @@ export interface SalesFunnelRefusal {
  */
 export async function resolveSalesFunnelPlan(
   salesFunnelId: string,
-  identity: IdentityHeaders & { userId: string; runId: string },
+  identity: IdentityHeaders & { userId: string; runId: string; brandId: string; offerId: string },
   deps: {
+    offerSteps?: typeof fetchOfferSteps;
     salesFunnel?: typeof fetchSalesFunnel;
     pipe?: typeof fetchPipe;
     catalogue?: () => Promise<ChannelCatalogueRead>;
@@ -335,6 +345,52 @@ export async function resolveSalesFunnelPlan(
   if (!catalogue.ok) {
     console.error(`[campaign-service] Sales funnel ${salesFunnelId}: channel catalogue unreadable: ${catalogue.detail}`);
     return unavailable();
+  }
+
+  // Owner 2026-10-12: a funnel through a step the offer's business does not have is never born (Doc Dinners was
+  // sold two funnels through Direct purchase after saying it has no purchase step). An offer that never stated its
+  // steps is unchanged; an unreadable statement refuses the launch (never created on a guess).
+  const offerSteps = await (deps.offerSteps ?? fetchOfferSteps)(identity.brandId, identity.offerId, identity);
+  if (!offerSteps.ok) {
+    if (offerSteps.notFound) {
+      console.warn(`[campaign-service] Sales funnel ${salesFunnelId}: offer ${identity.offerId} not on brand ${identity.brandId}: ${offerSteps.detail}`);
+      return refuseLaunch(400, "offer_not_found", "We don't know this offer on this brand.");
+    }
+    console.error(`[campaign-service] Sales funnel ${salesFunnelId}: steps of offer ${identity.offerId} unreadable: ${offerSteps.detail}`);
+    return refuseLaunch(502, "offer_steps_unavailable", "We couldn't read the steps of this offer's business just now. Please try again in a minute.");
+  }
+  if (offerSteps.stated) {
+    const salesFunnelSteps: string[] = [];
+    const unpublished: string[] = [];
+    for (const leg of read.value.legs) {
+      const published = catalogue.legs.find((l) => l.legKey === leg.legKey);
+      if (!published) {
+        unpublished.push(leg.legKey);
+        continue;
+      }
+      for (const step of [published.fromStepKey, published.toStepKey]) if (step) salesFunnelSteps.push(step);
+    }
+    if (unpublished.length > 0) {
+      console.error(`[campaign-service] Sales funnel ${salesFunnelId}: legs ${unpublished.join(", ")} not in the channel catalogue — steps unknown, not launched`);
+      return refuseLaunch(502, "sales_funnel_steps_unknown", `We couldn't tell which steps the sales funnel "${read.value.name}" goes through. Please try again in a minute.`);
+    }
+    const missing = missingOfferSteps(salesFunnelSteps, offerSteps.steps);
+    if (missing.length > 0) {
+      const one = missing.length === 1;
+      console.warn(`[campaign-service] Sales funnel ${salesFunnelId} not launched for offer ${identity.offerId}: its business has not stated ${missing.join(", ")}`);
+      return {
+        ok: false as const,
+        refusal: {
+          status: 409 as const,
+          code: "offer_lacks_steps" as const,
+          message:
+            `The sales funnel "${read.value.name}" goes through ${one ? "a step" : "steps"} this offer's business has not said it has: ${missing.join(", ")}. ` +
+            `Ask the client whether its business has ${one ? "this step" : "these steps"}, add ${one ? "it" : "them"} to the offer's steps, then launch again.`,
+          missingSteps: missing,
+          offerSteps: offerSteps.steps,
+        },
+      };
+    }
   }
 
   const units: SalesFunnelUnitPlan[] = [];
