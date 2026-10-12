@@ -26,6 +26,8 @@
  * (lib/channel-spend.ts), which keeps what is spent today unchanged.
  */
 
+import { readSourcingMap } from "./sourcing-origins-client.js";
+
 /** The leg every source campaign is keyed on (features-service `SOURCE_LEG_KEY`). */
 export const SOURCE_LEG_KEY = "start_to_lead_found";
 
@@ -76,51 +78,11 @@ export function sourceCampaignKey(originSlug: string): string {
   return `campaign:${originSlug}|${SOURCE_LEG_KEY}`;
 }
 
-const SEARCH_AND_SIGNAL_ORIGINS = [
-  "sourcing-apollo-cold-filters",
-  "sourcing-apollo-buying-signals",
-  "sourcing-linkedin-engagement-signals",
-  "sourcing-apify-search",
-] as const;
-
 /**
- * Which origins find leads for which OUTREACH channel. Mirrors features-service
- * `lib/sourcing-origins.ts` SOURCING_ORIGINS_BY_CHANNEL: a channel that starts serving another
- * origin must be listed in BOTH places. Read statically on purpose (it sits on gate-check's money
- * path, see lib/channel-spend.ts).
+ * WHICH ORIGINS FEED WHICH OUTREACH CHANNEL, Lead Sourcing included, and the origin a new offer starts with, are
+ * features-service's statement, READ at `GET /public/sourcing-origins` (lib/sourcing-origins-client.ts). No copy
+ * lives here: the hand-kept one drifted on 2026-10-12 and a live WhatsApp campaign served nobody.
  */
-export const SOURCING_ORIGINS_BY_CHANNEL: Readonly<Record<string, readonly string[]>> = {
-  "sales-cold-email-outreach": [...SEARCH_AND_SIGNAL_ORIGINS, "sourcing-crm-contacts"],
-  "feedback-request-cold-email-outreach": SEARCH_AND_SIGNAL_ORIGINS,
-  "sales-crm-email-outreach": ["sourcing-crm-contacts"],
-  "cold-whatsapp-outreach": ["sourcing-crm-contacts"],
-};
-
-/**
- * The SOURCE CAMPAIGNS that may feed an outreach channel: its origins, plus Lead Sourcing where it picks among
- * several (the cold email channels; never CRM email, one origin there). Lead Sourcing is NOT in
- * SOURCING_ORIGINS_BY_CHANNEL on purpose: that table widens SPEND reads by slug for serves filed under the
- * OUTREACH campaign's id (the pre-2026-10-08 labelling), and a Lead Sourcing serve is always filed under its own
- * campaign's id, so it adds nothing there and every gate-check read stays byte-identical.
- */
-export const SOURCE_CAMPAIGNS_FEEDING_CHANNEL: Readonly<Record<string, readonly string[]>> = Object.fromEntries(
-  Object.entries(SOURCING_ORIGINS_BY_CHANNEL).map(([channel, origins]) => [
-    channel,
-    origins.length > 1 ? [...origins, LEAD_SOURCING_SLUG] : [...origins],
-  ]),
-);
-
-/**
- * The origin an outreach channel found its leads from before sources were campaigns: the source
- * a migrated or brand-new offer starts with, so nothing stops finding leads. null = the channel
- * sources nothing.
- */
-export const DEFAULT_SOURCE_ORIGIN_BY_CHANNEL: Readonly<Record<string, string>> = {
-  "sales-cold-email-outreach": "sourcing-apollo-cold-filters",
-  "feedback-request-cold-email-outreach": "sourcing-apollo-cold-filters",
-  "sales-crm-email-outreach": "sourcing-crm-contacts",
-  "cold-whatsapp-outreach": "sourcing-crm-contacts",
-};
 
 /**
  * WHO DISPATCHES A SOURCE UNIT is lib/on-demand-mode.ts (owner 2026-10-12, "every pipe is independent"): the
@@ -129,7 +91,12 @@ export const DEFAULT_SOURCE_ORIGIN_BY_CHANNEL: Readonly<Record<string, string>> 
  * own inside its funnel campaign's caps.
  */
 
-/** True when campaigns of this channel are FED by source campaigns (it works found leads). */
-export function isSourcedChannel(featureSlug?: string | null): boolean {
-  return !!featureSlug && featureSlug in SOURCING_ORIGINS_BY_CHANNEL;
+/**
+ * True when campaigns of this channel are FED by source campaigns (it works found leads), per features-service's map.
+ * Throws when the map is unreadable (lib/sourcing-origins-client.ts): never answers "not sourced" for "unknown".
+ */
+export async function isSourcedChannel(featureSlug?: string | null): Promise<boolean> {
+  if (!featureSlug) return false;
+  const map = await readSourcingMap();
+  return (map.feedingByChannel[featureSlug]?.length ?? 0) > 0;
 }

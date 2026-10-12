@@ -11,7 +11,6 @@ import { isOutboundSalesFeature, isSalesFamilyFeature } from "./sales-outreach-c
 import { acquisitionChannelForFeature } from "./campaign-identity.js";
 import { fundingFromBudgets } from "./campaign-funding.js";
 import { salesFunnelUnitMoney, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
-import { isSourcedChannel } from "./source-campaigns.js";
 import { sourceCampaignsFeeding } from "./source-campaign-store.js";
 import { adoptOfferForPairSafely } from "./campaign-offer-adoption.js";
 import { reportTurnHolds, type TurnHold } from "./turn-hold-event.js";
@@ -385,8 +384,9 @@ async function planOneBrand(
   const strictSpent = new Map<string, number | null>();
   for (const c of group) {
     // The sources feeding it: its spend read below already counts theirs, so its pace ceiling must
-    // add their money (campaign-funding.ts). [] for any channel that is not sourced (no DB read).
-    const feeding = isSourcedChannel(c.featureSlug) ? await sourceCampaignsFeeding(c.id, c.featureSlug!) : [];
+    // add their money (campaign-funding.ts). [] for any channel features-service lists no source for; an unreadable
+    // map throws and the brand is held (planning_failed), never paced as if fed by nothing.
+    const feeding = c.featureSlug ? await sourceCampaignsFeeding(c.id, c.featureSlug) : [];
     const verdict = fundingFromBudgets(c, budgets, feeding);
     if (!verdict.funded) {
       deferred.set(c.id, heldAt);
