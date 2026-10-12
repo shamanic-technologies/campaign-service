@@ -1,0 +1,181 @@
+{
+  "origins": [
+    {
+      "slug": "sourcing-apollo-cold-filters",
+      "name": "Apollo Cold Filters",
+      "description": "People who match your target, found on Apollo by title, company and location.",
+      "family": "cold_filters",
+      "provider": {
+        "name": "Apollo",
+        "domain": "apollo.io"
+      },
+      "audienceLists": [
+        "apollo_search"
+      ],
+      "live": true,
+      "displayOrder": 101,
+      "sourceCampaignKey": "campaign:sourcing-apollo-cold-filters|start_to_lead_found"
+    },
+    {
+      "slug": "sourcing-apollo-buying-signals",
+      "name": "Apollo Buying Signals",
+      "description": "People who match your target and show a buying signal right now.",
+      "family": "signal",
+      "provider": {
+        "name": "Apollo",
+        "domain": "apollo.io"
+      },
+      "audienceLists": [
+        "apollo_buying_signal"
+      ],
+      "live": true,
+      "displayOrder": 102,
+      "sourceCampaignKey": "campaign:sourcing-apollo-buying-signals|start_to_lead_found"
+    },
+    {
+      "slug": "sourcing-linkedin-engagement-signals",
+      "name": "LinkedIn Engagement Signals",
+      "description": "People who recently reacted to or commented on your competitors' LinkedIn posts.",
+      "family": "signal",
+      "provider": {
+        "name": "LinkedIn",
+        "domain": "linkedin.com"
+      },
+      "audienceLists": [
+        "linkedin_engagement"
+      ],
+      "live": true,
+      "displayOrder": 103,
+      "sourceCampaignKey": "campaign:sourcing-linkedin-engagement-signals|start_to_lead_found"
+    },
+    {
+      "slug": "sourcing-crm-contacts",
+      "name": "Your CRM Contacts",
+      "description": "People from the contact list you uploaded.",
+      "family": "own_contacts",
+      "provider": null,
+      "audienceLists": [
+        "crm_contacts"
+      ],
+      "live": true,
+      "displayOrder": 104,
+      "sourceCampaignKey": "campaign:sourcing-crm-contacts|start_to_lead_found"
+    },
+    {
+      "slug": "sourcing-apify-search",
+      "name": "Apify Search",
+      "description": "People found by our former search provider. Retired, kept for its history.",
+      "family": "cold_filters",
+      "provider": {
+        "name": "Apify",
+        "domain": "apify.com"
+      },
+      "audienceLists": [
+        "apify_search"
+      ],
+      "live": false,
+      "displayOrder": 105,
+      "sourceCampaignKey": "campaign:sourcing-apify-search|start_to_lead_found"
+    }
+  ],
+  "leadFoundStep": {
+    "key": "lead_found",
+    "label": "Lead found",
+    "description": "A person who matches your target is found, with a verified email.",
+    "shortDescription": "Finds the right people"
+  },
+  "sourceLegKey": "start_to_lead_found",
+  "sourcingChannels": [
+    "cold-whatsapp-outreach",
+    "feedback-request-cold-email-outreach",
+    "sales-cold-email-outreach",
+    "sales-crm-email-outreach"
+  ],
+  "originsByChannel": {
+    "cold-whatsapp-outreach": [
+      "sourcing-crm-contacts"
+    ],
+    "feedback-request-cold-email-outreach": [
+      "sourcing-apollo-cold-filters",
+      "sourcing-apollo-buying-signals",
+      "sourcing-linkedin-engagement-signals",
+      "sourcing-apify-search",
+      "lead-sourcing"
+    ],
+    "sales-cold-email-outreach": [
+      "sourcing-apollo-cold-filters",
+      "sourcing-apollo-buying-signals",
+      "sourcing-linkedin-engagement-signals",
+      "sourcing-apify-search",
+      "lead-sourcing",
+      "sourcing-crm-contacts"
+    ],
+    "sales-crm-email-outreach": [
+      "sourcing-crm-contacts"
+    ]
+  },
+  "contactMethodsByChannel": {
+    "sales-cold-email-outreach": [
+      "email"
+    ],
+    "feedback-request-cold-email-outreach": [
+      "email"
+    ],
+    "sales-crm-email-outreach": [
+      "email"
+    ],
+    "pr-cold-email-outreach": [
+      "email"
+    ],
+    "vc-cold-email-outreach": [
+      "email"
+    ],
+    "accelerators-cold-email-outreach": [
+      "email"
+    ],
+    "hiring-cold-email-outreach": [
+      "email"
+    ],
+    "cold-call-outreach": [
+      "phone"
+    ],
+    "cold-sms-outreach": [
+      "phone"
+    ],
+    "cold-whatsapp-outreach": [
+      "phone"
+    ],
+    "cold-linkedin-outreach": [
+      "linkedin"
+    ],
+    "cold-x-outreach": [
+      "x"
+    ],
+    "cold-instagram-outreach": [
+      "instagram"
+    ],
+    "cold-reddit-outreach": [
+      "reddit"
+    ]
+  },
+  "leadSourcing": {
+    "slug": "lead-sourcing",
+    "name": "Lead Sourcing",
+    "description": "We pick the sources that bring you the most clients.",
+    "sourceCampaignKey": "campaign:lead-sourcing|start_to_lead_found",
+    "mayUseByChannel": {
+      "cold-whatsapp-outreach": [],
+      "feedback-request-cold-email-outreach": [
+        "sourcing-apollo-cold-filters",
+        "sourcing-apollo-buying-signals",
+        "sourcing-linkedin-engagement-signals"
+      ],
+      "sales-cold-email-outreach": [
+        "sourcing-apollo-cold-filters",
+        "sourcing-apollo-buying-signals",
+        "sourcing-linkedin-engagement-signals"
+      ],
+      "sales-crm-email-outreach": []
+    }
+  }
+}

@@ -6,12 +6,10 @@ vi.mock("@distribute/runs-client", () => ({ getStatsBudget: mockGetStatsBudget }
 import { resolveStartablePair } from "../../src/lib/startable-pair.js";
 import { getChannelStatsBudget } from "../../src/lib/channel-spend.js";
 import { proactiveCampaignsToStop } from "../../src/lib/single-proactive.js";
+import { readSourcingMap } from "../../src/lib/sourcing-origins-client.js";
 import {
-  DEFAULT_SOURCE_ORIGIN_BY_CHANNEL,
   LIVE_SOURCE_ORIGIN_SLUGS,
   SOURCE_LEG_KEY,
-  SOURCING_ORIGINS_BY_CHANNEL,
-  SOURCE_CAMPAIGNS_FEEDING_CHANNEL,
   isLiveSourceOrigin,
   isSourceCampaign,
   sourceCampaignKey,
@@ -40,7 +38,8 @@ function window(cents: string) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("the LOCKED vocabulary", () => {
-  it("holds features-service's keys verbatim", () => {
+  it("holds features-service's keys verbatim", async () => {
+    const { originsByChannel: SOURCING_ORIGINS_BY_CHANNEL, defaultOriginByChannel: DEFAULT_SOURCE_ORIGIN_BY_CHANNEL } = await readSourcingMap();
     expect(SOURCE_LEG_KEY).toBe("start_to_lead_found");
     expect([...LIVE_SOURCE_ORIGIN_SLUGS]).toEqual([
       "sourcing-apollo-cold-filters",
@@ -67,7 +66,8 @@ describe("the LOCKED vocabulary", () => {
     expect(isSourceCampaign({ featureSlug: COLD })).toBe(false);
   });
 
-  it("LEAD SOURCING (owner 2026-10-11) is a source campaign that feeds the cold email channels, never CRM email, and widens no spend read", () => {
+  it("LEAD SOURCING (owner 2026-10-11) is a source campaign that feeds the cold email channels, never CRM email, and widens no spend read", async () => {
+    const { originsByChannel: SOURCING_ORIGINS_BY_CHANNEL, feedingByChannel: SOURCE_CAMPAIGNS_FEEDING_CHANNEL } = await readSourcingMap();
     expect(isSourceCampaign({ featureSlug: "lead-sourcing" })).toBe(true);
     expect(isLiveSourceOrigin("lead-sourcing")).toBe(true);
     expect(SOURCE_CAMPAIGNS_FEEDING_CHANNEL["sales-cold-email-outreach"]).toEqual([...SOURCING_ORIGINS_BY_CHANNEL["sales-cold-email-outreach"]!, "lead-sourcing"]);

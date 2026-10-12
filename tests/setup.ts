@@ -25,6 +25,17 @@ vi.mock("../src/lib/source-campaign-store.js", async (importOriginal) => {
   };
 });
 
+// WHICH SOURCES FEED WHICH CHANNEL is read from features-service (src/lib/sourcing-origins-client.ts). Every test
+// reads features-service's prod answer as recorded on 2026-10-12 (tests/fixtures/features-sourcing-origins.json);
+// a plain function on purpose (no vi.resetAllMocks can blank it); the client's own tests read the real module via vi.importActual.
+vi.mock("../src/lib/sourcing-origins-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/sourcing-origins-client.js")>();
+  const { readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const body = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/features-sourcing-origins.json", import.meta.url)), "utf8"));
+  return { ...original, readSourcingMap: async () => original.deriveSourcingMap(body) };
+});
+
 // WHO DISPATCHES A PIPE (src/lib/on-demand-mode.ts) is read on the catalogue at every claim and person start. Tests
 // that are not about it read it as unreadable (sources parked on demand, everything else runs: today's behaviour);
 // the on-demand tests state their own reading.

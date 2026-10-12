@@ -11,7 +11,8 @@ vi.mock("@distribute/runs-client", () => ({ getStatsBudget: mockGetStatsBudget }
 vi.mock("../../src/db/index.js", () => ({ db: { query: { campaigns: { findMany: vi.fn() } } } }));
 vi.mock("../../src/db/schema.js", () => ({ campaigns: {} }));
 
-import { addDecimalStrings, getChannelStatsBudget, spendFeatureSlugs, SOURCING_ORIGINS_BY_CHANNEL } from "../../src/lib/channel-spend.js";
+import { addDecimalStrings, getChannelStatsBudget, spendFeatureSlugs } from "../../src/lib/channel-spend.js";
+import { readSourcingMap } from "../../src/lib/sourcing-origins-client.js";
 import { readSpentTodayCents } from "../../src/lib/global-sales-pot.js";
 import { readItemSpend } from "../../src/lib/sales-items-pace.js";
 
@@ -41,7 +42,7 @@ describe("a channel's spend includes the sourcing that found its leads", () => {
     expect(r.windows).toEqual([{ ...window("550.5000000000"), provisionedCostInUsdCents: "0.0000000000", netProvisionedCostInUsdCents: "0.0000000000" }]);
     // One read per slug, everything else byte-equal to the caller's params.
     const asked = mockGetStatsBudget.mock.calls.map((c) => c[0]);
-    expect(asked.map((p) => p.featureSlug)).toEqual(spendFeatureSlugs(SALES));
+    expect(asked.map((p) => p.featureSlug)).toEqual(await spendFeatureSlugs(SALES));
     for (const p of asked) expect({ ...p, featureSlug: undefined }).toEqual({ orgId: "org-1", campaignId: "c-1", featureSlug: undefined, windows: TODAY });
   });
 
@@ -97,12 +98,12 @@ describe("a channel's spend includes the sourcing that found its leads", () => {
     expect(w.netTotalCostInUsdCents).toBeUndefined();
   });
 
-  it("each channel counts only its own origins", () => {
-    expect(spendFeatureSlugs("sales-crm-email-outreach")).toEqual(["sales-crm-email-outreach", "sourcing-crm-contacts"]);
-    expect(spendFeatureSlugs("cold-whatsapp-outreach")).toEqual(["cold-whatsapp-outreach", "sourcing-crm-contacts"]);
-    expect(spendFeatureSlugs("feedback-request-cold-email-outreach")).not.toContain("sourcing-crm-contacts");
-    expect(spendFeatureSlugs("ai-meeting-booking")).toEqual(["ai-meeting-booking"]);
-    for (const origins of Object.values(SOURCING_ORIGINS_BY_CHANNEL)) for (const o of origins) expect(o.startsWith("sourcing-")).toBe(true);
+  it("each channel counts only its own origins", async () => {
+    expect(await spendFeatureSlugs("sales-crm-email-outreach")).toEqual(["sales-crm-email-outreach", "sourcing-crm-contacts"]);
+    expect(await spendFeatureSlugs("cold-whatsapp-outreach")).toEqual(["cold-whatsapp-outreach", "sourcing-crm-contacts"]);
+    expect(await spendFeatureSlugs("feedback-request-cold-email-outreach")).not.toContain("sourcing-crm-contacts");
+    expect(await spendFeatureSlugs("ai-meeting-booking")).toEqual(["ai-meeting-booking"]);
+    for (const origins of Object.values((await readSourcingMap()).originsByChannel)) for (const o of origins) expect(o.startsWith("sourcing-")).toBe(true);
   });
 });
 

@@ -33,7 +33,8 @@ export async function sourcesOffHold(campaign: {
   featureSlug: string;
   legKey: string | null;
 }): Promise<{ sourceCampaignIds: string[] } | null> {
-  if (!isSourcedChannel(campaign.featureSlug)) return null;
+  // Per features-service's map (cached); throws when it is unreadable: the tick backs the campaign off, loud.
+  if (!(await isSourcedChannel(campaign.featureSlug))) return null;
   const sources = await sourceCampaignsFeeding(campaign.id, campaign.featureSlug);
   if (sources.length === 0 || sources.some((s) => s.status === "ongoing")) return null;
 
