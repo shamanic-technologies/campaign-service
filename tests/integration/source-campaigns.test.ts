@@ -360,6 +360,19 @@ describe("Source campaigns: an offer's lead sources are campaigns (owner 2026-10
       const sources = await db.select().from(campaigns).where(and(eq(campaigns.offerId, OFFER), eq(campaigns.legKey, SOURCE_LEG)));
       expect(sources).toHaveLength(3);
     });
+    it("a legacy outreach start (no funnel) never turns ON a stopped funnel's source unit; its own offer-level source still follows", async () => {
+      const funnelApollo = await unit(F2, APOLLO, SOURCE_LEG, "stopped");
+      await db.insert(campaignStatusTransitions).values({ campaignId: funnelApollo.id, orgId: ORG, fromStatus: "ongoing", toStatus: "stopped", reason: "manual", source: "sales_funnel" });
+      const legacyCrm = await unit(null, CRM_SOURCE, SOURCE_LEG, "stopped");
+      await db.insert(campaignStatusTransitions).values({ campaignId: legacyCrm.id, orgId: ORG, fromStatus: null, toStatus: "stopped", reason: "manual", source: "source_mirror" });
+      const legacyEmail = await unit(null, COLD, OUTREACH_LEG, "ongoing");
+
+      const actual = await vi.importActual<typeof import("../../src/lib/source-campaign-store.js")>("../../src/lib/source-campaign-store.js");
+      const followed = await db.transaction((tx) => actual.ensureSourcesOnStart(tx, legacyEmail, { catalogue: async () => CATALOGUE as never }));
+
+      expect(followed.map((c) => c.id)).toEqual([legacyCrm.id]);
+      expect((await rowOf(funnelApollo.id)).status).toBe("stopped");
+    });
   });
 
   describe("migration of today's state (POST /internal/source-campaigns/mirror)", () => {
