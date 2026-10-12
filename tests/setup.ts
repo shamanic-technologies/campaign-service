@@ -25,6 +25,14 @@ vi.mock("../src/lib/source-campaign-store.js", async (importOriginal) => {
   };
 });
 
+// WHO DISPATCHES A PIPE (src/lib/on-demand-mode.ts) is read on the catalogue at every claim and person start. Tests
+// that are not about it read it as unreadable (sources parked on demand, everything else runs: today's behaviour);
+// the on-demand tests state their own reading.
+vi.mock("../src/lib/on-demand-mode.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/on-demand-mode.js")>();
+  return { ...original, readDispatchCatalogue: vi.fn().mockResolvedValue({ ok: false, detail: "not read in tests" }) };
+});
+
 process.env.NODE_ENV = "test";
 process.env.CAMPAIGN_SERVICE_DATABASE_URL = process.env.CAMPAIGN_SERVICE_DATABASE_URL || "postgresql://test:test@localhost/campaign_test";
 process.env.SERVICE_SECRET_KEY = "test-service-secret";

@@ -196,7 +196,7 @@ describe("Source campaigns: an offer's lead sources are campaigns (owner 2026-10
     expect(by[APOLLO]).toMatchObject({ campaignId: a.id, status: "ongoing", running: true, campaignKey: `campaign:${APOLLO}|${SOURCE_LEG}` });
     expect(by[SIGNALS]).toMatchObject({ campaignId: b.id, status: "stopped", running: false });
     expect(by[BUYING]).toMatchObject({ campaignId: null, status: null, running: false });
-    expect(res.body.runningSourceCampaigns).toEqual([{ featureSlug: APOLLO, campaignId: a.id, campaignKey: `campaign:${APOLLO}|${SOURCE_LEG}` }]);
+    expect(res.body.runningSourceCampaigns).toEqual([{ featureSlug: APOLLO, campaignId: a.id, campaignKey: `campaign:${APOLLO}|${SOURCE_LEG}`, runsOnItsOwn: false }]);
 
     await request(app).get(`/internal/offers/${OFFER}/source-campaigns?brandId=${BRAND}`).set("x-api-key", API_KEY).expect(400);
 
@@ -259,7 +259,8 @@ describe("Source campaigns: an offer's lead sources are campaigns (owner 2026-10
 
       await patchStatus(outreach.id, COLD, "activate").expect(200);
 
-      expect(await rowOf(mirrored.id)).toMatchObject({ status: "ongoing", stopReason: null, nextRunAt: null });
+      // Due now (the test row carries a workflow): the scheduler parks it, a pre-funnel source answers on demand.
+      expect(await rowOf(mirrored.id)).toMatchObject({ status: "ongoing", stopReason: null, nextRunAt: expect.any(Date) });
       const ledger = await db.select().from(campaignStatusTransitions).where(eq(campaignStatusTransitions.campaignId, mirrored.id));
       expect(ledger.map((t) => [t.toStatus, t.source]).sort()).toEqual([["ongoing", "source_follows_outreach"], ["stopped", "source_mirror"]]);
       // No default twin is born beside it.

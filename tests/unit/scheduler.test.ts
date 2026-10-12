@@ -133,6 +133,25 @@ vi.mock("../../src/lib/trigger-events.js", () => ({
 }));
 vi.mock("../../src/lib/trigger-silence.js", () => ({ alertSilentTriggers: vi.fn().mockResolvedValue([]) }));
 
+// The catalogue's reading of each claimed campaign's leg decides who dispatches it (lib/on-demand-mode.ts).
+const SOURCE = "sourcing-apollo-cold-filters";
+const SOURCE_LEG = "start_to_lead_found";
+function catalogueReading(mode: "on_demand" | "proactive") {
+  return {
+    ok: true as const,
+    operatorBySlug: new Map(),
+    legsBySlug: new Map([[SOURCE, new Set([SOURCE_LEG])]]),
+    legs: [],
+    stepKeys: new Set<string>(),
+    triggerTransitions: mode === "on_demand" ? [{ featureSlug: SOURCE, legKey: SOURCE_LEG, triggerId: "on_demand" }] : [],
+  };
+}
+const { mockFetchChannelCatalogue } = vi.hoisted(() => ({ mockFetchChannelCatalogue: vi.fn() }));
+vi.mock("../../src/lib/on-demand-mode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/lib/on-demand-mode.js")>()),
+  readDispatchCatalogue: mockFetchChannelCatalogue,
+}));
+
 import {
   reRunDueCampaigns,
   claimStuckCampaigns,
@@ -154,6 +173,56 @@ describe("Scheduler - reRunDueCampaigns", () => {
     mockListRuns.mockResolvedValue({ runs: [], limit: 50, offset: 0 });
     mockCreateRun.mockResolvedValue({ id: "anchor-run-1" });
     mockUpdateRun.mockResolvedValue({ id: "anchor-run-1", status: "completed" });
+    mockFetchChannelCatalogue.mockResolvedValue(catalogueReading("on_demand"));
+  });
+
+  // === LEADS-ONLY (owner 2026-10-12): the catalogue decides who dispatches a source unit ===
+
+  const sourceUnit = (over: Record<string, unknown> = {}) => ({
+    id: "source-unit-1",
+    orgId: "org-ext-1",
+    workflowSlug: "sourcing-apollo-cold-filters-scheat",
+    brandIds: ["brand-123"],
+    createdByUserId: "user-1",
+    parentRunId: "anchor-run-1",
+    featureSlug: SOURCE,
+    legKey: SOURCE_LEG,
+    salesFunnelCampaignId: "sfc-1",
+    ...over,
+  });
+
+  it("parks, never dispatches, a source unit whose leg answers on demand (today's catalogue)", async () => {
+    mockDbReturning.mockResolvedValue([sourceUnit()]);
+    await reRunDueCampaigns();
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a source unit like any campaign once the catalogue reads its leg proactive", async () => {
+    mockFetchChannelCatalogue.mockResolvedValue(catalogueReading("proactive"));
+    mockDbReturning.mockResolvedValue([sourceUnit()]);
+    await reRunDueCampaigns();
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
+      "sourcing-apollo-cold-filters-scheat",
+      expect.objectContaining({ campaignId: "source-unit-1", featureSlug: SOURCE }),
+    );
+  });
+
+  it("never dispatches a source campaign that is not a sales funnel unit (no money of its own)", async () => {
+    mockFetchChannelCatalogue.mockResolvedValue(catalogueReading("proactive"));
+    mockDbReturning.mockResolvedValue([sourceUnit({ salesFunnelCampaignId: null })]);
+    await reRunDueCampaigns();
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable catalogue parks the source units and runs everything else", async () => {
+    mockFetchChannelCatalogue.mockResolvedValue({ ok: false, detail: "HTTP 503" });
+    mockDbReturning.mockResolvedValue([
+      sourceUnit(),
+      { id: "campaign-1", orgId: "org-ext-1", workflowSlug: "wf-a", brandIds: ["brand-123"], createdByUserId: "user-1", parentRunId: "anchor-run-1", featureSlug: "sales-cold-email-v1" },
+    ]);
+    await reRunDueCampaigns();
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith("wf-a", expect.objectContaining({ campaignId: "campaign-1" }));
   });
 
   it("should return 0 when no campaigns are due", async () => {

@@ -65,8 +65,8 @@ describe("the Lead Sourcing switch", () => {
     expect(ls).toMatchObject({
       featureSlug: "lead-sourcing", legKey: SRC_LEG, status: "ongoing", workflowSlug: "lead-sourcing-vega",
       salesFunnelId: BLISS, salesFunnelCampaignId: parent.id, offerId: OFFER, brandId: BRAND,
-      // It answers the INLINE lead_requested trigger: never due here.
-      nextRunAt: null,
+      // Due at birth like every unit: the scheduler parks it while its leg answers on demand (lib/on-demand-mode.ts).
+      nextRunAt: expect.any(Date),
     });
     const after = await db.select().from(campaigns).where(eq(campaigns.salesFunnelCampaignId, parent.id));
     for (const s of units.filter((u) => u.legKey === SRC_LEG)) {
@@ -127,11 +127,11 @@ describe("the Lead Sourcing switch", () => {
     expect(units.every((u) => u.salesFunnelId === to)).toBe(true);
   });
 
-  it("every ON source unit with no workflow takes its pipe's, never due", async () => {
+  it("every ON source unit with no workflow takes its pipe's, due now (the scheduler decides who dispatches it)", async () => {
     await born([CF]);
     const res = await run(true, { catalogue: { fetchSalesFunnel: async () => ({ ok: true as const, value: { id: BLISS, name: "Bliss", pipeIds: [], legs: [] } }) } });
     expect(res.workflowBackfill).toEqual([expect.objectContaining({ featureSlug: CF, workflowSlug: "sourcing-apollo-cold-filters-rigel" })]);
     const [cf] = await db.select().from(campaigns).where(and(eq(campaigns.featureSlug, CF), eq(campaigns.status, "ongoing")));
-    expect(cf).toMatchObject({ workflowSlug: "sourcing-apollo-cold-filters-rigel", nextRunAt: null });
+    expect(cf).toMatchObject({ workflowSlug: "sourcing-apollo-cold-filters-rigel", nextRunAt: expect.any(Date) });
   });
 });

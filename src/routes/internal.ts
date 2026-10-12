@@ -65,7 +65,8 @@ import {
   MirrorCatalogueUnavailableError,
   sourceCampaignsFeeding,
 } from "../lib/source-campaign-store.js";
-import { LEAD_FOUND_STEP, SOURCE_LEG_KEY, SOURCE_CAMPAIGNS_FEEDING_CHANNEL, sourceCampaignKey } from "../lib/source-campaigns.js";
+import { LEAD_FOUND_STEP, SOURCE_LEG_KEY, SOURCE_CAMPAIGNS_FEEDING_CHANNEL, isSourcedChannel, sourceCampaignKey } from "../lib/source-campaigns.js";
+import { readDispatchCatalogue, sourceRunsOnItsOwn } from "../lib/on-demand-mode.js";
 import { SourceCampaignsMirrorBody, SourceCampaignsQuery } from "../schemas.js";
 
 const router = Router();
@@ -509,11 +510,39 @@ async function hasServeableAudience(
  * the error path (onError → end-run-error) including cases where
  * no run was created (gate-check blocked).
  */
+/** True when an ONGOING lead source feeding this campaign finds leads on its own (lib/on-demand-mode.ts). */
+async function fedBySelfRunningSource(campaignId: string, orgId: string): Promise<boolean> {
+  const campaign = await db.query.campaigns.findFirst({
+    where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
+    columns: { featureSlug: true },
+  });
+  if (!campaign?.featureSlug || !isSourcedChannel(campaign.featureSlug)) return false;
+  const feeding = (await sourceCampaignsFeeding(campaignId, campaign.featureSlug)).filter((f) => f.status === "ongoing" && f.salesFunnelCampaignId);
+  if (feeding.length === 0) return false;
+  const catalogue = await readDispatchCatalogue();
+  return feeding.some((f) => sourceRunsOnItsOwn({ featureSlug: f.featureSlug, legKey: SOURCE_LEG_KEY, salesFunnelCampaignId: f.salesFunnelCampaignId }, catalogue));
+}
+
 router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, validateBody(EndRunBody), async (req: AuthenticatedRequest, res) => {
   try {
     const campaignId = req.campaignId!;
     const orgId = req.orgId!;
-    const { success, stopCampaign, noWorkAvailable } = req.body;
+    const { success } = req.body;
+    let { stopCampaign, noWorkAvailable } = req.body;
+
+    // "No lead" from a campaign whose lead sources find leads ON THEIR OWN (lib/on-demand-mode.ts, owner 2026-10-12)
+    // means their stock is empty for now: nobody was asked to find anyone, so no audience ran dry. Exhaustion is then
+    // the SOURCE's fact (its own run reports it); here it is a run with nothing to do (idle cadence, nothing marked).
+    if (stopCampaign === true && success === true) {
+      try {
+        if (await fedBySelfRunningSource(campaignId, orgId)) {
+          stopCampaign = false;
+          noWorkAvailable = true;
+        }
+      } catch (err) {
+        console.error(`[campaign-service] /end-run could not read whether campaign ${campaignId}'s sources run on their own (read as on demand):`, err);
+      }
+    }
 
     const status = success === true ? "completed" : "failed";
     const identity: IdentityHeaders = {
@@ -1337,7 +1366,7 @@ router.get("/internal/offers/:offerId/source-campaigns", requireApiKey, validate
       return res.status(400).json({ error: "x-org-id header is required: an offer belongs to one (org, brand) pair" });
     }
     const { brandId } = req.query as { brandId: string };
-    const sources = await listOfferSourceCampaigns({ orgId, brandId, offerId: req.params.offerId });
+    const sources = await listOfferSourceCampaigns({ orgId, brandId, offerId: req.params.offerId }, await readDispatchCatalogue());
     res.json({
       orgId,
       brandId,
@@ -1347,7 +1376,7 @@ router.get("/internal/offers/:offerId/source-campaigns", requireApiKey, validate
       sourceCampaigns: sources,
       runningSourceCampaigns: sources
         .filter((s) => s.running)
-        .map((s) => ({ featureSlug: s.featureSlug, campaignId: s.campaignId!, campaignKey: s.campaignKey })),
+        .map((s) => ({ featureSlug: s.featureSlug, campaignId: s.campaignId!, campaignKey: s.campaignKey, runsOnItsOwn: s.runsOnItsOwn })),
     });
   } catch (error) {
     console.error("[campaign-service] offer source campaigns error:", error);
@@ -1370,6 +1399,9 @@ router.get("/internal/campaigns/:campaignId/source-campaigns", requireApiKey, as
     // Its origins and, on cold email, Lead Sourcing (lib/source-campaigns.ts SOURCE_CAMPAIGNS_FEEDING_CHANNEL).
     const origins = campaign.featureSlug ? SOURCE_CAMPAIGNS_FEEDING_CHANNEL[campaign.featureSlug] ?? [] : [];
     const feeding = campaign.featureSlug ? await sourceCampaignsFeeding(campaign.id, campaign.featureSlug) : [];
+    // Whether each source finds leads on its own (lib/on-demand-mode.ts): lead-service then serves this campaign the
+    // leads those sources already found instead of asking them on demand. Unreadable catalogue = false (on demand).
+    const catalogue = feeding.length > 0 ? await readDispatchCatalogue() : ({ ok: false, detail: "no source" } as const);
     res.json({
       campaignId: campaign.id,
       orgId: campaign.orgId,
@@ -1383,6 +1415,7 @@ router.get("/internal/campaigns/:campaignId/source-campaigns", requireApiKey, as
         campaignKey: sourceCampaignKey(f.featureSlug),
         status: f.status,
         running: f.status === "ongoing",
+        runsOnItsOwn: sourceRunsOnItsOwn({ featureSlug: f.featureSlug, legKey: SOURCE_LEG_KEY, salesFunnelCampaignId: f.salesFunnelCampaignId }, catalogue),
       })),
     });
   } catch (error) {

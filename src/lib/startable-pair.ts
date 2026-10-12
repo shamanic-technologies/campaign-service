@@ -350,9 +350,9 @@ export async function resolveSalesFunnelPlan(
     const { channelSlug, legKey, mode, name } = pipe.value;
     // A SOURCING pipe (Start → Lead found, an origin or Lead Sourcing): its unit is a source campaign of
     // the funnel (lib/source-campaigns.ts). It takes its pipe's workflow like EVERY pipe (owner 2026-10-11:
-    // "the infra is homogeneous", sourcing ran with none); it answers the `on_demand` trigger, so
-    // it is never dispatched by this service (`answersInlineTrigger`): lead-service serves inside the outreach
-    // run and files the lead under the running source. While it is ON its origin(s) are ON for the offer.
+    // "the infra is homogeneous", sourcing ran with none); who dispatches it is the catalogue's reading of its leg
+    // (lib/on-demand-mode.ts): on demand = lead-service serves inside the outreach run and files the lead under the
+    // running source; proactive = it finds leads on its own inside the funnel campaign's caps. While it is ON its origin(s) are ON for the offer.
     if (isSourceOriginSlug(channelSlug) && (!isLiveSourceOrigin(channelSlug) || storedLegKey(channelSlug, legKey) !== SOURCE_LEG_KEY)) {
       return refuseLaunch(400, "pipe_not_runnable", `We can't run the lead source "${name ?? pipeId}" of this sales funnel.`);
     }

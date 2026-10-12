@@ -1,8 +1,9 @@
 import { and, arrayContains, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaignAudienceAvailability, campaigns } from "../db/schema.js";
-import { answersInlineTrigger, isSourceCampaign } from "./source-campaigns.js";
-import { fetchChannelCatalogue } from "./channel-operator-client.js";
+import { isSourceCampaign } from "./source-campaigns.js";
+import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
+import { answersOnDemand } from "./on-demand-mode.js";
 import { legIsReactive, type CatalogueLegView } from "./leg-identity.js";
 
 /**
@@ -118,6 +119,7 @@ export async function recurringCampaignStatuses(scope: {
   // entry legs, and an unreadable one is loud — answering "reactive" or "unknown" for every
   // campaign during an outage would read as a revenue drop.
   let catalogueLegs: CatalogueLegView | null = null;
+  let catalogueRead: ChannelCatalogueRead = { ok: false, detail: "not read: no campaign states a leg" };
   if (rows.some((c) => c.legKey)) {
     const catalogue = await fetchChannelCatalogue();
     if (!catalogue.ok) {
@@ -126,6 +128,7 @@ export async function recurringCampaignStatuses(scope: {
       );
     }
     catalogueLegs = catalogue;
+    catalogueRead = catalogue;
   }
 
   return rows.map((c): RecurringCampaignStatus => {
@@ -135,8 +138,8 @@ export async function recurringCampaignStatuses(scope: {
       kindUnknownReason = "campaign_states_no_leg";
     } else if (isSourceCampaign(c)) {
       // A SOURCE campaign (lib/source-campaigns.ts) starts from nothing: proactive by features-service's
-      // statement. Its leg is not a catalogue leg, so it is not asked. It runs no workflow, so it is
-      // never `recurring` itself.
+      // statement. Its leg is not asked here. Once it runs on its own (lib/on-demand-mode.ts) it is executed by the
+      // platform like any proactive campaign; while it answers on demand it is not.
       kind = "proactive";
     } else {
       // features-service's per-(channel, leg) statement, either outbound spelling (lib/leg-identity.ts).
@@ -149,9 +152,9 @@ export async function recurringCampaignStatuses(scope: {
     const audience: CurrentAudience = !period ? "not_recorded" : period.hasAudience ? "available" : "exhausted";
 
     const running = c.status === "ongoing";
-    // A source unit carries its pipe's workflow but answers the on_demand trigger: this platform never
-    // dispatches it (lib/source-campaigns.ts), so it is not executed here and never recurring itself, as before.
-    const executedByPlatform = c.workflowSlug !== null && !answersInlineTrigger(c.featureSlug);
+    // A unit answering the on_demand trigger carries its pipe's workflow but this platform never dispatches it
+    // (lib/on-demand-mode.ts: the catalogue decides), so it is not executed here; one running on its own is.
+    const executedByPlatform = c.workflowSlug !== null && !answersOnDemand(c, catalogueRead);
     let recurring: boolean | null;
     let recurringUnknownReason: RecurringUnknownReason | undefined;
     if (!running || !executedByPlatform || kind === "reactive" || audience === "exhausted") {
