@@ -122,7 +122,9 @@ export interface CatalogueTriggerType {
   params?: Record<string, unknown> | null;
 }
 
-export const CATALOGUE_TRIGGER_KINDS = ["event", "delay", "poll"] as const;
+// `github_issue_in_prod` (2026-10-12): "a GitHub issue reached prod", detected HERE (lib/github-issue-trigger.ts);
+// the issue is the waiting campaign's own fact, the type carries no params.
+export const CATALOGUE_TRIGGER_KINDS = ["event", "delay", "poll", "github_issue_in_prod"] as const;
 export type CatalogueTriggerKind = (typeof CATALOGUE_TRIGGER_KINDS)[number];
 
 /** A reactive (channel, leg) and the trigger that asks for it. */

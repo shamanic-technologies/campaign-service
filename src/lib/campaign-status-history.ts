@@ -400,6 +400,8 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
   peopleKey?: string;
   /** Free text every run of its units carries to the workflow. */
   instruction?: string | null;
+  /** The GitHub issue it waits on (`owner/repo#n`, lib/github-issue-trigger.ts); null/absent = none. */
+  githubIssue?: string | null;
   units: SalesFunnelUnitBirth[];
   onUnitStarted?: OnUnitStarted;
 }): Promise<{ salesFunnelCampaign: SalesFunnelCampaign; units: CampaignRow[] }> {
@@ -421,6 +423,7 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
         people: input.people ?? null,
         peopleKey: input.peopleKey ?? "",
         instruction: input.instruction ?? null,
+        githubIssue: input.githubIssue ?? null,
         createdAt: now,
         updatedAt: now,
       })

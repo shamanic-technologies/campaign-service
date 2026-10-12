@@ -1,6 +1,7 @@
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
 import { detectableTriggers, liveScopesBehind, planDelayScope, readDelayParams } from "./delay-trigger-detector.js";
 import { pollDueTriggers, type PollTickSummary } from "./poll-trigger-detector.js";
+import { detectGithubIssueTriggers, type GithubIssueTickSummary } from "./github-issue-trigger-detector.js";
 
 /**
  * THE GENERIC TRIGGER DETECTORS' LOOP (owner 2026-10-09): `delay` and `poll` trigger types are
@@ -25,6 +26,7 @@ let running = false;
 export interface DetectorTickSummary {
   delay: { triggers: number; scopes: number; planned: number };
   poll: PollTickSummary;
+  githubIssue: GithubIssueTickSummary;
 }
 
 /** One detector pass. Null = skipped (a tick is already running, or the catalogue is unreadable). */
@@ -53,14 +55,18 @@ export async function runTriggerDetectorsTick(
 
     const poll = await pollDueTriggers(catalogue, now);
 
-    const idle = delay.triggers === 0 && poll.triggers === 0;
+    // `github_issue_in_prod` (lib/github-issue-trigger-detector.ts): fires what is in prod now.
+    const githubIssue = await detectGithubIssueTriggers(catalogue, now);
+
+    const idle = delay.triggers === 0 && poll.triggers === 0 && githubIssue.triggers === 0;
     console.log(
       idle
-        ? "[campaign-service] trigger detectors tick: idle (no delay or poll trigger behind a live campaign)"
+        ? "[campaign-service] trigger detectors tick: idle (no delay, poll or github issue trigger behind a live campaign)"
         : `[campaign-service] trigger detectors tick: delay triggers=${delay.triggers} scopes=${delay.scopes} planned=${delay.planned}; ` +
-          `poll triggers=${poll.triggers} scopes=${poll.scopes} polled=${poll.polled} baseline=${poll.baseline} fired=${poll.fired} held=${poll.held} failed=${poll.failed}`,
+          `poll triggers=${poll.triggers} scopes=${poll.scopes} polled=${poll.polled} baseline=${poll.baseline} fired=${poll.fired} held=${poll.held} failed=${poll.failed}; ` +
+          `github issue triggers=${githubIssue.triggers} waiting=${githubIssue.waiting} checked=${githubIssue.checked} fired=${githubIssue.fired} failed=${githubIssue.failed}`,
     );
-    return { delay, poll };
+    return { delay, poll, githubIssue };
   } finally {
     running = false;
   }

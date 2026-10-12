@@ -1,4 +1,5 @@
 import type { Campaign, SalesFunnelCampaign } from "../db/schema.js";
+import { serializeGithubIssue, type GithubIssueCheck } from "./github-issue-trigger.js";
 import { z } from "zod";
 import { legIdentity, sameLeg } from "./leg-identity.js";
 import { storedPeople } from "./sales-funnel-people.js";
@@ -515,6 +516,8 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
     createdByUserId: row.createdByUserId,
     people: storedPeople(row.people),
     instruction: row.instruction ?? null,
+    githubIssue: serializeGithubIssue(row.githubIssue),
+    githubIssueCheck: (row.githubIssueCheck ?? null) as GithubIssueCheck | null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     units: units.map((u) => ({

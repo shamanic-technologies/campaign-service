@@ -65,6 +65,8 @@ export function storedPeople(value: unknown): NamedPerson[] | null {
 export interface SalesFunnelCampaignTargeting {
   people: NamedPerson[] | null;
   instruction: string | null;
+  /** The GitHub issue it waits on (`owner/repo#n`, lib/github-issue-trigger.ts), or null. */
+  githubIssue: string | null;
 }
 
 /** The people a UNIT acts for (its funnel campaign's), or null when it names nobody. */

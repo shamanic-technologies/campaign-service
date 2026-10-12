@@ -48,7 +48,9 @@ import { sameLeg } from "./leg-identity.js";
 
 export const DELAY_DETECTOR_RECORDED_VIA = "delay_detector";
 export const POLL_DETECTOR_RECORDED_VIA = "poll_detector";
-export const DETECTOR_RECORDED_VIA = [DELAY_DETECTOR_RECORDED_VIA, POLL_DETECTOR_RECORDED_VIA] as const;
+/** lib/github-issue-trigger.ts `GITHUB_ISSUE_DETECTOR_RECORDED_VIA` (kept literal here: that module imports this one's helpers). */
+export const GITHUB_ISSUE_RECORDED_VIA = "github_issue_detector";
+export const DETECTOR_RECORDED_VIA = [DELAY_DETECTOR_RECORDED_VIA, POLL_DETECTOR_RECORDED_VIA, GITHUB_ISSUE_RECORDED_VIA] as const;
 
 /** An anchor whose due time passed longer ago than this is never planned. */
 export const DELAY_PLAN_LATE_MS = 2 * 24 * 60 * 60_000;
@@ -104,7 +106,7 @@ export type ParamsRead<P> = { ok: true; params: P } | { ok: false; error: string
 /** Every trigger of `kind` a reactive leg names, with its parsed parameters. Pure but for the error report. */
 export function detectableTriggers<P>(
   catalogue: Extract<ChannelCatalogueRead, { ok: true }>,
-  kind: "delay" | "poll",
+  kind: "delay" | "poll" | "github_issue_in_prod",
   parse: (params: Record<string, unknown> | null | undefined) => ParamsRead<P>,
 ): DetectableTrigger<P>[] {
   const out: DetectableTrigger<P>[] = [];
