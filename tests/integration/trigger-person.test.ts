@@ -180,6 +180,22 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     expect(mockExecute.mock.calls[0][1].trigger).toMatchObject({ leadId: "lead-jane", item: ITEM, person: { email: "jane.doe@example.com" } });
   });
 
+  it("a campaign in failure backoff: nobody is made due and the event retries instead of recording a skip", async () => {
+    const campaign = await meetingBooking("ongoing");
+    const { db: d } = await import("../../src/db/index.js");
+    const { campaigns } = await import("../../src/db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    await d.update(campaigns).set({
+      consecutiveRunFailures: 4,
+      lastRunFailureAt: new Date(),
+      nextRunAt: new Date(Date.now() + 5 * 60_000),
+    }).where(eq(campaigns.id, campaign.id));
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(res.body.event.status).toBe("pending");
+    expect(mockFile).not.toHaveBeenCalled();
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
   it("still unknown after the wait: recorded skipped `person_not_known`", async () => {
     await meetingBooking("ongoing");
     mockFile.mockResolvedValue({ ok: false, code: "person_not_known", detail: "lead-service 404" });
