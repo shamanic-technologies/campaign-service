@@ -17,7 +17,8 @@
  * pipe's, and a single-source funnel campaign stored under a LEGACY id (it starts out of Lead found: the sourcing
  * leg was a pool outside the id, so features-service answers it with the Lead Sourcing funnel's id) moves to the funnel
  * of the same pipes with its one source on the sourcing leg (an id features-service mints), so its path reads the
- * source it runs, unless billing holds a cap under that id (then reported, never moved).
+ * source it runs, unless billing holds a cap under that id (then reported, never moved). The funnel name (row + units'
+ * prefix) moves WITH the id, to the name features-service serves for it (lib/sales-funnel-name.ts).
  *
  * Dry run unless `apply`; idempotent (a funnel campaign with a Lead Sourcing unit is skipped). Exposed as
  * `POST /internal/sales-funnel-campaigns/lead-sourcing-switch`. The status writes live in
@@ -30,6 +31,7 @@ import { insertSalesFunnelUnits, stopSourceUnitsReplacedByLeadSourcing, TRANSITI
 import { acquisitionChannelForFeature, derivedCampaignName } from "./campaign-identity.js";
 import { fetchSalesFunnelCaps } from "./sales-funnel-campaigns.js";
 import { declareSalesFunnel, fetchSalesFunnel } from "./sales-funnel-catalogue-client.js";
+import { renameSalesFunnelCampaignInTx } from "./sales-funnel-name.js";
 import { LEAD_SOURCING_SLUG, SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
 
 type CampaignRow = typeof campaigns.$inferSelect;
@@ -55,6 +57,8 @@ export interface RespellPlanItem {
   brandId: string;
   from: string;
   to: string;
+  /** The name features-service serves for `to`: the funnel campaign and its units' prefix take it with the id. */
+  toName?: string;
   skipped?: string;
 }
 
@@ -160,10 +164,26 @@ export async function runLeadSourcingSwitch(opts: {
       }
       const to = declared.value.id;
       const item: RespellPlanItem = { salesFunnelCampaignId: parent.id, orgId: parent.orgId, brandId: parent.brandId, from: parent.salesFunnelId, to };
+      // The name follows the id (lib/sales-funnel-name.ts): never move an id whose name we cannot read.
+      const named = await (opts.catalogue?.fetchSalesFunnel ?? fetchSalesFunnel)(to);
+      if (!named.ok || named.value.id !== to) {
+        item.skipped = `funnel_name_unreadable: ${named.ok ? `features-service answers ${to} with ${named.value.id}` : named.detail}`;
+        console.error(`[campaign-service] Lead Sourcing switch: ${parent.id} not moved to ${to}, ${item.skipped}`);
+        result.respelled.push(item);
+        continue;
+      }
+      item.toName = named.value.name;
       const caps = await (opts.capsOf ?? fetchSalesFunnelCaps)({ orgId: parent.orgId, brandId: parent.brandId, offerId: parent.offerId, salesFunnelId: parent.salesFunnelId });
       if (!caps.ok) item.skipped = `caps_unreadable: ${caps.detail}`;
       else if (caps.caps.stated) item.skipped = "billing_cap_on_this_id";
-      else if (opts.apply) await respellFunnelId(parent.id, to);
+      else if (opts.apply) {
+        try {
+          await db.transaction((tx) => renameSalesFunnelCampaignInTx(tx, parent.id, named.value.name, to));
+        } catch (err) {
+          item.skipped = err instanceof Error ? err.message : String(err);
+          console.error(`[campaign-service] Lead Sourcing switch: ${parent.id} not moved to ${to}, rolled back: ${item.skipped}`);
+        }
+      }
       result.respelled.push(item);
     }
   }
@@ -215,13 +235,5 @@ async function applySwitch(parent: FunnelRow, sources: CampaignRow[], workflowSl
       `[campaign-service] Lead Sourcing switch: sales funnel campaign ${locked.id} (${locked.salesFunnelName}) now sources through unit ${unit.id} (${workflowSlug}); stopped ${stopped.join(", ")}`,
     );
     return unit.id;
-  });
-}
-
-/** The funnel campaign and every unit of it now carry `to` (one transaction; nothing else moves). */
-async function respellFunnelId(salesFunnelCampaignId: string, to: string): Promise<void> {
-  await db.transaction(async (tx) => {
-    await tx.update(salesFunnelCampaigns).set({ salesFunnelId: to, updatedAt: new Date() }).where(eq(salesFunnelCampaigns.id, salesFunnelCampaignId));
-    await tx.update(campaigns).set({ salesFunnelId: to, updatedAt: new Date() }).where(eq(campaigns.salesFunnelCampaignId, salesFunnelCampaignId));
   });
 }
