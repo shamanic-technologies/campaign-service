@@ -150,6 +150,12 @@ export const STEP_TRIGGER_SKIPS = {
    * lead-service (their CRM fact has not landed): nobody could be filed. The event is retried shortly.
    */
   PERSON_NOT_KNOWN: "person_not_known",
+  /**
+   * The event names a person the brand stated, and lead-service refused them for a protection a serve
+   * applies (unsubscribed, hard-bounced, opt_out / do_not_contact on the human; reason in the detail).
+   * Final: never retried, nobody contacted.
+   */
+  PERSON_SUPPRESSED: "person_suppressed",
 } as const;
 
 export type StepTriggerSkipReason = (typeof STEP_TRIGGER_SKIPS)[keyof typeof STEP_TRIGGER_SKIPS];
@@ -491,7 +497,9 @@ export async function runCampaignsInScope(
     // (a held event is retried as a whole: lib/trigger-events.ts).
     let campaignTrigger = trigger;
     if (person) {
-      const owed = await oweEventPerson(campaign, person, now);
+      // The occurrence is the org naming this person for its own brand: lead-service's evidence.
+      const statedBy = trigger ? { triggerEventId: trigger.eventId, triggerId: trigger.triggerId } : null;
+      const owed = await oweEventPerson(campaign, person, now, statedBy);
       if (!owed.ok) {
         skip(owed.code, owed.detail);
         continue;

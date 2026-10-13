@@ -143,6 +143,30 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     expect(await allEvents()).toHaveLength(1);
   });
 
+  it("the occurrence is the org naming the person: the filing carries it as statedBy (event + trigger) and the name", async () => {
+    const campaign = await meetingBooking("ongoing");
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(res.body.event.outcome).toBe("ran");
+    expect(mockFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        campaignId: campaign.id,
+        email: "jane.doe@example.com",
+        statedBy: { triggerEventId: res.body.event.id, triggerId: FORM },
+        name: "Jane Doe",
+      }),
+    );
+  });
+
+  it("a stated person lead-service suppresses (unsubscribed...): skipped `person_suppressed` at once, never retried, nothing run", async () => {
+    await meetingBooking("ongoing");
+    mockFile.mockResolvedValueOnce({ ok: false, code: "person_suppressed", detail: "lead-service 409 unsubscribed" });
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(res.status).toBe(201);
+    expect(res.body.event).toMatchObject({ status: "done", outcome: "skipped", skipReason: "person_suppressed" });
+    expect(mockDue).not.toHaveBeenCalled();
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
   it("a stopped campaign: recorded skipped `campaign_off`, nobody filed, nothing run", async () => {
     await meetingBooking("stopped");
     const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
