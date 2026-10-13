@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { settleTriggerDelivery } from "../lib/trigger-deliveries.js";
 import { targetingOfSalesFunnelCampaigns } from "../lib/sales-funnel-people-store.js";
 import { eq, and, sql, or, ne, isNotNull, gt, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -595,6 +596,16 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
 
     // Respond immediately, then handle re-trigger asynchronously
     res.json({ status });
+
+    // A run dispatched for a trigger occurrence carrying a person / an item (lib/trigger-deliveries.ts): it
+    // consumed the occurrence only if it did its work; otherwise the occurrence is redelivered (bounded).
+    // Fire-and-forget: never delays or fails run finalization.
+    if (req.runId) {
+      const endedRunId = req.runId;
+      void settleTriggerDelivery(endedRunId, { success, stopCampaign, noWorkAvailable }).catch((err) => {
+        console.error(`[campaign-service] could not settle the trigger delivery of run ${endedRunId} (campaign ${campaignId}):`, err);
+      });
+    }
 
     // The DAG sends stopCampaign=true when THIS run's single served audience returned no leads
     // (fetch-lead.found == false). That is AUDIENCE-scoped: the bandit narrows each run to one

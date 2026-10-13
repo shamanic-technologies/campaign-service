@@ -175,7 +175,8 @@ export interface StepTriggerOutcome {
   step: string;
   /** The legs OUT of that step, as features-service names them. */
   legKeys: string[];
-  triggered: Array<{ campaignId: string; legKey: string | null; workflowSlug: string }>;
+  /** `runId` = the run workflow-service opened (what its `/end-run` names); absent when it did not say. */
+  triggered: Array<{ campaignId: string; legKey: string | null; workflowSlug: string; runId?: string }>;
   skipped: Array<{
     campaignId: string;
     legKey: string | null;
@@ -558,8 +559,9 @@ export async function runCampaignsInScope(
         audienceId: selection.audienceId ?? campaign.audienceId,
         ...(campaignTrigger ? { trigger: campaignTrigger } : {}),
       };
+      let execution;
       try {
-        await executeCampaignWorkflow(workflowSlug, inputs);
+        execution = await executeCampaignWorkflow(workflowSlug, inputs);
       } catch (err) {
         // A deprecated workflow (410) is replaced once and never asked for again — see retired-workflow.ts.
         const successor = await replaceRetiredWorkflow(err, {
@@ -570,7 +572,7 @@ export async function runCampaignsInScope(
         });
         if (!successor) throw err;
         workflowSlug = successor;
-        await executeCampaignWorkflow(workflowSlug, inputs);
+        execution = await executeCampaignWorkflow(workflowSlug, inputs);
       }
       firedCohorts.add(cohort);
       if (pipe) firedPipes.set(pipe, campaign.id);
@@ -578,6 +580,7 @@ export async function runCampaignsInScope(
         campaignId: campaign.id,
         legKey: campaign.legKey,
         workflowSlug,
+        ...(execution?.runId ? { runId: execution.runId } : {}),
       });
       console.log(
         `[campaign-service] Campaign ${campaign.id} triggered on the step a lead reached (org ${req.orgId}, brand ${brandIds[0]}, ${label})`,
