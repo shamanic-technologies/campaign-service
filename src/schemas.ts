@@ -244,24 +244,17 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // `github_issue_in_prod` trigger run once this issue is in prod (closed as completed by a merge to the
   // default branch AND served by every deploy target of the repo on the box). Part of its identity.
   githubIssue: GithubIssueRefSchema.optional(),
-  // OPTIONAL (LEAK-1012): the brand audiences this campaign WORKS. Every unit carries them as its targeted
-  // audiences (the hard subset its source finds people in and its outreach serves), units born later too.
-  // Omitted = names none (its units inherit the brand's audiences). Not part of its identity: stating them
-  // again on a campaign handed back restates them on it and its units.
-  audienceIds: z.array(z.string().trim().min(1, "audienceIds[] must not be empty")).min(1, "audienceIds must name at least one audience (omit it to name none)").max(100).optional(),
 }).strict().openapi("CreateSalesFunnelCampaignBody");
 
 /**
- * Run or pause the WHOLE funnel (every unit moves with it, in one transaction), reword its instruction
- * (null clears it), and/or restate the audiences it works (null = names none; every unit restated in the
- * same transaction). At least one of the three.
+ * Run or pause the WHOLE funnel (every unit moves with it, in one transaction), and/or reword its
+ * instruction (null clears it). At least one of the two.
  */
 export const UpdateSalesFunnelCampaignBody = z.object({
   status: z.enum(["activate", "stop"], { error: 'status must be "activate" or "stop"' }).optional(),
   instruction: z.string().trim().min(1, "instruction must not be empty (null clears it)").max(MAX_INSTRUCTION_LENGTH).nullable().optional(),
-  audienceIds: z.array(z.string().trim().min(1, "audienceIds[] must not be empty")).min(1, "audienceIds must name at least one audience (omit it to name none)").max(100).nullable().optional(),
-}).strict().refine((b) => b.status !== undefined || b.instruction !== undefined || b.audienceIds !== undefined, {
-  message: "state status, instruction and/or audienceIds",
+}).strict().refine((b) => b.status !== undefined || b.instruction !== undefined, {
+  message: "state status and/or instruction",
 }).openapi("UpdateSalesFunnelCampaignBody");
 
 export const SalesFunnelCampaignsQuery = z.object({
@@ -286,8 +279,6 @@ export const SalesFunnelUnitSchema = z.object({
   // operates or another service performs (it never runs a DAG).
   workflowSlug: z.string().nullable(),
   name: z.string(),
-  // The audiences this unit works: always its funnel campaign's `audienceIds` (null = the brand's).
-  audienceIds: z.array(z.string()).nullable(),
 }).openapi("SalesFunnelUnit");
 
 export const SalesFunnelCampaignSchema = z.object({
@@ -308,8 +299,6 @@ export const SalesFunnelCampaignSchema = z.object({
   instruction: z.string().nullable(),
   // The GitHub issue it waits on (lowercased), or null.
   githubIssue: GithubIssueRefSchema.nullable(),
-  // The audiences it works (every unit carries them); null = names none, its units inherit the brand's.
-  audienceIds: z.array(z.string()).nullable(),
   // The detector's latest verdict on that issue (null = not checked yet / waits on none). `state`:
   // open | closed_not_completed | closed_without_merge | merged_not_deployed | in_prod | not_served_by_box |
   // github_unreadable | served_unreadable. Once `in_prod` the event fires and the check is no longer updated.

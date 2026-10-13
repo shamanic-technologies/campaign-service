@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   campaigns,
@@ -414,8 +414,6 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
   instruction?: string | null;
   /** The GitHub issue it waits on (`owner/repo#n`, lib/github-issue-trigger.ts); null/absent = none. */
   githubIssue?: string | null;
-  /** The audiences it works (LEAK-1012), copied onto every unit; null/absent = names none. */
-  audienceIds?: string[] | null;
   units: SalesFunnelUnitBirth[];
   onUnitStarted?: OnUnitStarted;
 }): Promise<{ salesFunnelCampaign: SalesFunnelCampaign; units: CampaignRow[] }> {
@@ -438,7 +436,6 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
         peopleKey: input.peopleKey ?? "",
         instruction: input.instruction ?? null,
         githubIssue: input.githubIssue ?? null,
-        audienceIds: input.audienceIds ?? null,
         createdAt: now,
         updatedAt: now,
       })
@@ -483,8 +480,6 @@ export async function insertSalesFunnelUnits(
       salesFunnelId: parent.salesFunnelId,
       salesFunnelCampaignId: parent.id,
       featureInputs: null,
-      // The funnel campaign's audiences are every unit's (LEAK-1012): a unit born later works the same ones.
-      audienceIds: parent.audienceIds ?? null,
       status: parent.status,
       stopReason: parent.status === "stopped" ? (parent.stopReason ?? STOP_REASONS.MANUAL) : null,
       // A unit with no DAG is never due; a stopped one is not claimed whatever this says. A unit answering on demand
@@ -498,37 +493,6 @@ export async function insertSalesFunnelUnits(
     units.map((u) => campaignBirthTransition(u.id, parent.orgId, u.status, source)),
   );
   return units;
-}
-
-/**
- * Restate the audiences a SALES FUNNEL campaign works (LEAK-1012): the funnel row and EVERY unit, in ONE
- * transaction, so no unit ever works audiences its funnel campaign does not state. null = names none (units
- * inherit the brand's). Status untouched. Returns null when the funnel campaign is not the org's.
- */
-export async function setSalesFunnelCampaignAudiences(write: {
-  salesFunnelCampaignId: string;
-  orgId: string;
-  audienceIds: string[] | null;
-}): Promise<{ salesFunnelCampaign: SalesFunnelCampaign; units: CampaignRow[] } | null> {
-  return db.transaction(async (tx) => {
-    const now = new Date();
-    const [parent] = await tx
-      .update(salesFunnelCampaigns)
-      .set({ audienceIds: write.audienceIds, updatedAt: now })
-      .where(and(eq(salesFunnelCampaigns.id, write.salesFunnelCampaignId), eq(salesFunnelCampaigns.orgId, write.orgId)))
-      .returning();
-    if (!parent) return null;
-    await tx
-      .update(campaigns)
-      .set({ audienceIds: write.audienceIds, updatedAt: now })
-      .where(and(eq(campaigns.salesFunnelCampaignId, parent.id), eq(campaigns.orgId, write.orgId)));
-    const units = await tx
-      .select()
-      .from(campaigns)
-      .where(and(eq(campaigns.salesFunnelCampaignId, parent.id), eq(campaigns.orgId, write.orgId)))
-      .orderBy(asc(campaigns.createdAt), asc(campaigns.id));
-    return { salesFunnelCampaign: parent, units };
-  });
 }
 
 /**

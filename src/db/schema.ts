@@ -259,10 +259,6 @@ export const salesFunnelCampaigns = pgTable(
     githubIssue: text("github_issue"),
     // The detector's latest verdict on that issue ({state, detail, checkedAt, ...}); a read, decides nothing.
     githubIssueCheck: jsonb("github_issue_check"),
-    // The audiences this campaign WORKS (migration 0070, LEAK-1012): brand audience ids, carried verbatim and
-    // copied onto every unit's `campaigns.audience_ids` (the hard subset lead-service and the bandit read).
-    // NULL = names none: its units inherit the brand's audiences, as every campaign before.
-    audienceIds: text("audience_ids").array(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
