@@ -1,5 +1,5 @@
 import type { Campaign } from "../db/schema.js";
-import { canonicalEmail, fileNamedPerson, scheduleNamedPersonDue } from "./sales-funnel-people.js";
+import { canonicalEmail, fileNamedPerson, scheduleNamedPersonDue, type PersonStatement } from "./sales-funnel-people.js";
 
 /**
  * AN EVENT THAT NAMES A PERSON BY WHO THEY ARE (2026-10-12, FORM-TRIGGER-1012).
@@ -18,7 +18,13 @@ import { canonicalEmail, fileNamedPerson, scheduleNamedPersonDue } from "./sales
  *     outcomes and attribution see them with no consumer change. lead-service files only people the
  *     brand KNOWS (a live fact of its CRM copy): a person whose CRM fact has not reached lead-service
  *     yet is `person_not_known`, and the EVENT is retried shortly (`PERSON_NOT_KNOWN_RETRY_MS`) for up
- *     to `PERSON_NOT_KNOWN_WAIT_MS` after it occurred, then recorded skipped `person_not_known`. Same
+ *     to `PERSON_NOT_KNOWN_WAIT_MS` after it occurred, then recorded skipped `person_not_known`.
+ *     The occurrence ITSELF is the org naming the person for its own brand (PUSHED-PERSON-KNOWN-1014,
+ *     owner 2026-10-14: a client pushing an email it wrote, with its own key, about someone it found
+ *     itself), so the filing carries it as `statedBy {triggerEventId, triggerId}` + the person's name:
+ *     lead-service records that statement as the evidence the brand knows them and files a person it
+ *     never saw, after the suppression a serve applies (an unsubscribed / bounced / opted-out /
+ *     do-not-contact person is skipped `person_suppressed`, never retried). Any trigger, no branch. Same
  *     retry when a run of the campaign or its cohort is in flight (`PERSON_EVENT_RETRY_SKIPS`): steps 1-2
  *     happen only once nothing holds the dispatch back, so every event gets its OWN run;
  *  2. make them DUE now on that campaign's own follow-up queue (`schedule-by-email`), so the workflow
@@ -94,7 +100,7 @@ export type EventPersonOwed =
   | { ok: true; leadId: string }
   | {
       ok: false;
-      code: "person_not_known" | "ambiguous_person" | "person_not_filed" | "followup_unavailable";
+      code: "person_not_known" | "person_suppressed" | "ambiguous_person" | "person_not_filed" | "followup_unavailable";
       detail: string;
     };
 
@@ -102,16 +108,25 @@ export type EventPersonOwed =
  * File the event's person on `campaign` at lead-service, then make them due now on its follow-up queue.
  * Never throws: the caller names the skip.
  */
-export async function oweEventPerson(campaign: Campaign, person: EventPerson, now: Date): Promise<EventPersonOwed> {
+export async function oweEventPerson(
+  campaign: Campaign,
+  person: EventPerson,
+  now: Date,
+  statedBy?: PersonStatement | null,
+): Promise<EventPersonOwed> {
   const filed = await fileNamedPerson({
     orgId: campaign.orgId,
     campaignId: campaign.id,
     email: person.email,
     userId: campaign.createdByUserId,
     runId: campaign.parentRunId,
+    statedBy: statedBy ?? null,
+    name: person.name ?? null,
   });
   if (!filed.ok) {
-    if (filed.code === "person_not_known" || filed.code === "ambiguous_person") return { ok: false, code: filed.code, detail: filed.detail };
+    if (filed.code === "person_not_known" || filed.code === "person_suppressed" || filed.code === "ambiguous_person") {
+      return { ok: false, code: filed.code, detail: filed.detail };
+    }
     return { ok: false, code: "followup_unavailable", detail: `${filed.code}: ${filed.detail}` };
   }
   const due = await scheduleNamedPersonDue({ orgId: campaign.orgId, campaignId: campaign.id, email: person.email, now });
