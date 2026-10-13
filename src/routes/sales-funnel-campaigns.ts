@@ -31,6 +31,7 @@ import { fileSalesFunnelCampaignPeople, type FilingReport } from "../lib/sales-f
 import { GITHUB_ISSUE_IN_PROD_KIND, githubIssueKey, parseGithubIssue } from "../lib/github-issue-trigger.js";
 import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
 import { sameLeg } from "../lib/leg-identity.js";
+import { notifySalesFunnelCampaignPrecompute } from "../lib/sales-funnel-campaign-precompute.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -278,6 +279,15 @@ router.post(
         `[campaign-service] Sales funnel campaign ${born.salesFunnelCampaign.id} (${plan.salesFunnelName}) born ${status} — org=${orgId} brand=${brandId} offer=${offerId}, units ${born.units.map((u) => u.id).join(", ")}`,
       );
       if (status === "ongoing") wakeScheduler();
+      // features-service computes the brand's Campaigns rows now, before anyone reads them. Never awaited.
+      void notifySalesFunnelCampaignPrecompute({
+        salesFunnelCampaignId: born.salesFunnelCampaign.id,
+        orgId,
+        brandId,
+        offerId,
+        userId: req.userId!,
+        runId: req.runId!,
+      });
       const named = await fileNamedPeopleOf(born.salesFunnelCampaign, born.units, req);
       return res.status(201).json({
         salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, born.units),
