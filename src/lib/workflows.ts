@@ -28,6 +28,11 @@ export interface WorkflowTriggerInput {
   person?: EventPerson | null;
 }
 
+/** What workflow-service answered: the run it opened, the one whose `/end-run` carries it as `x-run-id`. */
+export interface WorkflowExecution {
+  runId: string | null;
+}
+
 const REQUIRED_FIELDS: (keyof WorkflowExecutionInputs)[] = [
   "campaignId", "orgId", "brandId", "userId", "runId", "featureSlug",
 ];
@@ -56,13 +61,13 @@ export function validateWorkflowInputs(
 export async function executeCampaignWorkflow(
   workflowSlug: string,
   inputs: WorkflowExecutionInputs,
-): Promise<void> {
+): Promise<WorkflowExecution> {
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
 
   if (!url || !apiKey) {
     console.warn("[campaign-service] WORKFLOW_SERVICE_URL or WORKFLOW_SERVICE_API_KEY not set, skipping workflow execution");
-    return;
+    return { runId: null };
   }
 
   // Defense-in-depth: validate all required fields even though callers should check first
@@ -114,5 +119,7 @@ export async function executeCampaignWorkflow(
     throw new WorkflowExecutionRefusedError({ workflowSlug, campaignId: inputs.campaignId, status: res.status, body });
   }
 
-  await res.json();
+  // workflow-service answers the run row it opened; its `runId` is the run the DAG's `/end-run` names.
+  const body = (await res.json()) as { runId?: unknown } | null;
+  return { runId: typeof body?.runId === "string" && body.runId ? body.runId : null };
 }
