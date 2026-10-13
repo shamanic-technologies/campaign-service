@@ -127,6 +127,8 @@ export const STEP_TRIGGER_SKIPS = {
    * subset: a run would reach lead-service with nobody to serve, so none is dispatched.
    */
   NO_SERVEABLE_AUDIENCE: "no_serveable_audience",
+  /** features-service states the campaign's play allows no workflow yet: nothing may run. */
+  PLAY_ALLOWS_NO_WORKFLOW: "play_allows_no_workflow",
   /**
    * A campaign that NAMES its people (lib/sales-funnel-people.ts) and the event names a lead that is
    * not one of them: the event is about somebody else.
@@ -524,6 +526,10 @@ export async function runCampaignsInScope(
         requiredAudienceIds: campaign.audienceIds,
         excludedAudienceIds,
       });
+      if (selection.playHold) {
+        skip(STEP_TRIGGER_SKIPS.PLAY_ALLOWS_NO_WORKFLOW, selection.playHold.detail);
+        continue;
+      }
       if (selection.noServeableAudience) {
         skip(
           STEP_TRIGGER_SKIPS.NO_SERVEABLE_AUDIENCE,

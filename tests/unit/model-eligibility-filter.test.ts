@@ -311,10 +311,12 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
   });
 
   /** Serve the funnel-keyed pricing body and the leg-keyed verdict body off one mock. */
-  function routeFetch(opts: { legRows: unknown[] }) {
+  function routeFetch(opts: { legRows: unknown[]; play?: unknown }) {
     return vi.fn(async (url: URL | string) => {
       const u = new URL(String(url));
-      if (u.searchParams.has("leg")) return jsonResponse({ rows: opts.legRows });
+      if (u.searchParams.has("leg")) {
+        return jsonResponse({ rows: opts.legRows, ...(opts.play !== undefined ? { play: opts.play } : {}) });
+      }
       return jsonResponse({
         rows: [
           {
@@ -404,6 +406,58 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
       noServeableAudience: false,
     });
     expect(err).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+
+  // TSP-PLAY-HOLD-1013: a "Valid + Catch-all" funnel started before any catch-all workflow exists
+  // must WAIT, never run the configured (valid-only) workflow.
+  it("a play allowing NO workflow holds the run — no workflow picked, no fallback; without a play block the fallback stays", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const allIneligible = [
+      rawLegRow("aud-A", "cheap-wf", { eligible: false, modelAlias: "flash", modelTier: "cheap" }),
+      rawLegRow("aud-A", "strong-wf", { eligible: false, modelAlias: "pro", modelTier: "strong" }),
+    ];
+    const play = {
+      id: "sales-cold-email-outreach|lead_found_to_conversation~valid-catch-all",
+      strategyId: "valid-catch-all",
+      strategyName: "Valid + Catch-all",
+      default: false,
+      source: "funnel",
+      allowedWorkflowCount: 0,
+    };
+    global.fetch = routeFetch({ legRows: allIneligible, play }) as unknown as typeof fetch;
+    const held = await resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, campaignId: "camp-play" });
+    expect(held.playHold).toMatchObject({
+      playId: play.id,
+      strategyId: "valid-catch-all",
+      strategyName: "Valid + Catch-all",
+    });
+    expect(held.playHold?.detail).toContain("Valid + Catch-all");
+    expect(held.audienceId).toBeNull();
+    // The hold is a statement, not an anomaly: no "falling back" error line.
+    expect(err).not.toHaveBeenCalled();
+
+    // Same grid, NO play block → today's configured-workflow fallback, byte-unchanged.
+    global.fetch = routeFetch({ legRows: allIneligible }) as unknown as typeof fetch;
+    await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
+      workflowSlug: "wf-configured",
+      audienceId: null,
+      noServeableAudience: false,
+    });
+
+    // A play that allows workflows → selection as usual, no hold.
+    global.fetch = routeFetch({
+      legRows: [
+        rawLegRow("aud-A", "cheap-wf", { eligible: false, modelAlias: "flash", modelTier: "cheap" }),
+        rawLegRow("aud-A", "strong-wf", { eligible: true, modelAlias: "pro", modelTier: "strong" }),
+      ],
+      play: { ...play, allowedWorkflowCount: 1 },
+    }) as unknown as typeof fetch;
+    await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
+      workflowSlug: "strong-wf",
+      audienceId: "aud-A",
+      noServeableAudience: false,
+    });
     err.mockRestore();
   });
 

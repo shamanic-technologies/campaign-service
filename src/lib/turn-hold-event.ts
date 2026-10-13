@@ -46,7 +46,12 @@ export type TurnHoldReason =
    * outside its targeting subset: a run would reach lead-service with nobody to serve. Held, not
    * run, until a mark lapses or an audience is added (lib/features-workflow-projection-client.ts).
    */
-  | "no_serveable_audience";
+  | "no_serveable_audience"
+  /**
+   * features-service states the campaign's PLAY (pipe x strategy) allows no workflow yet: held,
+   * never run on the configured workflow (lib/features-workflow-projection-client.ts `playHold`).
+   */
+  | "play_allows_no_workflow";
 
 /** The campaign fields an event needs to be attributable. A structural subset of a claimed row. */
 export interface TurnHoldCampaign {
