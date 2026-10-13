@@ -484,6 +484,29 @@ export const triggerEvents = pgTable(
 
 export type TriggerEvent = typeof triggerEvents.$inferSelect;
 
+// One row per RUN dispatched for an occurrence that carries something (src/lib/trigger-deliveries.ts):
+// `/end-run` settles it by run id; a run that did not complete its work redelivers the occurrence.
+export const triggerEventDeliveries = pgTable(
+  "trigger_event_deliveries",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    eventId: text("event_id").notNull(),
+    campaignId: text("campaign_id").notNull(),
+    /** The run workflow-service opened on `/execute`: the `x-run-id` its `/end-run` carries. */
+    runId: text("run_id").notNull(),
+    /** `dispatched` | `completed` | `failed` */
+    status: text("status").notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("uniq_trigger_event_deliveries_run").on(table.runId),
+    index("idx_trigger_event_deliveries_event").on(table.eventId, table.campaignId),
+  ]
+);
+
+export type TriggerEventDelivery = typeof triggerEventDeliveries.$inferSelect;
+
 // The POLL detector's schedule per (poll trigger type, org, brand, offer) (src/lib/poll-trigger-detector.ts).
 // The items themselves are NOT here: each item seen is one `trigger_events` row whose idempotency key
 // names it, so an item can never be fired twice. `baseline_at` = the first successful read (its items

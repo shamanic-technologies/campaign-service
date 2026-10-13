@@ -748,13 +748,17 @@ export const TriggerEventSchema = z.object({
   dueAt: z.string(),
   /** `pending` (due later) | `firing` | `done` */
   status: z.string(),
-  /** `ran` | `skipped`; null until done */
+  /**
+   * `ran` | `skipped` | `failed` (an occurrence carrying a person / an item whose every campaign failed all its
+   * runs for it: lib/trigger-deliveries.ts); null until done
+   */
   outcome: z.string().nullable(),
   /**
    * When skipped: a campaign's named skip (`unfunded`, `run_in_flight`, `no_workflow`,
    * `global_sales_budget_reached`, `item_budget_reached`, `cohort_run_in_flight`,
    * `incomplete_campaign`, `dispatch_refused`, `failure_backoff`), else `campaign_off`,
-   * `no_campaign`, `no_leg`, `trigger_not_declared`, or the caller's own reason when performed.
+   * `no_campaign`, `no_leg`, `trigger_not_declared`, or the caller's own reason when performed. `run_failed`
+   * when the outcome is `failed` (`lastError` + `detail.failedDeliveries` name the runs).
    */
   skipReason: z.string().nullable(),
   ranCampaignIds: z.array(z.string()),

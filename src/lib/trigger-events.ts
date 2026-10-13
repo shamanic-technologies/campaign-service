@@ -18,6 +18,7 @@ import {
   storedEventPerson,
   type EventPerson,
 } from "./trigger-person.js";
+import { eventCarries, recordDeliveries } from "./trigger-deliveries.js";
 
 /**
  * THE TRIGGER EVENTS — ONE ROW PER OCCURRENCE, AND WHAT IT DID (owner 2026-10-09).
@@ -395,11 +396,14 @@ export async function fireClaimedEvent(
     // A reported event naming a person by identity / carrying an item (lib/trigger-person.ts).
     const person = storedEventPerson(own?.person);
     const carries = person !== null || (own !== null && "item" in own);
-    // A retried person event re-asks ONLY the campaigns held back last time; the ones that already ran
-    // are kept and never dispatched twice.
+    // An occurrence carrying a person or an item is owed until a run that carried it did its work
+    // (lib/trigger-deliveries.ts): each run dispatched for it is recorded, and `/end-run` redelivers it.
+    const delivers = eventCarries(own);
+    // A retried (held back) or redelivered event re-asks ONLY the campaigns named; the ones that already
+    // ran are kept and never dispatched twice.
     const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-    const retryCampaignIds = person && Array.isArray(own?.retryCampaignIds) ? strings(own?.retryCampaignIds) : null;
-    const priorRanCampaignIds = person ? strings(own?.priorRanCampaignIds) : [];
+    const retryCampaignIds = delivers && Array.isArray(own?.retryCampaignIds) ? strings(own?.retryCampaignIds) : null;
+    const priorRanCampaignIds = delivers ? strings(own?.priorRanCampaignIds) : [];
     if (!event.triggerId || !catalogue.triggers?.has(event.triggerId)) {
       verdict = skipped(TRIGGER_EVENT_SKIPS.TRIGGER_NOT_DECLARED);
     } else {
@@ -415,6 +419,14 @@ export async function fireClaimedEvent(
         verdict = eventVerdict(
           await fireTrigger(event, event.triggerId, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId, person, retryCampaignIds),
         );
+        if (delivers && verdict.detail.triggered.length > 0) {
+          // Already dispatched: a failure to record must never put the event back (it would dispatch twice).
+          try {
+            await recordDeliveries(event.id, verdict.detail.triggered);
+          } catch (err) {
+            console.error(`[campaign-service] trigger event ${event.id}: the runs just dispatched could not be recorded, a failure of them will not redeliver it:`, err);
+          }
+        }
       }
     }
     // Campaigns that ran on an earlier attempt still count.
@@ -425,10 +437,12 @@ export async function fireClaimedEvent(
       verdict = { ...verdict, detail: { ...rest, ...verdict.detail } as EventVerdict["detail"] };
     }
     // ANY campaign held back for a passing reason (person not known to the brand YET, a run in flight, a
-    // failure backoff): the event tries again shortly for those campaigns only, while it is young, so
-    // each gets its own run carrying the person and item.
-    const heldBack = person ? verdict.detail.skipped.filter((sk) => PERSON_EVENT_RETRY_SKIPS.has(sk.reason)) : [];
-    if (person && heldBack.length > 0 && now.getTime() - event.occurredAt.getTime() < PERSON_NOT_KNOWN_WAIT_MS) {
+    // failure backoff): the event tries again shortly for those campaigns only, while it is young (since it
+    // occurred, or since it was last redelivered), so each gets its own run carrying the person and item.
+    const heldBack = delivers ? verdict.detail.skipped.filter((sk) => PERSON_EVENT_RETRY_SKIPS.has(sk.reason)) : [];
+    const redeliveredAt = typeof own?.redeliveredAt === "string" ? Date.parse(own.redeliveredAt) : NaN;
+    const youngSince = Math.max(event.occurredAt.getTime(), Number.isFinite(redeliveredAt) ? redeliveredAt : 0);
+    if (delivers && heldBack.length > 0 && now.getTime() - youngSince < PERSON_NOT_KNOWN_WAIT_MS) {
       const [back] = await db
         .update(triggerEvents)
         .set({
@@ -440,7 +454,7 @@ export async function fireClaimedEvent(
             retryCampaignIds: heldBack.map((sk) => sk.campaignId),
             priorRanCampaignIds: ranCampaignIds,
           },
-          lastError: `${heldBack.map((sk) => `${sk.campaignId} ${sk.reason}`).join(", ")}: ${person.email}, retried in 2 min`.slice(0, 500),
+          lastError: `${heldBack.map((sk) => `${sk.campaignId} ${sk.reason}`).join(", ")}${person ? `: ${person.email}` : ""}, retried in 2 min`.slice(0, 500),
         })
         .where(eq(triggerEvents.id, event.id))
         .returning();

@@ -505,6 +505,13 @@
       "when": 1779600000000,
       "tag": "0071_revert_sales_funnel_campaign_audiences",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1779700000000,
+      "tag": "0072_trigger_event_deliveries",
+      "breakpoints": true
     }
   ]
 }
