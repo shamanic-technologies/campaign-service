@@ -496,13 +496,6 @@
           "githubIssue": {
             "$ref": "#/components/schemas/GithubIssueRef"
           },
-          "audienceIds": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "string"
-            }
-          },
           "githubIssueCheck": {
             "type": "object",
             "nullable": true,
@@ -577,7 +570,6 @@
           "people",
           "instruction",
           "githubIssue",
-          "audienceIds",
           "githubIssueCheck",
           "createdAt",
           "updatedAt",
@@ -628,13 +620,6 @@
           },
           "name": {
             "type": "string"
-          },
-          "audienceIds": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "string"
-            }
           }
         },
         "required": [
@@ -644,8 +629,7 @@
           "legKey",
           "status",
           "workflowSlug",
-          "name",
-          "audienceIds"
+          "name"
         ]
       },
       "CreateSalesFunnelCampaignBody": {
@@ -691,15 +675,6 @@
           },
           "githubIssue": {
             "$ref": "#/components/schemas/GithubIssueRef"
-          },
-          "audienceIds": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "minItems": 1,
-            "maxItems": 100
           }
         },
         "required": [
@@ -814,16 +789,6 @@
             "nullable": true,
             "minLength": 1,
             "maxLength": 4000
-          },
-          "audienceIds": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "minItems": 1,
-            "maxItems": 100
           }
         },
         "additionalProperties": false
