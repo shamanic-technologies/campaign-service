@@ -191,7 +191,10 @@ export async function fetchSalesFunnelCaps(
   })();
   capsCache.set(key, { at: nowMs, read });
   const result = await read;
-  if (!result.ok) capsCache.delete(key); // never remember an outage
+  // Never remember an outage, nor a "not funded": a cap the customer writes a second later must be read at
+  // once (prod 2026-10-13: a funnel born at 19:59:33 cached `funded: false`, its cap landed at 19:59:35, and
+  // two pushed emails at :49 and :51 were skipped `unfunded`).
+  if (!result.ok || !result.caps.funded) capsCache.delete(key);
   return result;
 }
 

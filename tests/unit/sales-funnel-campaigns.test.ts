@@ -83,6 +83,28 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
     expect(init.headers["x-org-id"]).toBe("org");
   });
 
+  it("never remembers a 'not funded' answer: a cap written a second later is read at once (prod 2026-10-13)", async () => {
+    process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+    process.env.BILLING_SERVICE_API_KEY = "k";
+    resetSalesFunnelCapsCache();
+    const unfunded = { stated: false, funded: false, fundedBy: null, maxBudget: null, maxVolume: null, pipes: null };
+    const funded = { stated: true, funded: true, fundedBy: "max_budget", maxBudget: budget("200", "0", false, "daily"), maxVolume: null, pipes: null };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => unfunded })
+      .mockResolvedValue({ ok: true, status: 200, json: async () => funded });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const t = new Date("2026-10-10T10:00:00Z");
+      expect(await salesFunnelUnitMoney(unit, t)).toMatchObject({ run: false, kind: "unfunded" });
+      expect(await salesFunnelUnitMoney(unit, new Date(t.getTime() + 2_000))).toMatchObject({ run: true });
+      // A funded answer is still cached.
+      expect(await salesFunnelUnitMoney(unit, new Date(t.getTime() + 4_000))).toMatchObject({ run: true });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   describe("billing's funding verdict (owner 2026-10-11: a max $ AND/OR a max volume)", () => {
     const volume = (consumed: number | null, reached: boolean | null, count = 10) => ({
       count, period: "daily", unit: "first_contacts", consumed, reached,

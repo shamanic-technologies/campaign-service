@@ -241,6 +241,18 @@ describe("an occurrence carrying something is consumed only by a run that did it
     expect((await settleTriggerDelivery(d.runId, { success: false, stopCampaign: false })).kind).toBe("redelivered");
   });
 
+  it("pushed while the campaign is not funded YET: it waits, and goes out once billing says funded", async () => {
+    const campaign = await emailSending();
+    mockFunding.mockResolvedValueOnce({ funded: false, reason: "no ceiling yet" });
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(res.body.event.status).toBe("pending");
+    expect(res.body.event.detail.retryCampaignIds).toEqual([campaign.id]);
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(await fireDueTriggerEvents(new Date(new Date(res.body.event.dueAt).getTime() + 1000))).toBe(1);
+    expect(await eventRow(res.body.event.id)).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+    expect(mockExecute.mock.calls[0][1].trigger).toMatchObject({ eventId: res.body.event.id, item: ITEM });
+  });
+
   it("an occurrence carrying nothing records no delivery (byte-identical to before)", async () => {
     await emailSending();
     const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER });
