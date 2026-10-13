@@ -4,7 +4,7 @@ import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./on-demand-mode.js";
 import { executeCampaignWorkflow } from "./workflows.js";
-import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
+import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
 import { listRuns, updateRun } from "@distribute/runs-client";
 import { planBrandTurns } from "./brand-turns.js";
@@ -269,6 +269,27 @@ export async function reRunDueCampaigns(): Promise<number> {
         // Every audience the grid lists is freshly exhausted or outside the campaign's subset: a run
         // would reach lead-service with no audience and buy nothing. Held on the exhaustion's own
         // cadence and SAID, never run; status untouched.
+        // features-service states the campaign's play allows no workflow: held, never run on the
+        // configured workflow (that is not what the client asked for). Status untouched.
+        if (selection.playHold) {
+          const nextRunAt = new Date(now.getTime() + PLAY_NO_WORKFLOW_RECHECK_MS);
+          await db
+            .update(campaigns)
+            .set({ nextRunAt, updatedAt: new Date() })
+            .where(eq(campaigns.id, campaign.id));
+          await reportTurnHolds([{
+            campaign,
+            reason: "play_allows_no_workflow",
+            detail: `${selection.playHold.detail} It is looked at again at ${nextRunAt.toISOString()}.`,
+            nextRunAt,
+            data: {
+              playId: selection.playHold.playId,
+              strategyId: selection.playHold.strategyId,
+              strategyName: selection.playHold.strategyName,
+            },
+          }]);
+          continue;
+        }
         if (selection.noServeableAudience) {
           const nextRunAt = new Date(now.getTime() + NO_SERVEABLE_AUDIENCE_RECHECK_MS);
           await db

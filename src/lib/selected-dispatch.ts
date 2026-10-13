@@ -1,5 +1,5 @@
 import { executeCampaignWorkflow } from "./workflows.js";
-import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
+import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
@@ -76,6 +76,14 @@ export async function dispatchSelectedRun(
     requiredAudienceIds: campaign.audienceIds,
     excludedAudienceIds,
   });
+  if (selection.playHold) {
+    // The campaign's play allows no workflow yet: parked, the scheduler holds it out loud.
+    await db
+      .update(campaigns)
+      .set({ nextRunAt: new Date(Date.now() + PLAY_NO_WORKFLOW_RECHECK_MS), updatedAt: new Date() })
+      .where(eq(campaigns.id, campaign.id));
+    return null;
+  }
   if (selection.noServeableAudience) {
     await db
       .update(campaigns)
