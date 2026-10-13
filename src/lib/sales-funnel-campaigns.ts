@@ -517,6 +517,7 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
     people: storedPeople(row.people),
     instruction: row.instruction ?? null,
     githubIssue: serializeGithubIssue(row.githubIssue),
+    audienceIds: row.audienceIds ?? null,
     githubIssueCheck: (row.githubIssueCheck ?? null) as GithubIssueCheck | null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -528,6 +529,7 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
       status: u.status,
       workflowSlug: u.workflowSlug,
       name: u.name,
+      audienceIds: u.audienceIds ?? null,
     })),
   };
 }

@@ -14,6 +14,7 @@ import { paymentStartRefusal } from "../lib/payment-hold.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
 import {
   insertSalesFunnelCampaignWithUnits,
+  setSalesFunnelCampaignAudiences,
   setSalesFunnelCampaignStatus,
   type OnUnitStarted,
 } from "../lib/campaign-status-history.js";
@@ -31,6 +32,7 @@ import { fileSalesFunnelCampaignPeople, type FilingReport } from "../lib/sales-f
 import { GITHUB_ISSUE_IN_PROD_KIND, githubIssueKey, parseGithubIssue } from "../lib/github-issue-trigger.js";
 import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
 import { sameLeg } from "../lib/leg-identity.js";
+import { SOURCE_LEG_KEY } from "../lib/source-campaigns.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -58,6 +60,45 @@ async function unitsOf(parentIds: string[], orgId: string): Promise<Map<string, 
     .orderBy(asc(campaigns.createdAt), asc(campaigns.id));
   for (const row of rows) byParent.get(row.salesFunnelCampaignId!)?.push(row);
   return byParent;
+}
+
+/** Audience ids as stated: trimmed, each once, in the caller's order (null stays null = names none). */
+function statedAudienceIds(ids: string[] | null | undefined): string[] | null | undefined {
+  if (ids === undefined || ids === null) return ids;
+  return [...new Set(ids.map((id) => id.trim()))];
+}
+
+function sameAudienceIds(a: string[] | null, b: string[] | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.length === b.length && [...a].sort().join(",") === [...b].sort().join(",");
+}
+
+/**
+ * A funnel campaign naming NO audience whose lead source another funnel campaign of the same offer also runs:
+ * both walk the same audiences, so one takes the people the other was launched for (LEAK-1012). Not refused
+ * yet (no live caller names audiences: the dashboard and the Copilot gain the field first), SAID loudly.
+ */
+async function warnSharedSourceWithoutAudiences(row: SalesFunnelCampaign, units: CampaignRow[]): Promise<void> {
+  if (row.audienceIds && row.audienceIds.length > 0) return;
+  const sourceSlugs = units.filter((u) => u.legKey === SOURCE_LEG_KEY && u.featureSlug).map((u) => u.featureSlug!);
+  if (sourceSlugs.length === 0) return;
+  const siblings = await db
+    .select({ salesFunnelCampaignId: campaigns.salesFunnelCampaignId, featureSlug: campaigns.featureSlug })
+    .from(campaigns)
+    .where(and(
+      eq(campaigns.orgId, row.orgId),
+      eq(campaigns.brandId, row.brandId),
+      eq(campaigns.offerId, row.offerId),
+      eq(campaigns.legKey, SOURCE_LEG_KEY),
+      inArray(campaigns.featureSlug, sourceSlugs),
+      sql`${campaigns.salesFunnelCampaignId} IS NOT NULL AND ${campaigns.salesFunnelCampaignId} <> ${row.id}`,
+    ));
+  if (siblings.length === 0) return;
+  console.error(
+    `[campaign-service] Sales funnel campaign ${row.id} (${row.salesFunnelName}) names NO audience but shares its lead source with ` +
+      `${siblings.map((s) => `${s.salesFunnelCampaignId} (${s.featureSlug})`).join(", ")} — org=${row.orgId} brand=${row.brandId} offer=${row.offerId}: ` +
+      "both walk the same audiences; state audienceIds on each (PATCH /sales-funnel-campaigns/:id).",
+  );
 }
 
 function missingPersonHeaders(req: AuthenticatedRequest): string[] {
@@ -101,8 +142,10 @@ router.post(
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId, salesFunnelId, status, people: namedInput, instruction, githubIssue: issueInput } =
+      const { brandId, offerId, salesFunnelId, status, people: namedInput, instruction, githubIssue: issueInput, audienceIds: audienceInput } =
         CreateSalesFunnelCampaignBody.parse(req.body);
+      // The audiences it works (LEAK-1012): every unit carries them.
+      const audienceIds = statedAudienceIds(audienceInput);
       // The GitHub issue it waits on (lib/github-issue-trigger.ts): part of its identity too.
       const issueRef = issueInput ? parseGithubIssue(issueInput) : null;
       if (issueInput && !issueRef) {
@@ -139,6 +182,10 @@ router.post(
           .set({ instruction, updatedAt: new Date() })
           .where(eq(salesFunnelCampaigns.id, incumbent.id))
           .returning();
+      }
+      // Handed back with the audiences the caller states now, restated on every unit (absent = untouched).
+      if (incumbent && audienceIds && !sameAudienceIds(audienceIds, incumbent.audienceIds ?? null)) {
+        incumbent = (await setSalesFunnelCampaignAudiences({ salesFunnelCampaignId: incumbent.id, orgId, audienceIds }))!.salesFunnelCampaign;
       }
       if (incumbent) {
         if (status === "ongoing" && incumbent.status !== "ongoing") {
@@ -247,6 +294,7 @@ router.post(
           peopleKey,
           instruction: instruction ?? null,
           githubIssue,
+          audienceIds: audienceIds ?? null,
           units: plan.units.map((u) => ({
             featureSlug: u.featureSlug,
             legKey: u.legKey,
@@ -278,6 +326,7 @@ router.post(
         `[campaign-service] Sales funnel campaign ${born.salesFunnelCampaign.id} (${plan.salesFunnelName}) born ${status} — org=${orgId} brand=${brandId} offer=${offerId}, units ${born.units.map((u) => u.id).join(", ")}`,
       );
       if (status === "ongoing") wakeScheduler();
+      await warnSharedSourceWithoutAudiences(born.salesFunnelCampaign, born.units);
       const named = await fileNamedPeopleOf(born.salesFunnelCampaign, born.units, req);
       return res.status(201).json({
         salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, born.units),
@@ -343,7 +392,7 @@ router.get("/sales-funnel-campaigns/:id", requireApiKey, serviceAuth, async (req
 });
 
 /**
- * PATCH /sales-funnel-campaigns/:id {status: activate|stop} — run or pause the WHOLE funnel. Every
+ * PATCH /sales-funnel-campaigns/:id {status?, instruction?, audienceIds?} — run or pause the WHOLE funnel. Every
  * unit moves with it in one transaction. Stopping stops NEW first touches only: follow-ups of leads
  * already contacted keep going out (the sending side's rule, unchanged).
  */
@@ -354,23 +403,33 @@ router.patch(
   validateBody(UpdateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { status, instruction } = UpdateSalesFunnelCampaignBody.parse(req.body);
+      const { status, instruction, audienceIds: audienceInput } = UpdateSalesFunnelCampaignBody.parse(req.body);
+      const audienceIds = statedAudienceIds(audienceInput);
       const orgId = req.orgId!;
-      const existing = await db.query.salesFunnelCampaigns.findFirst({
+      let existing = await db.query.salesFunnelCampaigns.findFirst({
         where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
       });
       if (!existing) return res.status(404).json({ error: "Sales funnel campaign not found" });
 
+      // Restate the audiences it works: the funnel row and every unit, in one transaction (LEAK-1012). The next
+      // run of each unit (its source's find, its outreach's serve) works only these. Status untouched.
+      if (audienceIds !== undefined) {
+        existing = (await setSalesFunnelCampaignAudiences({ salesFunnelCampaignId: existing.id, orgId, audienceIds }))!.salesFunnelCampaign;
+      }
+
       // Reword (or clear) the instruction its runs carry. Read by every run at /start-run, so the next
       // message follows the new words. Status untouched unless stated too.
       if (status === undefined) {
-        const [reworded] = await db
-          .update(salesFunnelCampaigns)
-          .set({ instruction: instruction ?? null, updatedAt: new Date() })
-          .where(and(eq(salesFunnelCampaigns.id, existing.id), eq(salesFunnelCampaigns.orgId, orgId)))
-          .returning();
-        const units = (await unitsOf([reworded.id], orgId)).get(reworded.id)!;
-        return res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(reworded, units) });
+        let row = existing;
+        if (instruction !== undefined) {
+          [row] = await db
+            .update(salesFunnelCampaigns)
+            .set({ instruction: instruction ?? null, updatedAt: new Date() })
+            .where(and(eq(salesFunnelCampaigns.id, existing.id), eq(salesFunnelCampaigns.orgId, orgId)))
+            .returning();
+        }
+        const units = (await unitsOf([row.id], orgId)).get(row.id)!;
+        return res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(row, units) });
       }
 
       if (status === "activate") {

@@ -52,13 +52,14 @@ type CampaignRow = typeof campaigns.$inferSelect;
 /**
  * A SALES FUNNEL unit (lib/sales-funnel-campaigns.ts) is run, paused and identified only through its
  * funnel campaign: a PATCH stating its status or anything of its identity is refused, naming the
- * funnel campaign to act on instead. Anything else (audiences, services, destination) stays the
- * unit's own. null = not a unit, or nothing refused.
+ * funnel campaign to act on instead. Anything else (services, destination) stays the unit's own.
+ * null = not a unit, or nothing refused.
  */
 // Identity, and the per-pipe budget of the pre-funnel model: a unit's money is its funnel's caps, so
-// nothing writes an old-style per-campaign budget for it (billing v0.83.12 conversion).
+// nothing writes an old-style per-campaign budget for it (billing v0.83.12 conversion). Its audiences are
+// its funnel campaign's (LEAK-1012: stated on the funnel, carried by every unit; PATCH the funnel campaign).
 const SALES_FUNNEL_UNIT_LOCKED_FIELDS = [
-  "offerId", "legKey", "featureSlug", "brandIds",
+  "offerId", "legKey", "featureSlug", "brandIds", "audienceIds",
   "dailyBudgetCents", "maxBudgetDailyUsd", "maxBudgetWeeklyUsd", "maxBudgetMonthlyUsd", "maxBudgetTotalUsd",
 ] as const;
 function salesFunnelUnitRefusal(
@@ -69,7 +70,7 @@ function salesFunnelUnitRefusal(
   const locked = SALES_FUNNEL_UNIT_LOCKED_FIELDS.filter((f) => body[f] !== undefined);
   if (locked.length === 0) return null;
   return {
-    error: "This campaign is a step of a sales funnel campaign: its offer, step, channel and budget belong to that sales funnel.",
+    error: "This campaign is a step of a sales funnel campaign: its offer, step, channel, budget and audiences belong to that sales funnel.",
     reason: "sales_funnel_unit",
     salesFunnelCampaignId: existing.salesFunnelCampaignId,
   };
