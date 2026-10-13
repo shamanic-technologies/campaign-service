@@ -49,6 +49,7 @@ import { resolvePredecessorCampaign } from "../../src/lib/predecessor-campaign.j
 import { runCampaignsInScope, STEP_TRIGGER_SKIPS } from "../../src/lib/step-trigger.js";
 import { sameLeg } from "../../src/lib/leg-identity.js";
 import type { ChannelCatalogueRead } from "../../src/lib/channel-operator-client.js";
+import { notifySalesFunnelCampaignPrecompute } from "../../src/lib/sales-funnel-campaign-precompute.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "b645207b-0000-4000-8000-0000000000f1";
@@ -125,6 +126,18 @@ describe("sales funnel campaigns (brand x offer x sales funnel, one unit per pip
       [null, "stopped", TRANSITION_SOURCES.SALES_FUNNEL],
     ]);
     expect(mockExecute).not.toHaveBeenCalled();
+    // features-service is told at once, with the creating request's identity, to precompute the brand's rows.
+    expect(vi.mocked(notifySalesFunnelCampaignPrecompute)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notifySalesFunnelCampaignPrecompute).mock.calls[0][0]).toMatchObject({
+      salesFunnelCampaignId: fc.id,
+      orgId: ORG,
+      brandId: BRAND,
+      offerId: OFFER,
+      userId: "user_funnel",
+    });
+    // A hand-back creates nothing: no second notification.
+    await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "stopped" }).expect(200);
+    expect(vi.mocked(notifySalesFunnelCampaignPrecompute)).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a funnel through a step the offer's business has not stated: 409 naming the steps, nothing written (owner 2026-10-12)", async () => {
