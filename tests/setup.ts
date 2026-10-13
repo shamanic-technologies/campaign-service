@@ -44,6 +44,13 @@ vi.mock("../src/lib/on-demand-mode.js", async (importOriginal) => {
   return { ...original, readDispatchCatalogue: vi.fn().mockResolvedValue({ ok: false, detail: "not read in tests" }) };
 });
 
+// A funnel campaign's birth tells features-service to precompute the brand's rows (src/lib/sales-funnel-campaign-precompute.ts),
+// fire-and-forget. No test talks to features-service: a stub here keeps it off every route's fetch mocks; its own unit
+// test reads the real module via vi.importActual.
+vi.mock("../src/lib/sales-funnel-campaign-precompute.js", () => ({
+  notifySalesFunnelCampaignPrecompute: vi.fn().mockResolvedValue(undefined),
+}));
+
 process.env.NODE_ENV = "test";
 process.env.CAMPAIGN_SERVICE_DATABASE_URL = process.env.CAMPAIGN_SERVICE_DATABASE_URL || "postgresql://test:test@localhost/campaign_test";
 process.env.SERVICE_SECRET_KEY = "test-service-secret";
