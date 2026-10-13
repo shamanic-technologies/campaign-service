@@ -364,6 +364,11 @@ describe("Campaign CRUD", () => {
         .set("x-org-id", orgId);
     }
 
+    it("a non-uuid id reads as not found, never a 500 (prod campaigns.id is uuid)", async () => {
+      const res = await get("signups:75d7e3e8-6926-4f85-a557-976895400666").expect(404);
+      expect(res.body.error).toBe("Campaign not found");
+    });
+
     it("persists own config on create and reads it back (single + list)", async () => {
       const createRes = await createCampaign({ ...validBody, name: "Own Config", ...ownConfig }).expect(201);
       expect(createRes.body.campaign).toMatchObject(ownConfig);
