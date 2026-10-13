@@ -193,9 +193,11 @@ router.get("/campaigns/:id", requireApiKey, serviceAuth, async (req: Authenticat
   try {
     const { id } = req.params;
 
+    // `::text`: prod's `campaigns.id` is uuid, so a caller's non-uuid id ("signups:<brand>") must read as
+    // not found, never a 500 (invalid input syntax for type uuid).
     const campaign = await db.query.campaigns.findFirst({
       where: and(
-        eq(campaigns.id, id),
+        sql`${campaigns.id}::text = ${id}`,
         eq(campaigns.orgId, req.orgId!)
       ),
     });
