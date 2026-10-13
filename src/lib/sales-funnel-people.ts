@@ -132,9 +132,19 @@ export type FileNamedPersonOutcome =
   | { ok: true; leadId: string; filed: boolean }
   | {
       ok: false;
-      code: "person_not_known" | "ambiguous_person" | "campaign_has_no_brand" | "filing_unavailable";
+      code: "person_not_known" | "person_suppressed" | "ambiguous_person" | "campaign_has_no_brand" | "filing_unavailable";
       detail: string;
     };
+
+/**
+ * The brand's OWN organization names the person: a trigger occurrence it reported about them
+ * (lib/trigger-person.ts). lead-service takes it as the evidence the brand knows them, records it, and
+ * files a person it never saw (after the suppression a serve applies: `person_suppressed`).
+ */
+export interface PersonStatement {
+  triggerEventId: string;
+  triggerId?: string | null;
+}
 
 /**
  * FILE one named person under a unit at lead-service (`POST /orgs/campaigns/:id/leads/by-email`): the
@@ -148,6 +158,10 @@ export async function fileNamedPerson(input: {
   email: string;
   userId?: string | null;
   runId?: string | null;
+  /** Absent = the door as before: only people the brand already knows. */
+  statedBy?: PersonStatement | null;
+  /** The person's name as the statement carries it (a lead lead-service creates takes it). */
+  name?: string | null;
 }): Promise<FileNamedPersonOutcome> {
   const url = process.env.LEAD_SERVICE_URL;
   const apiKey = process.env.LEAD_SERVICE_API_KEY;
@@ -160,7 +174,16 @@ export async function fileNamedPerson(input: {
   try {
     const res = await fetch(
       `${url.replace(/\/$/, "")}/orgs/campaigns/${encodeURIComponent(input.campaignId)}/leads/by-email`,
-      { method: "POST", headers, body: JSON.stringify({ email: input.email }), signal: AbortSignal.timeout(30_000) },
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          email: input.email,
+          ...(input.statedBy ? { statedBy: input.statedBy } : {}),
+          ...(input.statedBy && input.name ? { name: input.name } : {}),
+        }),
+        signal: AbortSignal.timeout(30_000),
+      },
     );
     const text = await res.text().catch(() => "");
     if (res.ok) {
@@ -175,6 +198,7 @@ export async function fileNamedPerson(input: {
     })();
     const detail = `lead-service ${res.status} ${text.slice(0, 300)}`;
     if (code === "person_not_known") return { ok: false, code: "person_not_known", detail };
+    if (code === "person_suppressed") return { ok: false, code: "person_suppressed", detail };
     if (code === "ambiguous_lead") return { ok: false, code: "ambiguous_person", detail };
     if (code === "campaign_has_no_brand") return { ok: false, code: "campaign_has_no_brand", detail };
     return { ok: false, code: "filing_unavailable", detail };
