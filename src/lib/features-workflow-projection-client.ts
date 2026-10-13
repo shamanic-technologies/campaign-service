@@ -154,6 +154,54 @@ export interface LegModelEligibility {
    * resolves the offer transitively and prices them even for a brand selling several offers.
    */
   rows: ProjectionRow[];
+  /**
+   * The campaign's PLAY as features-service states it (top-level `play` block of the leg-keyed
+   * body): the pipe x a strategy ruling which workflows may run. features-service already marks
+   * every workflow the play rules out `eligible: false`, so the filter above needs nothing more.
+   * Only `allowedWorkflowCount === 0` is acted on here (the run waits, see PlayHold). Null = the
+   * body carried no play block: byte-unchanged behaviour.
+   */
+  play?: ServedPlay | null;
+}
+
+/** features-service's `play` block, carried verbatim; never re-derived here. */
+export interface ServedPlay {
+  id: string | null;
+  strategyId: string | null;
+  strategyName: string | null;
+  default: boolean | null;
+  source: string | null;
+  allowedWorkflowCount: number | null;
+}
+
+/** How often a campaign whose play allows no workflow is looked at again. */
+export const PLAY_NO_WORKFLOW_RECHECK_MS = 10 * 60_000; // 10 min
+
+/**
+ * The run WAITS: features-service states the campaign's play allows no workflow at all (e.g. a
+ * "Valid + Catch-all" funnel started before any catch-all workflow exists). Never resolved through
+ * the configured-workflow fallback: that would run what the client did not ask for.
+ */
+export interface PlayHold {
+  playId: string | null;
+  strategyId: string | null;
+  strategyName: string | null;
+  /** One sentence a human reads without opening the code. */
+  detail: string;
+}
+
+function parseServedPlay(raw: unknown): ServedPlay | null {
+  if (!raw || typeof raw !== "object") return null;
+  const p = raw as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : null);
+  return {
+    id: str(p.id),
+    strategyId: str(p.strategyId),
+    strategyName: str(p.strategyName),
+    default: typeof p.default === "boolean" ? p.default : null,
+    source: str(p.source),
+    allowedWorkflowCount: typeof p.allowedWorkflowCount === "number" ? p.allowedWorkflowCount : null,
+  };
 }
 
 interface LegProjectionInput {
@@ -174,16 +222,16 @@ interface LegProjectionInput {
  * states a leg reads this body.
  */
 export async function fetchLegProjectionRows(input: LegProjectionInput): Promise<ProjectionRow[]> {
-  return normalizeProjectionRows(await fetchLegProjectionRawRows(input));
+  return normalizeProjectionRows((await fetchLegProjectionBody(input)).rows);
 }
 
-async function fetchLegProjectionRawRows({
+async function fetchLegProjectionBody({
   featureSlug,
   brandId,
   legKey,
   campaignId,
   identity,
-}: LegProjectionInput): Promise<RawEligibilityRow[]> {
+}: LegProjectionInput): Promise<{ rows: RawEligibilityRow[]; play: ServedPlay | null }> {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
   const apiKey = process.env.FEATURES_SERVICE_API_KEY;
   if (!baseUrl || !apiKey) {
@@ -206,9 +254,9 @@ async function fetchLegProjectionRawRows({
   const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
   if (!res.ok) throw new Error(`workflow-projection (leg) failed (${res.status}): ${await res.text()}`);
 
-  const body = await res.json() as { rows?: RawEligibilityRow[] };
+  const body = await res.json() as { rows?: RawEligibilityRow[]; play?: unknown };
   if (!Array.isArray(body.rows)) throw new Error("workflow-projection (leg) returned an invalid rows payload");
-  return body.rows;
+  return { rows: body.rows, play: parseServedPlay(body.play) };
 }
 
 /**
@@ -226,7 +274,7 @@ export async function readLegModelEligibility(
 ): Promise<LegModelEligibility | null> {
   const { brandId, legKey } = input;
   try {
-    const legRows = await fetchLegProjectionRawRows(input);
+    const { rows: legRows, play } = await fetchLegProjectionBody(input);
 
     const ineligible = new Map<string, string>();
     for (const row of legRows) {
@@ -242,7 +290,7 @@ export async function readLegModelEligibility(
           `features-service excluded it for leg "${legKey}" (model ${verdict.modelAlias ?? "unstated"}, tier ${verdict.modelTier ?? "unstated"})`,
       );
     }
-    return { legKey, ineligible, rows: normalizeProjectionRows(legRows) };
+    return { legKey, ineligible, rows: normalizeProjectionRows(legRows), play };
   } catch (err) {
     // FAIL OPEN, LOUDLY. Falling back to the unfiltered grid is the pre-filter behaviour; falling
     // back to NOTHING would stop a funded campaign over a read that decides only which cells are
@@ -640,6 +688,12 @@ export interface TriggerSelection {
    * leg, unreadable or empty grid, a grid enumerating no audience): those run exactly as before.
    */
   noServeableAudience: boolean;
+  /**
+   * Present ONLY when features-service states the campaign's play allows no workflow
+   * (`play.allowedWorkflowCount === 0`): nothing may be dispatched, `workflowSlug` is NOT to be
+   * run. Callers hold on `PLAY_NO_WORKFLOW_RECHECK_MS`. Absent on every other answer.
+   */
+  playHold?: PlayHold;
 }
 
 /**
@@ -728,6 +782,26 @@ export async function resolveSelectionForTrigger(args: {
     });
     // A read that failed (it already said why) or enumerated nothing leaves the pick on the
     // campaign's configured workflow: a selection optimization never blocks a run.
+    // The campaign's PLAY allows no workflow (features-service's statement, never re-derived):
+    // the run waits. Checked before any fallback, because every fallback runs a workflow the play
+    // rules out. A body without a play block, or a play allowing some, is untouched.
+    if (eligibility?.play && eligibility.play.allowedWorkflowCount === 0) {
+      const { id, strategyId, strategyName } = eligibility.play;
+      return {
+        workflowSlug: fallbackSlug,
+        audienceId: null,
+        noServeableAudience: false,
+        playHold: {
+          playId: id,
+          strategyId,
+          strategyName,
+          detail:
+            `Campaign ${campaignId ?? "(unknown)"} is waiting: its play ` +
+            `"${strategyName ?? strategyId ?? id ?? "unnamed"}" (${id ?? "no id"}) on leg ${legKey} ` +
+            `allows no workflow yet, so no run goes out until features-service lists one.`,
+        },
+      };
+    }
     if (!eligibility || eligibility.rows.length === 0) {
       console.warn(
         `[campaign-service] leg-keyed workflow-projection for brand ${primaryBrandId} leg ` +
