@@ -396,6 +396,7 @@ describe("serializeSalesFunnelCampaign", () => {
       { id: "F1", orgId: "o", brandId: "b", offerId: "of", salesFunnelId: "f@x", salesFunnelName: "Epiphany", status: "stopped", stopReason: "manual", createdByUserId: "u", parentRunId: null, createdAt: now, updatedAt: now },
       [{ id: "c1", featureSlug: COLD, legKey: ENTRY, status: "stopped", workflowSlug: "aurora-v3", name: "n" } as never],
     );
-    expect(out.units).toEqual([{ campaignId: "c1", pipeId: `${COLD}|${ENTRY}`, featureSlug: COLD, legKey: ENTRY, status: "stopped", workflowSlug: "aurora-v3", name: "n" }]);
+    expect(out.units).toEqual([{ campaignId: "c1", pipeId: `${COLD}|${ENTRY}`, featureSlug: COLD, legKey: ENTRY, status: "stopped", workflowSlug: "aurora-v3", name: "n", audienceIds: null }]);
+    expect(out.audienceIds).toBeNull();
   });
 });
