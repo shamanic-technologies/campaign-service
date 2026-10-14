@@ -1,4 +1,6 @@
 import { Router } from "express";
+import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
+import { legIsReactive } from "../lib/leg-identity.js";
 import { settleTriggerDelivery } from "../lib/trigger-deliveries.js";
 import { targetingOfSalesFunnelCampaigns } from "../lib/sales-funnel-people-store.js";
 import { eq, and, sql, or, ne, isNotNull, gt, desc } from "drizzle-orm";
@@ -413,6 +415,15 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       ? (await targetingOfSalesFunnelCampaigns([campaign.salesFunnelCampaignId])).get(campaign.salesFunnelCampaignId) ?? null
       : null;
 
+    // Whether the leg is reactive (features-service's statement, cached read): a reactive unit run on its
+    // cadence with nobody due must end idle, never buy a new lead (FACT-NOT-FOLLOWED-1014, WhatsApp DAG).
+    let reactive: boolean | null = null;
+    if (campaign.featureSlug && campaign.legKey) {
+      const catalogue = await fetchChannelCatalogue();
+      if (catalogue.ok) reactive = legIsReactive(catalogue, campaign.featureSlug, campaign.legKey);
+      else console.warn(`[campaign-service] /start-run ${campaignId}: catalogue unreadable (${catalogue.detail}), reactive=null`);
+    }
+
     // Return campaign data for downstream DAG nodes
     res.json({
       runId: run.id,
@@ -439,6 +450,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       instruction: targeting?.instruction ?? null,
       // The exact people this campaign acts for ([{email, leadId}]; null = whoever its pipes serve).
       people: targeting?.people ?? null,
+      reactive,
       searchParams,
     });
   } catch (error) {
