@@ -68,6 +68,7 @@ import {
   mirrorSourceCampaigns,
   MirrorCatalogueUnavailableError,
   sourceCampaignsFeeding,
+  SourceChainUnavailableError,
 } from "../lib/source-campaign-store.js";
 import { LEAD_FOUND_STEP, SOURCE_LEG_KEY, sourceCampaignKey } from "../lib/source-campaigns.js";
 import { readSourcingMap, SourcingMapUnavailableError } from "../lib/sourcing-origins-client.js";
@@ -1420,8 +1421,10 @@ router.get("/internal/campaigns/:campaignId/source-campaigns", requireApiKey, as
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
     // Its origins and, where features-service lists it, Lead Sourcing (lib/sourcing-origins-client.ts). Unreadable
     // map = 502, never `sourced: false` (that answer once served a live campaign nobody, 2026-10-12).
-    const origins = campaign.featureSlug ? (await readSourcingMap()).feedingByChannel[campaign.featureSlug] ?? [] : [];
+    const mapOrigins = campaign.featureSlug ? (await readSourcingMap()).feedingByChannel[campaign.featureSlug] ?? [] : [];
     const feeding = campaign.featureSlug ? await sourceCampaignsFeeding(campaign.id, campaign.featureSlug) : [];
+    // A funnel unit fed by its own funnel's source units (lib/source-campaign-store.ts) serves their origins too.
+    const origins = [...mapOrigins, ...new Set(feeding.map((f) => f.featureSlug).filter((o) => !mapOrigins.includes(o)))];
     // Whether each source finds leads on its own (lib/on-demand-mode.ts): lead-service then serves this campaign the
     // leads those sources already found instead of asking them on demand. Unreadable catalogue = false (on demand).
     const catalogue = feeding.length > 0 ? await readDispatchCatalogue() : ({ ok: false, detail: "no source" } as const);
@@ -1442,7 +1445,7 @@ router.get("/internal/campaigns/:campaignId/source-campaigns", requireApiKey, as
       })),
     });
   } catch (error) {
-    if (error instanceof SourcingMapUnavailableError) return res.status(502).json({ error: error.message });
+    if (error instanceof SourcingMapUnavailableError || error instanceof SourceChainUnavailableError) return res.status(502).json({ error: error.message });
     console.error("[campaign-service] campaign source campaigns error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
