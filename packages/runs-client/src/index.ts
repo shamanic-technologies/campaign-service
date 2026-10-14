@@ -56,6 +56,8 @@ export interface ListRunsParams {
   userId?: string;
   brandId?: string;
   campaignId?: string;
+  /** The runs of ANY of these campaign ids (runs-service caps the list at 500). */
+  campaignIds?: string[];
   serviceName?: string;
   taskName?: string;
   status?: string;
@@ -182,6 +184,7 @@ export async function listRuns(
   if (rest.userId) searchParams.set("userId", rest.userId);
   if (rest.brandId) searchParams.set("brandId", rest.brandId);
   if (rest.campaignId) searchParams.set("campaignId", rest.campaignId);
+  if (rest.campaignIds) searchParams.set("campaignIds", rest.campaignIds.join(","));
   if (rest.serviceName) searchParams.set("serviceName", rest.serviceName);
   if (rest.taskName) searchParams.set("taskName", rest.taskName);
   if (rest.status) searchParams.set("status", rest.status);
