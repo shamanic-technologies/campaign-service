@@ -5,6 +5,7 @@ import { db } from "../db/index.js";
 import { campaigns, campaignStatusTransitions } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
+import { refuseRetiredAudienceIds } from "../lib/retired-audience-ids.js";
 import {
   CreateCampaignBody,
   UpdateCampaignBody,
@@ -217,7 +218,7 @@ router.get("/campaigns/:id", requireApiKey, serviceAuth, async (req: Authenticat
 /**
  * POST /campaigns - Create a new campaign
  */
-router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaignBody), async (req: AuthenticatedRequest, res) => {
+router.post("/campaigns", requireApiKey, serviceAuth, refuseRetiredAudienceIds, validateBody(CreateCampaignBody), async (req: AuthenticatedRequest, res) => {
   try {
     const {
       name,
@@ -230,7 +231,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
       audienceId,
       offerId,
       legKey: bodyLegKey,
-      audienceIds,
       servicesOffered,
       clickDestinationUrl,
       maxBudgetDailyUsd,
@@ -421,7 +421,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
           // Same rule for the leg it is bought for: an incumbent learns it from a caller that now
           // states one, and a create saying nothing about the leg must not blank the row's.
           ...(legKey !== undefined ? { legKey } : {}),
-          ...(audienceIds !== undefined ? { audienceIds } : {}),
           ...(servicesOffered !== undefined ? { servicesOffered } : {}),
           ...(clickDestinationUrl !== undefined ? { clickDestinationUrl } : {}),
           ...(maxBudgetDailyUsd !== undefined ? { maxBudgetDailyUsd } : {}),
@@ -492,7 +491,6 @@ router.post("/campaigns", requireApiKey, serviceAuth, validateBody(CreateCampaig
         // features-service's vocabulary. Absent → NULL; nothing is inferred from the channel or
         // the workflow.
         legKey: legKey ?? null,
-        audienceIds: audienceIds ?? null,
         servicesOffered: servicesOffered ?? null,
         clickDestinationUrl: clickDestinationUrl ?? null,
         maxBudgetDailyUsd,
@@ -817,7 +815,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
 /**
  * PATCH /campaigns/:id - Update a campaign (including status: "active" | "stopped")
  */
-router.patch("/campaigns/:id", requireApiKey, serviceAuth, validateBody(UpdateCampaignBody), async (req: AuthenticatedRequest, res) => {
+router.patch("/campaigns/:id", requireApiKey, serviceAuth, refuseRetiredAudienceIds, validateBody(UpdateCampaignBody), async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
 

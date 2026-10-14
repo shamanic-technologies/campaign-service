@@ -303,7 +303,6 @@ describe("Scheduler - reRunDueCampaigns", () => {
         createdByUserId: "user-1",
         parentRunId: null,
         featureSlug: "sales-cold-email-v1",
-        audienceIds: ["aud-1", "aud-2"],
       },
     ]);
     mockExhaustedAudienceIds.mockResolvedValue(["aud-2"]);
@@ -313,10 +312,11 @@ describe("Scheduler - reRunDueCampaigns", () => {
     expect(mockExhaustedAudienceIds).toHaveBeenCalledWith("campaign-1");
     expect(mockResolveWorkflowSlug).toHaveBeenCalledWith(
       expect.objectContaining({
-        requiredAudienceIds: ["aud-1", "aud-2"],
         excludedAudienceIds: ["aud-2"],
       }),
     );
+    // A campaign states no audience subset (retired 2026-10-14): selection is never handed one.
+    expect(mockResolveWorkflowSlug.mock.calls[0][0]).not.toHaveProperty("requiredAudienceIds");
   });
 
   it("dispatches with the configured slug and no chosen audience when selection could not answer", async () => {

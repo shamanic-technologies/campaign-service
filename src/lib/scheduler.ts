@@ -120,9 +120,6 @@ export async function reRunDueCampaigns(): Promise<number> {
       activeGoalId: campaigns.activeGoalId,
       brandProfileId: campaigns.brandProfileId,
       audienceId: campaigns.audienceId,
-      // The HARD targeting subset. It constrained the audience pick when that pick happened
-      // inside the DAG; the pick moved to the trigger, so the constraint moves with it.
-      audienceIds: campaigns.audienceIds,
       dailyBudgetCents: campaigns.dailyBudgetCents,
       // The offer this campaign sells — part of the (offer, leg, channel) its ceiling is set at.
       offerId: campaigns.offerId,
@@ -263,10 +260,9 @@ export async function reRunDueCampaigns(): Promise<number> {
           // Names the OFFER every brand-scoped read is priced on — a campaign sells exactly one.
           // Null on the pre-offer population keeps the brand-scoped read.
           campaignId: campaign.id,
-          requiredAudienceIds: campaign.audienceIds,
           excludedAudienceIds,
         });
-        // Every audience the grid lists is freshly exhausted or outside the campaign's subset: a run
+        // Every audience the grid lists is freshly exhausted: a run
         // would reach lead-service with no audience and buy nothing. Held on the exhaustion's own
         // cadence and SAID, never run; status untouched.
         // features-service states the campaign's play allows no workflow: held, never run on the
@@ -301,7 +297,7 @@ export async function reRunDueCampaigns(): Promise<number> {
             reason: "no_serveable_audience",
             detail: `Campaign ${campaign.id} is held: every audience it may serve is exhausted for now, so a run would have nobody to contact. It is looked at again at ${nextRunAt.toISOString()}.`,
             nextRunAt,
-            data: { excludedAudienceIds, requiredAudienceIds: campaign.audienceIds },
+            data: { excludedAudienceIds },
           }]);
           continue;
         }

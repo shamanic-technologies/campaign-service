@@ -56,7 +56,7 @@ describe("selectCellFromProjection — the run serves a CELL, not a ROW", () => 
 
     // What the cell pick answers once the audience is chosen first.
     const chosen = selectCellFromProjection(grid, {
-      requiredAudienceIds: ["aud-B"],
+      excludedAudienceIds: ["aud-A"],
       rng: fixedRng,
     });
     expect(chosen.audienceId).toBe("aud-B");
@@ -65,7 +65,7 @@ describe("selectCellFromProjection — the run serves a CELL, not a ROW", () => 
 
   it("still answers the globally cheapest workflow when the chosen audience IS the one it is cheap on", () => {
     const chosen = selectCellFromProjection(grid, {
-      requiredAudienceIds: ["aud-A"],
+      excludedAudienceIds: ["aud-B"],
       rng: fixedRng,
     });
     expect(chosen).toEqual({ audienceId: "aud-A", workflowSlug: "wf-D" });
@@ -109,12 +109,6 @@ describe("the campaign's constraints apply to the audience chosen at the TRIGGER
     cell("aud-3", "wf-a", 10, ev()),
   ];
 
-  it("never chooses an audience outside the HARD targeting subset", () => {
-    for (let i = 0; i < 50; i++) {
-      expect(selectCellFromProjection(rows, { requiredAudienceIds: ["aud-2"] }).audienceId).toBe("aud-2");
-    }
-  });
-
   it("never chooses a freshly-exhausted audience", () => {
     for (let i = 0; i < 50; i++) {
       const chosen = selectCellFromProjection(rows, { excludedAudienceIds: ["aud-1", "aud-3"] });
@@ -122,10 +116,9 @@ describe("the campaign's constraints apply to the audience chosen at the TRIGGER
     }
   });
 
-  it("chooses NO audience when the two constraints leave nothing — and still names a workflow", () => {
+  it("chooses NO audience when the exclusion leaves nothing — and still names a workflow", () => {
     const chosen = selectCellFromProjection(rows, {
-      requiredAudienceIds: ["aud-1"],
-      excludedAudienceIds: ["aud-1"],
+      excludedAudienceIds: ["aud-1", "aud-2", "aud-3"],
     });
     expect(chosen.audienceId).toBeNull();
     // The run still dispatches: the workflow falls back to the global argmin, which is what the
@@ -135,7 +128,7 @@ describe("the campaign's constraints apply to the audience chosen at the TRIGGER
 
   it("keeps the chosen audience when its column carries no rankable economics", () => {
     const unpriced = [cell("aud-1", "wf-a", null, ev()), cell("aud-2", "wf-b", 7, ev())];
-    const chosen = selectCellFromProjection(unpriced, { requiredAudienceIds: ["aud-1"] });
+    const chosen = selectCellFromProjection(unpriced, { excludedAudienceIds: ["aud-2"] });
     expect(chosen.audienceId).toBe("aud-1");
     expect(chosen.workflowSlug).toBe("wf-b");
   });

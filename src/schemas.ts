@@ -39,12 +39,10 @@ export const CampaignSchema = z.object({
   activeGoalId: z.string().nullable(),
   brandProfileId: z.string().nullable(),
   audienceId: z.string().nullable(),
-  // Per-campaign OWN config (Campaign v2). Null = inherit the brand. audienceIds is the
-  // targeted subset. `goal` is a LEGACY read-only field: still served wherever it is stored so
+  // Per-campaign OWN config (Campaign v2). Null = inherit the brand. `goal` is a LEGACY read-only field: still served wherever it is stored so
   // consumers reading it keep working, never written any more, and scheduled for removal — a
   // campaign states what it sells with `offerId` + `legKey`.
   goal: RuntimeGoalSchema.nullable(),
-  audienceIds: z.array(z.string()).nullable(),
   servicesOffered: z.array(z.string()).nullable(),
   clickDestinationUrl: z.string().nullable(),
   maxBudgetDailyUsd: z.string().nullable(),
@@ -124,10 +122,8 @@ export const CreateCampaignBody = z.object({
   // REQUIRED for the sales family, optional otherwise. Not validated against a local list,
   // because there is no local list: this service does not own the leg vocabulary.
   legKey: z.string().min(1).nullable().optional(),
-  // Per-campaign OWN config (Campaign v2). Omit / null = inherit the brand. audienceIds is the
-  // targeted SUBSET (one or more) of the brand's audiences; an empty array is rejected — use
-  // null to clear back to inherit.
-  audienceIds: z.array(z.string().min(1)).min(1, "audienceIds must contain at least one audience (use null to inherit the brand)").nullable().optional(),
+  // Per-campaign OWN config (Campaign v2). Omit / null = inherit the brand. No audience subset:
+  // `audienceIds` is RETIRED (2026-10-14) and a stated list is refused 400 `audience_ids_retired`.
   servicesOffered: z.array(z.string().min(1)).nullable().optional(),
   clickDestinationUrl: z.string().min(1).nullable().optional(),
   maxBudgetDailyUsd: z.string().optional(),
@@ -335,10 +331,9 @@ export const UpdateCampaignBody = z.object({
   // without a second campaign.
   legKey: z.string().min(1).nullable().optional(),
   // Set / clear this campaign's OWN config (Campaign v2). null clears a field → inherit the
-  // brand. Updating these never touches the brand or any sibling campaign. audienceIds must be
-  // non-empty when present; use null to clear back to inherit. `goal` is deliberately absent: it
-  // is a legacy read-only field nothing writes any more.
-  audienceIds: z.array(z.string().min(1)).min(1, "audienceIds must contain at least one audience (use null to inherit the brand)").nullable().optional(),
+  // brand. Updating these never touches the brand or any sibling campaign. `goal` is deliberately
+  // absent: it is a legacy read-only field nothing writes any more. `audienceIds` is RETIRED
+  // (2026-10-14): a stated list is refused 400 `audience_ids_retired`.
   servicesOffered: z.array(z.string().min(1)).nullable().optional(),
   clickDestinationUrl: z.string().min(1).nullable().optional(),
   maxBudgetDailyUsd: z.string().optional(),
@@ -464,14 +459,13 @@ export const StartRunResponse = z.object({
   // served as stored (almost always null), never written, scheduled for removal; the sending
   // runtime reads
   // servicesOffered / clickDestinationUrl as authoritative per-campaign config (null =
-  // inherit the brand). audienceIds is the campaign's targeted subset.
+  // inherit the brand).
   goal: RuntimeGoalSchema.nullable(),
   // The OFFER this campaign sells — brand-service's id, carried and never derived. A brand
   // holding SEVERAL offers refuses every brand-scoped read with 409 SEVERAL_OFFERS, so a
   // downstream DAG node that reads brand-service scopes its call on this rather than guessing
   // one. Null for a campaign older than the offer level.
   offerId: z.string().nullable(),
-  audienceIds: z.array(z.string()).nullable(),
   servicesOffered: z.array(z.string()).nullable(),
   clickDestinationUrl: z.string().nullable(),
   // A sales funnel unit: the free text its funnel campaign tells the writer of this run's message to

@@ -357,10 +357,6 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
           identity: preRunIdentity,
         });
         audienceId = selectAudienceFromProjection(projectionRows, workflowSlug, {
-          // Campaign v2: HARD targeting subset. When the campaign targets a subset of the
-          // brand's audiences, the bandit may ONLY pick from it — the campaign never contacts
-          // an audience it doesn't target. NULL/empty → target the brand's full active set.
-          requiredAudienceIds: campaign.audienceIds ?? undefined,
           excludedAudienceIds,
         });
       } catch (err) {
@@ -431,13 +427,12 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       brandProfileId: campaign.brandProfileId ?? null,
       audienceId,
       // Campaign v2 own config — the campaign's raw own goal (null = paced on brand goal),
-      // its targeted audience subset, its services, its click-destination.
+      // its services, its click-destination. No audience subset: retired 2026-10-14.
       goal: campaign.goal ?? null,
       // The offer this campaign sells (null = pre-offer campaign). A brand holding several
       // offers refuses brand-scoped reads (SEVERAL_OFFERS), so downstream nodes that read
       // brand-service (e.g. extract-fields) scope their call on this — never guessing one.
       offerId: campaign.offerId ?? null,
-      audienceIds: campaign.audienceIds ?? null,
       servicesOffered: campaign.servicesOffered ?? null,
       clickDestinationUrl: campaign.clickDestinationUrl ?? null,
       // Free text the writer of this run's message must follow (null = none). The funnel campaign's.
@@ -455,10 +450,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
 /**
  * Does the campaign still have at least one serveable, non-exhausted audience?
  *
- * Mirrors /start-run's bandit eligibility (active audiences ∩ the campaign's targeted subset)
+ * Mirrors /start-run's bandit eligibility (the brand's active audiences)
  * but drops the workflow soft-filter — an audience serveable under ANY workflow keeps the
  * campaign alive — and excludes audiences currently marked exhausted. Returns true when the
- * bandit would find at least one audience to pick, false when every targeted audience is
+ * bandit would find at least one audience to pick, false when every audience is
  * exhausted (the only legitimate campaign-wide stop condition).
  *
  * Throws on a features/brand-service error so the caller can fail SAFE (never stop on an

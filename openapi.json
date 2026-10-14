@@ -79,13 +79,6 @@
           "goal": {
             "$ref": "#/components/schemas/RuntimeGoal"
           },
-          "audienceIds": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "string"
-            }
-          },
           "servicesOffered": {
             "type": "array",
             "nullable": true,
@@ -204,7 +197,6 @@
           "brandProfileId",
           "audienceId",
           "goal",
-          "audienceIds",
           "servicesOffered",
           "clickDestinationUrl",
           "maxBudgetDailyUsd",
@@ -344,15 +336,6 @@
             "type": "string",
             "nullable": true,
             "minLength": 1
-          },
-          "audienceIds": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "minItems": 1
           },
           "servicesOffered": {
             "type": "array",
@@ -840,15 +823,6 @@
             "type": "string",
             "nullable": true,
             "minLength": 1
-          },
-          "audienceIds": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "minItems": 1
           },
           "servicesOffered": {
             "type": "array",
@@ -1476,13 +1450,6 @@
             "type": "string",
             "nullable": true
           },
-          "audienceIds": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "string"
-            }
-          },
           "servicesOffered": {
             "type": "array",
             "nullable": true,
@@ -1540,7 +1507,6 @@
           "audienceId",
           "goal",
           "offerId",
-          "audienceIds",
           "servicesOffered",
           "clickDestinationUrl",
           "instruction",
