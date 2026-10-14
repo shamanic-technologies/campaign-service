@@ -1,8 +1,6 @@
 import { publishedSpelling, storedLegKey } from "./leg-identity.js";
 import type { IdentityHeaders } from "@distribute/runs-client";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
-import { fetchCampaignBudgets, type CampaignBudgetsRead } from "./campaign-budget-client.js";
-import { fundingFromBudgets } from "./campaign-funding.js";
 import { isSalesFamilyFeature, isServicePerformedFeature } from "./sales-outreach-campaign.js";
 import { fetchStartableWorkflowSlug } from "./startable-workflow-client.js";
 import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
@@ -10,21 +8,12 @@ import { fetchPipe, fetchSalesFunnel, legsWithoutChannel } from "./sales-funnel-
 import { fetchOfferSteps, missingOfferSteps } from "./sales-funnel-offer-steps.js";
 
 /**
- * CAN THE CUSTOMER START THE CAMPAIGN FOR THIS FUNDED (OFFER, LEG, CHANNEL), AND WHAT WOULD IT BE?
+ * CAN THE CUSTOMER START THE CAMPAIGN FOR THIS (OFFER, LEG, CHANNEL)?
  *
- * Funding states a ceiling and creates nothing — money starts nothing. This is the other half: a
- * way for the CUSTOMER to say "start it". Their screen knows four things (brand, offer, leg,
- * acquisition channel) and cannot know the other three:
- *
- *   - the WORKFLOW is this service's choice, re-picked every run, and a slug frozen in a browser
- *     goes stale the moment the catalogue moves;
- *   - the NAME is derivable from the identity;
- *   - the MONEY is billing's, per (offer x leg x channel), and is already set. That is what
- *     "funded" means, and accepting a per-campaign ceiling here would be a second representation
- *     of one fact.
- *
- * So this resolves those three from what is already stated elsewhere, and REFUSES — in a sentence
- * a person can read — when it cannot be started.
+ * A way for the CUSTOMER to say "start it" from four things their screen knows (brand, offer, leg,
+ * acquisition channel). Since the one money model (owner 2026-10-14: a campaign's money is its sales
+ * funnel's caps) only a lead SOURCE's On is answered yes here; an outreach channel is refused
+ * `sales_funnel_required`, in a sentence a person can read.
  *
  * NOTHING HERE DECIDES THAT A CAMPAIGN SHOULD EXIST. It answers a question a person asked. No
  * sweep, tick, cadence or ceiling reaches it, and it never runs unless somebody pressed a button.
@@ -40,10 +29,9 @@ export interface StartRefusal {
     | "channel_not_paced_here"
     | "unknown_channel"
     | "leg_not_performed"
-    | "not_funded"
+    | "sales_funnel_required"
     | "no_workflow"
     | "catalogue_unavailable"
-    | "billing_unavailable"
     | "workflow_unavailable";
   /** Customer-facing English. The dashboard shows this and nothing else. */
   message: string;
@@ -52,12 +40,8 @@ export interface StartRefusal {
 export interface StartablePair {
   /** The single LEG this campaign is bought for, as the customer stated it. */
   legKey: string;
-  /**
-   * The ceiling billing states for this campaign, by the one shared funding definition. null for a
-   * SOURCE campaign: it runs nothing itself, so no ceiling is read to start it (its sourcing spend is
-   * paced inside the outreach campaign it feeds, lib/channel-spend.ts).
-   */
-  ceilingCents: number | null;
+  /** Always null: no per-campaign ceiling exists any more (one money model, owner 2026-10-14). */
+  ceilingCents: null;
   /**
    * The DAG this campaign is born on, or null for a channel the CUSTOMER operates: there is no
    * workflow for work a human performs off-platform, and the absence IS the statement.
@@ -82,22 +66,19 @@ export interface StartPairRequest {
 /**
  * Resolve everything a start needs, or say why it cannot happen.
  *
- * The reads are the ones this service already makes: features-service's PUBLIC channel catalogue
- * (the ONE place that says which legs a channel performs), billing's per-campaign ceilings, and
- * workflow-service's active workflows for the channel. Nothing new is stored, cached or summed.
+ * The read is features-service's PUBLIC channel catalogue (the ONE place that says which legs a
+ * channel performs). Since the one money model (owner 2026-10-14) only a lead SOURCE starts here: an
+ * outreach channel has no money outside a sales funnel campaign, so it is refused
+ * `sales_funnel_required` once its scope is valid. Nothing is stored, cached or summed.
  */
 export async function resolveStartablePair(
   input: StartPairRequest,
   identity: IdentityHeaders & { userId: string; runId: string },
   deps: {
     catalogue?: () => Promise<ChannelCatalogueRead>;
-    budgets?: (brandId: string) => Promise<CampaignBudgetsRead>;
-    workflow?: typeof fetchStartableWorkflowSlug;
   } = {},
 ): Promise<StartablePairRead> {
   const readCatalogue = deps.catalogue ?? fetchChannelCatalogue;
-  const readBudgets = deps.budgets ?? ((brandId: string) => fetchCampaignBudgets(brandId, identity));
-  const readWorkflow = deps.workflow ?? fetchStartableWorkflowSlug;
 
   if (!input.offerId || !input.legKey) {
     return refuse(
@@ -158,54 +139,14 @@ export async function resolveStartablePair(
     return refuse(400, "leg_not_performed", "This channel doesn't perform that step.");
   }
 
-  const budgets = await readBudgets(input.brandId);
-  if (!budgets.ok) {
-    return refuse(
-      502,
-      "billing_unavailable",
-      "We couldn't read this brand's budget just now. Please try again in a minute.",
-    );
-  }
-  const verdict = fundingFromBudgets(
-    { featureSlug: input.featureSlug, offerId: input.offerId, legKey },
-    budgets,
-  );
-  if (!verdict.funded) return refuse(409, "not_funded", NOT_FUNDED_MESSAGE);
-
-  // A channel the CUSTOMER operates has NO workflow, and that absence is the statement rather than
-  // a gap: the work is performed by a human off-platform, and the campaign exists so their work has
-  // a budget line, a scope for stats and something they can pause.
-  // Same for a channel ANOTHER SERVICE performs on an event (ai-instant-call): no DAG runs it,
-  // so none is looked up and none is required.
-  const operator = catalogue.operatorBySlug.get(input.featureSlug) ?? "platform";
-  if (operator === "customer" || isServicePerformedFeature(input.featureSlug)) {
-    return { ok: true, pair: { legKey, ceilingCents: verdict.ceilingCents, workflowSlug: null } };
-  }
-
-  const workflow = await readWorkflow(input.featureSlug, identity);
-  if (!workflow.ok) {
-    return refuse(
-      502,
-      "workflow_unavailable",
-      "We couldn't work out how to run this channel just now. Please try again in a minute.",
-    );
-  }
-  if (workflow.workflowSlug === null) {
-    return refuse(
-      409,
-      "no_workflow",
-      "Nothing can run this channel yet, so there is nothing to start.",
-    );
-  }
-
-  return {
-    ok: true,
-    pair: { legKey, ceilingCents: verdict.ceilingCents, workflowSlug: workflow.workflowSlug },
-  };
+  // ONE money model (owner 2026-10-14): a campaign's money is its sales funnel's caps, and an
+  // outreach campaign started alone has none. It is refused here by name rather than born to be held
+  // by the gate forever; the person starts the channel as part of a sales funnel campaign.
+  return refuse(409, "sales_funnel_required", SALES_FUNNEL_REQUIRED_MESSAGE);
 }
 
-const NOT_FUNDED_MESSAGE =
-  "You haven't funded this channel for that offer and step. Set its daily budget, then start it.";
+const SALES_FUNNEL_REQUIRED_MESSAGE =
+  "This channel now runs inside a sales funnel campaign. Start it from a sales funnel, with its budget there.";
 
 function refuse(
   status: number,

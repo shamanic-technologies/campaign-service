@@ -4,7 +4,6 @@ import { db } from "../db/index.js";
 import { campaigns, type Campaign } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { sameLeg } from "./leg-identity.js";
-import { campaignFunding } from "./campaign-funding.js";
 import { isSalesFunnelUnit, orderForSharedPipes, pipeKey, salesFunnelUnitMoney, salesFunnelUnitRef, sharedSalesFunnelPipes } from "./sales-funnel-campaigns.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
@@ -16,9 +15,6 @@ import {
   serializationCohort,
 } from "./brand-turns.js";
 import { hasLiveRunForCampaign, STUCK_RUN_FRESHNESS_THRESHOLD_MS } from "./scheduler.js";
-import { globalSalesPotBlock } from "./global-sales-pot.js";
-import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
-import { itemVerdict } from "./sales-items-pace.js";
 import {
   eventConcernsPeople,
   scheduleNamedPersonDue,
@@ -77,7 +73,7 @@ import { oweEventPerson, type EventPerson } from "./trigger-person.js";
  * before dispatching, because both are correctness rather than pacing: never two runs of one
  * campaign, and never two runs of one brand COHORT (the outbound channels share a lead population
  * and a set of sending accounts, so a second concurrent run contacts the same people from the same
- * mailboxes). And the campaign must be FUNDED on the one shared definition (`campaignFunding`) —
+ * mailboxes). And the campaign must be a SALES FUNNEL unit its funnel's caps fund (`salesFunnelUnitMoney`) —
  * fail-CLOSED, as everywhere else that decides whether to start spending: a reply must never make a
  * defunded campaign spend, and firing a run the gate is about to refuse could only burn it.
  */
@@ -86,20 +82,15 @@ import { oweEventPerson, type EventPerson } from "./trigger-person.js";
 export const STEP_TRIGGER_SKIPS = {
   /** Its channel is operated by the CUSTOMER's own team, so it has no DAG and never runs one. */
   NO_WORKFLOW: "no_workflow",
-  /** The customer funds nothing for it — the same definition the turn planner holds it on. */
+  /** Its sales funnel funds nothing for it — the same definition the turn planner holds it on. */
   UNFUNDED: "unfunded",
   /** A run of this campaign is already in flight. The event is already being answered. */
   RUN_IN_FLIGHT: "run_in_flight",
   /**
-   * GLOBAL mode: the brand's ONE daily sales pot is spent (or cannot be judged). The lead is NOT
-   * dropped: it stays due in lead-service's queue and the first run the pot can pay for works it.
+   * The campaign is not a SALES FUNNEL unit: it has no money (owner 2026-10-14, one money model: a
+   * campaign's money is its sales funnel's caps). Final, never retried.
    */
-  GLOBAL_SALES_BUDGET_REACHED: "global_sales_budget_reached",
-  /**
-   * ITEMS mode: this campaign's own item budget allows nothing more today (or cannot be judged).
-   * The lead is NOT dropped: it stays due and the first run the item can pay for works it.
-   */
-  ITEM_BUDGET_REACHED: "item_budget_reached",
+  NOT_A_SALES_FUNNEL_CAMPAIGN: "not_a_sales_funnel_campaign",
   /** A run of a campaign it shares leads and sending accounts with is in flight. */
   COHORT_RUN_IN_FLIGHT: "cohort_run_in_flight",
   /** The row states no brand, owner or feature, so no execution could be identified. */
@@ -411,10 +402,17 @@ export async function runCampaignsInScope(
       continue;
     }
 
-    const moneyIdentity = { orgId: req.orgId, userId: campaign.createdByUserId, campaignId: campaign.id, brandId: brandIds[0] };
-    // A SALES FUNNEL unit's money is its funnel's caps, and nothing else (lib/sales-funnel-campaigns.ts).
-    const unitMoney = isSalesFunnelUnit(campaign) ? await salesFunnelUnitMoney(salesFunnelUnitRef(campaign), now) : null;
-    if (unitMoney && !unitMoney.run) {
+    // ONE money model (owner 2026-10-14): a campaign's money is its sales funnel's caps, and nothing
+    // else (lib/sales-funnel-campaigns.ts). A campaign that is not a sales funnel unit has none.
+    if (!isSalesFunnelUnit(campaign)) {
+      skip(
+        STEP_TRIGGER_SKIPS.NOT_A_SALES_FUNNEL_CAMPAIGN,
+        "this campaign is not part of a sales funnel campaign, and a campaign's money is its sales funnel's caps only",
+      );
+      continue;
+    }
+    const unitMoney = await salesFunnelUnitMoney(salesFunnelUnitRef(campaign), now);
+    if (!unitMoney.run) {
       skip(
         unitMoney.kind === "unfunded"
           ? STEP_TRIGGER_SKIPS.UNFUNDED
@@ -422,59 +420,6 @@ export async function runCampaignsInScope(
             ? STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAPS_UNAVAILABLE
             : STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAP,
         unitMoney.detail,
-      );
-      continue;
-    }
-    const salesBudget = brandIds.length === 1 && !unitMoney ? await fetchBrandSalesBudget(brandIds[0], moneyIdentity) : null;
-    if (unitMoney) {
-      // Funded by its funnel: neither an item, a per-pipe ceiling nor the brand pot is its money.
-    } else if (salesBudget?.ok && salesBudget.mode === "items") {
-      // ITEMS mode: this campaign's item is its money, and nothing else (see sales-items.ts). A
-      // step-triggered leg is reactive by definition: capped on its item's period, not paced.
-      const verdict = await itemVerdict({
-        campaign: {
-          id: campaign.id,
-          orgId: req.orgId,
-          offerId: campaign.offerId,
-          legKey: campaign.legKey,
-          featureSlug: campaign.featureSlug,
-          dailyBudgetCents: campaign.dailyBudgetCents,
-        },
-        brandId: brandIds[0],
-        items: salesBudget.items,
-        reactive: true,
-        identity: moneyIdentity,
-        now,
-      });
-      if (!verdict.run) {
-        if (verdict.kind === "unfunded") skip(STEP_TRIGGER_SKIPS.UNFUNDED, verdict.detail);
-        else {
-          skip(
-            STEP_TRIGGER_SKIPS.ITEM_BUDGET_REACHED,
-            `${verdict.detail}; the lead stays due and is worked by the first run the item can pay for (next check ${verdict.nextRunAt.toISOString()})`,
-          );
-        }
-        continue;
-      }
-    } else {
-      const funding = await campaignFunding(campaign, brandIds[0], { orgId: req.orgId });
-      if (!funding.funded) {
-        skip(STEP_TRIGGER_SKIPS.UNFUNDED, funding.reason);
-        continue;
-      }
-    }
-
-    // Same pot gate-check binds on: firing a run it is about to refuse would only burn the run.
-    // (Items mode answers null here: the brand has no pot.)
-    const pot = unitMoney ? null : await globalSalesPotBlock(
-      { orgId: req.orgId, brandId: brandIds[0], featureSlug: campaign.featureSlug, identity: moneyIdentity },
-      now,
-      salesBudget,
-    );
-    if (pot) {
-      skip(
-        STEP_TRIGGER_SKIPS.GLOBAL_SALES_BUDGET_REACHED,
-        `${pot.detail}; the lead stays due and is worked by the first run the budget can pay for (next check ${pot.nextRunAt.toISOString()})`,
       );
       continue;
     }

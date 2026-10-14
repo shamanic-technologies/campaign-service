@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const {
   mockListRuns,
-  mockGetStatsBudget,
   mockFindFirst,
   mockFindMany,
   mockInsertValues,
@@ -12,10 +11,11 @@ const {
   mockCreateRun,
   mockUpdateRun,
   mockTraceEvent,
+  mockUnitMoney,
 } = vi.hoisted(() => ({
   mockTraceEvent: vi.fn(),
+  mockUnitMoney: vi.fn(),
   mockListRuns: vi.fn(),
-  mockGetStatsBudget: vi.fn(),
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
   mockFindFirst: vi.fn(),
@@ -28,19 +28,19 @@ const {
 
 vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
-  getStatsBudget: (p: { featureSlug?: string }) => (p?.featureSlug?.startsWith("sourcing-") ? Promise.resolve({ windows: [] }) : mockGetStatsBudget(p)),
   createRun: mockCreateRun,
   updateRun: mockUpdateRun,
 }));
 
 vi.mock("../../src/lib/trace-event.js", () => ({ traceEvent: mockTraceEvent }));
 
-// Every brand in this file is in CAMPAIGNS mode — billing's default, and every brand in prod until
-// one states a global sales budget. Mocking the mode read (rather than queueing one more fetch)
-// leaves every assertion below byte-identical: this file IS the campaigns-mode regression gate.
-vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({
-  fetchBrandSalesBudget: vi.fn().mockResolvedValue({ ok: true, mode: "campaigns" }),
-}));
+// A unit's money is its funnel's caps. Defaults to the REAL read (so the billing URL is pinned);
+// a test states a verdict with `fundedUnit` / `heldUnit` when the read itself is not the subject.
+vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>();
+  mockUnitMoney.mockImplementation(actual.salesFunnelUnitMoney);
+  return { ...actual, salesFunnelUnitMoney: mockUnitMoney };
+});
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
@@ -53,7 +53,6 @@ vi.mock("../../src/db/index.js", () => ({
       },
     }),
     delete: vi.fn().mockReturnValue({ where: mockDeleteWhere }),
-    // Raw-SQL seam (the offer adoption's pre-check), inert here.
     execute: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -88,7 +87,7 @@ import {
   planBrandTurns,
   selectLowestFillRatio,
   serializationCohort,
-  resetLegKeylessCeilingReports,
+  hasLiveRunForBrandCohort,
   TURN_DEFER_MS,
   FUNDING_RECHECK_MS,
   type ClaimedSalesCampaign,
@@ -107,7 +106,7 @@ const VISIT_LEG = "start_to_website_visit";
 const OFFER = "offer-1";
 
 // The brand's alive campaigns, as the sales-scoped liveness check reads them.
-let aliveBrandCampaigns: Array<{ id: string; featureSlug: string | null }> = [];
+let aliveBrandCampaigns: Array<{ id: string; featureSlug: string | null; salesFunnelCampaignId?: string | null }> = [];
 function claimed(overrides: Partial<ClaimedSalesCampaign> = {}): ClaimedSalesCampaign {
   return {
     id: "campaign-1",
@@ -117,44 +116,40 @@ function claimed(overrides: Partial<ClaimedSalesCampaign> = {}): ClaimedSalesCam
     workflowSlug: "sales-email-cold-outreach",
     brandIds: ["brand-1"],
     featureSlug: SALES,
-    dailyBudgetCents: null,
     offerId: OFFER,
     legKey: ENTRY_LEG,
+    salesFunnelCampaignId: "fc-1",
+    salesFunnelId: "funnel@1",
     ...overrides,
   };
 }
 
-type Entry = { offerId?: string | null; legKey: string | null; featureSlug?: string; dailyBudgetCents: string };
-// billing's per-campaign ceilings for the brand. `brandDailyBudgetCents` defaults to their sum;
-// pass it explicitly for a brand with ONE pot (entries: []).
-function mockCampaignBudgets(entries: Entry[], brandDailyBudgetCents?: string | null) {
-  mockFetch.mockResolvedValueOnce({
-    ok: true,
-    json: async () => ({
-      brandId: "brand-1",
-      dailyBudgetCents:
-        brandDailyBudgetCents === undefined
-          ? String(entries.reduce((s, e) => s + Number(e.dailyBudgetCents), 0))
-          : brandDailyBudgetCents,
-      campaigns: entries.map((e) => ({ offerId: OFFER, featureSlug: SALES, ...e, updatedAt: null })),
-    }),
-  });
+/** The funnel funds this unit; it ranks on `spentCents / ceilingCents`. */
+function fundedUnit(id: string, spentCents: number, ceilingCents: number) {
+  mockUnitMoney.mockImplementation(async (ref: { id: string }, now: Date) =>
+    ref.id === id ? { run: true, pace: { spentCents, ceilingCents } } : pending(ref, now),
+  );
 }
 
-function mockSpend(cents: string) {
-  mockGetStatsBudget.mockResolvedValueOnce({
-    windows: [{ label: "today", totalCostInUsdCents: cents, netTotalCostInUsdCents: cents }],
-  });
+// Per-unit verdicts, set by `unitVerdicts` for a test with several units.
+let verdicts = new Map<string, unknown>();
+function pending(ref: { id: string }, now: Date) {
+  const v = verdicts.get(ref.id);
+  if (!v) throw new Error(`no money verdict stated for unit ${ref.id}`);
+  return typeof v === "function" ? (v as (n: Date) => unknown)(now) : v;
 }
-
-/** Run something and return everything it said on console.error, joined. */
-function captureErrors(): () => string {
-  const said: string[] = [];
-  vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-    said.push(args.map((a) => (a instanceof Error ? a.message : String(a))).join(" "));
-  });
-  return () => said.join("\n");
+function unitVerdicts(map: Record<string, unknown>) {
+  verdicts = new Map(Object.entries(map));
+  mockUnitMoney.mockImplementation(async (ref: { id: string }, now: Date) => pending(ref, now));
 }
+const runs = (spentCents: number, ceilingCents: number) => ({ run: true, pace: { spentCents, ceilingCents } });
+const held = (kind: "unfunded" | "unreadable" | "cap_reached") => (now: Date) => ({
+  run: false,
+  kind,
+  reason: kind,
+  detail: `held: ${kind}`,
+  nextRunAt: new Date(now.getTime() + FUNDING_RECHECK_MS),
+});
 
 /** Run something and return everything it said on console.warn, joined. */
 function captureWarnings(): () => string {
@@ -236,21 +231,14 @@ function resetMocks() {
   mockFetch.mockReset();
   mockTraceEvent.mockReset();
   mockTraceEvent.mockResolvedValue(undefined);
-  mockGetStatsBudget.mockReset();
-  mockGetStatsBudget.mockResolvedValue({
-    windows: [{ label: "today", totalCostInUsdCents: "0", netTotalCostInUsdCents: "0" }],
-  });
-  resetLegKeylessCeilingReports();
+  verdicts = new Map();
   process.env.BILLING_SERVICE_URL = "https://billing.test.local";
   process.env.BILLING_SERVICE_API_KEY = "billing-key";
-  process.env.BRAND_SERVICE_URL = "https://brand.test.local";
-  process.env.BRAND_SERVICE_API_KEY = "brand-key";
   mockFetch.mockImplementation(async (input: URL | string) => {
     throw new Error(`unexpected fetch in test: ${String(input)}`);
   });
   mockListRuns.mockResolvedValue({ runs: [] });
-  mockFindFirst.mockResolvedValue({ id: "existing", name: "custom name", status: "ongoing" });
-  aliveBrandCampaigns = [{ id: "campaign-1", featureSlug: SALES }];
+  aliveBrandCampaigns = [{ id: "campaign-1", featureSlug: SALES, salesFunnelCampaignId: "fc-1" }];
   mockFindMany.mockImplementation(async () => aliveBrandCampaigns);
   mockInsertValues.mockResolvedValue(undefined);
   mockUpdateWhere.mockResolvedValue(undefined);
@@ -258,17 +246,34 @@ function resetMocks() {
 }
 
 describe("planBrandTurns", () => {
-  beforeEach(resetMocks);
-
-  it("leaves non-sales campaigns entirely alone", async () => {
-    const deferred = await planBrandTurns([claimed({ featureSlug: "pr-media-pitch-v1" })]);
-    expect(deferred.size).toBe(0);
-    expect(mockFetch).not.toHaveBeenCalled();
+  let actualMoney: typeof import("../../src/lib/sales-funnel-campaigns.js").salesFunnelUnitMoney;
+  beforeEach(async () => {
+    resetMocks();
+    actualMoney = (await vi.importActual<typeof import("../../src/lib/sales-funnel-campaigns.js")>("../../src/lib/sales-funnel-campaigns.js")).salesFunnelUnitMoney;
+    mockUnitMoney.mockImplementation(actualMoney);
   });
 
-  it("HOLDS a SALES FUNNEL unit on its funnel's money, without reading the brand's per-pipe ceilings", async () => {
-    // The brand funds this pipe generously in the pre-funnel model; a unit never runs on that money:
-    // its funnel states no max budget at billing, so it waits.
+  it("leaves non-sales campaigns that are not units entirely alone", async () => {
+    const deferred = await planBrandTurns([claimed({ featureSlug: "pr-media-pitch-v1", salesFunnelCampaignId: null, salesFunnelId: null })]);
+    expect(deferred.size).toBe(0);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockUnitMoney).not.toHaveBeenCalled();
+    expect(mockTraceEvent).not.toHaveBeenCalled();
+  });
+
+  it("HOLDS a sales-family campaign that is not a sales funnel unit, by name, with no billing read", async () => {
+    const now = new Date("2026-10-14T10:00:00Z");
+    const deferred = await planBrandTurns([claimed({ salesFunnelCampaignId: null, salesFunnelId: null })], now);
+    expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockUnitMoney).not.toHaveBeenCalled();
+    expect(mockListRuns).not.toHaveBeenCalled();
+    const call = mockTraceEvent.mock.calls[0];
+    expect(call?.[0]).toBe(ANCESTOR_RUN_ID);
+    expect((call?.[1] as { data: { reason: string } }).data.reason).toBe("not_a_sales_funnel_campaign");
+  });
+
+  it("HOLDS a SALES FUNNEL unit on its funnel's money", async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ stated: false, funded: false, fundedBy: null, maxBudget: null, maxVolume: null, pipes: null }) });
     const now = new Date("2026-10-10T10:00:00Z");
     const deferred = await planBrandTurns(
@@ -301,7 +306,6 @@ describe("planBrandTurns", () => {
         pipes: null,
       }),
     });
-    mockListRuns.mockResolvedValue({ runs: [] });
     mockFindMany.mockResolvedValue([]);
     const deferred = await planBrandTurns([
       claimed({ id: "unit-2", offerId: OFFER, salesFunnelCampaignId: "funnel-campaign-2", salesFunnelId: "f@y" }),
@@ -309,127 +313,25 @@ describe("planBrandTurns", () => {
     expect(deferred.has("unit-2")).toBe(false);
   });
 
-  it("a brand with ONE funded pot and no per-campaign ceilings runs on it", async () => {
-    mockCampaignBudgets([], "5000");
-    mockSpend("0");
-    const deferred = await planBrandTurns([claimed()]);
-    expect(deferred.size).toBe(0);
-  });
-
-  it("HOLDS a brand that funds nothing — no campaign ceiling and no pot", async () => {
-    mockCampaignBudgets([], null);
+  it("HOLDS a unit whose money read throws (fail-CLOSED)", async () => {
+    mockUnitMoney.mockRejectedValue(new Error("boom"));
     const now = new Date("2026-08-16T10:00:00Z");
     const deferred = await planBrandTurns([claimed()], now);
     expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
   });
 
-  it("HOLDS the brand when the ceilings cannot be read (fail-CLOSED)", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
-    const now = new Date("2026-08-16T10:00:00Z");
-    const deferred = await planBrandTurns([claimed()], now);
-    expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
-  });
-
-  it("CREATES NOTHING for a funded campaign ceiling that has no campaign", async () => {
-    // Money is not a statement of intent: a campaign exists because the CUSTOMER said so.
-    mockCampaignBudgets([
-      { legKey: ENTRY_LEG, dailyBudgetCents: "2000" },
-      { legKey: ENTRY_LEG, featureSlug: FEEDBACK, dailyBudgetCents: "1000" },
-    ]);
-    mockSpend("0");
+  it("never RESUMES or CREATES anything because a funnel is funded", async () => {
+    fundedUnit("campaign-1", 0, 2000);
     await planBrandTurns([claimed()]);
     expect(mockInsertValues).not.toHaveBeenCalled();
-  });
-
-  it("never RESUMES a campaign because its ceiling is funded", async () => {
-    mockCampaignBudgets([{ legKey: ENTRY_LEG, dailyBudgetCents: "2000" }]);
-    mockSpend("0");
-    await planBrandTurns([claimed()]);
     for (const call of mockUpdateSet.mock.calls) {
       expect(call[0]).not.toHaveProperty("status");
       expect(call[0]).not.toHaveProperty("stopReason");
     }
   });
 
-  it("makes ONE billing read — the per-campaign ceilings — and nothing else", async () => {
-    mockCampaignBudgets([{ legKey: ENTRY_LEG, dailyBudgetCents: "2000" }]);
-    mockSpend("0");
-    await planBrandTurns([claimed()]);
-    const urls = mockFetch.mock.calls.map((c) => String(c[0]));
-    expect(urls).toHaveLength(1);
-    expect(urls[0]).toBe("https://billing.test.local/internal/brands/brand-1/campaign-budgets");
-  });
-
-  it("names, as an ERROR, a funded ceiling that states no leg", async () => {
-    mockCampaignBudgets([
-      { legKey: ENTRY_LEG, dailyBudgetCents: "1500" },
-      { legKey: null, featureSlug: FEEDBACK, dailyBudgetCents: "500" },
-    ]);
-    mockSpend("0");
-    const said = captureErrors();
-    await planBrandTurns([claimed()]);
-    const text = said();
-    expect(text).toContain("FUNDED CEILING STATES NO LEG");
-    expect(text).toContain("brand-1");
-    expect(text).toContain(FEEDBACK);
-    expect(text).toContain("500 cents/day");
-  });
-
-  it("says nothing at all when every funded ceiling states its leg", async () => {
-    mockCampaignBudgets([{ legKey: ENTRY_LEG, dailyBudgetCents: "2000" }]);
-    mockSpend("0");
-    const said = captureErrors();
-    await planBrandTurns([claimed()]);
-    expect(said()).toBe("");
-  });
-
-  it("does NOT hold the brand for a leg-less ceiling — the live campaign is not at fault", async () => {
-    mockCampaignBudgets([
-      { legKey: ENTRY_LEG, dailyBudgetCents: "1500" },
-      { legKey: null, featureSlug: FEEDBACK, dailyBudgetCents: "500" },
-    ]);
-    mockSpend("0");
-    const said = captureErrors();
-    const deferred = await planBrandTurns([claimed()]);
-    expect(said()).toContain("FUNDED CEILING STATES NO LEG");
-    expect(deferred.size).toBe(0);
-  });
-
-  it("reports the same leg-less ceiling once per cadence, not once per tick", async () => {
-    const budgets = () => mockCampaignBudgets([{ legKey: null, dailyBudgetCents: "500" }]);
-    const now = new Date("2026-09-06T10:00:00Z");
-    const said = captureErrors();
-    budgets();
-    mockSpend("0");
-    await planBrandTurns([claimed()], now);
-    budgets();
-    mockSpend("0");
-    await planBrandTurns([claimed()], new Date(now.getTime() + 60_000));
-    expect(said().match(/FUNDED CEILING STATES NO LEG/g)).toHaveLength(1);
-  });
-
-  it("HOLDS a campaign whose (offer, leg, channel) carries no ceiling while the brand funds another", async () => {
-    mockCampaignBudgets([
-      { legKey: ENTRY_LEG, dailyBudgetCents: "2000" },
-      { legKey: VISIT_LEG, dailyBudgetCents: "0" },
-    ]);
-    mockSpend("0");
-    const now = new Date("2026-08-16T10:00:00Z");
-    const deferred = await planBrandTurns(
-      [claimed({ id: "c-reply" }), claimed({ id: "c-visit", legKey: VISIT_LEG })],
-      now,
-    );
-    expect(deferred.get("c-visit")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
-    expect(deferred.has("c-reply")).toBe(false);
-  });
-
-  it("fires exactly one campaign per cohort per tick — the emptiest relative to its ceiling", async () => {
-    mockCampaignBudgets([
-      { legKey: ENTRY_LEG, dailyBudgetCents: "1000" },
-      { legKey: VISIT_LEG, dailyBudgetCents: "1000" },
-    ]);
-    mockSpend("900"); // c-reply is nearly full
-    mockSpend("100"); // c-visit is nearly empty → takes the turn
+  it("fires exactly one unit per cohort per tick — the emptiest relative to its max budget", async () => {
+    unitVerdicts({ "c-reply": runs(900, 1000), "c-visit": runs(100, 1000) });
     const now = new Date("2026-08-16T10:00:00Z");
     const deferred = await planBrandTurns(
       [claimed({ id: "c-reply" }), claimed({ id: "c-visit", legKey: VISIT_LEG })],
@@ -439,39 +341,27 @@ describe("planBrandTurns", () => {
     expect(deferred.has("c-visit")).toBe(false);
   });
 
-  it("asks each campaign's spend under its OWN feature — the seed's slug would answer zero", async () => {
-    mockCampaignBudgets([
-      { legKey: ENTRY_LEG, featureSlug: SALES, dailyBudgetCents: "1000" },
-      { legKey: VISIT_LEG, featureSlug: GOOGLE_ADS, dailyBudgetCents: "1000" },
-    ]);
-    mockSpend("0");
-    mockSpend("0");
-    aliveBrandCampaigns = [
-      { id: "c-email", featureSlug: SALES },
-      { id: "c-ads", featureSlug: GOOGLE_ADS },
-    ];
-    await planBrandTurns([
+  it("units of different cohorts each take their own turn", async () => {
+    unitVerdicts({ "c-email": runs(900, 1000), "c-ads": runs(100, 1000) });
+    aliveBrandCampaigns = [];
+    const deferred = await planBrandTurns([
       claimed({ id: "c-email", featureSlug: SALES }),
       claimed({ id: "c-ads", featureSlug: GOOGLE_ADS, legKey: VISIT_LEG }),
     ]);
-    const slugs = mockGetStatsBudget.mock.calls.map((c) => c[0].featureSlug);
-    expect(slugs).toContain(SALES);
-    expect(slugs).toContain(GOOGLE_ADS);
+    expect(deferred.size).toBe(0);
   });
 
   it("holds the whole cohort while one of its runs is in flight", async () => {
-    mockCampaignBudgets([{ legKey: ENTRY_LEG, dailyBudgetCents: "2000" }]);
-    mockSpend("0");
+    fundedUnit("campaign-1", 0, 2000);
     mockListRuns.mockResolvedValue({ runs: [{ id: "run-1" }] });
     const now = new Date("2026-08-16T10:00:00Z");
     const deferred = await planBrandTurns([claimed()], now);
     expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + TURN_DEFER_MS);
   });
 
-  it("a live cold-email run does NOT hold a funded Google Ads campaign", async () => {
-    mockCampaignBudgets([{ legKey: VISIT_LEG, featureSlug: GOOGLE_ADS, dailyBudgetCents: "1000" }]);
-    mockSpend("0");
-    aliveBrandCampaigns = [{ id: "c-email", featureSlug: SALES }];
+  it("a live cold-email run does NOT hold a funded Google Ads unit", async () => {
+    fundedUnit("c-ads", 0, 1000);
+    aliveBrandCampaigns = [{ id: "c-email", featureSlug: SALES, salesFunnelCampaignId: "fc-1" }];
     mockListRuns.mockResolvedValue({ runs: [{ id: "run-1" }] });
     const deferred = await planBrandTurns([
       claimed({ id: "c-ads", featureSlug: GOOGLE_ADS, legKey: VISIT_LEG }),
@@ -479,22 +369,45 @@ describe("planBrandTurns", () => {
     expect(deferred.has("c-ads")).toBe(false);
   });
 
-  it("re-checks a parked brand on the funding cadence, never only on the day rollover", async () => {
-    mockCampaignBudgets([{ legKey: ENTRY_LEG, dailyBudgetCents: "1000" }]);
-    mockSpend("1000"); // at its ceiling
+  it("re-checks a unit at its max budget on the funding cadence, never only on the day rollover", async () => {
+    fundedUnit("campaign-1", 1000, 1000);
     const now = new Date("2026-08-23T14:00:00Z");
     const deferred = await planBrandTurns([claimed()], now);
     expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
   });
 });
 
+describe("hasLiveRunForBrandCohort", () => {
+  beforeEach(resetMocks);
+
+  it("asks campaign by campaign, only the brand's sales campaigns and units of THIS cohort", async () => {
+    aliveBrandCampaigns = [
+      { id: "c-email", featureSlug: SALES, salesFunnelCampaignId: null },
+      { id: "c-pr", featureSlug: "pr-media-pitch-v1", salesFunnelCampaignId: null },
+      { id: "c-ads", featureSlug: GOOGLE_ADS, salesFunnelCampaignId: "fc-ads" },
+      { id: "c-feedback-unit", featureSlug: FEEDBACK, salesFunnelCampaignId: "fc-2" },
+    ];
+    const live = await hasLiveRunForBrandCohort("org-1", "brand-1", "outbound_cold_email", new Date("2026-10-14T10:00:00Z"));
+    expect(live).toBe(false);
+    const asked = mockListRuns.mock.calls.map((c) => c[0].campaignId);
+    expect(asked).toEqual(["c-email", "c-feedback-unit"]);
+    for (const c of mockListRuns.mock.calls) {
+      expect(c[0].status).toBe("running");
+      expect(c[0].limit).toBe(1);
+    }
+  });
+
+  it("answers true as soon as one campaign of the cohort has a live run", async () => {
+    aliveBrandCampaigns = [{ id: "c-ads", featureSlug: GOOGLE_ADS, salesFunnelCampaignId: "fc-ads" }];
+    mockListRuns.mockResolvedValue({ runs: [{ id: "run-1" }] });
+    expect(await hasLiveRunForBrandCohort("org-1", "brand-1", "google_ads", new Date())).toBe(true);
+  });
+});
+
 // A CAMPAIGN THAT IS DELIBERATELY NOT RUNNING MUST SAY SO — from `run_events` alone, a campaign
 // correctly parked at its ceiling was indistinguishable from one that had silently died.
 describe("planBrandTurns — the hold is stated on the run ledger", () => {
-  beforeEach(() => {
-    resetMocks();
-    mockGetStatsBudget.mockReset();
-  });
+  beforeEach(resetMocks);
 
   /** The one hold event emitted for a campaign, or undefined. */
   function holdFor(campaignId: string) {
@@ -509,9 +422,8 @@ describe("planBrandTurns — the hold is stated on the run ledger", () => {
     };
   }
 
-  it("says WHY a campaign parked at its daily ceiling is not running", async () => {
-    mockCampaignBudgets([{ legKey: ENTRY_LEG, dailyBudgetCents: "400" }]);
-    mockSpend("428");
+  it("says WHY a unit parked at its funnel's max budget is not running", async () => {
+    fundedUnit("campaign-1", 428, 400);
     const now = new Date("2026-09-17T05:33:27Z");
     const deferred = await planBrandTurns([claimed()], now);
     expect(deferred.get("campaign-1")?.getTime()).toBe(now.getTime() + FUNDING_RECHECK_MS);
@@ -526,8 +438,8 @@ describe("planBrandTurns — the hold is stated on the run ledger", () => {
     expect(hold?.headers["x-campaign-id"]).toBe("campaign-1");
   });
 
-  it("says WHY a campaign the customer funds nothing for is not running", async () => {
-    mockCampaignBudgets([], null);
+  it("says WHY a unit its funnel funds nothing for is not running", async () => {
+    unitVerdicts({ "campaign-1": held("unfunded") });
     const deferred = await planBrandTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
     expect(deferred.size).toBe(1);
     const hold = holdFor("campaign-1");
@@ -535,21 +447,22 @@ describe("planBrandTurns — the hold is stated on the run ledger", () => {
     expect(hold?.payload.level).toBe("info");
   });
 
-  it("says WHY a brand whose ceilings cannot be read is held, and WARNS — that one is a fault", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+  it("says WHY a unit whose caps cannot be read is held, and WARNS — that one is a fault", async () => {
+    unitVerdicts({ "campaign-1": held("unreadable") });
     await planBrandTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
     const hold = holdFor("campaign-1");
     expect(hold?.payload.data.reason).toBe("budgets_unreadable");
     expect(hold?.payload.level).toBe("warn");
   });
 
-  it("stays SILENT for a campaign that merely yielded its turn — the brand is visibly working", async () => {
-    mockCampaignBudgets([
-      { legKey: ENTRY_LEG, dailyBudgetCents: "1000" },
-      { legKey: VISIT_LEG, dailyBudgetCents: "1000" },
-    ]);
-    mockSpend("900");
-    mockSpend("100");
+  it("says a reached cap is a ceiling hold", async () => {
+    unitVerdicts({ "campaign-1": held("cap_reached") });
+    await planBrandTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
+    expect(holdFor("campaign-1")?.payload.data.reason).toBe("daily_ceiling_reached");
+  });
+
+  it("stays SILENT for a unit that merely yielded its turn — the brand is visibly working", async () => {
+    unitVerdicts({ "c-reply": runs(900, 1000), "c-visit": runs(100, 1000) });
     const now = new Date("2026-09-17T05:33:27Z");
     const deferred = await planBrandTurns(
       [claimed({ id: "c-reply" }), claimed({ id: "c-visit", legKey: VISIT_LEG })],
@@ -560,15 +473,14 @@ describe("planBrandTurns — the hold is stated on the run ledger", () => {
   });
 
   it("stays SILENT while a run of the cohort is in flight", async () => {
-    mockCampaignBudgets([{ legKey: ENTRY_LEG, dailyBudgetCents: "2000" }]);
-    mockSpend("0");
+    fundedUnit("campaign-1", 0, 2000);
     mockListRuns.mockResolvedValue({ runs: [{ id: "run-1" }] });
     await planBrandTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
     expect(mockTraceEvent).not.toHaveBeenCalled();
   });
 
   it("never invents a run id for a campaign that has no ancestor run", async () => {
-    mockCampaignBudgets([], null);
+    unitVerdicts({ "campaign-1": held("unfunded") });
     const said = captureWarnings();
     await planBrandTurns([claimed({ parentRunId: null })], new Date("2026-09-17T05:33:27Z"));
     expect(mockTraceEvent).not.toHaveBeenCalled();
@@ -576,8 +488,7 @@ describe("planBrandTurns — the hold is stated on the run ledger", () => {
   });
 
   it("a hold that cannot be reported never changes whether a campaign runs", async () => {
-    mockCampaignBudgets([{ legKey: ENTRY_LEG, dailyBudgetCents: "400" }]);
-    mockSpend("428");
+    fundedUnit("campaign-1", 428, 400);
     mockTraceEvent.mockRejectedValue(new Error("runs-service unreachable"));
     await expect(
       planBrandTurns([claimed()], new Date("2026-09-17T05:33:27Z")),

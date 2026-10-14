@@ -2,9 +2,7 @@ import { createHash } from "node:crypto";
 import { and, eq, lte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, triggerEvents, triggerPollCursors, type Campaign, type TriggerEvent } from "../db/schema.js";
-import { campaignFunding } from "./campaign-funding.js";
 import { isSalesFunnelUnit, salesFunnelPollRoom, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
-import { getChannelStatsBudget } from "./channel-spend.js";
 import type { ChannelCatalogueRead } from "./channel-operator-client.js";
 import {
   POLL_DETECTOR_RECORDED_VIA,
@@ -163,12 +161,6 @@ function itemDetail(id: string, item: unknown): Record<string, unknown> {
   return json.length > ITEM_DETAIL_MAX_BYTES ? { itemId: id, itemTruncated: true } : { itemId: id, item };
 }
 
-function startOfToday(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
 export type PollOutcome = "not_due" | "budget_held" | "baseline" | "polled" | "source_failed" | "insufficient_credit";
 
 export interface PollScopeResult {
@@ -189,8 +181,8 @@ async function campaignsBehind(trigger: DetectableTrigger<PollParams>, scope: Tr
   });
 }
 
-/** The campaign that pays for the next read: funded, and the call's ceiling fits under today's. */
-export async function pollPayer(candidates: Campaign[], brandId: string, maxMicro: number): Promise<{ campaign: Campaign } | { held: string }> {
+/** The campaign that pays for the next read: a sales funnel unit whose caps leave room for the call. */
+export async function pollPayer(candidates: Campaign[], maxMicro: number): Promise<{ campaign: Campaign } | { held: string }> {
   const reasons: string[] = [];
   const callCents = maxMicro / 10_000;
   for (const c of candidates) {
@@ -208,24 +200,8 @@ export async function pollPayer(candidates: Campaign[], brandId: string, maxMicr
       }
       return { campaign: c };
     }
-    const funding = await campaignFunding(c, brandId, { orgId: c.orgId });
-    if (!funding.funded) {
-      reasons.push(`${c.id}: ${funding.reason}`);
-      continue;
-    }
-    const spend = await getChannelStatsBudget({
-      orgId: c.orgId,
-      campaignId: c.id,
-      featureSlug: c.featureSlug,
-      windows: [{ label: "today", since: startOfToday().toISOString() }],
-    });
-    const today = spend.windows.find((w) => w.label === "today");
-    const spentCents = today ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0 : 0;
-    if (spentCents + callCents > funding.ceilingCents) {
-      reasons.push(`${c.id}: ${spentCents.toFixed(2)}c spent of ${funding.ceilingCents}c today`);
-      continue;
-    }
-    return { campaign: c };
+    // ONE money model (owner 2026-10-14): a campaign that is not a sales funnel unit has no money.
+    reasons.push(`${c.id}: not a sales funnel campaign`);
   }
   return { held: reasons.join("; ") || "no live campaign behind the trigger" };
 }
@@ -266,7 +242,7 @@ export async function pollScope(
     db.update(triggerPollCursors).set({ lastOutcome: outcome, lastError: error, ...extra }).where(eq(triggerPollCursors.id, cursor.id));
 
   const source = trigger.params.source;
-  const payer = await pollPayer(await campaignsBehind(trigger, scope), scope.brandId, source.maxMicro);
+  const payer = await pollPayer(await campaignsBehind(trigger, scope), source.maxMicro);
   if ("held" in payer) {
     await settle("budget_held", payer.held.slice(0, 500));
     return { outcome: "budget_held", fired: 0, seen: 0 };

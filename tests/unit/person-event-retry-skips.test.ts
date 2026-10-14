@@ -12,12 +12,10 @@ describe("which skips put an occurrence carrying a person back on its short retr
     expect(PERSON_EVENT_RETRY_SKIPS.has(STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAPS_UNAVAILABLE)).toBe(true);
   });
 
-  it("NEVER-NO-FOLLOWUP-1014: a cap reached / unfunded / budget spent / pacing hold is owed until room returns, no deadline", () => {
+  it("NEVER-NO-FOLLOWUP-1014: a cap reached / unfunded / pacing hold is owed until room returns, no deadline", () => {
     for (const reason of [
       STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAP,
       STEP_TRIGGER_SKIPS.UNFUNDED,
-      STEP_TRIGGER_SKIPS.GLOBAL_SALES_BUDGET_REACHED,
-      STEP_TRIGGER_SKIPS.ITEM_BUDGET_REACHED,
       STEP_TRIGGER_SKIPS.RUN_IN_FLIGHT,
       STEP_TRIGGER_SKIPS.COHORT_RUN_IN_FLIGHT,
       STEP_TRIGGER_SKIPS.FAILURE_BACKOFF,
@@ -33,6 +31,11 @@ describe("which skips put an occurrence carrying a person back on its short retr
     expect(OWED_UNTIL_ROOM_SKIPS.has(STEP_TRIGGER_SKIPS.PERSON_NOT_KNOWN)).toBe(false);
     expect(PERSON_EVENT_RETRY_SKIPS.has(STEP_TRIGGER_SKIPS.PERSON_SUPPRESSED)).toBe(false);
     expect(PERSON_EVENT_RETRY_SKIPS.has(STEP_TRIGGER_SKIPS.NO_WORKFLOW)).toBe(false);
+  });
+
+  it("a campaign that is not a sales funnel unit has no money: final, never owed nor retried", () => {
+    expect(OWED_UNTIL_ROOM_SKIPS.has(STEP_TRIGGER_SKIPS.NOT_A_SALES_FUNNEL_CAMPAIGN)).toBe(false);
+    expect(PERSON_EVENT_RETRY_SKIPS.has(STEP_TRIGGER_SKIPS.NOT_A_SALES_FUNNEL_CAMPAIGN)).toBe(false);
   });
 
   it("every retry skip is a skip the step trigger can name", () => {

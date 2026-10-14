@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 
-const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockSalesBudget, mockGetStatsBudget, mockLeadActivity } = vi.hoisted(() => ({
-  mockSalesBudget: vi.fn(),
+const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockGetStatsBudget, mockLeadActivity, realMoney } = vi.hoisted(() => ({
+  realMoney: { on: false },
   mockGetStatsBudget: vi.fn(),
   mockExecute: vi.fn(),
   mockCatalogue: vi.fn(),
@@ -17,7 +17,6 @@ vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
   getStatsBudget: (p: { featureSlug?: string }) => (p?.featureSlug?.startsWith("sourcing-") ? Promise.resolve({ windows: [] }) : mockGetStatsBudget(p)),
 }));
-vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({ fetchBrandSalesBudget: mockSalesBudget }));
 vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
   return { ...original, executeCampaignWorkflow: mockExecute };
@@ -26,13 +25,29 @@ vi.mock("../../src/lib/channel-operator-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/channel-operator-client.js")>();
   return { ...original, fetchChannelCatalogue: mockCatalogue };
 });
-vi.mock("../../src/lib/campaign-funding.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../src/lib/campaign-funding.js")>();
-  return { ...original, campaignFunding: mockFunding };
-});
 vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/features-workflow-projection-client.js")>();
   return { ...original, resolveSelectionForTrigger: mockResolveSlug };
+});
+// The campaigns are sales funnel UNITS. Their money (dispatch verdict and poll-read room) is driven by
+// `mockFunding`, except in the describe that exercises billing's REAL caps (`realMoney.on`).
+vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>();
+  return {
+    ...original,
+    salesFunnelUnitMoney: async (...args: Parameters<typeof original.salesFunnelUnitMoney>) => {
+      if (realMoney.on) return original.salesFunnelUnitMoney(...args);
+      const f = await mockFunding();
+      return f.funded
+        ? { run: true, pace: { spentCents: 0, ceilingCents: f.ceilingCents } }
+        : { run: false, kind: f.kind ?? "unfunded", reason: "Unfunded", detail: f.reason, nextRunAt: new Date(Date.now() + 600_000) };
+    },
+    salesFunnelPollRoom: async (...args: Parameters<typeof original.salesFunnelPollRoom>) => {
+      if (realMoney.on) return original.salesFunnelPollRoom(...args);
+      const f = await mockFunding();
+      return f.funded ? { ok: true } : { ok: false, reason: f.reason };
+    },
+  };
 });
 vi.mock("../../src/lib/lead-activity-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/lead-activity-client.js")>();
@@ -95,6 +110,8 @@ const campaignOn = (featureSlug: string, legKey: string) =>
     parentRunId: "9f0d1c22-0000-4000-8000-000000000029",
     offerId: OFFER,
     legKey,
+    salesFunnelCampaignId: crypto.randomUUID(),
+    salesFunnelId: `sf-${featureSlug}`,
   });
 
 /** lead-service found the person: what lead-service records at campaign-service today. */
@@ -119,7 +136,7 @@ describe("generic trigger detectors", () => {
     mockListRuns.mockResolvedValue({ runs: [] });
     mockResolveSlug.mockImplementation(async (p: { fallbackSlug: string }) => ({ workflowSlug: p.fallbackSlug, audienceId: null }));
     mockExecute.mockResolvedValue(undefined);
-    mockSalesBudget.mockResolvedValue({ ok: true, mode: "campaigns" });
+    realMoney.on = false;
     mockGetStatsBudget.mockResolvedValue({ windows: [{ label: "today", totalCostInUsdCents: "0", netTotalCostInUsdCents: "0" }] });
   });
 
@@ -250,22 +267,14 @@ describe("generic trigger detectors", () => {
       expect(treg.mock.calls[0][1]).toMatchObject({ endpoint: "fetchinio.linkedin.post.engagement", method: "GET", maxMicro: 3000 });
     });
 
-    it("the campaign's budget cap holds the read: no call, nothing fired", async () => {
+    it("an unfunded campaign holds the read too", async () => {
       await campaignOn(REACT_SLUG, REACT_LEG);
-      mockGetStatsBudget.mockResolvedValue({ windows: [{ label: "today", totalCostInUsdCents: "5000", netTotalCostInUsdCents: "5000" }] });
+      mockFunding.mockResolvedValue({ funded: false, reason: "campaign is not funded" });
       const treg = vi.fn();
       expect(await pollDueTriggers(catalogue() as never, new Date(), treg)).toMatchObject({ held: 1, polled: 0, fired: 0 });
       expect(treg).not.toHaveBeenCalled();
       const [cursor] = await db.select().from(triggerPollCursors).where(and(eq(triggerPollCursors.triggerId, POLL), eq(triggerPollCursors.orgId, ORG)));
       expect(cursor).toMatchObject({ lastOutcome: "budget_held", baselineAt: null });
-    });
-
-    it("an unfunded campaign holds the read too", async () => {
-      await campaignOn(REACT_SLUG, REACT_LEG);
-      mockFunding.mockResolvedValue({ funded: false, reason: "campaign is not funded" });
-      const treg = vi.fn();
-      expect(await pollDueTriggers(catalogue() as never, new Date(), treg)).toMatchObject({ held: 1 });
-      expect(treg).not.toHaveBeenCalled();
     });
 
     describe("a brand whose only live campaigns are SALES FUNNEL units still has a payer", () => {
@@ -294,8 +303,9 @@ describe("generic trigger detectors", () => {
         process.env.BILLING_SERVICE_URL = "https://billing.test.local";
         process.env.BILLING_SERVICE_API_KEY = "k";
         resetSalesFunnelCapsCache();
-        // The pre-funnel money says NO: a unit must never be paid by it, nor held by it.
-        mockFunding.mockResolvedValue({ funded: false, reason: "pre-funnel money is not a unit's" });
+        realMoney.on = true;
+        // The mocked money says NO: a unit must never be paid by it, nor held by it.
+        mockFunding.mockResolvedValue({ funded: false, reason: "the mocked money is not billing's caps" });
       });
 
       it("pays the read on the unit (its own org, its own run) and fires the new item on it", async () => {

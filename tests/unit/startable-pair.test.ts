@@ -1,19 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 import { resolveStartablePair } from "../../src/lib/startable-pair.js";
 import type { ChannelCatalogueRead } from "../../src/lib/channel-operator-client.js";
-import type { CampaignBudgetEntry, CampaignBudgetsRead } from "../../src/lib/campaign-budget-client.js";
 
 /**
  * CAN THE CUSTOMER START THE CAMPAIGN FOR AN (OFFER, LEG, CHANNEL) THEY FUND?
  *
- * The things that must never happen here: a workflow chosen by the caller, a ceiling accepted from
- * the caller, a leg invented, and a refusal a person cannot read.
+ * The things that must never happen here: a leg invented, a refusal a person cannot read, and (ONE
+ * money model, owner 2026-10-14) an outreach campaign born outside a sales funnel campaign, with no money.
  */
 
 const CHANNEL = "sales-cold-email-outreach";
 const ENTRY_LEG = "start_to_conversation";
-// What a pair stated in the legacy outbound spelling is stored (and served) as since wave 2.
-const STORED_ENTRY_LEG = "lead_found_to_conversation";
 const SECOND_LEG = "conversation_to_meeting_booked";
 const OFFER = "11111111-1111-1111-1111-111111111111";
 const BRAND = "22222222-2222-2222-2222-222222222222";
@@ -39,42 +36,59 @@ function catalogue(overrides: Partial<{
   };
 }
 
-function budgets(
-  campaigns: CampaignBudgetEntry[] = [],
-  brandDailyBudgetCents: number | null = null,
-): CampaignBudgetsRead {
-  return { ok: true, brandDailyBudgetCents, campaigns };
+function deps(over: { catalogue?: ChannelCatalogueRead } = {}) {
+  return { catalogue: async () => over.catalogue ?? catalogue() };
 }
 
-const FUNDED: CampaignBudgetEntry = { offerId: OFFER, legKey: ENTRY_LEG, featureSlug: CHANNEL, dailyBudgetCents: 1500 };
-
-function deps(over: {
-  catalogue?: ChannelCatalogueRead;
-  budgets?: CampaignBudgetsRead;
-  workflow?: unknown;
-} = {}) {
-  return {
-    catalogue: async () => over.catalogue ?? catalogue(),
-    budgets: async () => over.budgets ?? budgets([FUNDED]),
-    workflow: (over.workflow as any) ?? (async () => ({ ok: true as const, workflowSlug: "aurora" })),
-  };
-}
-
-function start(input: Partial<Parameters<typeof resolveStartablePair>[0]> = {}, over = {}) {
+function start(input: Partial<Parameters<typeof resolveStartablePair>[0]> = {}, over: { catalogue?: ChannelCatalogueRead } = {}) {
   return resolveStartablePair(
     { brandId: BRAND, offerId: OFFER, legKey: ENTRY_LEG, featureSlug: CHANNEL, ...input },
     IDENTITY,
-    deps(over) as any,
+    deps(over),
   );
 }
 
 describe("resolveStartablePair", () => {
-  it("resolves a funded (offer, leg, channel) to its ceiling and the channel's workflow", async () => {
+  it("refuses an outreach channel with a valid scope: it runs inside a sales funnel campaign (409 sales_funnel_required)", async () => {
     const read = await start();
-    expect(read).toEqual({
-      ok: true,
-      pair: { legKey: STORED_ENTRY_LEG, ceilingCents: 1500, workflowSlug: "aurora" },
-    });
+    expect(read.ok).toBe(false);
+    if (!read.ok) {
+      expect(read.refusal).toMatchObject({ status: 409, code: "sales_funnel_required" });
+      expect(read.refusal.message).toMatch(/sales funnel/);
+    }
+  });
+
+  it("refuses a customer-operated or service-performed channel the same way: no outreach start outside a funnel", async () => {
+    const custom = await start({}, { catalogue: catalogue({ operator: "customer" }) });
+    expect(custom.ok || custom.refusal.code).toBe("sales_funnel_required");
+
+    const AIC = "ai-instant-call";
+    const LEG = "conversation_to_booking_call";
+    const aic = await resolveStartablePair(
+      { brandId: BRAND, offerId: OFFER, legKey: LEG, featureSlug: AIC },
+      IDENTITY,
+      {
+        catalogue: async () => ({
+          ok: true,
+          operatorBySlug: new Map([[AIC, "platform" as const]]),
+          legsBySlug: new Map([[AIC, new Set([LEG])]]),
+          legs: [{ legKey: LEG, fromStepKey: "conversation", toStepKey: "booking_call" }],
+          stepKeys: new Set<string>(),
+        }),
+      },
+    );
+    expect(aic.ok || aic.refusal).toMatchObject({ status: 409, code: "sales_funnel_required" });
+  });
+
+  it("a live lead SOURCE origin still starts on its lead-found leg, with no ceiling, no workflow and no catalogue read", async () => {
+    const readCatalogue = vi.fn();
+    const read = await resolveStartablePair(
+      { brandId: BRAND, offerId: OFFER, legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-cold-filters" },
+      IDENTITY,
+      { catalogue: readCatalogue },
+    );
+    expect(read).toEqual({ ok: true, pair: { legKey: "start_to_lead_found", ceilingCents: null, workflowSlug: null } });
+    expect(readCatalogue).not.toHaveBeenCalled();
   });
 
   it("refuses a start that states no leg or no offer, in words a person can read", async () => {
@@ -103,59 +117,8 @@ describe("resolveStartablePair", () => {
     expect(read.ok || read.refusal.code).toBe("leg_not_performed");
   });
 
-  it("refuses an unfunded campaign with a 409", async () => {
-    const read = await start({}, { budgets: budgets([{ ...FUNDED, legKey: SECOND_LEG }]) });
-    expect(read.ok).toBe(false);
-    if (!read.ok) expect(read.refusal).toMatchObject({ status: 409, code: "not_funded" });
-  });
-
   it("an unreadable catalogue is a 502, never a refusal about the channel", async () => {
     const read = await start({}, { catalogue: { ok: false, detail: "HTTP 503" } });
     expect(read.ok || read.refusal).toMatchObject({ status: 502, code: "catalogue_unavailable" });
-  });
-
-  it("an unreadable billing is a 502, never `not funded`", async () => {
-    const read = await start({}, { budgets: { ok: false } });
-    expect(read.ok || read.refusal).toMatchObject({ status: 502, code: "billing_unavailable" });
-  });
-
-  it("a channel the CUSTOMER operates starts with NO workflow, and workflow-service is never asked", async () => {
-    const workflow = vi.fn();
-    const read = await start({}, { catalogue: catalogue({ operator: "customer" }), workflow });
-    expect(read).toEqual({ ok: true, pair: { legKey: STORED_ENTRY_LEG, ceilingCents: 1500, workflowSlug: null } });
-    expect(workflow).not.toHaveBeenCalled();
-  });
-
-  it("a platform channel with no active workflow is refused — nothing could run it", async () => {
-    const read = await start({}, { workflow: async () => ({ ok: true, workflowSlug: null }) });
-    expect(read.ok || read.refusal).toMatchObject({ status: 409, code: "no_workflow" });
-  });
-
-  it("an unreadable workflow statement is a 502", async () => {
-    const read = await start({}, { workflow: async () => ({ ok: false, detail: "HTTP 500" }) });
-    expect(read.ok || read.refusal).toMatchObject({ status: 502, code: "workflow_unavailable" });
-  });
-
-  it("a channel another service performs on an event (ai-instant-call) starts with NO workflow, none looked up", async () => {
-    const AIC = "ai-instant-call";
-    const LEG = "conversation_to_booking_call";
-    const workflow = vi.fn();
-    const read = await resolveStartablePair(
-      { brandId: BRAND, offerId: OFFER, legKey: LEG, featureSlug: AIC },
-      IDENTITY,
-      {
-        catalogue: async () => ({
-          ok: true,
-          operatorBySlug: new Map([[AIC, "platform" as const]]),
-          legsBySlug: new Map([[AIC, new Set([LEG])]]),
-          legs: [{ legKey: LEG, fromStepKey: "conversation", toStepKey: "booking_call" }],
-          stepKeys: new Set<string>(),
-        }),
-        budgets: async () => budgets([{ offerId: OFFER, legKey: LEG, featureSlug: AIC, dailyBudgetCents: 500 }]),
-        workflow,
-      } as any,
-    );
-    expect(read).toEqual({ ok: true, pair: { legKey: LEG, ceilingCents: 500, workflowSlug: null } });
-    expect(workflow).not.toHaveBeenCalled();
   });
 });

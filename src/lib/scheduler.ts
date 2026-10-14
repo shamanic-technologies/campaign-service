@@ -120,10 +120,8 @@ export async function reRunDueCampaigns(): Promise<number> {
       activeGoalId: campaigns.activeGoalId,
       brandProfileId: campaigns.brandProfileId,
       audienceId: campaigns.audienceId,
-      dailyBudgetCents: campaigns.dailyBudgetCents,
-      // The offer this campaign sells — part of the (offer, leg, channel) its ceiling is set at.
+      // The offer this campaign sells and the single LEG it was bought for (its funnel pipe).
       offerId: campaigns.offerId,
-      // The single LEG this campaign was bought for — the other part of that grain.
       legKey: campaigns.legKey,
       // A SALES FUNNEL unit is paced on its funnel's caps (lib/sales-funnel-campaigns.ts).
       salesFunnelCampaignId: campaigns.salesFunnelCampaignId,

@@ -77,8 +77,6 @@ export const OWED_UNTIL_ROOM_SKIPS: ReadonlySet<string> = new Set([
   "sales_funnel_caps_unavailable",
   // The funnel's cap is reached (a $10/month reactive funnel): owed until its period rolls over or the cap is raised.
   "sales_funnel_cap",
-  "global_sales_budget_reached",
-  "item_budget_reached",
 ]);
 
 /**

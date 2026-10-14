@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 
-const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockSalesBudget, mockGetStatsBudget, mockFile, mockDue } =
+const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockGetStatsBudget, mockFile, mockDue } =
   vi.hoisted(() => ({
-    mockSalesBudget: vi.fn(),
     mockGetStatsBudget: vi.fn(),
     mockExecute: vi.fn(),
     mockCatalogue: vi.fn(),
@@ -20,19 +19,28 @@ vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
   getStatsBudget: (p: { featureSlug?: string }) => (p?.featureSlug?.startsWith("sourcing-") ? Promise.resolve({ windows: [] }) : mockGetStatsBudget(p)),
 }));
-vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({ fetchBrandSalesBudget: mockSalesBudget }));
 vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
   return { ...original, executeCampaignWorkflow: mockExecute };
 });
 vi.mock("../../src/lib/channel-operator-client.js", () => ({ fetchChannelCatalogue: mockCatalogue }));
-vi.mock("../../src/lib/campaign-funding.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../src/lib/campaign-funding.js")>();
-  return { ...original, campaignFunding: mockFunding };
-});
 vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/features-workflow-projection-client.js")>();
   return { ...original, resolveSelectionForTrigger: mockResolveSlug };
+});
+// The dispatched campaigns are sales funnel UNITS: their money is their funnel's caps, driven here
+// by `mockFunding` (funded = runs; not funded = held, `kind` defaulting to `unfunded`).
+vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>();
+  return {
+    ...original,
+    salesFunnelUnitMoney: async () => {
+      const f = await mockFunding();
+      return f.funded
+        ? { run: true, pace: { spentCents: 0, ceilingCents: f.ceilingCents } }
+        : { run: false, kind: f.kind ?? "unfunded", reason: "Unfunded", detail: f.reason, nextRunAt: new Date(Date.now() + 600_000) };
+    },
+  };
 });
 vi.mock("../../src/lib/sales-funnel-people.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/sales-funnel-people.js")>();
@@ -81,6 +89,8 @@ const meetingBooking = (status: "ongoing" | "stopped") =>
     parentRunId: "9f0d1c22-0000-4000-8000-000000000029",
     offerId: OFFER,
     legKey: LEG,
+    salesFunnelCampaignId: crypto.randomUUID(),
+    salesFunnelId: "sf-form",
   });
 
 const PERSON = { email: "  Jane.Doe@Example.com ", name: "Jane Doe", phone: "+33600000000", crmContact: { provider: "gohighlevel", contactId: "ghl-123" } };
@@ -99,7 +109,6 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     mockListRuns.mockResolvedValue({ runs: [] });
     mockResolveSlug.mockResolvedValue({ workflowSlug: "ai-meeting-booking-v1", audienceId: null });
     mockExecute.mockResolvedValue(undefined);
-    mockSalesBudget.mockResolvedValue({ ok: true, mode: "campaigns" });
     mockFile.mockResolvedValue({ ok: true, leadId: "lead-jane", filed: true });
     mockDue.mockResolvedValue({ ok: true });
   });
@@ -257,7 +266,7 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
   it("a your-team campaign beside a held-back AI campaign: the event retries for the AI one only", async () => {
     const yourTeam = await insertTestCampaign(ORG, {
       brandIds: [BRAND], brandId: BRAND, status: "ongoing", featureSlug: "your-team-meeting-booking",
-      createdByUserId: USER, offerId: OFFER, legKey: LEG,
+      createdByUserId: USER, offerId: OFFER, legKey: LEG, salesFunnelCampaignId: crypto.randomUUID(), salesFunnelId: "sf-form",
     });
     const { campaigns } = await import("../../src/db/schema.js");
     const { eq } = await import("drizzle-orm");
@@ -282,6 +291,7 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     const second = await insertTestCampaign(ORG, {
       brandIds: [BRAND], brandId: BRAND, status: "ongoing", featureSlug: "other-meeting-booking",
       workflowSlug: "other-v1", createdByUserId: USER, parentRunId: "9f0d1c22-0000-4000-8000-000000000030", offerId: OFFER, legKey: LEG,
+      salesFunnelCampaignId: crypto.randomUUID(), salesFunnelId: "sf-form",
     });
     mockListRuns.mockImplementation(async (p: { campaignId?: string }) => ({ runs: p.campaignId === second.id ? [{ id: "run-live" }] : [] }));
     mockFile.mockImplementation(async (p: { campaignId: string }) => ({ ok: true, leadId: `lead-${p.campaignId}`, filed: true }));
@@ -339,7 +349,7 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
 
   it("NEVER-NO-FOLLOWUP-1014: a campaign without room long past the hour keeps the occurrence pending, then fires it once when room returns", async () => {
     const campaign = await meetingBooking("ongoing");
-    mockFunding.mockResolvedValue({ funded: false, reason: "cap reached for the month" });
+    mockFunding.mockResolvedValue({ funded: false, kind: "cap_reached", reason: "cap reached for the month" });
     const longAgo = new Date(Date.now() - 5 * PERSON_NOT_KNOWN_WAIT_MS).toISOString();
     const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, occurredAt: longAgo, dueAt: longAgo });
     expect(res.body.event.status).toBe("pending");
@@ -365,7 +375,7 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
 
   it("NEVER-NO-FOLLOWUP-1014: an occurrence held for money whose campaign the customer turns Off is done `campaign_off`, nothing run", async () => {
     const campaign = await meetingBooking("ongoing");
-    mockFunding.mockResolvedValue({ funded: false, reason: "cap reached" });
+    mockFunding.mockResolvedValue({ funded: false, kind: "cap_reached", reason: "cap reached" });
     const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON });
     expect(res.body.event.status).toBe("pending");
     const { campaigns } = await import("../../src/db/schema.js");

@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 
-const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockSalesBudget, mockGetStatsBudget, mockReachers, mockEver, mockFile, mockDue } =
+const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockGetStatsBudget, mockReachers, mockEver, mockFile, mockDue } =
   vi.hoisted(() => ({
-    mockSalesBudget: vi.fn(),
     mockGetStatsBudget: vi.fn(),
     mockExecute: vi.fn(),
     mockCatalogue: vi.fn(),
@@ -21,7 +20,6 @@ vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
   getStatsBudget: (p: { featureSlug?: string }) => (p?.featureSlug?.startsWith("sourcing-") ? Promise.resolve({ windows: [] }) : mockGetStatsBudget(p)),
 }));
-vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({ fetchBrandSalesBudget: mockSalesBudget }));
 vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
   return { ...original, executeCampaignWorkflow: mockExecute };
@@ -30,15 +28,25 @@ vi.mock("../../src/lib/channel-operator-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/channel-operator-client.js")>();
   return { ...original, fetchChannelCatalogue: mockCatalogue };
 });
-vi.mock("../../src/lib/campaign-funding.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../src/lib/campaign-funding.js")>();
-  return { ...original, campaignFunding: mockFunding };
-});
 vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/features-workflow-projection-client.js")>();
   return { ...original, resolveSelectionForTrigger: mockResolveSlug };
 });
 vi.mock("../../src/lib/step-reach-client.js", () => ({ fetchStepReachers: mockReachers, hasEverReachedStep: mockEver }));
+// The dispatched campaigns are sales funnel UNITS: their money is their funnel's caps, driven here
+// by `mockFunding` (funded = runs; not funded = held, `kind` defaulting to `unfunded`).
+vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>();
+  return {
+    ...original,
+    salesFunnelUnitMoney: async () => {
+      const f = await mockFunding();
+      return f.funded
+        ? { run: true, pace: { spentCents: 0, ceilingCents: f.ceilingCents } }
+        : { run: false, kind: f.kind ?? "unfunded", reason: "Unfunded", detail: f.reason, nextRunAt: new Date(Date.now() + 600_000) };
+    },
+  };
+});
 vi.mock("../../src/lib/sales-funnel-people.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/sales-funnel-people.js")>();
   return { ...original, fileNamedPerson: mockFile, scheduleNamedPersonDue: mockDue };
@@ -88,7 +96,6 @@ describe("fact not followed: a delay trigger with unlessStep", () => {
     mockListRuns.mockResolvedValue({ runs: [] });
     mockResolveSlug.mockImplementation(async (p: { fallbackSlug: string }) => ({ workflowSlug: p.fallbackSlug, audienceId: null }));
     mockExecute.mockResolvedValue({ runId: "run-1" });
-    mockSalesBudget.mockResolvedValue({ ok: true, mode: "campaigns" });
     mockGetStatsBudget.mockResolvedValue({ windows: [{ label: "today", totalCostInUsdCents: "0", netTotalCostInUsdCents: "0" }] });
     mockFile.mockResolvedValue({ ok: true, leadId: "lead-filed", outcome: "filed" });
     mockDue.mockResolvedValue({ ok: true });
@@ -103,6 +110,7 @@ describe("fact not followed: a delay trigger with unlessStep", () => {
     insertTestCampaign(ORG, {
       brandIds: [BRAND], brandId: BRAND, status: "ongoing", featureSlug: SLUG, workflowSlug: `${SLUG}-v1`,
       createdByUserId: USER, parentRunId: "9f0d1c22-0000-4000-8000-000000000039", offerId: OFFER, legKey: LEG,
+      salesFunnelCampaignId: crypto.randomUUID(), salesFunnelId: "sf-signup-follow-up",
     });
 
   it("plans one event per person who reached the step, fires 30 min later for the one still not paid, cancels the one who paid", async () => {

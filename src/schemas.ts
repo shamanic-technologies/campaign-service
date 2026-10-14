@@ -360,22 +360,6 @@ export const BrandPauseResponse = z.object({
   updatedAt: z.string().nullable(),
 }).openapi("BrandPauseResponse");
 
-// --- Brand-wide campaign daily budget (propagate the brand-page budget to all campaigns) ---
-
-// Set the daily budget (cents) for EVERY sales campaign of a brand at once. null clears each
-// campaign's own budget → they fall back to the brand daily budget. Used when a customer edits
-// their budget on the brand page and it must propagate down to the brand's campaign(s).
-export const SetBrandCampaignsDailyBudgetBody = z.object({
-  dailyBudgetCents: z.number().int().nonnegative().nullable(),
-}).openapi("SetBrandCampaignsDailyBudgetBody");
-
-export const SetBrandCampaignsDailyBudgetResponse = z.object({
-  brandId: z.string(),
-  orgId: z.string(),
-  dailyBudgetCents: z.number().int().nullable(),
-  updatedCount: z.number().int(),
-}).openapi("SetBrandCampaignsDailyBudgetResponse");
-
 // One dated pause/resume flip. paused = the new state after the flip.
 export const BrandPauseTransition = z.object({
   paused: z.boolean(),
@@ -765,7 +749,7 @@ export const TriggerEventSchema = z.object({
   outcome: z.string().nullable(),
   /**
    * When skipped: a campaign's named skip (`unfunded`, `run_in_flight`, `no_workflow`,
-   * `global_sales_budget_reached`, `item_budget_reached`, `cohort_run_in_flight`,
+   * `not_a_sales_funnel_campaign`, `sales_funnel_cap`, `cohort_run_in_flight`,
    * `incomplete_campaign`, `dispatch_refused`, `failure_backoff`), else `campaign_off`,
    * `no_campaign`, `no_leg`, `trigger_not_declared`, or the caller's own reason when performed. `run_failed`
    * when the outcome is `failed` (`lastError` + `detail.failedDeliveries` name the runs).

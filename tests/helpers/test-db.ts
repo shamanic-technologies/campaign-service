@@ -56,6 +56,9 @@ export async function insertTestCampaign(
     // (org, brand, offer, leg, channel) collision the resume must refuse.
     brandId?: string | null;
     acquisitionChannel?: string | null;
+    /** A SALES FUNNEL unit (its money is its funnel's caps): the funnel campaign + funnel it belongs to. */
+    salesFunnelCampaignId?: string | null;
+    salesFunnelId?: string | null;
     updatedAt?: Date;
   } = {}
 ) {
@@ -89,6 +92,8 @@ export async function insertTestCampaign(
       legKey: data.legKey ?? null,
       brandId: data.brandId ?? null,
       acquisitionChannel: data.acquisitionChannel ?? null,
+      salesFunnelCampaignId: data.salesFunnelCampaignId ?? null,
+      salesFunnelId: data.salesFunnelId ?? null,
       ...(data.updatedAt ? { updatedAt: data.updatedAt } : {}),
     })
     .returning();

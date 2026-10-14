@@ -1,4 +1,3 @@
-import { ceilingEntriesOf, type CampaignBudgetsRead } from "./campaign-budget-client.js";
 import type { StatedSalesFunnelCap } from "./sales-funnel-campaigns.js";
 
 /**
@@ -14,7 +13,11 @@ import type { StatedSalesFunnelCap } from "./sales-funnel-campaigns.js";
  * lost.
  *
  * NOTHING IS LEFT FOR A CONSUMER TO SUM. The brand total, each offer's total and each campaign's
- * total are all stated, alongside the individual ceiling entries that produced them.
+ * total are all stated.
+ *
+ * ONE money model (owner 2026-10-14): a campaign's money is its SALES FUNNEL's caps, counted under
+ * `salesFunnels`. billing's per-campaign daily ceilings are retired and never read, so `rows` is
+ * always empty and `grain` always `none` (both kept so a reader's shape does not move).
  */
 
 /** A campaign of the (org, brand) pair, as this computation needs it. */
@@ -62,9 +65,8 @@ export interface SpendableSalesFunnelLine {
 }
 
 /**
- * WHICH billing grain the figures were computed at: `campaign` when billing states ceilings per
- * (offer, leg, channel), `brand` when the brand has only its one pot, `none` when nothing was ever
- * configured.
+ * The grain of the retired per-campaign / brand-pot rows. Always `none` since the one money model
+ * (owner 2026-10-14); `campaign` and `brand` are no longer served.
  */
 export type SpendableGrain = "campaign" | "brand" | "none";
 
@@ -126,45 +128,6 @@ export interface SpendableBudget {
   salesFunnels: SpendableSalesFunnelLine[];
 }
 
-interface RawRow {
-  featureSlug: string | null;
-  offerId: string | null;
-  legKey: string | null;
-  dailyBudgetCents: number;
-}
-
-/**
- * The campaign standing behind ONE ceiling entry, or null.
- *
- * A campaign stands behind an entry exactly when that entry is among the ceilings it is PACED on
- * (`ceilingEntriesOf`, billing's own rule) — so a campaign counts as running here exactly when the
- * gate would let it spend that money. At brand grain every campaign draws on the one pot.
- *
- * An ONGOING campaign always wins over a stopped one, whatever their creation dates: the stopped
- * row is history, the ongoing one is what spends the money. Ties break on the oldest campaign so
- * the answer is stable between calls.
- */
-function campaignForRow(
-  row: RawRow,
-  all: SpendableCampaign[],
-  budgets: Extract<CampaignBudgetsRead, { ok: true }>,
-  grain: SpendableGrain,
-): SpendableCampaign | null {
-  // A SALES FUNNEL unit never stands behind a per-pipe ceiling or the brand pot: the funnel's money
-  // is not a pre-funnel campaign's, and the pre-funnel money is not a unit's.
-  const unowned = all.filter((c) => !c.salesFunnelCampaignId);
-  const candidates = grain === "brand"
-    ? unowned
-    : unowned.filter((c) => ceilingEntriesOf(budgets, c).some(
-      (e) => e.featureSlug === row.featureSlug && e.offerId === row.offerId && e.legKey === row.legKey,
-    ));
-  if (candidates.length === 0) return null;
-  const rank = (c: SpendableCampaign) => (c.status === "ongoing" ? 0 : 1);
-  return [...candidates].sort(
-    (a, b) => rank(a) - rank(b) || a.createdAt.getTime() - b.createdAt.getTime(),
-  )[0]!;
-}
-
 /**
  * Answer both figures for one (org, brand), from ceilings and campaigns ALREADY read — so a
  * fleet-wide caller judges every brand with one read each rather than one request per brand.
@@ -175,92 +138,28 @@ function campaignForRow(
 export function computeSpendableBudget(
   orgId: string,
   brandId: string,
-  budgets: Extract<CampaignBudgetsRead, { ok: true }>,
   campaigns: SpendableCampaign[],
   owned: { caps: StatedSalesFunnelCap[]; salesFunnelCampaigns: SpendableSalesFunnelCampaign[] } = { caps: [], salesFunnelCampaigns: [] },
 ): SpendableBudget {
-  let grain: SpendableGrain;
-  let rawRows: RawRow[];
-  if (budgets.campaigns.length > 0) {
-    grain = "campaign";
-    rawRows = budgets.campaigns.map((e) => ({ ...e }));
-  } else if (budgets.brandDailyBudgetCents !== null) {
-    grain = "brand";
-    rawRows = [{ featureSlug: null, offerId: null, legKey: null, dailyBudgetCents: budgets.brandDailyBudgetCents }];
-  } else {
-    grain = "none";
-    rawRows = [];
-  }
-
-  const configuredByCampaign = new Map<string, number>();
-  const runningByCampaign = new Map<string, number>();
-  const seenCampaign = new Map<string, SpendableCampaign>();
-
-  const rows: SpendableRow[] = rawRows.map((raw) => {
-    const campaign = campaignForRow(raw, campaigns, budgets, grain);
-    const running = campaign?.status === "ongoing";
-    if (campaign) {
-      seenCampaign.set(campaign.id, campaign);
-      configuredByCampaign.set(
-        campaign.id,
-        (configuredByCampaign.get(campaign.id) ?? 0) + raw.dailyBudgetCents,
-      );
-      if (running) {
-        runningByCampaign.set(
-          campaign.id,
-          (runningByCampaign.get(campaign.id) ?? 0) + raw.dailyBudgetCents,
-        );
-      }
-    }
-    return {
-      featureSlug: raw.featureSlug,
-      offerId: raw.offerId,
-      legKey: raw.legKey,
-      resolvedOfferId: raw.offerId ?? campaign?.offerId ?? null,
-      dailyBudgetCents: raw.dailyBudgetCents,
-      running,
-      campaignId: campaign?.id ?? null,
-      campaignStatus: campaign?.status ?? null,
-    };
-  });
-
-  // Every ONGOING campaign is named even when no ceiling stands behind it — a running campaign
-  // funded at nothing is exactly what a consumer needs to see, and its absence would read as
-  // "there is no such campaign".
-  for (const c of campaigns) {
-    if (c.status === "ongoing") seenCampaign.set(c.id, c);
-  }
-
-  const campaignLines: SpendableCampaignLine[] = [...seenCampaign.values()]
+  // Every ONGOING campaign is named even when nothing funds it — a running campaign funded at
+  // nothing is exactly what a consumer needs to see, and its absence would read as "there is no
+  // such campaign". A campaign's own figures are 0: its money is its funnel's, counted below.
+  const campaignLines: SpendableCampaignLine[] = campaigns
+    .filter((c) => c.status === "ongoing")
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     .map((c) => ({
       campaignId: c.id,
       status: c.status,
-      running: c.status === "ongoing",
+      running: true,
       featureSlug: c.featureSlug,
       offerId: c.offerId,
       legKey: c.legKey,
       salesFunnelCampaignId: c.salesFunnelCampaignId ?? null,
-      configuredDailyBudgetCents: configuredByCampaign.get(c.id) ?? 0,
-      runningDailyBudgetCents: runningByCampaign.get(c.id) ?? 0,
+      configuredDailyBudgetCents: 0,
+      runningDailyBudgetCents: 0,
     }));
 
   const offerMap = new Map<string | null, SpendableOfferLine>();
-  for (const row of rows) {
-    const key = row.resolvedOfferId;
-    const line = offerMap.get(key) ?? {
-      offerId: key,
-      configuredDailyBudgetCents: 0,
-      runningDailyBudgetCents: 0,
-      campaignIds: [],
-    };
-    line.configuredDailyBudgetCents += row.dailyBudgetCents;
-    if (row.running) line.runningDailyBudgetCents += row.dailyBudgetCents;
-    if (row.campaignId && !line.campaignIds.includes(row.campaignId)) {
-      line.campaignIds.push(row.campaignId);
-    }
-    offerMap.set(key, line);
-  }
 
   // SALES FUNNELS: each stated cap counts once, by its max budget per day, under its offer. A cap
   // with no funnel campaign yet is configured money that nothing runs.
@@ -304,12 +203,12 @@ export function computeSpendableBudget(
   return {
     orgId,
     brandId,
-    grain,
-    configuredDailyBudgetCents: rows.reduce((sum, r) => sum + r.dailyBudgetCents, 0) + capsConfigured,
-    runningDailyBudgetCents: rows.reduce((sum, r) => sum + (r.running ? r.dailyBudgetCents : 0), 0) + capsRunning,
+    grain: "none",
+    configuredDailyBudgetCents: capsConfigured,
+    runningDailyBudgetCents: capsRunning,
     offers: [...offerMap.values()],
     campaigns: campaignLines,
-    rows,
+    rows: [],
     salesFunnels,
   };
 }

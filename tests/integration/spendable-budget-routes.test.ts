@@ -18,7 +18,7 @@ const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const BRAND = "11111111-1111-4111-8111-111111111111";
 const BRAND_2 = "22222222-2222-4222-8222-222222222222";
 
-/** billing-service's per-campaign budget read, as it comes off the wire. */
+/** A billing-service read, as it comes off the wire. */
 function billingPayload(body: unknown) {
   return { ok: true, json: async () => body } as unknown as Response;
 }
@@ -51,8 +51,8 @@ describe("Brand spendable budget", () => {
     const orgId = "org-funnels";
     const OFFER = "33333333-3333-4333-8333-333333333333";
     const ENTRY = "lead_found_to_website_visit";
-    // A stopped PRE-FUNNEL campaign on the pipe, funded at $30/day by its own ceiling.
-    const preFunnel = await insertTestCampaign(orgId, {
+    // A stopped PRE-FUNNEL campaign on the pipe: its retired per-campaign ceiling is never read.
+    await insertTestCampaign(orgId, {
       brandIds: [BRAND], brandId: BRAND, featureSlug: "sales-cold-email-outreach", acquisitionChannel: "cold_email",
       offerId: OFFER, legKey: ENTRY, status: "stopped",
     });
@@ -77,18 +77,14 @@ describe("Brand spendable budget", () => {
       { offerId: OFFER, salesFunnelId: "f-reactive", funded: true, fundedBy: "max_budget", maxBudget: { amountCents: "2000", period: "daily", dailyBudgetCents: "0" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
       { offerId: OFFER, salesFunnelId: "f-volume", funded: true, fundedBy: "max_volume", maxBudget: null, maxVolume: { count: 10, period: "daily", unit: "first_contacts" }, updatedAt: "2026-10-10T00:00:00Z" },
     ];
-    fetchMock.mockResolvedValue(billingPayload({
-      brandId: BRAND,
-      dailyBudgetCents: "3000",
-      campaigns: [{ offerId: OFFER, legKey: ENTRY, featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" }],
-    }));
-
     const res = await request(app).get(`/brands/${BRAND}/spendable-budget`).set("x-api-key", API_KEY).set("x-org-id", orgId).expect(200);
 
-    // The pipe's ceiling stays the STOPPED pre-funnel campaign's: the running unit never wakes it.
-    expect(res.body.rows).toEqual([expect.objectContaining({ campaignId: preFunnel.id, running: false, dailyBudgetCents: 3000 })]);
+    // One money model (owner 2026-10-14): no per-campaign ceiling is read or served.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.body.rows).toEqual([]);
+    expect(res.body.grain).toBe("none");
     // weekly 7000/7 = 1000 (running), monthly 30000/30 = 1000 (stopped), one_off 0, volume-only 0.
-    expect(res.body.configuredDailyBudgetCents).toBe(3000 + 1000 + 1000);
+    expect(res.body.configuredDailyBudgetCents).toBe(1000 + 1000);
     expect(res.body.runningDailyBudgetCents).toBe(1000);
     const line = (id: string) => res.body.salesFunnels.find((f: { salesFunnelId: string }) => f.salesFunnelId === id);
     expect(line("f-weekly")).toMatchObject({ salesFunnelCampaignId: weekly.id, running: true, dailyBudgetCents: 1000, recurring: true, unitCampaignIds: [unit.id] });
@@ -100,12 +96,11 @@ describe("Brand spendable budget", () => {
     expect(res.body.campaigns.find((c: { campaignId: string }) => c.campaignId === unit.id)).toMatchObject({
       salesFunnelCampaignId: weekly.id, configuredDailyBudgetCents: 0, runningDailyBudgetCents: 0,
     });
-    expect(res.body.offers).toEqual([expect.objectContaining({ offerId: OFFER, configuredDailyBudgetCents: 5000, runningDailyBudgetCents: 1000 })]);
+    expect(res.body.offers).toEqual([expect.objectContaining({ offerId: OFFER, configuredDailyBudgetCents: 2000, runningDailyBudgetCents: 1000 })]);
     expect(capsReads).toHaveLength(1);
   });
 
   it("answers 502, never a smaller figure, when billing's funnel caps cannot be read", async () => {
-    fetchMock.mockResolvedValue(billingPayload({ brandId: BRAND, dailyBudgetCents: null, campaigns: [] }));
     vi.stubGlobal("fetch", (url: string, init?: unknown) =>
       String(url).includes("/sales-funnel-caps") ? Promise.resolve({ ok: false, status: 503, json: async () => ({}) }) : fetchMock(url, init));
     await request(app).get(`/brands/${BRAND}/spendable-budget`).set("x-api-key", API_KEY).set("x-org-id", "org-x").expect(502);
@@ -117,62 +112,16 @@ describe("Brand spendable budget", () => {
     await closeDb();
   });
 
-  it("reports configured money with nothing running when the funded ceiling has no campaign", async () => {
-    fetchMock.mockResolvedValue(billingPayload({
-      brandId: BRAND,
-      dailyBudgetCents: "5000",
-      campaigns: [{ offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "5000" }],
-    }));
-
-    const res = await request(app)
-      .get(`/brands/${BRAND}/spendable-budget`)
-      .set("x-api-key", API_KEY)
-      .set("x-org-id", "org-nothing-running")
-      .expect(200);
-
-    expect(res.body.configuredDailyBudgetCents).toBe(5000);
-    expect(res.body.runningDailyBudgetCents).toBe(0);
-    expect(res.body.campaigns).toEqual([]);
-  });
-
-  it("counts a running lead SOURCE campaign's ceiling as running, and names a stopped one", async () => {
-    const orgId = "org-sources";
-    const OFFER = "33333333-3333-4333-8333-333333333333";
+  it("never reads billing's retired per-campaign ceilings: a pre-funnel campaign is named with no money", async () => {
+    const orgId = "org-pre-funnel";
     const outreach = await insertTestCampaign(orgId, {
-      brandIds: [BRAND],
-      brandId: BRAND,
-      featureSlug: "sales-cold-email-outreach",
-      acquisitionChannel: "cold_email",
-      offerId: OFFER,
-      legKey: "lead_found_to_website_visit",
-      status: "ongoing",
+      brandIds: [BRAND], brandId: BRAND, featureSlug: "sales-cold-email-outreach", acquisitionChannel: "cold_email",
+      offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_conversation", status: "ongoing",
     });
-    const coldFilters = await insertTestCampaign(orgId, {
-      brandIds: [BRAND],
-      brandId: BRAND,
-      featureSlug: "sourcing-apollo-cold-filters",
-      offerId: OFFER,
-      legKey: "start_to_lead_found",
-      status: "ongoing",
+    await insertTestCampaign(orgId, {
+      brandIds: [BRAND], brandId: BRAND, featureSlug: "sourcing-apollo-cold-filters",
+      offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_lead_found", status: "stopped",
     });
-    const signals = await insertTestCampaign(orgId, {
-      brandIds: [BRAND],
-      brandId: BRAND,
-      featureSlug: "sourcing-apollo-buying-signals",
-      offerId: OFFER,
-      legKey: "start_to_lead_found",
-      status: "stopped",
-    });
-
-    fetchMock.mockResolvedValue(billingPayload({
-      brandId: BRAND,
-      dailyBudgetCents: "2500",
-      campaigns: [
-        { offerId: OFFER, legKey: "lead_found_to_website_visit", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "300" },
-        { offerId: OFFER, legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-cold-filters", dailyBudgetCents: "1700" },
-        { offerId: OFFER, legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-buying-signals", dailyBudgetCents: "500" },
-      ],
-    }));
 
     const res = await request(app)
       .get(`/brands/${BRAND}/spendable-budget`)
@@ -180,63 +129,11 @@ describe("Brand spendable budget", () => {
       .set("x-org-id", orgId)
       .expect(200);
 
-    expect(res.body.configuredDailyBudgetCents).toBe(2500);
-    expect(res.body.runningDailyBudgetCents).toBe(2000);
-    const row = (slug: string) => res.body.rows.find((r: { featureSlug: string }) => r.featureSlug === slug);
-    expect(row("sales-cold-email-outreach")).toMatchObject({ running: true, campaignId: outreach.id });
-    expect(row("sourcing-apollo-cold-filters")).toMatchObject({ running: true, campaignId: coldFilters.id });
-    expect(row("sourcing-apollo-buying-signals")).toMatchObject({ running: false, campaignId: signals.id, campaignStatus: "stopped" });
-  });
-
-  it("counts only the ceiling whose campaign is ongoing", async () => {
-    const orgId = "org-partly-running";
-    await insertTestCampaign(orgId, {
-      brandIds: [BRAND],
-      brandId: BRAND,
-      featureSlug: "sales-cold-email-outreach",
-      acquisitionChannel: "cold_email",
-      offerId: "33333333-3333-4333-8333-333333333333",
-      legKey: "start_to_conversation",
-      status: "ongoing",
-    });
-    await insertTestCampaign(orgId, {
-      brandIds: [BRAND],
-      brandId: BRAND,
-      featureSlug: "sales-cold-email-outreach",
-      acquisitionChannel: "cold_email",
-      offerId: "33333333-3333-4333-8333-333333333333",
-      legKey: "start_to_website_visit",
-      status: "stopped",
-    });
-
-    fetchMock.mockResolvedValue(billingPayload({
-      brandId: BRAND,
-      dailyBudgetCents: "9000",
-      campaigns: [
-        { offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "4000" },
-        { offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_website_visit", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "5000" },
-      ],
-    }));
-
-    const res = await request(app)
-      .get(`/brands/${BRAND}/spendable-budget`)
-      .set("x-api-key", API_KEY)
-      .set("x-org-id", orgId)
-      .expect(200);
-
-    expect(res.body.configuredDailyBudgetCents).toBe(9000);
-    expect(res.body.runningDailyBudgetCents).toBe(4000);
-    expect(res.body.campaigns).toHaveLength(2);
-  });
-
-  it("fails LOUD when billing cannot be read, never a smaller figure", async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) } as unknown as Response);
-
-    await request(app)
-      .get(`/brands/${BRAND}/spendable-budget`)
-      .set("x-api-key", API_KEY)
-      .set("x-org-id", "org-billing-down")
-      .expect(502);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.body).toMatchObject({ grain: "none", rows: [], configuredDailyBudgetCents: 0, runningDailyBudgetCents: 0, offers: [] });
+    expect(res.body.campaigns).toEqual([
+      expect.objectContaining({ campaignId: outreach.id, running: true, configuredDailyBudgetCents: 0, runningDailyBudgetCents: 0, salesFunnelCampaignId: null }),
+    ]);
   });
 
   it("requires an org", async () => {
@@ -259,18 +156,13 @@ describe("Brand spendable budget", () => {
       status: "ongoing",
     });
 
-    fetchMock.mockImplementation(async (url: string, init: { headers: Record<string, string> }) => {
-      const orgId = init.headers["x-org-id"];
-      if (orgId === orgA) {
-        return billingPayload({
-          dailyBudgetCents: "4000",
-          campaigns: [{ offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "4000" }],
-        });
-      }
-      return billingPayload({
-        dailyBudgetCents: "3000",
-        campaigns: [{ offerId: "33333333-3333-4333-8333-333333333333", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" }],
-      });
+    vi.stubGlobal("fetch", (url: string, init: { headers: Record<string, string> }) => {
+      if (!String(url).includes("/sales-funnel-caps")) return fetchMock(url, init);
+      const daily = init.headers["x-org-id"] === orgA ? "4000" : "3000";
+      return Promise.resolve(billingPayload({
+        orgId: init.headers["x-org-id"], brandId: "b",
+        caps: [{ offerId: "33333333-3333-4333-8333-333333333333", salesFunnelId: "f", funded: true, fundedBy: "max_budget", maxBudget: { amountCents: daily, period: "daily", dailyBudgetCents: daily }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" }],
+      }));
     });
 
     const batch = await request(app)
@@ -295,7 +187,8 @@ describe("Brand spendable budget", () => {
   });
 
   it("names a brand billing could not answer for, and gives it NO figures at all", async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) } as unknown as Response);
+    vi.stubGlobal("fetch", (url: string, init?: unknown) =>
+      String(url).includes("/sales-funnel-caps") ? Promise.resolve({ ok: false, status: 503, json: async () => ({}) }) : fetchMock(url, init));
 
     const res = await request(app)
       .post("/brands/spendable-budget")
