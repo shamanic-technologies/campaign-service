@@ -55,11 +55,9 @@ describe("a served-out audience is not picked while another still has people", (
     expect(selectAudienceFromProjection(allDry, "wf-A", { rng: fixedRng })).toBe("aud-1");
   });
 
-  it("the fresh-exhausted exclusion and the required subset still apply first", () => {
+  it("the fresh-exhausted exclusion still applies first", () => {
     // the only audience with people is freshly exhausted → the rule does not resurrect it, and does not
     // invent an empty answer either: the dry one is still probed.
     expect(selectAudiencePooled([dryCheap, fullDear], { excludedAudienceIds: ["aud-full"], rng: fixedRng })).toBe("aud-dry");
-    // a required subset naming only the dry audience keeps it
-    expect(selectAudiencePooled([dryCheap, fullDear], { requiredAudienceIds: ["aud-dry"], rng: fixedRng })).toBe("aud-dry");
   });
 });

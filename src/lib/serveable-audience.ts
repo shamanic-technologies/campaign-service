@@ -9,15 +9,15 @@ import {
 /** The campaign fields the serveable-audience read needs. */
 export type ServeableAudienceCampaign = Pick<
   Campaign,
-  "id" | "orgId" | "legKey" | "audienceIds"
+  "id" | "orgId" | "legKey"
 >;
 
 /**
- * WHICH audiences this campaign could be served right now — the brand's active audiences,
- * narrowed to the campaign's targeted subset, minus the ones currently marked exhausted.
+ * WHICH audiences this campaign could be served right now — the brand's active audiences minus
+ * the ones currently marked exhausted. A campaign states no audience subset (retired 2026-10-14).
  *
  * ONE definition, asked by the two legs that must agree on it:
- *   /end-run     — none left → every targeted audience is exhausted → auto-stop.
+ *   /end-run     — none left → every audience is exhausted → auto-stop.
  *   resume sweep — at least one → the brand has somebody to contact again → come back.
  * Two legs on two definitions is how a campaign gets stopped by one and never picked up by the
  * other, so they read the same function rather than two copies of the same idea.
@@ -59,7 +59,6 @@ export async function serveableAudienceIdsForCampaign(
     identity,
   });
   return serveableAudienceIdsInProjection(rows, {
-    requiredAudienceIds: campaign.audienceIds ?? undefined,
     excludedAudienceIds,
   });
 }

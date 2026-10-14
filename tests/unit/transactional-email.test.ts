@@ -71,7 +71,6 @@ function makeCampaign(overrides: Partial<Campaign> = {}): Campaign {
     brandProfileId: null,
     audienceId: null,
     goal: null,
-    audienceIds: null,
     servicesOffered: null,
     clickDestinationUrl: null,
     maxBudgetDailyUsd: null,

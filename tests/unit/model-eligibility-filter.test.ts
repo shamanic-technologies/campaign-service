@@ -168,10 +168,10 @@ describe("the restriction binds BOTH argmins", () => {
     const cell = selectCellFromProjection(kept, { rng: fixedRng });
     expect(cell.workflowSlug).toBe("strong-wf");
 
-    // And it holds when the campaign is PINNED to the audience the cheap workflow was best on —
+    // And it holds when the pick lands on the audience the cheap workflow was best on —
     // the global-argmin fallback inside selectCellFromProjection must not smuggle it back in.
     expect(
-      selectCellFromProjection(kept, { requiredAudienceIds: ["aud-A"], rng: fixedRng }).workflowSlug,
+      selectCellFromProjection(kept, { excludedAudienceIds: ["aud-B"], rng: fixedRng }).workflowSlug,
     ).toBe("strong-wf");
   });
 
@@ -495,10 +495,6 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     await expect(
       resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, excludedAudienceIds: ["aud-A", "aud-B"] }),
     ).resolves.toEqual({ workflowSlug: "strong-wf", audienceId: null, noServeableAudience: true });
-    // Outside the hard targeting subset counts the same: nobody the campaign may serve.
-    await expect(
-      resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, requiredAudienceIds: ["aud-Z"] }),
-    ).resolves.toMatchObject({ audienceId: null, noServeableAudience: true });
     // One audience left → it is served, nothing held.
     await expect(
       resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, excludedAudienceIds: ["aud-A"] }),

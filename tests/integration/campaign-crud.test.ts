@@ -338,10 +338,9 @@ describe("Campaign CRUD", () => {
     });
   });
 
-  // === Campaign v2: per-campaign own config (audience subset / services / destination) ===
+  // === Campaign v2: per-campaign own config (services / destination) ===
   describe("Campaign v2 own config", () => {
     const ownConfig = {
-      audienceIds: ["aud-1", "aud-2"],
       servicesOffered: ["seo", "ads"],
       clickDestinationUrl: "https://example.com/landing",
     };
@@ -387,7 +386,7 @@ describe("Campaign CRUD", () => {
 
     it("defaults to null (inherit brand) when nothing is set", async () => {
       const res = await createCampaign({ ...validBody, name: "Inherit" }).expect(201);
-      expect(res.body.campaign.audienceIds).toBeNull();
+      expect(res.body.campaign).not.toHaveProperty("audienceIds");
       expect(res.body.campaign.servicesOffered).toBeNull();
       expect(res.body.campaign.clickDestinationUrl).toBeNull();
     });
@@ -400,20 +399,27 @@ describe("Campaign CRUD", () => {
       expect(setRes.body.campaign).toMatchObject(ownConfig);
 
       const clearRes = await patch(id, {
-        audienceIds: null,
         servicesOffered: null,
         clickDestinationUrl: null,
       }).expect(200);
-      expect(clearRes.body.campaign.audienceIds).toBeNull();
       expect(clearRes.body.campaign.servicesOffered).toBeNull();
       expect(clearRes.body.campaign.clickDestinationUrl).toBeNull();
     });
 
-    it("targets one OR more audiences (subset) and rejects an empty subset", async () => {
-      const one = await createCampaign({ ...validBody, name: "One Aud", audienceIds: ["aud-only"] }).expect(201);
-      expect(one.body.campaign.audienceIds).toEqual(["aud-only"]);
-
+    // The per-campaign audience SUBSET is retired (owner 2026-10-14): who a pipe reaches is its lead
+    // strategy's. A stated list is refused by name, on create AND update, so nobody believes a
+    // campaign is scoped when it is not; null (the old "inherit") is what every campaign does now.
+    it("refuses a stated audienceIds list (create and update), accepts and ignores null", async () => {
+      const refused = await createCampaign({ ...validBody, name: "One Aud", audienceIds: ["aud-only"] }).expect(400);
+      expect(refused.body.reason).toBe("audience_ids_retired");
       await createCampaign({ ...validBody, name: "Empty Aud", audienceIds: [] }).expect(400);
+
+      const ok = await createCampaign({ ...validBody, name: "Null Aud", audienceIds: null }).expect(201);
+      expect(ok.body.campaign).not.toHaveProperty("audienceIds");
+
+      const patched = await patch(ok.body.campaign.id, { audienceIds: ["aud-x"] }).expect(400);
+      expect(patched.body.reason).toBe("audience_ids_retired");
+      await patch(ok.body.campaign.id, { audienceIds: null }).expect(200);
     });
 
     // `goal` is not writable any more: a campaign says what it sells with its OFFER and LEG, the
@@ -445,7 +451,6 @@ describe("Campaign CRUD", () => {
 
       // Sibling B is untouched — still inheriting (all null).
       const bRead = await get(b.body.campaign.id).expect(200);
-      expect(bRead.body.campaign.audienceIds).toBeNull();
       expect(bRead.body.campaign.servicesOffered).toBeNull();
       expect(bRead.body.campaign.clickDestinationUrl).toBeNull();
 

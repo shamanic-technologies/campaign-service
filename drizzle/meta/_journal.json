@@ -512,6 +512,13 @@
       "when": 1779700000000,
       "tag": "0072_trigger_event_deliveries",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1779800000000,
+      "tag": "0073_drop_campaign_audience_ids",
+      "breakpoints": true
     }
   ]
 }
