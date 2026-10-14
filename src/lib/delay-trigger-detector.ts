@@ -5,6 +5,7 @@ import type { CatalogueTriggerTransition, CatalogueTriggerType, ChannelCatalogue
 import { fetchOfferLeadActivity, type LeadActivityByLead } from "./lead-activity-client.js";
 import { sameLeg } from "./leg-identity.js";
 import { ON_DEMAND_TRIGGER_ID } from "./on-demand-mode.js";
+import { fetchStepReachers, hasEverReachedStep } from "./step-reach-client.js";
 
 /**
  * THE GENERIC `delay` DETECTOR (owner 2026-10-09): "N days after a lead reached step X, if nothing
@@ -45,6 +46,23 @@ import { ON_DEMAND_TRIGGER_ID } from "./on-demand-mode.js";
  * LIMIT, stated: lead-service's evidence is not dated except the CRM reply, so after an anchor LATER
  * than `lead_found` only our own later events and the dated CRM reply count (a reply that predates a
  * click anchor cannot be told from one after it, so neither is used).
+ *
+ * ── "FACT NOT FOLLOWED": `unlessStep` (owner 2026-10-14, FACT-NOT-FOLLOWED-1014) ─────────────────
+ *
+ * "A signup not followed by a paid client within 30 min", "a website visit not followed by a signup
+ * within 30 min": params `{afterStep, minutes|days, unlessStep}`. Generic, any step pair, any brand.
+ *  - ANCHORS are PEOPLE, read from lead-service (lib/step-reach-client.ts: who of the brand reached
+ *    `afterStep`, when, by email; what a connector fact (auth, analytics, payments) means as a step is lead-service's).
+ *    One `pending` event per person x trigger x offer, ever (key `delay:<trigger>:<offer>:<email>`),
+ *    carrying `detail.person`: firing files the person at lead-service, makes them due and hands them
+ *    to the run (lib/trigger-person.ts), exactly like a pushed person. A visitor with no email is never
+ *    listed (cannot be written to). An anchor whose due time passed longer ago than the delay itself
+ *    (capped at `DELAY_PLAN_LATE_MS`) is never planned: a connector backfill of old signups writes to
+ *    nobody.
+ *  - GUARD = the person has EVER reached `unlessStep` (lead-service, by email) = skip `step_reached`.
+ *    Nothing else cancels it (a second visit is not a signup); opted-out / bounced people are refused
+ *    by the filing itself (`person_suppressed`). Unreadable = retry, never fired on a guess.
+ * Without `unlessStep` the trigger is the one above, byte-identical.
  */
 
 export const DELAY_DETECTOR_RECORDED_VIA = "delay_detector";
@@ -69,20 +87,40 @@ export const DELAY_SKIPS = {
   LEAD_OPTED_OUT: "lead_opted_out",
   LEAD_UNREACHABLE: "lead_unreachable",
   LEAD_UNKNOWN: "lead_unknown",
+  /** `unlessStep`: the person reached the step the trigger waits for ("still not Y" is false). */
+  STEP_REACHED: "step_reached",
 } as const;
+
+export const DELAY_MIN_MINUTES = 5;
 
 export interface DelayParams {
   afterStep: string;
-  days: number;
+  /** Exactly one of `days` / `minutes` is stated. */
+  days?: number;
+  minutes?: number;
+  /** "Still not this step": the occurrence is cancelled when the person ever reached it. */
+  unlessStep?: string;
+}
+
+/** The delay in ms. Pure. */
+export function delayMsOf(params: DelayParams): number {
+  return params.minutes !== undefined ? params.minutes * 60_000 : params.days! * 24 * 60 * 60_000;
 }
 
 /** Read a delay trigger's parameters. Null = not a delay this service can detect (said by the caller). */
 export function parseDelayParams(params: Record<string, unknown> | null | undefined): DelayParams | null {
   if (!params) return null;
-  const { afterStep, days } = params;
+  const { afterStep, days, minutes, unlessStep } = params;
   if (typeof afterStep !== "string" || afterStep.length === 0) return null;
-  if (typeof days !== "number" || !Number.isInteger(days) || days < 1) return null;
-  return { afterStep, days };
+  if ((days === undefined) === (minutes === undefined)) return null;
+  if (days !== undefined && (typeof days !== "number" || !Number.isInteger(days) || days < 1)) return null;
+  if (minutes !== undefined && (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes < DELAY_MIN_MINUTES)) return null;
+  if (unlessStep !== undefined && (typeof unlessStep !== "string" || unlessStep.length === 0 || unlessStep === afterStep)) return null;
+  return {
+    afterStep,
+    ...(days !== undefined ? { days: days as number } : { minutes: minutes as number }),
+    ...(unlessStep !== undefined ? { unlessStep: unlessStep as string } : {}),
+  };
 }
 
 export interface DetectableTrigger<P> {
@@ -128,7 +166,12 @@ export function detectableTriggers<P>(
 /** `parseDelayParams` as a detector read. */
 export function readDelayParams(params: Record<string, unknown> | null | undefined): ParamsRead<DelayParams> {
   const parsed = parseDelayParams(params);
-  return parsed ? { ok: true, params: parsed } : { ok: false, error: "params must be {afterStep: <step key>, days: <whole number >= 1>}" };
+  return parsed
+    ? { ok: true, params: parsed }
+    : {
+        ok: false,
+        error: `params must be {afterStep: <step key>, days: <whole number >= 1> | minutes: <whole number >= ${DELAY_MIN_MINUTES}>, unlessStep?: <another step key>}`,
+      };
 }
 
 export interface TriggerScope {
@@ -169,8 +212,9 @@ export async function liveScopesBehind(transitions: readonly CatalogueTriggerTra
   return [...seen.values()];
 }
 
-export function delayIdempotencyKey(triggerId: string, offerId: string, leadId: string): string {
-  return `delay:${triggerId}:${offerId}:${leadId}`;
+/** `subject` = the lead id (a step anchor of ours) or the person's canonical email (`unlessStep`). */
+export function delayIdempotencyKey(triggerId: string, offerId: string, subject: string): string {
+  return `delay:${triggerId}:${offerId}:${subject}`;
 }
 
 /** The SQL predicate "this event says the lead reached `step`". */
@@ -189,7 +233,8 @@ export async function planDelayScope(
   scope: TriggerScope,
   now: Date,
 ): Promise<number> {
-  const delayMs = trigger.params.days * 24 * 60 * 60_000;
+  if (trigger.params.unlessStep) return planPersonDelayScope(trigger, scope, now);
+  const delayMs = delayMsOf(trigger.params);
   const windowStart = new Date(now.getTime() - delayMs - DELAY_PLAN_LATE_MS);
   const anchors = await db
     .selectDistinctOn([triggerEvents.leadId], {
@@ -229,6 +274,55 @@ export async function planDelayScope(
         anchorAt: a.occurredAt.toISOString(),
         afterStep: trigger.params.afterStep,
         days: trigger.params.days,
+        ...(trigger.params.minutes !== undefined ? { minutes: trigger.params.minutes } : {}),
+      },
+    };
+  });
+  const inserted = await db.insert(triggerEvents).values(rows).onConflictDoNothing().returning({ id: triggerEvents.id });
+  return inserted.length;
+}
+
+/** How late an anchor may be planned: never later than the delay itself, at most `DELAY_PLAN_LATE_MS`. Pure. */
+export function personDelayLateMs(params: DelayParams): number {
+  return Math.min(DELAY_PLAN_LATE_MS, delayMsOf(params));
+}
+
+/** Plan one scope of a "fact not followed" trigger (`unlessStep`): anchors are PEOPLE, read from lead-service. */
+async function planPersonDelayScope(
+  trigger: { id: string; params: DelayParams },
+  scope: TriggerScope,
+  now: Date,
+): Promise<number> {
+  const delayMs = delayMsOf(trigger.params);
+  const windowStart = new Date(now.getTime() - delayMs - personDelayLateMs(trigger.params));
+  const reachers = await fetchStepReachers({
+    orgId: scope.orgId,
+    brandId: scope.brandId,
+    step: trigger.params.afterStep,
+    since: windowStart,
+  });
+  if (reachers.length === 0) return 0;
+
+  const rows = reachers.map((p) => {
+    const dueAt = new Date(p.reachedAt.getTime() + delayMs);
+    return {
+      orgId: scope.orgId,
+      brandId: scope.brandId,
+      offerId: scope.offerId,
+      triggerId: trigger.id,
+      step: trigger.params.afterStep,
+      leadId: null,
+      idempotencyKey: delayIdempotencyKey(trigger.id, scope.offerId, p.email),
+      recordedVia: DELAY_DETECTOR_RECORDED_VIA,
+      occurredAt: dueAt,
+      dueAt,
+      status: "pending",
+      detail: {
+        anchorAt: p.reachedAt.toISOString(),
+        afterStep: trigger.params.afterStep,
+        unlessStep: trigger.params.unlessStep,
+        ...(trigger.params.days !== undefined ? { days: trigger.params.days } : { minutes: trigger.params.minutes }),
+        person: { email: p.email, name: p.name, phone: p.phone, crmContact: null },
       },
     };
   });
@@ -268,6 +362,15 @@ function anchorOf(event: TriggerEvent): DelayAnchor {
  * Throws when it cannot be told (lead-service unreadable, no lead on the event).
  */
 export async function delayGuard(event: TriggerEvent, cache: LeadActivityCache = new Map()): Promise<DelayGuardVerdict | null> {
+  const own = (event.detail ?? {}) as { unlessStep?: unknown; person?: { email?: unknown } };
+  if (typeof own.unlessStep === "string" && own.unlessStep) {
+    const email = typeof own.person?.email === "string" ? own.person.email : null;
+    if (!email) throw new Error(`delay event ${event.id} waits on step ${own.unlessStep} but names no person`);
+    const reached = await hasEverReachedStep({ orgId: event.orgId, brandId: event.brandId, step: own.unlessStep, email });
+    return reached
+      ? { reason: DELAY_SKIPS.STEP_REACHED, detail: `the person reached ${own.unlessStep}` }
+      : null;
+  }
   if (!event.leadId) throw new Error(`delay event ${event.id} names no lead`);
   const anchor = anchorOf(event);
 
