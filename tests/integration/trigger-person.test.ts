@@ -44,7 +44,7 @@ import { db } from "../../src/db/index.js";
 import { triggerEvents } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { fireDueTriggerEvents } from "../../src/lib/trigger-events.js";
-import { PERSON_NOT_KNOWN_RETRY_MS, PERSON_NOT_KNOWN_WAIT_MS } from "../../src/lib/trigger-person.js";
+import { OWED_EVENT_RECHECK_MS, PERSON_NOT_KNOWN_RETRY_MS, PERSON_NOT_KNOWN_WAIT_MS } from "../../src/lib/trigger-person.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "b645207b-0000-4000-8000-000000000021";
@@ -295,6 +295,70 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     const occurredAt = new Date(Date.now() - PERSON_NOT_KNOWN_WAIT_MS - 60_000).toISOString();
     const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, occurredAt, dueAt: occurredAt });
     expect(res.body.event).toMatchObject({ status: "done", outcome: "skipped", skipReason: "person_not_known" });
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("NEVER-NO-FOLLOWUP-1014: a future-dated occurrence fires at its date on the live unit, the person due on it and named on /execute", async () => {
+    const campaign = await meetingBooking("ongoing");
+    const dueAt = new Date(Date.now() + 3 * 24 * 3600_000);
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, dueAt: dueAt.toISOString(), idempotencyKey: "followup:send-1" });
+    expect(res.status).toBe(201);
+    expect(res.body.event.status).toBe("pending");
+    expect(mockFile).not.toHaveBeenCalled();
+
+    // At its date a run of the unit is in flight: held, not given up although it was RECORDED 3 days earlier.
+    mockListRuns.mockResolvedValueOnce({ runs: [{ id: "run-live", status: "running" }] });
+    expect(await fireDueTriggerEvents(new Date(dueAt.getTime() + 1000))).toBe(0);
+    let [event] = await allEvents();
+    expect(event.status).toBe("pending");
+    expect(event.dueAt.getTime() - dueAt.getTime()).toBeLessThanOrEqual(PERSON_NOT_KNOWN_RETRY_MS + 1000);
+
+    expect(await fireDueTriggerEvents(new Date(event.dueAt.getTime() + 1000))).toBe(1);
+    [event] = await allEvents();
+    expect(event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+    expect(mockDue).toHaveBeenCalledWith(expect.objectContaining({ campaignId: campaign.id, email: "jane.doe@example.com" }));
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(mockExecute.mock.calls[0][1].trigger).toMatchObject({ eventId: event.id, leadId: "lead-jane", person: { email: "jane.doe@example.com" } });
+  });
+
+  it("NEVER-NO-FOLLOWUP-1014: a campaign without room long past the hour keeps the occurrence pending, then fires it once when room returns", async () => {
+    const campaign = await meetingBooking("ongoing");
+    mockFunding.mockResolvedValue({ funded: false, reason: "cap reached for the month" });
+    const longAgo = new Date(Date.now() - 5 * PERSON_NOT_KNOWN_WAIT_MS).toISOString();
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, occurredAt: longAgo, dueAt: longAgo });
+    expect(res.body.event.status).toBe("pending");
+    expect(res.body.event.detail.retryCampaignIds).toEqual([campaign.id]);
+    const retryIn = new Date(res.body.event.dueAt).getTime() - Date.now();
+    expect(retryIn).toBeGreaterThan(OWED_EVENT_RECHECK_MS - 10_000);
+    expect(mockFile).not.toHaveBeenCalled();
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    // Still no room on the next try: still pending.
+    expect(await fireDueTriggerEvents(new Date(Date.now() + OWED_EVENT_RECHECK_MS + 1000))).toBe(0);
+    let [event] = await allEvents();
+    expect(event.status).toBe("pending");
+
+    // Room returns (period rolled over): fired once, never again.
+    mockFunding.mockResolvedValue({ funded: true, ceilingCents: 5000 });
+    expect(await fireDueTriggerEvents(new Date(event.dueAt.getTime() + 1000))).toBe(1);
+    [event] = await allEvents();
+    expect(event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+    expect(await fireDueTriggerEvents(new Date(Date.now() + 24 * 3600_000))).toBe(0);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("NEVER-NO-FOLLOWUP-1014: an occurrence held for money whose campaign the customer turns Off is done `campaign_off`, nothing run", async () => {
+    const campaign = await meetingBooking("ongoing");
+    mockFunding.mockResolvedValue({ funded: false, reason: "cap reached" });
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON });
+    expect(res.body.event.status).toBe("pending");
+    const { campaigns } = await import("../../src/db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    await db.update(campaigns).set({ status: "stopped" }).where(eq(campaigns.id, campaign.id));
+    mockFunding.mockResolvedValue({ funded: true, ceilingCents: 5000 });
+    expect(await fireDueTriggerEvents(new Date(new Date(res.body.event.dueAt).getTime() + 1000))).toBe(1);
+    const [event] = await allEvents();
+    expect(event).toMatchObject({ status: "done", outcome: "skipped", skipReason: "campaign_off" });
     expect(mockExecute).not.toHaveBeenCalled();
   });
 

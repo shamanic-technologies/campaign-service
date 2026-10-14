@@ -708,7 +708,8 @@ export const RecordTriggerEventBody = z.object({
    * may not be a lead yet. Each campaign the trigger reaches files them as a lead of the brand at
    * lead-service (the brand must know the address: a CRM fact), makes them due, and receives them on
    * `/execute` `trigger.person` (+ `trigger.leadId`). Not known yet = the event retries every 2 min for
-   * 60 min (also while a run of the campaign is in flight, so each event gets its own run), then is skipped with that reason.
+   * 60 min after it fell due, then is skipped with that reason. A campaign held for money or pacing (cap reached,
+   * unfunded, a run in flight, a failure backoff) keeps the event pending with no deadline until it can run, once.
    */
   person: z.object({
     email: z.string().trim().email("person.email must be an email address"),
