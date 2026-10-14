@@ -41,6 +41,7 @@ import { db } from "../../src/db/index.js";
 import { campaigns, campaignStatusTransitions } from "../../src/db/schema.js";
 import { and, eq } from "drizzle-orm";
 import * as store from "../../src/lib/source-campaign-store.js";
+import { readDispatchCatalogue } from "../../src/lib/on-demand-mode.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "50c0e000-0000-4000-8000-000000000001";
@@ -372,6 +373,93 @@ describe("Source campaigns: an offer's lead sources are campaigns (owner 2026-10
 
       expect(followed.map((c) => c.id)).toEqual([legacyCrm.id]);
       expect((await rowOf(funnelApollo.id)).status).toBe("stopped");
+    });
+  });
+
+  describe("a funnel unit is fed by its own funnel's source units on the leg before it, whatever its channel (NEVER-NO-FOLLOWUP-1014)", () => {
+    const FOLLOW_UP = "ai-follow-up-email";
+    const LEAD_SOURCING = "lead-sourcing";
+    const FROM_LEAD_FOUND = "lead_found_to_conversation";
+    const FROM_CONVERSATION = "conversation_to_paid_client";
+    const CHAIN_CATALOGUE = {
+      ...CATALOGUE,
+      operatorBySlug: new Map([[COLD, "platform" as const], [FOLLOW_UP, "platform" as const], [LEAD_SOURCING, "platform" as const]]),
+      legsBySlug: new Map<string, ReadonlySet<string>>([
+        [COLD, new Set([FROM_LEAD_FOUND])],
+        [FOLLOW_UP, new Set([FROM_LEAD_FOUND, FROM_CONVERSATION])],
+        [LEAD_SOURCING, new Set([SOURCE_LEG])],
+      ]),
+      legs: [
+        ...CATALOGUE.legs,
+        { legKey: FROM_LEAD_FOUND, fromStepKey: "lead_found", toStepKey: "conversation" },
+        { legKey: FROM_CONVERSATION, fromStepKey: "conversation", toStepKey: "paid_client" },
+      ],
+      triggerTransitions: [],
+    };
+    const unit = async (funnel: string, featureSlug: string, legKey: string, status = "ongoing") => {
+      const row = await insertTestCampaign(ORG, {
+        status, brandIds: [BRAND], brandId: BRAND, offerId: OFFER, legKey, featureSlug,
+        acquisitionChannel: featureSlug === COLD ? "cold_email" : null, maxBudgetDailyUsd: undefined,
+      });
+      await db.update(campaigns).set({ salesFunnelCampaignId: funnel }).where(eq(campaigns.id, row.id));
+      return rowOf(row.id);
+    };
+    const servedTo = async (id: string, expected = 200) =>
+      (await request(app).get(`/internal/campaigns/${id}/source-campaigns`).set("x-api-key", API_KEY).expect(expected)).body;
+
+    beforeEach(() => {
+      mockCatalogue.mockResolvedValue(CHAIN_CATALOGUE);
+      vi.mocked(readDispatchCatalogue).mockResolvedValue(CHAIN_CATALOGUE as never);
+    });
+    afterAll(() => {
+      vi.mocked(readDispatchCatalogue).mockResolvedValue({ ok: false, detail: "not read in tests" });
+    });
+
+    it("'Ribbon': the AI Follow-up Email unit on lead_found is served its funnel's running Lead Sourcing unit, which runs on its own", async () => {
+      const ribbon = crypto.randomUUID();
+      const source = await unit(ribbon, LEAD_SOURCING, SOURCE_LEG);
+      const followUp = await unit(ribbon, FOLLOW_UP, FROM_LEAD_FOUND);
+      // Another funnel's source of the same offer never feeds it.
+      await unit(crypto.randomUUID(), LEAD_SOURCING, SOURCE_LEG);
+
+      const body = await servedTo(followUp.id);
+      expect(body.sourced).toBe(true);
+      expect(body.servedOrigins).toEqual([LEAD_SOURCING]);
+      expect(body.sourceCampaigns).toEqual([
+        { featureSlug: LEAD_SOURCING, campaignId: source.id, campaignKey: `campaign:${LEAD_SOURCING}|${SOURCE_LEG}`, status: "ongoing", running: true, runsOnItsOwn: true },
+      ]);
+    });
+
+    it("a unit whose leg starts after another step (conversation) is fed by nothing; a source unit feeds nothing to itself", async () => {
+      const funnel = crypto.randomUUID();
+      const source = await unit(funnel, LEAD_SOURCING, SOURCE_LEG);
+      const closing = await unit(funnel, FOLLOW_UP, FROM_CONVERSATION);
+
+      expect((await servedTo(closing.id)).sourceCampaigns).toEqual([]);
+      expect((await servedTo(closing.id)).sourced).toBe(false);
+      expect((await servedTo(source.id)).sourceCampaigns).toEqual([]);
+    });
+
+    it("a cold-email unit the map already covers reads exactly as before, without asking the catalogue", async () => {
+      const funnel = crypto.randomUUID();
+      const source = await unit(funnel, LEAD_SOURCING, SOURCE_LEG);
+      const email = await unit(funnel, COLD, FROM_LEAD_FOUND);
+      mockCatalogue.mockClear();
+
+      const feeding = await store.sourceCampaignsFeeding(email.id, COLD);
+      expect(feeding.map((f) => f.id)).toEqual([source.id]);
+      expect(mockCatalogue).not.toHaveBeenCalled();
+      const body = await servedTo(email.id);
+      expect(body.servedOrigins).toEqual(["sourcing-apollo-cold-filters", "sourcing-apollo-buying-signals", "sourcing-linkedin-engagement-signals", "sourcing-apify-search", "sourcing-crm-contacts", LEAD_SOURCING]);
+    });
+
+    it("an unreadable catalogue is a 502, never 'fed by nothing'", async () => {
+      const funnel = crypto.randomUUID();
+      await unit(funnel, LEAD_SOURCING, SOURCE_LEG);
+      const followUp = await unit(funnel, FOLLOW_UP, FROM_LEAD_FOUND);
+      mockCatalogue.mockResolvedValue({ ok: false, detail: "HTTP 503" });
+
+      expect((await servedTo(followUp.id, 502)).error).toMatch(/catalogue unreadable/);
     });
   });
 
