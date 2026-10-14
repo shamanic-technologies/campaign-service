@@ -333,6 +333,22 @@ registry.registerPath({
   },
 });
 
+registry.registerPath({
+  method: "delete",
+  path: "/sales-funnel-campaigns/{id}",
+  tags: ["Sales funnel campaigns"],
+  summary: "Delete a sales funnel campaign created by mistake (never ran)",
+  description: "Header x-org-id (the campaign must belong to it, else 404); x-user-id + x-run-id forwarded when present. Deletes the funnel campaign AND its units in one transaction. Only a STOPPED campaign that NEVER RAN: no run ever filed under any of its units in runs-service (any status) and no trigger delivery recorded. Refusals (`error` is customer-facing English, render verbatim): 409 `sales_funnel_campaign_ongoing` (it or one of its units is running: stop it first); 409 `sales_funnel_campaign_has_history` (it ran: its results are kept, stop it instead, it stays in the past campaigns); 502 `runs_unavailable` (its history could not be read) or `billing_unavailable` (its own caps could not be cleared): nothing deleted. Side effects: billing's caps stated for THIS funnel campaign are cleared (the funnel-wide cap, shared by every campaign on that funnel, is untouched); features-service is told to recompute the brand's Campaigns rows. Status transitions are kept (append-only history).",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: "Deleted", content: { "application/json": { schema: z.object({ deleted: z.literal(true), salesFunnelCampaignId: z.string(), unitIds: z.array(z.string()) }) } } },
+    404: { description: "Not found in this org", content: { "application/json": { schema: ErrorResponse } } },
+    409: { description: "Refused: sales_funnel_campaign_ongoing | sales_funnel_campaign_has_history", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string() }) } } },
+    502: { description: "Refused: runs_unavailable | billing_unavailable, nothing deleted", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), detail: z.string().optional() }) } } },
+  },
+});
+
 
 registry.registerPath({
   method: "patch",

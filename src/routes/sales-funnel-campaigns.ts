@@ -32,6 +32,7 @@ import { GITHUB_ISSUE_IN_PROD_KIND, githubIssueKey, parseGithubIssue } from "../
 import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
 import { sameLeg } from "../lib/leg-identity.js";
 import { notifySalesFunnelCampaignPrecompute } from "../lib/sales-funnel-campaign-precompute.js";
+import { deleteSalesFunnelCampaign } from "../lib/sales-funnel-campaign-delete.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -417,6 +418,42 @@ router.patch(
     }
   },
 );
+
+/**
+ * DELETE /sales-funnel-campaigns/:id — remove a funnel campaign created by mistake, with its units
+ * (lib/sales-funnel-campaign-delete.ts). Only a STOPPED campaign that NEVER RAN: one that ran keeps its
+ * history (409 sales_funnel_campaign_has_history), a running one must be stopped first (409
+ * sales_funnel_campaign_ongoing). Scoped to the caller's org (another org's id = 404).
+ */
+router.delete("/sales-funnel-campaigns/:id", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const orgId = req.orgId!;
+    const parent = await db.query.salesFunnelCampaigns.findFirst({
+      where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
+    });
+    if (!parent) return res.status(404).json({ error: "Sales funnel campaign not found" });
+    const units = (await unitsOf([parent.id], orgId)).get(parent.id)!;
+    const outcome = await deleteSalesFunnelCampaign({ parent, units, userId: req.userId, runId: req.runId });
+    if ("notFound" in outcome) return res.status(404).json({ error: "Sales funnel campaign not found" });
+    if (!outcome.deleted) return res.status(outcome.refusal.status).json(outcome.refusal.body);
+    const userId = req.userId ?? parent.createdByUserId;
+    const runId = req.runId ?? parent.parentRunId;
+    if (userId && runId) {
+      void notifySalesFunnelCampaignPrecompute({
+        salesFunnelCampaignId: parent.id,
+        orgId,
+        brandId: parent.brandId,
+        offerId: parent.offerId,
+        userId,
+        runId,
+      });
+    }
+    res.json({ deleted: true, salesFunnelCampaignId: parent.id, unitIds: outcome.unitIds });
+  } catch (error) {
+    console.error("[campaign-service] Delete sales funnel campaign error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 /**
  * POST /internal/sales-funnel-campaigns/convert {apply?, orgId?} — turn the live (leg x channel)
