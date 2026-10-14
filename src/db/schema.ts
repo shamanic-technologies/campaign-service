@@ -75,12 +75,8 @@ export const campaigns = pgTable(
     // never consumed for pacing).
     goal: text("goal"),
 
-    // The SUBSET (one OR more) of the brand's audiences this campaign targets
-    // (human-service saved-filter-set UUIDs == audience.id). NULL/absent → target the
-    // brand's full active audience set (inherit). When set, the per-run audience bandit is
-    // HARD-restricted to this subset — the campaign never contacts an audience outside it,
-    // regardless of workflow-conditioning. Replaces the singular audienceId for targeting.
-    audienceIds: text("audience_ids").array(),
+    // No per-campaign audience subset (`audience_ids`, dropped by migration 0073, 2026-10-14):
+    // who a pipe reaches is its lead strategy's, never a list stored on the campaign.
 
     // The services this campaign offers. NULL → inherit the brand's services. Exposed to the
     // sending runtime on /start-run so downstream nodes read authoritative per-campaign

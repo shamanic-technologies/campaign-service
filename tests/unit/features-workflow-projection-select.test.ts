@@ -66,26 +66,6 @@ describe("selectAudienceFromProjection — workflow scoping", () => {
   });
 });
 
-describe("selectAudienceFromProjection — hard targeting subset (requiredAudienceIds)", () => {
-  it("only picks an audience inside the targeted subset", () => {
-    const rows = [row("aud-a", "wf-a", ev()), row("aud-z", "wf-a", ev())];
-    const picked = selectAudienceFromProjection(rows, "wf-a", {
-      requiredAudienceIds: ["aud-a", "aud-b"],
-      rng: fixedRng,
-    });
-    expect(picked).toBe("aud-a"); // aud-z is untargeted; aud-b is absent
-  });
-
-  it("returns null (contacts none) when no targeted audience is present — NO fallback", () => {
-    const rows = [row("aud-z", "wf-a", ev())];
-    const picked = selectAudienceFromProjection(rows, "wf-a", {
-      requiredAudienceIds: ["aud-a", "aud-b"],
-      rng: fixedRng,
-    });
-    expect(picked).toBeNull();
-  });
-});
-
 describe("selectAudienceFromProjection — exhausted-audience exclusion", () => {
   it("never picks an excluded (exhausted) audience", () => {
     const rows = [row("aud-a", "wf-a", ev()), row("aud-b", "wf-a", ev())];
@@ -103,16 +83,6 @@ describe("selectAudienceFromProjection — exhausted-audience exclusion", () => 
       rng: fixedRng,
     });
     expect(picked).toBeNull();
-  });
-
-  it("applies exclusion WITHIN the targeted subset (one exhausted of two targeted → picks the other)", () => {
-    const rows = [row("aud-a", "wf-a", ev()), row("aud-b", "wf-a", ev()), row("aud-z", "wf-a", ev())];
-    const picked = selectAudienceFromProjection(rows, "wf-a", {
-      requiredAudienceIds: ["aud-a", "aud-b"],
-      excludedAudienceIds: ["aud-a"],
-      rng: fixedRng,
-    });
-    expect(picked).toBe("aud-b");
   });
 });
 
@@ -141,17 +111,6 @@ describe("hasServeableAudienceInProjection", () => {
 
   it("false when there are no audience rows", () => {
     expect(hasServeableAudienceInProjection([row(null, "wf-a")], {})).toBe(false);
-  });
-
-  it("intersects the targeted subset before checking exhaustion", () => {
-    const rows = [row("aud-a", "wf-a"), row("aud-z", "wf-a")];
-    // Only aud-a is targeted, and it's exhausted → no serveable targeted audience.
-    expect(
-      hasServeableAudienceInProjection(rows, {
-        requiredAudienceIds: ["aud-a"],
-        excludedAudienceIds: ["aud-a"],
-      }),
-    ).toBe(false);
   });
 
   it("counts an audience under ANY workflow (workflow-agnostic)", () => {

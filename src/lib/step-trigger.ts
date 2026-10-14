@@ -123,8 +123,7 @@ export const STEP_TRIGGER_SKIPS = {
    */
   SALES_FUNNEL_CAP: "sales_funnel_cap",
   /**
-   * Every audience the grid lists for the campaign is freshly exhausted or outside its targeting
-   * subset: a run would reach lead-service with nobody to serve, so none is dispatched.
+   * Every audience the grid lists for the campaign is freshly exhausted: a run would reach lead-service with nobody to serve, so none is dispatched.
    */
   NO_SERVEABLE_AUDIENCE: "no_serveable_audience",
   /** features-service states the campaign's play allows no workflow yet: nothing may run. */
@@ -532,7 +531,6 @@ export async function runCampaignsInScope(
         legKey: campaign.legKey,
         // Names the OFFER every brand-scoped read is priced on — a campaign sells exactly one.
         campaignId: campaign.id,
-        requiredAudienceIds: campaign.audienceIds,
         excludedAudienceIds,
       });
       if (selection.playHold) {

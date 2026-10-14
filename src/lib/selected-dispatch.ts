@@ -21,7 +21,7 @@ import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./
  * picked that tier again.
  *
  * So those paths call this, and it is the scheduler's own pick — same function, same inputs, same
- * constraints (hard targeting subset, freshly-exhausted audiences) — not a second rule. The stored
+ * constraints (freshly-exhausted audiences) — not a second rule. The stored
  * slug stays what it always was on every other path: the configured fallback when nothing can be
  * ranked, so a selection failure never blocks a run. Nothing about the stored row changes.
  *
@@ -40,7 +40,6 @@ export async function dispatchSelectedRun(
     featureSlug: string;
     legKey: string | null;
     offerId: string | null;
-    audienceIds: string[] | null;
     audienceId: string | null;
     activeGoalId: string | null;
     brandProfileId: string | null;
@@ -73,7 +72,6 @@ export async function dispatchSelectedRun(
     fallbackSlug: campaign.workflowSlug,
     legKey: campaign.legKey,
     campaignId: campaign.id,
-    requiredAudienceIds: campaign.audienceIds,
     excludedAudienceIds,
   });
   if (selection.playHold) {

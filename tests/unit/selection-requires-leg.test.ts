@@ -92,7 +92,7 @@ describe("resolveSelectionForTrigger — the leg is the only pricing key", () =>
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, requiredAudienceIds: ["aud-B"] }),
+      resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, excludedAudienceIds: ["aud-A"] }),
     ).resolves.toEqual({ workflowSlug: "wf-E", audienceId: "aud-B", noServeableAudience: false });
     // ONE read, leg-keyed, naming neither a funnel nor a goal, and never the arbitration route.
     const urls = fetchMock.mock.calls.map((c) => new URL(String((c as unknown[])[0])));

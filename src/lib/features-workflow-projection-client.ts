@@ -473,24 +473,21 @@ function preferAudiencesWithPeople<T>(candidates: T[], idOf: (c: T) => string, s
  * Per-run AUDIENCE selection at the TRIGGER: cost-aware Thompson sampling over every audience the
  * grid enumerates, each scored on its POOLED column.
  *
- * The two constraints are the campaign's, not a workflow's, so they apply here exactly as they
+ * The one constraint is the campaign's, not a workflow's, so it applies here exactly as it
  * applied to the later, workflow-scoped pick this replaces:
- *   requiredAudienceIds — the Campaign v2 HARD targeting subset (no fallback — empty → null).
  *   excludedAudienceIds — the freshly-exhausted set (no fallback — empty → null).
+ * A campaign states no audience subset (retired 2026-10-14): who a pipe reaches is its lead
+ * strategy's, never a list on the campaign.
  *
  * Returns the chosen audienceId, or null when the grid enumerates no audience the campaign may
  * be served.
  */
 export function selectAudiencePooled(
   rows: ProjectionRow[],
-  opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[]; rng?: Rng } = {},
+  opts: { excludedAudienceIds?: string[]; rng?: Rng } = {},
 ): string | null {
   let entries = [...poolArmsByAudience(rows).entries()];
 
-  if (opts.requiredAudienceIds && opts.requiredAudienceIds.length > 0) {
-    const required = new Set(opts.requiredAudienceIds);
-    entries = entries.filter(([id]) => required.has(id));
-  }
   if (opts.excludedAudienceIds && opts.excludedAudienceIds.length > 0) {
     const excluded = new Set(opts.excludedAudienceIds);
     entries = entries.filter(([id]) => !excluded.has(id));
@@ -536,7 +533,7 @@ export function unrankedPick(rows: readonly ProjectionRow[], fallbackSlug: strin
  */
 export function selectCellFromProjection(
   rows: ProjectionRow[],
-  opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[]; rng?: Rng } = {},
+  opts: { excludedAudienceIds?: string[]; rng?: Rng } = {},
 ): ProjectionCell {
   const audienceId = selectAudiencePooled(rows, opts);
   const column = audienceId == null ? [] : rows.filter((r) => r.audienceId === audienceId);
@@ -587,14 +584,13 @@ function dedupeByAudience(rows: ProjectionRow[]): ProjectionRow[] {
  * chosen workflow has no rows at all (a cold/fallback slug absent from the projection), explore
  * one row per audience across ALL workflows so a fresh workflow still gets an audience.
  *
- * requiredAudienceIds is the Campaign v2 HARD targeting subset (no fallback — empty → null).
  * excludedAudienceIds is the fresh-exhausted set (no fallback — empty → null = the real
  * all-audiences-exhausted stop signal). Returns the chosen audienceId, or null.
  */
 export function selectAudienceFromProjection(
   rows: ProjectionRow[],
   workflowSlug: string,
-  opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[]; rng?: Rng } = {},
+  opts: { excludedAudienceIds?: string[]; rng?: Rng } = {},
 ): string | null {
   let candidates = rows.filter(
     (r) => r.audienceId != null && r.workflow.workflowDynastySlug === workflowSlug,
@@ -604,13 +600,6 @@ export function selectAudienceFromProjection(
     candidates = dedupeByAudience(rows.filter((r) => r.audienceId != null));
   } else {
     candidates = dedupeByAudience(candidates);
-  }
-
-  // HARD targeting subset — the campaign may ONLY ever be served one of its targeted audiences.
-  if (opts.requiredAudienceIds && opts.requiredAudienceIds.length > 0) {
-    const required = new Set(opts.requiredAudienceIds);
-    candidates = candidates.filter((r) => required.has(r.audienceId!));
-    if (candidates.length === 0) return null;
   }
 
   // Drop exhausted audiences (24h TTL). No fallback: empty → null (all exhausted = stop).
@@ -634,12 +623,12 @@ export function selectAudienceFromProjection(
  *
  * Mirrors selectAudienceFromProjection's eligibility but drops the workflow scoping — an
  * audience serveable under ANY workflow keeps the campaign alive — and ignores the Thompson
- * draw (a boolean, not a pick). Returns false only when EVERY targeted audience is exhausted
+ * draw (a boolean, not a pick). Returns false only when EVERY audience is exhausted
  * (the sole legitimate campaign-wide stop condition).
  */
 export function hasServeableAudienceInProjection(
   rows: ProjectionRow[],
-  opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[] } = {},
+  opts: { excludedAudienceIds?: string[] } = {},
 ): boolean {
   return serveableAudienceIdsInProjection(rows, opts).length > 0;
 }
@@ -652,15 +641,11 @@ export function hasServeableAudienceInProjection(
  */
 export function serveableAudienceIdsInProjection(
   rows: ProjectionRow[],
-  opts: { requiredAudienceIds?: string[]; excludedAudienceIds?: string[] } = {},
+  opts: { excludedAudienceIds?: string[] } = {},
 ): string[] {
-  let ids = new Set<string>();
+  const ids = new Set<string>();
   for (const r of rows) if (r.audienceId != null) ids.add(r.audienceId);
 
-  if (opts.requiredAudienceIds && opts.requiredAudienceIds.length > 0) {
-    const required = new Set(opts.requiredAudienceIds);
-    ids = new Set([...ids].filter((id) => required.has(id)));
-  }
   if (opts.excludedAudienceIds) {
     for (const e of opts.excludedAudienceIds) ids.delete(e);
   }
@@ -738,8 +723,6 @@ export async function resolveSelectionForTrigger(args: {
    * with 409 `SEVERAL_OFFERS` for a brand selling several. Null (the pre-offer population)
    * keeps the brand-scoped read, which fails loud on a multi-offer brand rather than guessing. */
   campaignId?: string | null;
-  /** The campaign's HARD targeting subset — the audience pick may only ever land inside it. */
-  requiredAudienceIds?: string[] | null;
   /** The campaign's freshly-exhausted audiences — never chosen. */
   excludedAudienceIds?: string[] | null;
 }): Promise<TriggerSelection> {
@@ -750,7 +733,6 @@ export async function resolveSelectionForTrigger(args: {
     fallbackSlug,
     legKey,
     campaignId,
-    requiredAudienceIds,
     excludedAudienceIds,
   } = args;
   // Rotation is feature-scoped: non-rotating features keep their configured workflow.
@@ -819,7 +801,6 @@ export async function resolveSelectionForTrigger(args: {
       featureSlug,
     });
     const cell = selectCellFromProjection(candidates, {
-      requiredAudienceIds: requiredAudienceIds ?? undefined,
       excludedAudienceIds: excludedAudienceIds ?? undefined,
     });
     const enumeratesAudiences = candidates.some((r) => r.audienceId != null);

@@ -524,13 +524,10 @@ describe("Pipeline routes", () => {
       );
     });
 
-    it("consumes it even when the campaign's own exhausted/targeting state would exclude it", async () => {
+    it("consumes it even when the campaign's own exhausted state would exclude it", async () => {
       // The trigger applied those constraints when it chose. Re-applying them here is a second
       // draw by another name, and the workflow running was chosen for the audience it picked.
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-        audienceIds: ["some-other-audience"],
-      });
+      const campaign = await insertTestCampaign(orgId, { brandIds });
       await db.insert(campaignAudienceExhaustion).values({
         campaignId: campaign.id,
         audienceId: "aud-chosen-at-trigger",
@@ -614,27 +611,7 @@ describe("Pipeline routes", () => {
       expect(res.body.audienceId).toBeNull();
     });
 
-    it("should HARD-restrict the audience bandit to the campaign's targeted subset", async () => {
-      // Rows contain a targeted (aud-a) and an untargeted (aud-z) audience under the workflow.
-      mockFetchCandidates.mockResolvedValueOnce([
-        projectionRow("aud-a"),
-        projectionRow("aud-z"),
-      ]);
-      const campaign = await insertTestCampaign(orgId, {
-        brandIds,
-        audienceIds: ["aud-a", "aud-b"], // targets aud-a (present) + aud-b (absent)
-      });
-
-      const res = await request(app)
-        .post("/start-run")
-        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id }))
-        .expect(200);
-
-      // aud-z is untargeted and aud-b is absent → the only serveable targeted audience is aud-a.
-      expect(res.body.audienceId).toBe("aud-a");
-    });
-
-    it("should inherit the brand's full active set when the campaign targets no subset", async () => {
+    it("picks from the brand's full active set: a campaign states no audience subset", async () => {
       const campaign = await insertTestCampaign(orgId, { brandIds });
 
       const res = await request(app)
@@ -650,7 +627,6 @@ describe("Pipeline routes", () => {
       const campaign = await insertTestCampaign(orgId, {
         brandIds,
         goal: "meetingBooked",
-        audienceIds: ["aud-x"],
         servicesOffered: ["seo", "ads"],
         clickDestinationUrl: "https://example.com/lp",
       });
@@ -661,7 +637,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(res.body.goal).toBe("meetingBooked");
-      expect(res.body.audienceIds).toEqual(["aud-x"]);
+      expect(res.body).not.toHaveProperty("audienceIds");
       expect(res.body.servicesOffered).toEqual(["seo", "ads"]);
       expect(res.body.clickDestinationUrl).toBe("https://example.com/lp");
       expect(res.body.searchParams.servicesOffered).toEqual(["seo", "ads"]);
@@ -677,7 +653,7 @@ describe("Pipeline routes", () => {
         .expect(200);
 
       expect(res.body.goal).toBeNull();
-      expect(res.body.audienceIds).toBeNull();
+      expect(res.body).not.toHaveProperty("audienceIds");
       expect(res.body.servicesOffered).toBeNull();
       expect(res.body.clickDestinationUrl).toBeNull();
     });
