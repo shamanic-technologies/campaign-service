@@ -186,7 +186,7 @@ router.post(
         offerId,
       });
       if (!resolved.ok) {
-        const { status: httpStatus, code, message, missingSteps, offerSteps } = resolved.refusal;
+        const { status: httpStatus, code, message, missingSteps, offerSteps, pipeId, notRunnableReason, notRunnableDetail } = resolved.refusal;
         console.warn(
           `[campaign-service] Not launching sales funnel ${salesFunnelId} — org=${orgId} brand=${brandId} offer=${offerId}: ${code}`,
         );
@@ -194,6 +194,7 @@ router.post(
           error: message,
           reason: code,
           ...(missingSteps ? { missingSteps, offerSteps } : {}),
+          ...(code === "play_allows_no_workflow" ? { pipeId, notRunnableReason, notRunnableDetail } : {}),
         });
       }
       const { plan } = resolved;
