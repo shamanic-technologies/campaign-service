@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import {
   orderForSharedPipes,
   salesFunnelUnitMoney,
@@ -294,6 +294,77 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
     // not "not paced here".
     d.workflow = vi.fn(async () => ({ ok: true as const, workflowSlug: null }));
     expect(await resolveSalesFunnelPlan("f@li", identity, d)).toMatchObject({ ok: false, refusal: { status: 409, code: "no_workflow" } });
+  });
+
+  describe("a PLAY never seeds a workflow it rules out (PLAY-SEED-1014)", () => {
+    const PLAY = `ai-meeting-booking|${REACTIVE}~replies-with-documents`;
+    const playPipe = (play: { default: boolean; allowedActiveWorkflowCount: number; excludedWorkflowDynastySlugs: string[] }, extra: Record<string, unknown> = {}) =>
+      vi.fn(async (id: string) => ({
+        ok: true as const,
+        value: {
+          id,
+          name: "Replies with documents",
+          channelSlug: "ai-meeting-booking",
+          legKey: REACTIVE,
+          mode: "reactive" as const,
+          play: { strategyId: "replies-with-documents", strategyName: "Replies with documents", ...play },
+          ...extra,
+        },
+      }));
+    // workflow-service's active list, newest first, filtered on what the resolver excludes.
+    const active = ["ai-meeting-booking-torcular-v2", "ai-meeting-booking-algenib"];
+    let workflow = vi.fn();
+    beforeEach(() => {
+      workflow = vi.fn(async (_slug: string, _id: unknown, excluded: readonly string[] = []) => ({
+        ok: true as const,
+        workflowSlug: active.find((w) => !excluded.includes(w)) ?? null,
+      }));
+    });
+
+    it("a play allowing workflows is born on an ALLOWED one, never the newest it excludes", async () => {
+      const d = { ...deps([PLAY]), pipe: playPipe({ default: false, allowedActiveWorkflowCount: 1, excludedWorkflowDynastySlugs: ["ai-meeting-booking-torcular-v2"] }), workflow };
+      const res = await resolveSalesFunnelPlan("f@x", identity, d);
+      expect(res).toMatchObject({ ok: true, plan: { units: [{ featureSlug: "ai-meeting-booking", workflowSlug: "ai-meeting-booking-algenib" }] } });
+    });
+
+    it("a play allowing NONE refuses the launch with features-service's reason, nothing seeded", async () => {
+      const d = {
+        ...deps([PLAY]),
+        pipe: playPipe(
+          { default: false, allowedActiveWorkflowCount: 0, excludedWorkflowDynastySlugs: active },
+          { notRunnableReason: "judging_failing", notRunnableDetail: "Jev is failing to judge the tactic \"Attaches offer documents\"; judging resumes by itself." },
+        ),
+        workflow,
+      };
+      const res = await resolveSalesFunnelPlan("f@x", identity, d);
+      expect(res).toMatchObject({
+        ok: false,
+        refusal: { status: 409, code: "play_allows_no_workflow", pipeId: PLAY, notRunnableReason: "judging_failing" },
+      });
+      if (res.ok) return;
+      expect(res.refusal.message).toContain("Jev is failing to judge");
+      expect(workflow).not.toHaveBeenCalled();
+    });
+
+    it("a play allowing none, with no reason served yet, still names the strategy", async () => {
+      const d = { ...deps([PLAY]), pipe: playPipe({ default: false, allowedActiveWorkflowCount: 0, excludedWorkflowDynastySlugs: [] }), workflow };
+      const res = await resolveSalesFunnelPlan("f@x", identity, d);
+      expect(res).toMatchObject({ ok: false, refusal: { code: "play_allows_no_workflow", notRunnableReason: null } });
+      if (res.ok) return;
+      expect(res.refusal.message).toContain(`"Replies with documents"`);
+    });
+
+    it("every workflow of the channel excluded (count stale) = the same refusal, never an excluded seed", async () => {
+      const d = { ...deps([PLAY]), pipe: playPipe({ default: false, allowedActiveWorkflowCount: 1, excludedWorkflowDynastySlugs: active }), workflow };
+      expect(await resolveSalesFunnelPlan("f@x", identity, d)).toMatchObject({ ok: false, refusal: { code: "play_allows_no_workflow" } });
+    });
+
+    it("a bare pipe cataloguing no play is unchanged: the channel's newest workflow", async () => {
+      const d = { ...deps([`ai-meeting-booking|${REACTIVE}`]), workflow };
+      const res = await resolveSalesFunnelPlan("f@x", identity, d);
+      expect(res).toMatchObject({ ok: true, plan: { units: [{ workflowSlug: "ai-meeting-booking-torcular-v2" }] } });
+      expect(workflow).toHaveBeenLastCalledWith("ai-meeting-booking", expect.anything(), []);
+    });
   });
 
   it("refuses the whole launch, naming the pipe, when one pipe cannot be run here", async () => {

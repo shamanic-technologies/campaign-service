@@ -280,6 +280,7 @@ export interface SalesFunnelRefusal {
     | "leg_without_channel"
     | "pipe_not_runnable"
     | "no_workflow"
+    | "play_allows_no_workflow"
     | "catalogue_unavailable"
     | "workflow_unavailable"
     | "offer_not_found"
@@ -291,6 +292,10 @@ export interface SalesFunnelRefusal {
   missingSteps?: string[];
   /** `offer_lacks_steps` only: the steps the offer's business HAS stated (brand-service, verbatim). */
   offerSteps?: string[];
+  /** `play_allows_no_workflow` only: the pipe (play id) nothing may run, and features-service's reason, verbatim. */
+  pipeId?: string;
+  notRunnableReason?: string | null;
+  notRunnableDetail?: string | null;
 }
 
 /**
@@ -412,11 +417,45 @@ export async function resolveSalesFunnelPlan(
     if (isSourceOriginSlug(channelSlug) && (!isLiveSourceOrigin(channelSlug) || storedLegKey(channelSlug, legKey) !== SOURCE_LEG_KEY)) {
       return refuseLaunch(400, "pipe_not_runnable", `We can't run the lead source "${name ?? pipeId}" of this sales funnel.`);
     }
-    const workflow = await resolveReactiveDefaultWorkflow(channelSlug, legKey, identity, catalogue, { workflow: deps.workflow }, { pacedBySalesFunnelCaps: true });
+    // The PLAY the pipe id names (PLAY-SEED-1014): a unit is born only on a workflow its strategy allows, never on
+    // one it rules out (the Entrust unit was born on `ai-meeting-booking-torcular-v2`, a workflow its play
+    // forbade, while features-service said nothing may run it). A play allowing NONE refuses the launch with
+    // features-service's reason, stopped or not: the unit would have to name a workflow, and every one is forbidden.
+    const play = pipe.value.play ?? null;
+    const readWorkflow = deps.workflow ?? fetchStartableWorkflowSlug;
+    const workflow = await resolveReactiveDefaultWorkflow(
+      channelSlug,
+      legKey,
+      identity,
+      catalogue,
+      {
+        workflow: async (slug, id) =>
+          play && play.allowedActiveWorkflowCount === 0
+            ? { ok: true as const, workflowSlug: null }
+            : readWorkflow(slug, id, play?.excludedWorkflowDynastySlugs ?? []),
+      },
+      { pacedBySalesFunnelCaps: true },
+    );
     if (!workflow.ok) {
       const label = name ?? pipeId;
       if (workflow.code === "workflow_unavailable") {
         return refuseLaunch(502, "workflow_unavailable", "We couldn't work out how to run this sales funnel just now. Please try again in a minute.");
+      }
+      if (workflow.code === "no_workflow" && play) {
+        const detail = pipe.value.notRunnableDetail
+          ?? `Its strategy "${play.strategyName}" allows none of the workflows that run this step.`;
+        console.warn(`[campaign-service] Sales funnel ${salesFunnelId} not launched: play ${pipeId} allows no workflow (${pipe.value.notRunnableReason ?? "no reason served"})`);
+        return {
+          ok: false as const,
+          refusal: {
+            status: 409 as const,
+            code: "play_allows_no_workflow" as const,
+            message: `Nothing can run the step "${label}" of this sales funnel yet, so it can't be launched. ${detail}`,
+            pipeId,
+            notRunnableReason: pipe.value.notRunnableReason ?? null,
+            notRunnableDetail: pipe.value.notRunnableDetail ?? null,
+          },
+        };
       }
       if (workflow.code === "no_workflow") {
         return refuseLaunch(409, "no_workflow", `Nothing can run the step "${label}" of this sales funnel yet, so it can't be launched.`);
