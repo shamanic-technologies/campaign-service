@@ -162,6 +162,10 @@ export async function fileNamedPerson(input: {
   statedBy?: PersonStatement | null;
   /** The person's name as the statement carries it (a lead lead-service creates takes it). */
   name?: string | null;
+  /** The person's phone as the client gave it: lead-service infers their timezone from it. */
+  phone?: string | null;
+  /** IANA zone the client stated for the person: always wins at lead-service. */
+  timezone?: string | null;
 }): Promise<FileNamedPersonOutcome> {
   const url = process.env.LEAD_SERVICE_URL;
   const apiKey = process.env.LEAD_SERVICE_API_KEY;
@@ -181,6 +185,9 @@ export async function fileNamedPerson(input: {
           email: input.email,
           ...(input.statedBy ? { statedBy: input.statedBy } : {}),
           ...(input.statedBy && input.name ? { name: input.name } : {}),
+          // lead-service refuses a phone shorter than 3 characters: such a value carries no country.
+          ...(input.phone && input.phone.trim().length >= 3 ? { phone: input.phone.trim() } : {}),
+          ...(input.timezone ? { timezone: input.timezone } : {}),
         }),
         signal: AbortSignal.timeout(30_000),
       },

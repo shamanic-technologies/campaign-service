@@ -1965,6 +1965,10 @@
                 "type": "string",
                 "maxLength": 50
               },
+              "timezone": {
+                "type": "string",
+                "maxLength": 64
+              },
               "crmContact": {
                 "type": "object",
                 "properties": {
