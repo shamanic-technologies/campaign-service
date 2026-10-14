@@ -68,6 +68,9 @@ export const PERSON_EVENT_RETRY_SKIPS: ReadonlySet<string> = new Set([
   // The funnel is not funded YET: a client funding it right after pushing (or a cap written a second after
   // the funnel was born) gets the occurrence delivered once billing says funded, within the same window.
   "unfunded",
+  // billing could not answer for a funnel's caps (a timeout while a neighbour redeploys): held fail-closed,
+  // never a verdict, so the occurrence is retried, never dropped (FORM-ANSWER-NOBODY-DUE-1014).
+  "sales_funnel_caps_unavailable",
 ]);
 
 /** The caller's person, canonical. Pure. */
