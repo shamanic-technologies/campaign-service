@@ -474,6 +474,11 @@ export const StartRunResponse = z.object({
   // A sales funnel unit whose campaign NAMES its people: exactly them ([{email, leadId}]; leadId null =
   // not filed at lead-service yet). null = whoever the campaign's pipes serve.
   people: z.array(z.object({ email: z.string(), leadId: z.string().nullable() })).nullable(),
+  // The leg this campaign works is REACTIVE (features-service's catalogue, per channel x leg): it answers
+  // people already made due (an occurrence, its follow-up queue) and never asks for a NEW lead; a run
+  // with nobody due has nothing to do. false = proactive (finds its own people). null = cannot be told
+  // (no leg stated, or the catalogue unreadable): the DAG must not assume either.
+  reactive: z.boolean().nullable(),
   searchParams: z.record(z.string(), z.unknown()).nullable(),
 }).openapi("StartRunResponse");
 

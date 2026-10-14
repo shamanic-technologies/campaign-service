@@ -1485,6 +1485,10 @@
               ]
             }
           },
+          "reactive": {
+            "type": "boolean",
+            "nullable": true
+          },
           "searchParams": {
             "type": "object",
             "nullable": true,
@@ -1511,6 +1515,7 @@
           "clickDestinationUrl",
           "instruction",
           "people",
+          "reactive",
           "searchParams"
         ]
       },
