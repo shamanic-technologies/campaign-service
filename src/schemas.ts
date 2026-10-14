@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isIanaTimezone } from "./lib/iana-timezone.js";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 
 extendZodWithOpenApi(z);
@@ -719,6 +720,15 @@ export const RecordTriggerEventBody = z.object({
     email: z.string().trim().email("person.email must be an email address"),
     name: z.string().max(300).optional(),
     phone: z.string().max(50).optional(),
+    /**
+     * The person's timezone as the client STATES it (IANA name, e.g. `Europe/London`): handed to
+     * lead-service with the filing, where a stated zone always wins over an inferred one, so every
+     * message lands in the person's business hours. Absent = none sent (lead-service infers it, e.g. from
+     * the phone). An offset (`GMT+1`) is refused by name.
+     */
+    timezone: z.string().trim().max(64)
+      .refine(isIanaTimezone, "person.timezone must be an IANA timezone name (e.g. Europe/London), not an offset")
+      .optional(),
     /** The contact in the brand's own CRM the person came from, carried verbatim. */
     crmContact: z.object({ provider: z.string().min(1), contactId: z.string().min(1) }).strict().optional(),
   }).strict().optional(),
