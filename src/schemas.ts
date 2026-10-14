@@ -767,6 +767,15 @@ export const TriggerEventSchema = z.object({
    */
   skipReason: z.string().nullable(),
   ranCampaignIds: z.array(z.string()),
+  /**
+   * Per campaign that RAN for the person the event is about: the lead that person is on that campaign at
+   * lead-service (the one its run received as `trigger.leadId`). A pushed person is filed once per campaign,
+   * so one event may name several leads; the event-level `leadId` stays the caller's own. A campaign whose run
+   * carried no lead is absent. Always present (empty when nothing ran or no lead rode the run).
+   */
+  ranLeads: z.array(z.object({ campaignId: z.string(), leadId: z.string() })).openapi({
+    description: "Per campaign that ran: the lead the event's person was filed as on that campaign (lead-service). Empty when no run carried a lead.",
+  }),
   performedByCaller: z.boolean(),
   processedAt: z.string().nullable(),
   /** Every per-campaign answer: `{legKeys, triggered[], skipped[], offCampaignIds}` (or the caller's `performedDetail`). */

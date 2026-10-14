@@ -1804,6 +1804,25 @@
               "type": "string"
             }
           },
+          "ranLeads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "campaignId": {
+                  "type": "string"
+                },
+                "leadId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "campaignId",
+                "leadId"
+              ]
+            },
+            "description": "Per campaign that ran: the lead the event's person was filed as on that campaign (lead-service). Empty when no run carried a lead."
+          },
           "performedByCaller": {
             "type": "boolean"
           },
@@ -1831,6 +1850,7 @@
           "outcome",
           "skipReason",
           "ranCampaignIds",
+          "ranLeads",
           "performedByCaller",
           "processedAt"
         ]
