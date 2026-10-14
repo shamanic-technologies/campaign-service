@@ -12,6 +12,8 @@ import {
 } from "./step-trigger.js";
 import type { WorkflowTriggerInput } from "./workflows.js";
 import {
+  OWED_EVENT_RECHECK_MS,
+  OWED_UNTIL_ROOM_SKIPS,
   PERSON_EVENT_RETRY_SKIPS,
   PERSON_NOT_KNOWN_RETRY_MS,
   PERSON_NOT_KNOWN_WAIT_MS,
@@ -51,7 +53,9 @@ import { eventCarries, recordDeliveries } from "./trigger-deliveries.js";
  *    about by IDENTITY (email, name, phone, CRM contact) and what they asked (any JSON). Kept on the row
  *    (`detail.person`, `detail.item`); each campaign reached files the person as a lead at lead-service,
  *    makes them due, and receives both on `/execute` `trigger`. A person the brand does not know YET
- *    keeps the event `pending` on a short retry, then `skipped` `person_not_known`.
+ *    keeps the event `pending` on a short retry, then `skipped` `person_not_known`. A campaign held
+ *    for money or pacing (cap reached, unfunded, run in flight...) keeps it `pending` with no
+ *    deadline until it can run, once (lib/trigger-person.ts `OWED_UNTIL_ROOM_SKIPS`).
  *  The step route (`trigger-for-step`) records its call the same way, typed with the trigger whose
  *  `fromStep` is that step (none declared = recorded with no type), and answers exactly as before.
  *
@@ -436,25 +440,35 @@ export async function fireClaimedEvent(
       const { retryCampaignIds: _r, priorRanCampaignIds: _p, ...rest } = own;
       verdict = { ...verdict, detail: { ...rest, ...verdict.detail } as EventVerdict["detail"] };
     }
-    // ANY campaign held back for a passing reason (person not known to the brand YET, a run in flight, a
-    // failure backoff): the event tries again shortly for those campaigns only, while it is young (since it
-    // occurred, or since it was last redelivered), so each gets its own run carrying the person and item.
-    const heldBack = delivers ? verdict.detail.skipped.filter((sk) => PERSON_EVENT_RETRY_SKIPS.has(sk.reason)) : [];
+    // ANY campaign held back for a passing reason: the event tries again for those campaigns only, so each
+    // gets its own run carrying the person and item. Money / pacing (cap reached, unfunded, a run in flight,
+    // a failure backoff: `OWED_UNTIL_ROOM_SKIPS`) is owed with NO deadline, every 2 min while the event is
+    // young then every `OWED_EVENT_RECHECK_MS`, until the campaign can run (NEVER-NO-FOLLOWUP-1014). A person
+    // not known to the brand yet is retried only while young. Young = since it FELL DUE (a future-dated
+    // occurrence is young at its date, not at its recording) or was last redelivered.
     const redeliveredAt = typeof own?.redeliveredAt === "string" ? Date.parse(own.redeliveredAt) : NaN;
-    const youngSince = Math.max(event.occurredAt.getTime(), Number.isFinite(redeliveredAt) ? redeliveredAt : 0);
-    if (delivers && heldBack.length > 0 && now.getTime() - youngSince < PERSON_NOT_KNOWN_WAIT_MS) {
+    const storedFellDueAt = typeof own?.fellDueAt === "string" ? Date.parse(own.fellDueAt) : NaN;
+    const fellDueAt = Number.isFinite(storedFellDueAt) ? storedFellDueAt : event.dueAt.getTime();
+    const youngSince = Math.max(event.occurredAt.getTime(), fellDueAt, Number.isFinite(redeliveredAt) ? redeliveredAt : 0);
+    const young = now.getTime() - youngSince < PERSON_NOT_KNOWN_WAIT_MS;
+    const heldBack = delivers
+      ? verdict.detail.skipped.filter((sk) => OWED_UNTIL_ROOM_SKIPS.has(sk.reason) || (young && PERSON_EVENT_RETRY_SKIPS.has(sk.reason)))
+      : [];
+    if (heldBack.length > 0) {
+      const retryMs = young ? PERSON_NOT_KNOWN_RETRY_MS : OWED_EVENT_RECHECK_MS;
       const [back] = await db
         .update(triggerEvents)
         .set({
           status: "pending",
-          dueAt: new Date(now.getTime() + PERSON_NOT_KNOWN_RETRY_MS),
+          dueAt: new Date(now.getTime() + retryMs),
           claimedAt: null,
           detail: {
             ...verdict.detail,
             retryCampaignIds: heldBack.map((sk) => sk.campaignId),
             priorRanCampaignIds: ranCampaignIds,
+            fellDueAt: new Date(fellDueAt).toISOString(),
           },
-          lastError: `${heldBack.map((sk) => `${sk.campaignId} ${sk.reason}`).join(", ")}${person ? `: ${person.email}` : ""}, retried in 2 min`.slice(0, 500),
+          lastError: `${heldBack.map((sk) => `${sk.campaignId} ${sk.reason}`).join(", ")}${person ? `: ${person.email}` : ""}, retried in ${retryMs / 60_000} min`.slice(0, 500),
         })
         .where(eq(triggerEvents.id, event.id))
         .returning();
