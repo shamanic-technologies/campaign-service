@@ -14,7 +14,9 @@ import {
 import { isEntryLeg } from "./single-proactive.js";
 import { sourceRunsOnItsOwn } from "./on-demand-mode.js";
 import { STOP_REASONS } from "./stop-reason.js";
+import { catalogueLegOf } from "./leg-identity.js";
 import {
+  LEAD_FOUND_STEP,
   LIVE_SOURCE_ORIGIN_SLUGS,
   RETIRED_SOURCE_ORIGIN_SLUGS,
   SOURCE_LEG_KEY,
@@ -52,13 +54,26 @@ export interface FeedingSourceCampaign {
  * serves the outreach channel, any status (a source stopped at noon still spent this morning).
  * [] when the campaign is not an outreach campaign of a sourced channel or states no offer. Throws when features-service's
  * map is unreadable (every caller holds: an unknown map is never "fed by nothing").
+ *
+ * A UNIT of a sales funnel campaign is also fed by every source unit of ITS OWN funnel campaign when its leg starts
+ * where a source leg ends (`lead_found`, catalogue `fromStep`): the funnel defines the chain, whatever the unit's
+ * channel (NEVER-NO-FOLLOWUP-1014: the AI Follow-up Email unit of "Ribbon" was fed by nothing because the sourcing map
+ * names no origin for its channel, so its own Lead Sourcing unit's people were never served). The catalogue is read
+ * only when the funnel holds a source the map does not already name for the channel: a unit the map already covers
+ * (every cold-email unit in prod, 2026-10-14) reads exactly as before. Unreadable catalogue then = throws
+ * `SourceChainUnavailableError` (fail-closed like the map).
  */
-export async function sourceCampaignsFeeding(campaignId: string, featureSlug: string): Promise<FeedingSourceCampaign[]> {
+export async function sourceCampaignsFeeding(
+  campaignId: string,
+  featureSlug: string,
+  deps: { catalogue?: () => Promise<ChannelCatalogueRead> } = {},
+): Promise<FeedingSourceCampaign[]> {
   // Every source campaign that may feed the channel: its origins and, where features lists it, Lead Sourcing.
-  const origins = (await readSourcingMap()).feedingByChannel[featureSlug];
-  if (!origins || origins.length === 0) return [];
+  const origins = (await readSourcingMap()).feedingByChannel[featureSlug] ?? [];
   const outreach = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaignId) });
-  if (!outreach || !outreach.offerId) return [];
+  if (!outreach || !outreach.offerId || outreach.legKey === SOURCE_LEG_KEY) return [];
+  const ownSalesFunnelCampaignId = outreach.salesFunnelCampaignId ?? null;
+  if (origins.length === 0 && !ownSalesFunnelCampaignId) return [];
   const brandId = brandOf(outreach);
   if (!brandId) return [];
   const rows = await db
@@ -70,14 +85,34 @@ export async function sourceCampaignsFeeding(campaignId: string, featureSlug: st
         eq(campaigns.brandId, brandId),
         eq(campaigns.offerId, outreach.offerId),
         eq(campaigns.legKey, SOURCE_LEG_KEY),
-        inArray(campaigns.featureSlug, [...origins]),
+        // A funnel unit reads every source unit of its own funnel (the chain below decides); others the map's origins.
+        inArray(campaigns.featureSlug, ownSalesFunnelCampaignId ? ALL_ORIGINS : [...origins]),
         // A unit of a sales funnel campaign draws ONLY from its own funnel's source units (owner 2026-10-12: "Worldly"'s
         // email unit was served Apollo units of OTHER campaigns of the offer). A legacy outreach campaign (no funnel)
         // keeps the offer-wide read.
-        ...(outreach.salesFunnelCampaignId ? [eq(campaigns.salesFunnelCampaignId, outreach.salesFunnelCampaignId)] : []),
+        ...(ownSalesFunnelCampaignId ? [eq(campaigns.salesFunnelCampaignId, ownSalesFunnelCampaignId)] : []),
       ),
     );
-  return rows.map((r) => ({ id: r.id, featureSlug: r.featureSlug!, status: r.status, salesFunnelCampaignId: r.salesFunnelCampaignId ?? null }));
+  const named = rows.filter((r) => origins.includes(r.featureSlug!));
+  const beyondMap = rows.filter((r) => !origins.includes(r.featureSlug!));
+  const fed = beyondMap.length > 0 && outreach.legKey && (await legStartsWhereSourcesEnd(featureSlug, outreach.legKey, deps.catalogue))
+    ? rows
+    : named;
+  return fed.map((r) => ({ id: r.id, featureSlug: r.featureSlug!, status: r.status, salesFunnelCampaignId: r.salesFunnelCampaignId ?? null }));
+}
+
+/** The catalogue could not say where a funnel unit's leg starts: whether its own funnel's sources feed it is unknown. */
+export class SourceChainUnavailableError extends Error {}
+
+/** True ⟺ the catalogue publishes this (channel, leg) as starting at the step every source leg ends at (`lead_found`). */
+async function legStartsWhereSourcesEnd(
+  featureSlug: string,
+  legKey: string,
+  catalogueRead: () => Promise<ChannelCatalogueRead> = fetchChannelCatalogue,
+): Promise<boolean> {
+  const catalogue = await catalogueRead();
+  if (!catalogue.ok) throw new SourceChainUnavailableError(`acquisition-channel catalogue unreadable: ${catalogue.detail}`);
+  return catalogueLegOf(catalogue, featureSlug, legKey)?.fromStepKey === LEAD_FOUND_STEP;
 }
 
 /** One origin of an offer, as served to the dashboard and to sibling services. */
