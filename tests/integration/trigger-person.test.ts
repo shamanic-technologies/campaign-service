@@ -43,7 +43,7 @@ import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
 import { triggerEvents } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
-import { fireDueTriggerEvents } from "../../src/lib/trigger-events.js";
+import { fireDueTriggerEvents, serializeTriggerEvent } from "../../src/lib/trigger-events.js";
 import { OWED_EVENT_RECHECK_MS, PERSON_NOT_KNOWN_RETRY_MS, PERSON_NOT_KNOWN_WAIT_MS } from "../../src/lib/trigger-person.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
@@ -138,6 +138,16 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     expect(res.status).toBe(201);
     expect(res.body.event).toMatchObject({ triggerId: FORM, step: FORM, status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
     expect(res.body.event.detail.person).toMatchObject({ email: "jane.doe@example.com", name: "Jane Doe" });
+    // PUSHED-EVENT-LEAD-1014: the answer names the lead the person was filed as on each campaign that ran.
+    expect(res.body.event.leadId).toBeNull();
+    expect(res.body.event.ranLeads).toEqual([{ campaignId: campaign.id, leadId: "lead-jane" }]);
+    const list = await request(app)
+      .get(`/internal/offers/${OFFER}/trigger-events`)
+      .query({ brandId: BRAND })
+      .set("x-api-key", API_KEY)
+      .set("x-org-id", ORG);
+    expect(list.status).toBe(200);
+    expect(list.body.events[0].ranLeads).toEqual([{ campaignId: campaign.id, leadId: "lead-jane" }]);
     expect(mockFile).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG, campaignId: campaign.id, email: "jane.doe@example.com" }));
     expect(mockDue).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG, campaignId: campaign.id, email: "jane.doe@example.com" }));
     expect(mockExecute).toHaveBeenCalledTimes(1);
@@ -274,8 +284,10 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
       workflowSlug: "other-v1", createdByUserId: USER, parentRunId: "9f0d1c22-0000-4000-8000-000000000030", offerId: OFFER, legKey: LEG,
     });
     mockListRuns.mockImplementation(async (p: { campaignId?: string }) => ({ runs: p.campaignId === second.id ? [{ id: "run-live" }] : [] }));
+    mockFile.mockImplementation(async (p: { campaignId: string }) => ({ ok: true, leadId: `lead-${p.campaignId}`, filed: true }));
     const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
     expect(res.body.event.status).toBe("pending");
+    expect(res.body.event.ranLeads).toEqual([{ campaignId: first.id, leadId: `lead-${first.id}` }]);
     expect(mockExecute).toHaveBeenCalledTimes(1);
     expect(mockExecute.mock.calls[0][1].campaignId).toBe(first.id);
 
@@ -287,6 +299,10 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     expect(event.status).toBe("done");
     expect(event.outcome).toBe("ran");
     expect([...(event.ranCampaignIds ?? [])].sort()).toEqual([first.id, second.id].sort());
+    // Each campaign's lead is kept across attempts (the retry's own runs name only the second).
+    expect(serializeTriggerEvent(event).ranLeads.sort((a, b) => a.campaignId.localeCompare(b.campaignId))).toEqual(
+      [first.id, second.id].sort().map((id) => ({ campaignId: id, leadId: `lead-${id}` })),
+    );
   });
 
   it("still unknown after the wait: recorded skipped `person_not_known`", async () => {

@@ -182,7 +182,8 @@ export interface StepTriggerOutcome {
   /** The legs OUT of that step, as features-service names them. */
   legKeys: string[];
   /** `runId` = the run workflow-service opened (what its `/end-run` names); absent when it did not say. */
-  triggered: Array<{ campaignId: string; legKey: string | null; workflowSlug: string; runId?: string }>;
+  /** `leadId` = the lead the run carried (`trigger.leadId`: the person filed on that campaign); absent when none. */
+  triggered: Array<{ campaignId: string; legKey: string | null; workflowSlug: string; runId?: string; leadId?: string }>;
   skipped: Array<{
     campaignId: string;
     legKey: string | null;
@@ -593,6 +594,7 @@ export async function runCampaignsInScope(
         legKey: campaign.legKey,
         workflowSlug,
         ...(execution?.runId ? { runId: execution.runId } : {}),
+        ...(campaignTrigger?.leadId ? { leadId: campaignTrigger.leadId } : {}),
       });
       console.log(
         `[campaign-service] Campaign ${campaign.id} triggered on the step a lead reached (org ${req.orgId}, brand ${brandIds[0]}, ${label})`,
