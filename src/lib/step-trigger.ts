@@ -118,10 +118,17 @@ export const STEP_TRIGGER_SKIPS = {
    */
   PIPE_HANDLED_BY_ANOTHER_CAMPAIGN: "pipe_handled_by_another_campaign",
   /**
-   * SALES FUNNELS: the unit's funnel cap is reached, or billing could not measure it (fail-closed).
-   * Only a proactive pipe is ever held on it; the lead is not dropped.
+   * SALES FUNNELS: the unit's funnel cap is reached. Only a proactive pipe is ever held on it; the
+   * lead is not dropped.
    */
   SALES_FUNNEL_CAP: "sales_funnel_cap",
+  /**
+   * SALES FUNNELS: billing could not answer for the unit's caps (timeout, outage, consumption it cannot
+   * measure): held fail-closed, never read as a verdict. A passing condition, so an event carrying a
+   * person or an item is retried (lib/trigger-person.ts `PERSON_EVENT_RETRY_SKIPS`), never dropped
+   * (FORM-ANSWER-NOBODY-DUE-1014: a form fill skipped while features-service redeployed was lost).
+   */
+  SALES_FUNNEL_CAPS_UNAVAILABLE: "sales_funnel_caps_unavailable",
   /**
    * Every audience the grid lists for the campaign is freshly exhausted: a run would reach lead-service with nobody to serve, so none is dispatched.
    */
@@ -407,7 +414,14 @@ export async function runCampaignsInScope(
     // A SALES FUNNEL unit's money is its funnel's caps, and nothing else (lib/sales-funnel-campaigns.ts).
     const unitMoney = isSalesFunnelUnit(campaign) ? await salesFunnelUnitMoney(salesFunnelUnitRef(campaign), now) : null;
     if (unitMoney && !unitMoney.run) {
-      skip(unitMoney.kind === "unfunded" ? STEP_TRIGGER_SKIPS.UNFUNDED : STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAP, unitMoney.detail);
+      skip(
+        unitMoney.kind === "unfunded"
+          ? STEP_TRIGGER_SKIPS.UNFUNDED
+          : unitMoney.kind === "unreadable"
+            ? STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAPS_UNAVAILABLE
+            : STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAP,
+        unitMoney.detail,
+      );
       continue;
     }
     const salesBudget = brandIds.length === 1 && !unitMoney ? await fetchBrandSalesBudget(brandIds[0], moneyIdentity) : null;

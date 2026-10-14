@@ -388,7 +388,7 @@ describe("sales funnel campaigns (brand x offer x sales funnel, one unit per pip
         "test event",
       );
       expect(out.triggered).toEqual([]);
-      expect(out.skipped.map((s) => s.reason)).toEqual([STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAP, STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAP]);
+      expect(out.skipped.map((s) => s.reason)).toEqual([STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAPS_UNAVAILABLE, STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAPS_UNAVAILABLE]);
       expect(mockExecute).not.toHaveBeenCalled();
       if (billingUrl !== undefined) process.env.BILLING_SERVICE_URL = billingUrl;
       errors.mockRestore();
