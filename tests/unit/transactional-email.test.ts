@@ -45,6 +45,18 @@ vi.mock("../../src/lib/audience-refill.js", async (importOriginal) => {
   };
 });
 
+// ONE money model (owner 2026-10-14): a campaign's money is its SALES FUNNEL's caps. The caps read is
+// stubbed; default = a positive stated max budget.
+type CapsRead = { ok: true; caps: { stated: boolean; maxBudget: { amountCents: number } | null } } | { ok: false; detail: string };
+const fetchSalesFunnelCaps = vi.fn(async (_scope: unknown): Promise<CapsRead> => ({
+  ok: true,
+  caps: { stated: true, maxBudget: { amountCents: 3000 } },
+}));
+vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>()),
+  fetchSalesFunnelCaps: (scope: unknown) => fetchSalesFunnelCaps(scope),
+}));
+
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
@@ -77,7 +89,11 @@ function makeCampaign(overrides: Partial<Campaign> = {}): Campaign {
     maxBudgetWeeklyUsd: null,
     maxBudgetMonthlyUsd: null,
     maxBudgetTotalUsd: null,
-    dailyBudgetCents: 500,
+    // A sales funnel campaign's unit: its money is its funnel's caps.
+    offerId: "offer-1",
+    legKey: "lead_found_to_conversation",
+    salesFunnelCampaignId: "sfc-1",
+    salesFunnelId: "sf-1",
     maxLeads: null,
     startDate: null,
     endDate: null,
@@ -92,19 +108,16 @@ function makeCampaign(overrides: Partial<Campaign> = {}): Campaign {
   } as Campaign;
 }
 
-// Route mock fetch by URL. Default: auto-topup ON, brand budget positive, send OK.
-function routeFetch(opts: { autoTopup?: boolean; brandBudgetCents?: string | null; sendOk?: boolean } = {}) {
-  const { autoTopup = true, brandBudgetCents = "1000", sendOk = true } = opts;
+// Route mock fetch by URL. Default: auto-topup ON, send OK.
+function routeFetch(opts: { autoTopup?: boolean; sendOk?: boolean } = {}) {
+  const { autoTopup = true, sendOk = true } = opts;
   mockFetch.mockImplementation((url: string) => {
     if (url.includes("/internal/accounts/by-org/")) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ has_auto_topup: autoTopup }) });
     }
-    if (url.includes("/campaign-budgets")) {
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ dailyBudgetCents: brandBudgetCents, campaigns: [] }) });
-    }
-    if (url.includes("/daily-budget")) {
-      // Since billing v0.83.9 this figure includes sales funnel caps: it must never be read here.
-      return Promise.reject(new Error("transactional-email must not read /daily-budget"));
+    if (url.includes("/campaign-budgets") || url.includes("/daily-budget")) {
+      // Retired as money (owner 2026-10-14): never read here.
+      return Promise.reject(new Error(`transactional-email must not read ${url}`));
     }
     if (url.endsWith("/platform-send")) {
       return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(""), json: () => Promise.resolve({}) });
@@ -137,6 +150,8 @@ describe("maybeSendExtendAudienceEmail", () => {
       brandProfile: null,
     });
     routeFetch();
+    fetchSalesFunnelCaps.mockReset();
+    fetchSalesFunnelCaps.mockResolvedValue({ ok: true, caps: { stated: true, maxBudget: { amountCents: 3000 } } });
     claimEpisodeRefill.mockReset();
     claimEpisodeRefill.mockResolvedValue(true);
     requestBrandAudienceRefill.mockReset();
@@ -221,24 +236,36 @@ describe("maybeSendExtendAudienceEmail", () => {
     expect(sendCall()).toBeUndefined();
   });
 
-  it("does NOT send when the brand's budget is zero — a defunded brand is a held brand", async () => {
-    // This replaces the old brand-pause guard: the flag is gone, and "funds nothing" is now the
-    // one statement that a brand is not running.
-    routeFetch({ brandBudgetCents: 0 });
-    await maybeSendExtendAudienceEmail(makeCampaign({ dailyBudgetCents: null }), { runId: "r" });
+  it("asks the money of the campaign's OWN sales funnel campaign", async () => {
+    await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+    expect(fetchSalesFunnelCaps).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: "org-1",
+      brandId: "brand-1",
+      offerId: "offer-1",
+      salesFunnelId: "sf-1",
+      salesFunnelCampaignId: "sfc-1",
+    }));
+  });
+
+  it("does NOT send for a campaign that is not a sales funnel unit: it has no money, nothing is read", async () => {
+    await maybeSendExtendAudienceEmail(makeCampaign({ salesFunnelCampaignId: null, salesFunnelId: null }), { runId: "r" });
+    expect(fetchSalesFunnelCaps).not.toHaveBeenCalled();
+    expect(sendCall()).toBeUndefined();
+    expect(staffAlertCall()).toBeUndefined();
+  });
+
+  it("does NOT send when the funnel's max budget is zero — a defunded funnel is a held one", async () => {
+    fetchSalesFunnelCaps.mockResolvedValue({ ok: true, caps: { stated: true, maxBudget: { amountCents: 0 } } });
+    await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
     expect(sendCall()).toBeUndefined();
   });
 
-  it("does NOT send when no daily budget is configured (campaign null + brand null)", async () => {
-    routeFetch({ brandBudgetCents: null });
-    await maybeSendExtendAudienceEmail(makeCampaign({ dailyBudgetCents: null }), { runId: "r" });
+  it("does NOT send when the funnel states no cap, or its caps cannot be read", async () => {
+    fetchSalesFunnelCaps.mockResolvedValue({ ok: true, caps: { stated: false, maxBudget: null } });
+    await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+    fetchSalesFunnelCaps.mockResolvedValue({ ok: false, detail: "billing down" });
+    await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
     expect(sendCall()).toBeUndefined();
-  });
-
-  it("sends on brand-budget fallback when the campaign has no own budget but the brand does", async () => {
-    routeFetch({ brandBudgetCents: "800" });
-    await maybeSendExtendAudienceEmail(makeCampaign({ dailyBudgetCents: null }), { runId: "r" });
-    expect(sendCall()).toBeTruthy();
   });
 
   it("does NOT send when auto-topup is OFF", async () => {
@@ -250,7 +277,7 @@ describe("maybeSendExtendAudienceEmail", () => {
   it("does NOT send (fail-safe) when the auto-topup read fails", async () => {
     mockFetch.mockImplementation((url: string) => {
       if (url.includes("/internal/accounts/by-org/")) return Promise.reject(new Error("billing down"));
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ dailyBudgetCents: "1000" }) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
     await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
     expect(sendCall()).toBeUndefined();
@@ -344,9 +371,11 @@ describe("maybeSendExtendAudienceEmail", () => {
       errSpy.mockRestore();
     });
 
-    it("never refills a defunded brand or one without auto-topup", async () => {
-      routeFetch({ brandBudgetCents: "0" });
-      await maybeSendExtendAudienceEmail(makeCampaign({ dailyBudgetCents: null }), { runId: "r" });
+    it("never refills a defunded funnel, a non-unit, or one without auto-topup", async () => {
+      fetchSalesFunnelCaps.mockResolvedValue({ ok: true, caps: { stated: true, maxBudget: { amountCents: 0 } } });
+      await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
+      fetchSalesFunnelCaps.mockResolvedValue({ ok: true, caps: { stated: true, maxBudget: { amountCents: 3000 } } });
+      await maybeSendExtendAudienceEmail(makeCampaign({ salesFunnelCampaignId: null }), { runId: "r" });
       routeFetch({ autoTopup: false });
       await maybeSendExtendAudienceEmail(makeCampaign(), { runId: "r" });
       expect(claimEpisodeRefill).not.toHaveBeenCalled();

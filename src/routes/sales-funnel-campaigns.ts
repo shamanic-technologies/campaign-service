@@ -22,7 +22,6 @@ import { acquisitionChannelForFeature, derivedCampaignName } from "../lib/campai
 import { ensureSourcesOnStart } from "../lib/source-campaign-store.js";
 import { serializeSalesFunnelCampaign } from "../lib/sales-funnel-campaigns.js";
 import { wakeScheduler } from "../lib/scheduler.js";
-import { convertToSalesFunnelCampaigns } from "../lib/sales-funnel-conversion.js";
 import { completeSalesFunnelUnits } from "../lib/sales-funnel-unit-completion.js";
 import { runLeadSourcingSwitch } from "../lib/sales-funnel-lead-sourcing-switch.js";
 import { runSalesFunnelNameRepair } from "../lib/sales-funnel-name.js";
@@ -452,29 +451,6 @@ router.delete("/sales-funnel-campaigns/:id", requireApiKey, serviceAuth, async (
   } catch (error) {
     console.error("[campaign-service] Delete sales funnel campaign error:", error);
     res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-/**
- * POST /internal/sales-funnel-campaigns/convert {apply?, orgId?} — turn the live (leg x channel)
- * campaigns into sales funnel campaigns (owner GO 2026-10-10, lib/sales-funnel-conversion.ts). Dry
- * run unless `apply: true`; idempotent (a row already a unit is not a candidate). `x-email` (the
- * person who ordered it) rides billing's writes so staff budget emails know whose act it was.
- */
-router.post("/internal/sales-funnel-campaigns/convert", requireApiKey, async (req, res) => {
-  try {
-    const apply = req.body?.apply === true;
-    const orgId = typeof req.body?.orgId === "string" ? req.body.orgId : undefined;
-    const brandId = typeof req.body?.brandId === "string" ? req.body.brandId : undefined;
-    const actingEmail = (req.headers["x-email"] as string | undefined) ?? null;
-    res.json(await convertToSalesFunnelCampaigns({
-      apply, orgId, brandId, actingEmail,
-      includeUnfundedReactive: req.body?.includeUnfundedReactive === true,
-      allowOfferLessCeilings: req.body?.allowOfferLessCeilings === true,
-    }));
-  } catch (error) {
-    console.error("[campaign-service] Sales funnel conversion error:", error);
-    res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
 

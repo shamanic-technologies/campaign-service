@@ -138,16 +138,34 @@ describe('No Legacy Patterns - CRITICAL', () => {
     const client = fs.readFileSync(path.join(srcDir, 'lib/brand-offers-client.ts'), 'utf-8');
     expect(client).toMatch(/"x-org-id": identity\.orgId/);
     expect(client).not.toMatch(/if \(identity\.orgId\)/);
+  });
 
-    const adoption = fs.readFileSync(path.join(srcDir, 'lib/campaign-offer-adoption.ts'), 'utf-8');
-    // Every statement this rule makes about campaigns is scoped to the campaign's own org.
-    const statements = adoption.split(/db\.execute/).slice(1);
-    expect(statements.length).toBeGreaterThan(0);
-    for (const statement of statements) {
-      expect(statement).toMatch(/"org_id" = \$\{scope\.orgId\}/);
+  it('should NEVER read billing per-campaign daily ceilings again — a campaign\'s money is its sales funnel\'s caps', () => {
+    // Owner 2026-10-14, one money model: billing's per-campaign / per-step daily ceilings, the
+    // campaign's own daily budget as a pace, items mode and the global pot are RETIRED as money.
+    // Two stores could disagree, and billing cannot drop its per-campaign store while we read it.
+    for (const gone of [
+      'lib/campaign-budget-client.ts',
+      'lib/campaign-funding.ts',
+      'lib/campaign-budget-split.ts',
+      'lib/sales-items.ts',
+      'lib/sales-items-pace.ts',
+      'lib/global-sales-budget.ts',
+      'lib/global-sales-pot.ts',
+      'lib/brand-sales-budget-client.ts',
+      'lib/sales-funnel-conversion.ts',
+    ]) {
+      expect(fs.existsSync(path.join(srcDir, gone)), `src/${gone} must stay deleted`).toBe(false);
     }
-    // And the offer is never derived from the funnel, the goal or the workflow.
-    expect(adoption).not.toMatch(/funnelKey\s*[:=]/);
+    const violations: string[] = [];
+    for (const file of getAllTsFiles(srcDir)) {
+      fs.readFileSync(file, 'utf-8').split('\n').forEach((line, index) => {
+        if (/\/campaign-budgets?\b|\/sales-budget\b/.test(line) && !/^\s*(\/\/|\*)/.test(line)) {
+          violations.push(`${path.relative(srcDir, file)}:${index + 1}  ${line.trim().slice(0, 100)}`);
+        }
+      });
+    }
+    expect(violations, `retired billing money reads:\n${violations.join('\n')}`).toHaveLength(0);
   });
 
   it('should NOT ask any service whether a brand still sells a funnel — money starts nothing', () => {
@@ -427,7 +445,7 @@ describe('No Legacy Patterns - CRITICAL', () => {
     // outlived its writer: the customer dashboard's pause control was deleted (a customer stops a
     // funnel by defunding it), nothing in the fleet wrote the flag any more, and 27 brands sat
     // stored-paused with no API path back. A campaign is held when the customer funds nothing for
-    // it, decided in ONE place (src/lib/campaign-funding.ts). The flag, its table and its helpers
+    // it, answered in ONE place (GET /brands/:brandId/pause, src/routes/brands.ts). The flag, its table and its helpers
     // must not come back — a second representation is what produced the contradiction.
     const roots = [srcDir, path.join(__dirname, '../../packages')].filter((d) => fs.existsSync(d));
     const violations: { file: string; line: number; code: string }[] = [];
@@ -464,7 +482,6 @@ describe('No Legacy Patterns - CRITICAL', () => {
       'lib/scheduler.ts',
       'lib/campaign-resume.ts',
       'lib/transactional-email.ts',
-      'lib/provisioning-identity.ts',
     ];
     const violations: string[] = [];
 
@@ -480,19 +497,6 @@ describe('No Legacy Patterns - CRITICAL', () => {
       violations,
       `A run id handed to another service must be one runs-service can resolve — use ensureCampaignRunId:\n${violations.join('\n')}`,
     ).toHaveLength(0);
-  });
-
-  it('should NOT make the provisioning identity OPTIONAL', () => {
-    // A sibling service REFUSES a read that does not state a full identity — `400 Missing
-    // required headers: x-run-id` — whatever the caller happens to be doing. `ProvisioningIdentity`
-    // makes userId and runId REQUIRED so a client cannot go back to attaching them only when it
-    // happens to have them, which is how every read on that path was rejected outright and every
-    // rejection laundered into "unknown".
-    const identity = fs.readFileSync(path.join(srcDir, 'lib/provisioning-identity.ts'), 'utf-8');
-    expect(identity).toMatch(/userId:\s*string;/);
-    expect(identity).toMatch(/runId:\s*string;/);
-    expect(identity).not.toMatch(/userId\?:/);
-    expect(identity).not.toMatch(/runId\?:/);
   });
 
   it('should NOT expose a writer for the brand held state on any surface', () => {

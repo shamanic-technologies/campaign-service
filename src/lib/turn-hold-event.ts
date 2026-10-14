@@ -17,7 +17,7 @@ import { traceEvent } from "./trace-event.js";
  * bug.
  */
 export type TurnHoldReason =
-  /** The customer funds nothing for this campaign. Waits for money on `FUNDING_RECHECK_MS`. */
+  /** Its sales funnel funds nothing for this unit. Waits for money on `FUNDING_RECHECK_MS`. */
   | "unfunded"
   /** Billing could not be read. Fail-CLOSED: the brand is held rather than spent. */
   | "budgets_unreadable"
@@ -26,16 +26,10 @@ export type TurnHoldReason =
   /** Planning threw. The brand is held; the gate would refuse these runs anyway. */
   | "planning_failed"
   /**
-   * GLOBAL mode: the brand's one daily sales pot is spent (or stated at zero). EVERY sales campaign
-   * of the brand, reactive included, waits for a raise or the rollover; a lead waiting at a reactive
-   * step stays due and is worked then.
+   * A sales campaign that is NOT a sales funnel unit: it has no money (owner 2026-10-14, one money
+   * model: a campaign's money is its sales funnel's caps). Held on `FUNDING_RECHECK_MS`, never run.
    */
-  | "global_sales_budget_reached"
-  /**
-   * ITEMS mode: this campaign's own item budget allows nothing more today. Its siblings are not
-   * affected. Re-opens on a raise or the rollover.
-   */
-  | "item_budget_reached"
+  | "not_a_sales_funnel_campaign"
   /**
    * Every lead SOURCE of the campaign's offer is OFF (a person's choice), so lead-service refuses
    * every serve. Held, not run, until a source is turned back on (lib/sources-off-hold.ts).

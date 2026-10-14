@@ -2,10 +2,32 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, salesFunnelCampaigns } from "../db/schema.js";
 import { fetchChannelCatalogue } from "./channel-operator-client.js";
-import { insertSalesFunnelUnits } from "./campaign-status-history.js";
-import { sameLeg } from "./leg-identity.js";
+import { insertSalesFunnelUnits, type SalesFunnelUnitBirth } from "./campaign-status-history.js";
+import { sameLeg, storedLegKey } from "./leg-identity.js";
+import { acquisitionChannelForFeature, derivedCampaignName } from "./campaign-identity.js";
 import { fetchPipe, fetchSalesFunnel, isSourcingLeg, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
-import { customerUnitBirths, type CustomerPipe } from "./sales-funnel-conversion.js";
+
+/** A pipe of the funnel the CUSTOMER's own team works ("Your team"): a unit with no workflow. */
+export interface CustomerPipe {
+  featureSlug: string;
+  legKey: string;
+}
+
+/** The unit births of a funnel campaign's "Your team" pipes (no workflow: the customer works them). */
+export function customerUnitBirths(
+  parent: { id: string; brandId: string; offerId: string; salesFunnelName: string },
+  pipes: CustomerPipe[],
+): SalesFunnelUnitBirth[] {
+  const idTag = parent.id.slice(0, 8);
+  return pipes.map((p) => ({
+    featureSlug: p.featureSlug,
+    legKey: storedLegKey(p.featureSlug, p.legKey),
+    workflowSlug: null,
+    acquisitionChannel: acquisitionChannelForFeature(p.featureSlug)!,
+    // Same name as a launch gives it (names are unique per org; the funnel id keeps funnels apart).
+    name: `${parent.salesFunnelName} ${idTag} - ${derivedCampaignName(p.featureSlug, parent.brandId, parent.offerId, p.legKey)}`,
+  }));
+}
 
 /**
  * EVERY LEG OF A FUNNEL CAMPAIGN HAS ITS CHANNEL (owner 2026-10-11: "a sales funnel never has a

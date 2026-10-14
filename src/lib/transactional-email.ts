@@ -7,7 +7,6 @@
 //
 // EVERYTHING here is fire-and-forget: it must NEVER block, delay, or fail the outreach
 // loop / run finalization. Every path swallows its error (logged, not thrown).
-import { fetchCampaignBudgets } from "./campaign-budget-client.js";
 import { fetchSalesFunnelCaps, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
 import type { Campaign } from "../db/schema.js";
 import { isOutboundSalesFeature } from "./sales-outreach-campaign.js";
@@ -166,28 +165,16 @@ async function readAutoTopupEnabled(orgId: string): Promise<boolean> {
 /**
  * Does the campaign have positive money configured? Fail-safe → false.
  *
- *   - a SALES FUNNEL unit: its funnel states a positive max budget at billing (its only money);
- *   - otherwise its OWN daily budget when stated, else ANY targeted brand's PRE-FUNNEL total
- *     (billing `/campaign-budgets` brand figure: the ceilings' sum, else the legacy pot). Not
- *     `/daily-budget`: since billing v0.83.9 it adds every sales funnel's max budget, and a
- *     funnel's money is never a pre-funnel campaign's (lib/sales-funnel-campaigns.ts).
+ * A campaign's money is its SALES FUNNEL's caps (owner 2026-10-14, one money model): a unit whose
+ * funnel states a positive max budget at billing. A campaign that is not a unit has none.
  */
 async function hasPositiveDailyBudget(campaign: Campaign): Promise<boolean> {
   try {
-    if (campaign.salesFunnelCampaignId) {
-      const ref = salesFunnelUnitRef(campaign);
-      if (!ref.brandId || !ref.offerId || !ref.salesFunnelId) return false;
-      const read = await fetchSalesFunnelCaps({ orgId: ref.orgId, brandId: ref.brandId, offerId: ref.offerId, salesFunnelId: ref.salesFunnelId, salesFunnelCampaignId: ref.salesFunnelCampaignId });
-      return read.ok && read.caps.stated && !!read.caps.maxBudget && (read.caps.maxBudget.amountCents ?? 0) > 0;
-    }
-    if (campaign.dailyBudgetCents !== null && campaign.dailyBudgetCents !== undefined) {
-      return campaign.dailyBudgetCents > 0;
-    }
-    for (const brandId of campaign.brandIds ?? []) {
-      const budgets = await fetchCampaignBudgets(brandId, { orgId: campaign.orgId });
-      if (budgets.ok && budgets.brandDailyBudgetCents !== null && budgets.brandDailyBudgetCents > 0) return true;
-    }
-    return false;
+    if (!campaign.salesFunnelCampaignId) return false;
+    const ref = salesFunnelUnitRef(campaign);
+    if (!ref.brandId || !ref.offerId || !ref.salesFunnelId) return false;
+    const read = await fetchSalesFunnelCaps({ orgId: ref.orgId, brandId: ref.brandId, offerId: ref.offerId, salesFunnelId: ref.salesFunnelId, salesFunnelCampaignId: ref.salesFunnelCampaignId });
+    return read.ok && read.caps.stated && !!read.caps.maxBudget && (read.caps.maxBudget.amountCents ?? 0) > 0;
   } catch {
     return false;
   }

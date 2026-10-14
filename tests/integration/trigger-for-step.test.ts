@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 
-const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockSalesBudget, mockGetStatsBudget } = vi.hoisted(() => ({
-  mockSalesBudget: vi.fn(),
+const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockGetStatsBudget } = vi.hoisted(() => ({
   mockGetStatsBudget: vi.fn(),
   mockExecute: vi.fn(),
   mockCatalogue: vi.fn(),
@@ -18,8 +17,6 @@ vi.mock("@distribute/runs-client", () => ({
   getStatsBudget: (p: { featureSlug?: string }) => (p?.featureSlug?.startsWith("sourcing-") ? Promise.resolve({ windows: [] }) : mockGetStatsBudget(p)),
 }));
 
-// billing's sales-budget MODE: "campaigns" (no global pot) unless a test says otherwise.
-vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({ fetchBrandSalesBudget: mockSalesBudget }));
 
 vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
@@ -28,16 +25,25 @@ vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
 
 vi.mock("../../src/lib/channel-operator-client.js", () => ({ fetchChannelCatalogue: mockCatalogue }));
 
-vi.mock("../../src/lib/campaign-funding.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../src/lib/campaign-funding.js")>();
-  return { ...original, campaignFunding: mockFunding };
-});
-
 vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/features-workflow-projection-client.js")>();
   return { ...original, resolveSelectionForTrigger: mockResolveSlug };
 });
 
+// The dispatched campaigns are sales funnel UNITS: their money is their funnel's caps, driven here
+// by `mockFunding` (funded = runs; not funded = held, `kind` defaulting to `unfunded`).
+vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>();
+  return {
+    ...original,
+    salesFunnelUnitMoney: async () => {
+      const f = await mockFunding();
+      return f.funded
+        ? { run: true, pace: { spentCents: 0, ceilingCents: f.ceilingCents } }
+        : { run: false, kind: f.kind ?? "unfunded", reason: "Unfunded", detail: f.reason, nextRunAt: new Date(Date.now() + 600_000) };
+    },
+  };
+});
 import app from "../../src/index.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 
@@ -78,7 +84,6 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
     mockListRuns.mockResolvedValue({ runs: [] });
     mockResolveSlug.mockResolvedValue({ workflowSlug: "aurora-v3", audienceId: null });
     mockExecute.mockResolvedValue(undefined);
-    mockSalesBudget.mockResolvedValue({ ok: true, mode: "campaigns" });
   });
 
   afterAll(async () => {
@@ -96,6 +101,8 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
       parentRunId: "9f0d1c22-0000-4000-8000-000000000009",
       offerId: OFFER,
       legKey: LEG_OUT,
+      salesFunnelCampaignId: crypto.randomUUID(),
+      salesFunnelId: "sf-reply",
     });
 
     const res = await post(body);
@@ -121,6 +128,8 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
       parentRunId: "9f0d1c22-0000-4000-8000-000000000009",
       offerId: OFFER,
       legKey: LEG_OUT,
+      salesFunnelCampaignId: crypto.randomUUID(),
+      salesFunnelId: "sf-reply",
       nextRunAt: new Date(Date.now() + 10 * 60_000),
     });
 
@@ -133,11 +142,7 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
     expect(mockExecute).toHaveBeenCalledTimes(1);
   });
 
-  it("GLOBAL mode, pot spent: the reply handler is not run and the skip says the lead stays due", async () => {
-    mockSalesBudget.mockResolvedValue({ ok: true, mode: "global", dailyBudgetCents: 1000 });
-    mockGetStatsBudget.mockResolvedValue({
-      windows: [{ label: "today", totalCostInUsdCents: "1000", netTotalCostInUsdCents: "1000" }],
-    });
+  it("a live campaign that is NOT a sales funnel unit is skipped `not_a_sales_funnel_campaign` and never dispatched", async () => {
     const campaign = await insertTestCampaign(ORG, {
       brandIds: [BRAND],
       brandId: BRAND,
@@ -155,9 +160,9 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
     expect(res.status).toBe(200);
     expect(res.body.triggered).toEqual([]);
     expect(res.body.skipped).toEqual([
-      expect.objectContaining({ campaignId: campaign.id, reason: "global_sales_budget_reached" }),
+      expect.objectContaining({ campaignId: campaign.id, legKey: LEG_OUT, reason: "not_a_sales_funnel_campaign" }),
     ]);
-    expect(res.body.skipped[0].detail).toMatch(/stays due/);
+    expect(mockFunding).not.toHaveBeenCalled();
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
@@ -179,6 +184,8 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
       createdByUserId: "user-1",
       offerId: OFFER,
       legKey: LEG_OUT,
+      salesFunnelCampaignId: crypto.randomUUID(),
+      salesFunnelId: "sf-reply",
     });
 
     const res = await post(body);
@@ -199,6 +206,8 @@ describe("POST /internal/campaigns/trigger-for-step", () => {
       parentRunId: "9f0d1c22-0000-4000-8000-000000000009",
       offerId: OFFER,
       legKey: LEG_OUT,
+      salesFunnelCampaignId: crypto.randomUUID(),
+      salesFunnelId: "sf-reply",
     });
     mockFunding.mockResolvedValue({ funded: false, reason: "the leg is funded at zero" });
 

@@ -5,9 +5,6 @@ import { fileURLToPath } from "node:url";
 // This file is about the REAL client: the fleet-wide stub in tests/setup.ts is lifted here.
 vi.unmock("../../src/lib/sourcing-origins-client.js");
 
-const { mockGetStatsBudget } = vi.hoisted(() => ({ mockGetStatsBudget: vi.fn() }));
-vi.mock("@distribute/runs-client", () => ({ getStatsBudget: mockGetStatsBudget }));
-
 import {
   deriveSourcingMap,
   readSourcingMap,
@@ -17,7 +14,6 @@ import {
   SourcingMapUnavailableError,
 } from "../../src/lib/sourcing-origins-client.js";
 import { isSourcedChannel } from "../../src/lib/source-campaigns.js";
-import { getChannelStatsBudget, spendFeatureSlugs } from "../../src/lib/channel-spend.js";
 
 /** features-service `GET /public/sourcing-origins`, as served in prod on 2026-10-12. */
 const PROD = JSON.parse(readFileSync(fileURLToPath(new URL("../fixtures/features-sourcing-origins.json", import.meta.url)), "utf8"));
@@ -52,7 +48,6 @@ const fetchMock = vi.fn();
 beforeEach(() => {
   resetSourcingMapCache();
   fetchMock.mockReset();
-  mockGetStatsBudget.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -85,13 +80,12 @@ describe("deriveSourcingMap: byte-identical to the retired copy", () => {
 });
 
 describe("a channel features-service starts sourcing is sourced here with no code change", () => {
-  it("a new channel -> origin pair feeds, counts spend and births its default", async () => {
+  it("a new channel -> origin pair feeds and births its default", async () => {
     const body = structuredClone(PROD);
     body.originsByChannel["cold-sms-outreach"] = ["sourcing-crm-contacts"];
     fetchMock.mockResolvedValue(answer(body));
 
     expect(await isSourcedChannel("cold-sms-outreach")).toBe(true);
-    expect(await spendFeatureSlugs("cold-sms-outreach")).toEqual(["cold-sms-outreach", "sourcing-crm-contacts"]);
     const map = await readSourcingMap();
     expect(map.feedingByChannel["cold-sms-outreach"]).toEqual(["sourcing-crm-contacts"]);
     expect(map.defaultOriginByChannel["cold-sms-outreach"]).toBe("sourcing-crm-contacts");
@@ -140,13 +134,5 @@ describe("cache and failure policy", () => {
     await readSourcingMap();
     fetchMock.mockResolvedValue(answer({}, 500));
     await expect(readSourcingMap(Date.now() + SOURCING_MAP_STALE_MAX_MS + 1)).rejects.toBeInstanceOf(SourcingMapUnavailableError);
-  });
-
-  it("the money path fails CLOSED: an unreadable map makes the spend read throw, runs-service is never asked", async () => {
-    fetchMock.mockResolvedValue(answer({}, 502));
-    await expect(
-      getChannelStatsBudget({ orgId: "org-1", campaignId: "c-1", featureSlug: "cold-whatsapp-outreach", windows: [{ label: "today", since: "2026-10-12T00:00:00.000Z" }] }),
-    ).rejects.toBeInstanceOf(SourcingMapUnavailableError);
-    expect(mockGetStatsBudget).not.toHaveBeenCalled();
   });
 });

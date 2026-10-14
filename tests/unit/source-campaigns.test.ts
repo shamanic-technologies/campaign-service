@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockGetStatsBudget } = vi.hoisted(() => ({ mockGetStatsBudget: vi.fn() }));
-vi.mock("@distribute/runs-client", () => ({ getStatsBudget: mockGetStatsBudget }));
-
 import { resolveStartablePair } from "../../src/lib/startable-pair.js";
-import { getChannelStatsBudget } from "../../src/lib/channel-spend.js";
 import { proactiveCampaignsToStop } from "../../src/lib/single-proactive.js";
 import { readSourcingMap } from "../../src/lib/sourcing-origins-client.js";
 import {
@@ -25,15 +21,6 @@ const BRAND = "22222222-2222-2222-2222-222222222222";
 const IDENTITY = { orgId: "org", userId: "user", runId: "33333333-3333-3333-3333-333333333333", brandId: BRAND };
 const APOLLO = "sourcing-apollo-cold-filters";
 const COLD = "sales-cold-email-outreach";
-const TODAY = [{ label: "today", since: "2026-10-07T00:00:00.000Z" }];
-
-function window(cents: string) {
-  return {
-    label: "today",
-    totalCostInUsdCents: cents, actualCostInUsdCents: cents, provisionedCostInUsdCents: "0",
-    netTotalCostInUsdCents: cents, netActualCostInUsdCents: cents, netProvisionedCostInUsdCents: "0",
-  };
-}
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -79,9 +66,9 @@ describe("the LOCKED vocabulary", () => {
 
 describe("turning a source ON (start-funded-pair resolution)", () => {
   const never = () => {
-    throw new Error("a source start reads no catalogue, billing or workflow");
+    throw new Error("a source start reads no catalogue");
   };
-  const deps = { catalogue: never as never, budgets: never as never, workflow: never as never };
+  const deps = { catalogue: never as never };
 
   it("is startable with no workflow and no ceiling read", async () => {
     const r = await resolveStartablePair({ brandId: BRAND, offerId: OFFER, featureSlug: APOLLO, legKey: SOURCE_LEG_KEY }, IDENTITY, deps);
@@ -124,58 +111,5 @@ describe("one proactive campaign per offer never touches a source", () => {
     expect(stopped).toEqual([]);
     // Only sources were live: the catalogue is not even asked.
     expect(catalogue).not.toHaveBeenCalled();
-  });
-});
-
-describe("the outreach campaign's spend still counts the sourcing filed under its offer's sources", () => {
-  const spend: Record<string, string> = {};
-  beforeEach(() => {
-    for (const k of Object.keys(spend)) delete spend[k];
-    mockGetStatsBudget.mockImplementation(async ({ campaignId, featureSlug }: { campaignId?: string; featureSlug?: string }) => {
-      const cents = spend[`${campaignId}|${featureSlug}`];
-      return { windows: cents === undefined ? [] : [window(cents)] };
-    });
-  });
-  const feeding = async () => [{ id: "src-apollo", featureSlug: APOLLO, status: "ongoing" }];
-
-  it("reads the same total before and after lead-service files the sourcing under the source campaign", async () => {
-    spend[`jub|${COLD}`] = "300.0000000000";
-    spend[`jub|${APOLLO}`] = "250.0000000000";
-    const before = await getChannelStatsBudget({ orgId: "org", campaignId: "jub", featureSlug: COLD, windows: TODAY }, { feeding });
-
-    delete spend[`jub|${APOLLO}`];
-    spend[`src-apollo|${APOLLO}`] = "250.0000000000";
-    const after = await getChannelStatsBudget({ orgId: "org", campaignId: "jub", featureSlug: COLD, windows: TODAY }, { feeding });
-
-    expect(before.windows[0].netTotalCostInUsdCents).toBe("550.0000000000");
-    expect(after.windows[0].netTotalCostInUsdCents).toBe("550.0000000000");
-    const asked = mockGetStatsBudget.mock.calls.map((c) => `${c[0].campaignId}|${c[0].featureSlug}`);
-    expect(asked).toContain(`src-apollo|${APOLLO}`);
-  });
-
-  it("a brand-scoped read, or a channel that sources nothing, asks no source", async () => {
-    const spy = vi.fn(feeding);
-    await getChannelStatsBudget({ orgId: "org", brandId: BRAND, featureSlug: COLD, windows: TODAY }, { feeding: spy });
-    await getChannelStatsBudget({ orgId: "org", campaignId: "c", featureSlug: "ai-meeting-booking", windows: TODAY }, { feeding: spy });
-    expect(spy).not.toHaveBeenCalled();
-  });
-});
-
-describe("billing's split read measures the campaign family: outreach + the sources feeding it", () => {
-  it("names every feeding source campaign in campaignIds", async () => {
-    process.env.BILLING_SERVICE_URL = "https://billing.test.local";
-    process.env.BILLING_SERVICE_API_KEY = "k";
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      split: true, outreachDailyBudgetCents: "100", sourcingCeilingCents: "50",
-      today: { sourcingSpentCents: "1", outreachSpentCents: "2" },
-    }), { status: 200 }));
-    const { fetchCampaignSplitToday } = await import("../../src/lib/campaign-budget-split.js");
-    const r = await fetchCampaignSplitToday(BRAND, {
-      campaignId: "jub", offerId: OFFER, legKey: "start_to_conversation", featureSlug: COLD, sourceCampaignIds: ["src-a", "src-b"],
-    }, { orgId: "org" });
-    expect(r.ok).toBe(true);
-    const url = new URL(String(fetchSpy.mock.calls[0][0]));
-    expect(url.searchParams.get("campaignIds")).toBe("jub,src-a,src-b");
-    fetchSpy.mockRestore();
   });
 });
