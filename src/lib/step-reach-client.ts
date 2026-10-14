@@ -45,14 +45,20 @@ async function readStepReach(
   return res.json();
 }
 
-/** Parse the people of a step-reached answer. Pure; throws on a malformed answer. */
-export function parseStepReachers(data: unknown): StepReacher[] {
+/**
+ * Parse the people of a step-reached answer. Pure; throws on a malformed answer. `reachedAt` is always
+ * dated in `since` mode; in `email` mode lead-service may answer null (every reach undated): such a
+ * person still REACHED the step, so `allowUndated` keeps them (dated at the epoch, never used as an anchor).
+ */
+export function parseStepReachers(data: unknown, allowUndated = false): StepReacher[] {
   const people = (data as { people?: unknown } | null)?.people;
   if (!Array.isArray(people)) throw new Error("lead-service step-reached answered no people array");
   const out: StepReacher[] = [];
   for (const p of people as Array<Record<string, unknown>>) {
     const email = typeof p?.email === "string" ? p.email.trim().toLowerCase() : "";
-    const reachedAt = typeof p?.reachedAt === "string" ? new Date(p.reachedAt) : null;
+    const reachedAt = typeof p?.reachedAt === "string"
+      ? new Date(p.reachedAt)
+      : allowUndated && p?.reachedAt === null ? new Date(0) : null;
     if (!email || !reachedAt || Number.isNaN(reachedAt.getTime())) {
       throw new Error(`lead-service step-reached answered a malformed person: ${JSON.stringify(p).slice(0, 200)}`);
     }
@@ -83,6 +89,6 @@ export async function hasEverReachedStep(input: {
   step: string;
   email: string;
 }): Promise<boolean> {
-  const people = parseStepReachers(await readStepReach(input, { step: input.step, email: input.email.trim().toLowerCase() }));
+  const people = parseStepReachers(await readStepReach(input, { step: input.step, email: input.email.trim().toLowerCase() }), true);
   return people.some((p) => p.email === input.email.trim().toLowerCase());
 }

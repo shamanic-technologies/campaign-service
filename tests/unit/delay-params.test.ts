@@ -27,3 +27,13 @@ describe("delay trigger params (FACT-NOT-FOLLOWED-1014)", () => {
     expect(personDelayLateMs({ afterStep: "signup", days: 5, unlessStep: "paid_client" })).toBe(DELAY_PLAN_LATE_MS);
   });
 });
+
+describe("lead-service step-reached answer", () => {
+  it("since mode needs a date; email mode keeps an undated reach (the person still reached the step)", async () => {
+    const { parseStepReachers } = await import("../../src/lib/step-reach-client.js");
+    const undated = { step: "paid_client", people: [{ email: "A@x.io", name: null, phone: null, reachedAt: null }] };
+    expect(() => parseStepReachers(undated)).toThrow(/malformed/);
+    expect(parseStepReachers(undated, true).map((p) => p.email)).toEqual(["a@x.io"]);
+    expect(() => parseStepReachers({ step: "signup" })).toThrow(/no people/);
+  });
+});
