@@ -61,6 +61,9 @@ import { eventCarries, recordDeliveries } from "./trigger-deliveries.js";
  *
  * ── THE OUTCOME ─────────────────────────────────────────────────────────────────────────────────
  *
+ * `ranLeads` (served): per campaign that ran, the lead its run carried (`trigger.leadId`: the person filed on
+ * that campaign at lead-service), kept on `detail.ranLeads` across attempts (PUSHED-EVENT-LEAD-1014).
+ *
  * `ran` when at least one campaign was dispatched (`ranCampaignIds`). Otherwise `skipped` with ONE
  * reason: the first campaign's named skip (`unfunded`, `run_in_flight`, ...; lib/step-trigger.ts),
  * else `campaign_off` (a campaign is bought for the leg and its customer turned it off), else
@@ -436,10 +439,13 @@ export async function fireClaimedEvent(
     // Campaigns that ran on an earlier attempt still count.
     const ranCampaignIds = [...new Set([...priorRanCampaignIds, ...verdict.ranCampaignIds])];
     if (ranCampaignIds.length > 0) verdict = { ...verdict, outcome: "ran", skipReason: null, ranCampaignIds };
+    // The lead each campaign's run carried, kept across attempts (a retry's `triggered` names only its own runs).
+    const ranLeads = mergeRanLeads(own?.ranLeads, verdict.detail.triggered);
     if (own) {
-      const { retryCampaignIds: _r, priorRanCampaignIds: _p, ...rest } = own;
+      const { retryCampaignIds: _r, priorRanCampaignIds: _p, ranLeads: _l, ...rest } = own;
       verdict = { ...verdict, detail: { ...rest, ...verdict.detail } as EventVerdict["detail"] };
     }
+    if (ranLeads.length > 0) verdict = { ...verdict, detail: { ...verdict.detail, ranLeads } as EventVerdict["detail"] };
     // ANY campaign held back for a passing reason: the event tries again for those campaigns only, so each
     // gets its own run carrying the person and item. Money / pacing (cap reached, unfunded, a run in flight,
     // a failure backoff: `OWED_UNTIL_ROOM_SKIPS`) is owed with NO deadline, every 2 min while the event is
@@ -503,6 +509,40 @@ export async function fireClaimedEvent(
       .returning();
     return back;
   }
+}
+
+/** One entry per campaign: the lead its run carried. Pure. */
+export interface RanLead {
+  campaignId: string;
+  leadId: string;
+}
+
+/**
+ * Stored `ranLeads` (earlier attempts) + this attempt's `triggered` runs that carried a lead; a campaign's
+ * latest run wins. Pure.
+ */
+export function mergeRanLeads(stored: unknown, triggered: ReadonlyArray<{ campaignId: string; leadId?: string }>): RanLead[] {
+  const byCampaign = new Map<string, string>();
+  const take = (v: unknown) => {
+    if (!v || typeof v !== "object") return;
+    const { campaignId, leadId } = v as Record<string, unknown>;
+    if (typeof campaignId === "string" && typeof leadId === "string" && leadId) byCampaign.set(campaignId, leadId);
+  };
+  if (Array.isArray(stored)) stored.forEach(take);
+  triggered.forEach(take);
+  return [...byCampaign].map(([campaignId, leadId]) => ({ campaignId, leadId }));
+}
+
+/**
+ * What `ranLeads` serves: the lead per campaign that RAN, a still-pending event's earlier runs included
+ * (`detail.priorRanCampaignIds`); a campaign given up (lib/trigger-deliveries.ts) has left both lists.
+ */
+export function eventRanLeads(e: Pick<TriggerEvent, "detail" | "ranCampaignIds">): RanLead[] {
+  const own = e.detail && typeof e.detail === "object" && !Array.isArray(e.detail) ? (e.detail as Record<string, unknown>) : {};
+  const triggered = Array.isArray(own.triggered) ? (own.triggered as Array<{ campaignId: string; leadId?: string }>) : [];
+  const prior = Array.isArray(own.priorRanCampaignIds) ? own.priorRanCampaignIds.filter((x): x is string => typeof x === "string") : [];
+  const ran = new Set([...(e.ranCampaignIds ?? []), ...prior]);
+  return mergeRanLeads(own.ranLeads, triggered).filter((l) => ran.has(l.campaignId));
 }
 
 // ── The tick ────────────────────────────────────────────────────────────────────────────────────
@@ -669,6 +709,7 @@ export function serializeTriggerEvent(e: TriggerEvent) {
     outcome: e.outcome,
     skipReason: e.skipReason,
     ranCampaignIds: e.ranCampaignIds ?? [],
+    ranLeads: eventRanLeads(e),
     performedByCaller: e.performedByCaller,
     processedAt: e.processedAt ? e.processedAt.toISOString() : null,
     detail: e.detail ?? null,
