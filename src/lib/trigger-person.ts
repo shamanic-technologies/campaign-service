@@ -48,30 +48,46 @@ export interface EventPerson {
   crmContact?: { provider: string; contactId: string } | null;
 }
 
-/** How soon an event held back for a passing reason (`PERSON_EVENT_RETRY_SKIPS`) is tried again. */
+/** How soon an event held back for a passing reason (`PERSON_EVENT_RETRY_SKIPS`) is tried again, while young. */
 export const PERSON_NOT_KNOWN_RETRY_MS = 2 * 60_000;
-/** How long after it occurred such an event keeps being retried before its skip is recorded. */
+/** How long after it FELL DUE (or was last redelivered) an event stays young (short retry; `person_not_known` deadline). */
 export const PERSON_NOT_KNOWN_WAIT_MS = 60 * 60_000;
+/** Once no longer young, an event still owed for money or pacing is tried again on this delay, until room returns. */
+export const OWED_EVENT_RECHECK_MS = 10 * 60_000;
+
 /**
- * The skips that make an event naming a person RETRY rather than record: the person is not known to the
- * brand yet, a run of the campaign (or its cohort) is in flight, the campaign waits out a failure backoff, or it is not funded yet. The person is filed and made due only
- * right before a dispatch, so every such event gets its OWN run carrying its person and item, never a
- * later run that would claim them without what they asked.
+ * NEVER A DEAD END FOR MONEY OR PACING (owner 2026-10-14, NEVER-NO-FOLLOWUP-1014: « qu'on ne se retrouve jamais
+ * dans une situation de non-followup, sauf évidemment si unsubscribe, unqualified, opt-out, ou si on a une
+ * réponse positive »). A dated occurrence may be the ONLY thing carrying a person to their next message (the
+ * follow-up chain records its next date as an occurrence). A campaign that cannot run it NOW only because of
+ * money or pacing (its cap reached until the period rolls over, not funded yet, a run of it or its cohort in
+ * flight, a failure backoff, a budget read billing could not answer) still OWES it: the occurrence stays
+ * `pending` for that campaign with NO deadline, and fires once the campaign can run, exactly once. A customer's
+ * Off (`campaign_off`) and every verdict about the PERSON (suppressed...) stay final.
  */
-export const PERSON_EVENT_RETRY_SKIPS: ReadonlySet<string> = new Set([
-  "person_not_known",
+export const OWED_UNTIL_ROOM_SKIPS: ReadonlySet<string> = new Set([
   "run_in_flight",
   "cohort_run_in_flight",
   // The campaign waits out a failure backoff: the person was never made due, so nothing else would
-  // answer them; the event retries until the backoff ends (prod 2026-10-12, staff probe).
+  // answer them (prod 2026-10-12, staff probe).
   "failure_backoff",
-  // The funnel is not funded YET: a client funding it right after pushing (or a cap written a second after
-  // the funnel was born) gets the occurrence delivered once billing says funded, within the same window.
+  // Not funded YET (a client funding it right after pushing, or a cap written a second after the funnel was born).
   "unfunded",
-  // billing could not answer for a funnel's caps (a timeout while a neighbour redeploys): held fail-closed,
-  // never a verdict, so the occurrence is retried, never dropped (FORM-ANSWER-NOBODY-DUE-1014).
+  // billing could not answer for a funnel's caps: held fail-closed, never a verdict (FORM-ANSWER-NOBODY-DUE-1014).
   "sales_funnel_caps_unavailable",
+  // The funnel's cap is reached (a $10/month reactive funnel): owed until its period rolls over or the cap is raised.
+  "sales_funnel_cap",
+  "global_sales_budget_reached",
+  "item_budget_reached",
 ]);
+
+/**
+ * The skips that make an event naming a person RETRY rather than record: every money / pacing hold
+ * (`OWED_UNTIL_ROOM_SKIPS`, no deadline) + the person not known to the brand YET (retried only while the
+ * event is young). The person is filed and made due only right before a dispatch, so every such event gets
+ * its OWN run carrying its person and item, never a later run that would claim them without what they asked.
+ */
+export const PERSON_EVENT_RETRY_SKIPS: ReadonlySet<string> = new Set([...OWED_UNTIL_ROOM_SKIPS, "person_not_known"]);
 
 /** The caller's person, canonical. Pure. */
 export function eventPerson(input: {
