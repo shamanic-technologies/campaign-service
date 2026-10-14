@@ -9,6 +9,7 @@ const {
   mockGateChecks,
   mockFetchBrandRuntimeContext,
   mockFetchCandidates,
+  mockCatalogue,
 } = vi.hoisted(() => ({
   mockCreateRun: vi.fn(),
   mockUpdateRun: vi.fn(),
@@ -17,6 +18,7 @@ const {
   mockGateChecks: vi.fn(),
   mockFetchBrandRuntimeContext: vi.fn(),
   mockFetchCandidates: vi.fn(),
+  mockCatalogue: vi.fn(async () => ({ ok: false, detail: "not read in this test" })),
 }));
 
 vi.mock("@distribute/runs-client", () => ({
@@ -32,6 +34,11 @@ vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
     ...original,
     executeCampaignWorkflow: mockExecute,
   };
+});
+
+vi.mock("../../src/lib/channel-operator-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/channel-operator-client.js")>();
+  return { ...original, fetchChannelCatalogue: mockCatalogue };
 });
 
 vi.mock("../../src/lib/gate-check.js", () => ({
@@ -391,6 +398,28 @@ describe("Pipeline routes", () => {
       expect(res.body).not.toHaveProperty("customerProfileId");
       expect(res.body).not.toHaveProperty("appId");
       expect(res.body).not.toHaveProperty("keySource");
+    });
+
+    it("says whether the leg is reactive (features-service's statement); null when it cannot be told", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds, featureSlug: "ai-follow-up-email", legKey: "signup_to_paid_client" });
+      const catalogueWith = (reactive: boolean) => ({
+        ok: true,
+        reactiveBySlug: new Map([["ai-follow-up-email", new Map([["signup_to_paid_client", reactive]])]]),
+        legsBySlug: new Map(),
+        operatorBySlug: new Map(),
+        stepKeys: new Set(),
+        legs: [],
+      });
+      mockCatalogue.mockResolvedValueOnce(catalogueWith(true));
+      const reactive = await request(app).post("/start-run").set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id })).expect(200);
+      expect(reactive.body.reactive).toBe(true);
+
+      mockCatalogue.mockResolvedValueOnce(catalogueWith(false));
+      const proactive = await request(app).post("/start-run").set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id })).expect(200);
+      expect(proactive.body.reactive).toBe(false);
+
+      const unknown = await request(app).post("/start-run").set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id })).expect(200);
+      expect(unknown.body.reactive).toBeNull();
     });
 
     it("should return persona/profile attribution for attributed campaigns", async () => {
