@@ -38,10 +38,19 @@ export type StartableWorkflowRead =
 export async function fetchStartableWorkflowSlug(
   featureSlug: string,
   identity: IdentityHeaders & { userId: string; runId: string },
+  /**
+   * Workflows a PLAY rules out (features-service's `excludedWorkflowDynastySlugs`, PLAY-SEED-1014): the seed is
+   * the newest active workflow NOT among them, matched on its dynasty or its own slug. Nothing left = null.
+   */
+  excludedWorkflowSlugs: readonly string[] = [],
 ): Promise<StartableWorkflowRead> {
   const read = await listActiveWorkflows(featureSlug, identity);
   if (!read.ok) return read;
-  return { ok: true, workflowSlug: read.workflows[0]?.workflowSlug ?? null };
+  const excluded = new Set(excludedWorkflowSlugs);
+  const allowed = read.workflows.find(
+    (w) => !excluded.has(w.workflowSlug!) && !(w.workflowDynastySlug && excluded.has(w.workflowDynastySlug)),
+  );
+  return { ok: true, workflowSlug: allowed?.workflowSlug ?? null };
 }
 
 /**

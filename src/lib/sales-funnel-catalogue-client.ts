@@ -42,6 +42,30 @@ export interface PipeFromCatalogue {
   channelSlug: string;
   legKey: string;
   mode: "proactive" | "reactive";
+  /**
+   * The PLAY this pipe id is (features-service, owner 2026-10-13: a play = a pipe x a strategy; a bare pipe id is
+   * its default play, `<pipe id>~<strategy id>` another one). Null/absent = the pipe catalogues no play: every
+   * workflow of the channel may run it. Read so a unit is never BORN on a workflow its play rules out
+   * (PLAY-SEED-1014); carried verbatim, never re-derived.
+   */
+  play?: PipePlay | null;
+  /**
+   * Why nothing runs it, in features-service's words (`judging_pending`, `judging_failing`,
+   * `no_workflow_follows_strategy`, ...) + one plain sentence an agent can relay. Null when it runs. Kept as an
+   * opaque string: the vocabulary is features-service's.
+   */
+  notRunnableReason?: string | null;
+  notRunnableDetail?: string | null;
+}
+
+export interface PipePlay {
+  strategyId: string;
+  strategyName: string;
+  default: boolean;
+  /** Active workflows of the pipe the strategy allows. 0 = nothing may run the play. */
+  allowedActiveWorkflowCount: number;
+  /** The workflow dynasties the strategy rules out on this pipe. */
+  excludedWorkflowDynastySlugs: string[];
 }
 
 const SalesFunnelResponse = z.object({
@@ -62,6 +86,18 @@ const PipeResponse = z.object({
   channelSlug: z.string().min(1),
   legKey: z.string().min(1),
   mode: z.enum(["proactive", "reactive"]),
+  play: z
+    .object({
+      strategyId: z.string(),
+      strategyName: z.string(),
+      default: z.boolean(),
+      allowedActiveWorkflowCount: z.number().int(),
+      excludedWorkflowDynastySlugs: z.array(z.string()),
+    })
+    .nullable()
+    .optional(),
+  notRunnableReason: z.string().nullable().optional(),
+  notRunnableDetail: z.string().nullable().optional(),
 });
 
 async function readCatalogue<T>(path: string, parse: (body: unknown) => T): Promise<CatalogueRead<T>> {
