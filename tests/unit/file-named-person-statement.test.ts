@@ -41,6 +41,29 @@ describe("fileNamedPerson: the brand's statement rides the filing", () => {
     });
   });
 
+  it("hands lead-service the phone and the stated timezone (PUSHED-PERSON-TZ-1014)", async () => {
+    answer = { status: 201, body: { leadId: "lead-1", status: "filed", timezone: "Europe/London", timezoneSource: "inferred" } };
+    await fileNamedPerson({
+      orgId: "o",
+      campaignId: "c",
+      email: "a@x.com",
+      statedBy: { triggerEventId: "evt-1" },
+      phone: " +44 20 7946 0958 ",
+      timezone: "America/New_York",
+    });
+    expect(calls[0].body).toEqual({
+      email: "a@x.com",
+      statedBy: { triggerEventId: "evt-1" },
+      phone: "+44 20 7946 0958",
+      timezone: "America/New_York",
+    });
+  });
+
+  it("sends no timezone when none is stated, and no phone too short to carry a country", async () => {
+    await fileNamedPerson({ orgId: "o", campaignId: "c", email: "a@x.com", statedBy: { triggerEventId: "e" }, phone: "12", timezone: null });
+    expect(calls[0].body).toEqual({ email: "a@x.com", statedBy: { triggerEventId: "e" } });
+  });
+
   it("names a suppressed person person_suppressed", async () => {
     answer = { status: 409, body: { code: "person_suppressed", reason: "unsubscribed" } };
     const out = await fileNamedPerson({ orgId: "o", campaignId: "c", email: "a@x.com", statedBy: { triggerEventId: "e" } });

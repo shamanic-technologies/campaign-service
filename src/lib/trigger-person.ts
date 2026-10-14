@@ -42,6 +42,8 @@ export interface EventPerson {
   email: string;
   name?: string | null;
   phone?: string | null;
+  /** IANA zone the client STATED for the person (validated at the door); absent = none stated, never guessed here. */
+  timezone?: string | null;
   /** The contact in the brand's own CRM the person came from, carried verbatim. */
   crmContact?: { provider: string; contactId: string } | null;
 }
@@ -73,12 +75,15 @@ export function eventPerson(input: {
   email: string;
   name?: string;
   phone?: string;
+  timezone?: string;
   crmContact?: { provider: string; contactId: string };
 }): EventPerson {
   return {
     email: canonicalEmail(input.email),
     name: input.name?.trim() || null,
     phone: input.phone?.trim() || null,
+    // Present only when stated: a push stating none is byte-identical to before (row, `/execute`).
+    ...(input.timezone?.trim() ? { timezone: input.timezone.trim() } : {}),
     crmContact: input.crmContact ?? null,
   };
 }
@@ -93,6 +98,7 @@ export function storedEventPerson(value: unknown): EventPerson | null {
     email: r.email,
     name: typeof r.name === "string" ? r.name : null,
     phone: typeof r.phone === "string" ? r.phone : null,
+    ...(typeof r.timezone === "string" && r.timezone ? { timezone: r.timezone } : {}),
     crmContact: crm && typeof crm.provider === "string" && typeof crm.contactId === "string"
       ? { provider: crm.provider, contactId: crm.contactId }
       : null,
@@ -125,6 +131,10 @@ export async function oweEventPerson(
     runId: campaign.parentRunId,
     statedBy: statedBy ?? null,
     name: person.name ?? null,
+    // What lead-service schedules every message to this person on (PUSHED-PERSON-TZ-1014): the phone the
+    // client gave (a +44 number = UK) and the zone they stated, if any. No zone is ever made up here.
+    phone: person.phone ?? null,
+    timezone: person.timezone ?? null,
   });
   if (!filed.ok) {
     if (filed.code === "person_not_known" || filed.code === "person_suppressed" || filed.code === "ambiguous_person") {

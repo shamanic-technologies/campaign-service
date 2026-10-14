@@ -109,6 +109,26 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     await closeDb();
   });
 
+  it("PUSHED-PERSON-TZ-1014: the phone and a stated timezone ride the filing; an offset is refused by name, nothing written", async () => {
+    const campaign = await meetingBooking("ongoing");
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: { email: "uk@example.com", phone: "+44 7700 900123", timezone: "America/New_York" } });
+    expect(res.status).toBe(201);
+    expect(res.body.event.detail.person).toMatchObject({ phone: "+44 7700 900123", timezone: "America/New_York" });
+    expect(mockFile).toHaveBeenCalledWith(expect.objectContaining({ campaignId: campaign.id, phone: "+44 7700 900123", timezone: "America/New_York" }));
+
+    mockFile.mockClear();
+    const bad = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: { email: "x@example.com", timezone: "GMT+1" } });
+    expect(bad.status).toBe(400);
+    expect(JSON.stringify(bad.body)).toContain("person.timezone must be an IANA timezone");
+    expect(mockFile).not.toHaveBeenCalled();
+    expect((await allEvents()).length).toBe(1);
+
+    const none = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: { email: "n@example.com", phone: "+44 7700 900124" } });
+    expect(none.status).toBe(201);
+    expect("timezone" in none.body.event.detail.person).toBe(false);
+    expect(mockFile).toHaveBeenCalledWith(expect.objectContaining({ phone: "+44 7700 900124", timezone: null }));
+  });
+
   it("a live campaign on the pipe: the person is filed and made due on it, and the workflow receives them + the item", async () => {
     const campaign = await meetingBooking("ongoing");
     const started = Date.now();
