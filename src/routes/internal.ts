@@ -62,7 +62,6 @@ import {
   type ProjectionRow,
 } from "../lib/features-workflow-projection-client.js";
 import type { DownstreamIdentity } from "../lib/downstream-headers.js";
-import { SPLIT_GATE_REASONS } from "../lib/campaign-budget-split.js";
 import {
   listOfferSourceCampaigns,
   mirrorSourceCampaigns,
@@ -154,7 +153,6 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       maxBudgetWeeklyUsd: campaign.maxBudgetWeeklyUsd,
       maxBudgetMonthlyUsd: campaign.maxBudgetMonthlyUsd,
       maxBudgetTotalUsd: campaign.maxBudgetTotalUsd,
-      dailyBudgetCents: campaign.dailyBudgetCents,
       offerId: campaign.offerId,
       legKey: campaign.legKey,
       salesFunnelCampaignId: campaign.salesFunnelCampaignId,
@@ -167,23 +165,9 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       // not an anomaly to warn on. The campaign simply backs off and auto-resumes on
       // recharge. Trace it at info level, like a passing check, so it never surfaces as
       // a warning/error in logs. Genuine fail-closed blocks keep warn level.
-      // A brand reaching its daily budget is the same class of expected business state
-      // (pacing ceiling hit, not a fault) → also benign/info. A user-paused brand is likewise
-      // an intentional, expected hold — not an anomaly.
+      // A user-paused brand is likewise an intentional, expected hold — not an anomaly.
       const benignBlock = result.reason === "Insufficient credits" ||
-                          result.reason === "Brand daily budget reached" ||
-                          result.reason === "Campaign daily budget reached" ||
-                          // The customer having funded this campaign at zero (or not at all) is
-                          // an expected pacing outcome, not a fault.
-                          result.reason === "Campaign not funded" ||
-                          result.reason === "Brand paused" ||
-                          // The brand's ONE global sales pot is spent for today: pacing, not a fault.
-                          result.reason === "Global sales budget reached" ||
-                          // Items mode: this campaign's own item budget is spent for now.
-                          result.reason === "Item budget reached" ||
-                          // A split campaign's sourcing or outreach part is spent for today.
-                          result.reason === SPLIT_GATE_REASONS.sourcingReached ||
-                          result.reason === SPLIT_GATE_REASONS.outreachReached;
+                          result.reason === "Brand paused";
       // A run allowed because billing could NOT be asked is a fail-OPEN anomaly, not an
       // authorization — exactly the class this service warns on. It rides the event that is
       // already emitted once per gate check, so it adds no log volume at all, and it is the

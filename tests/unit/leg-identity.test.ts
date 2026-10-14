@@ -10,9 +10,6 @@ import {
   storedLegKey,
   withOtherOutboundSpellings,
 } from "../../src/lib/leg-identity.js";
-import { ceilingEntriesOf, type CampaignBudgetEntry } from "../../src/lib/campaign-budget-client.js";
-import { itemsOf, type SalesItem } from "../../src/lib/sales-items.js";
-import { selectByPathRoi } from "../../src/lib/global-sales-budget.js";
 
 const COLD = "sales-cold-email-outreach";
 const CALL = "cold-call-outreach";
@@ -111,43 +108,4 @@ describe("catalogue reads accept either spelling", () => {
     expect(legIsReactive(legacy, COLD, OLD_REPLY)).toBe(false);
     expect(legIsReactive(legacy, COLD, NEW_REPLY)).toBe(false);
   });
-});
-
-describe("money matches either spelling", () => {
-  const entry = (legKey: string | null, featureSlug = COLD): CampaignBudgetEntry => ({
-    offerId: "o1", legKey, featureSlug, dailyBudgetCents: 500, sourcingCeilingCents: null,
-  } as CampaignBudgetEntry);
-
-  it("a billing ceiling under the new spelling funds a legacy-stored campaign, and the reverse", () => {
-    const newRead = { ok: true as const, brandDailyBudgetCents: 500, campaigns: [entry(NEW_REPLY)] };
-    expect(ceilingEntriesOf(newRead, { featureSlug: COLD, offerId: "o1", legKey: OLD_REPLY })).toHaveLength(1);
-    const oldRead = { ok: true as const, brandDailyBudgetCents: 500, campaigns: [entry(OLD_REPLY)] };
-    expect(ceilingEntriesOf(oldRead, { featureSlug: COLD, offerId: "o1", legKey: NEW_REPLY })).toHaveLength(1);
-  });
-
-  it("a new-spelling entry is not 'another leg' that disqualifies a leg-less one", () => {
-    const read = { ok: true as const, brandDailyBudgetCents: 900, campaigns: [entry(NEW_REPLY), entry(null)] };
-    expect(ceilingEntriesOf(read, { featureSlug: COLD, offerId: "o1", legKey: OLD_REPLY })).toHaveLength(2);
-  });
-
-  it("a non-outbound channel's ceiling is matched verbatim only", () => {
-    const read = { ok: true as const, brandDailyBudgetCents: 500, campaigns: [entry(NEW_VISIT, ADS)] };
-    expect(ceilingEntriesOf(read, { featureSlug: ADS, offerId: "o1", legKey: OLD_VISIT })).toHaveLength(0);
-  });
-
-  it("an items-mode item under the new spelling is the legacy campaign's item", () => {
-    const item = { offerId: "O1", legKey: NEW_VISIT, featureSlug: COLD } as SalesItem;
-    expect(itemsOf([item], { offerId: "o1", legKey: OLD_VISIT, featureSlug: COLD })).toHaveLength(1);
-    expect(itemsOf([{ ...item, featureSlug: ADS }], { offerId: "o1", legKey: OLD_VISIT, featureSlug: ADS })).toHaveLength(0);
-  });
-
-  it("global mode's best-ROI path under the new spelling picks the legacy campaign", () => {
-    const pick = selectByPathRoi(
-      [{ campaignId: "c1", offerId: "o1", legKey: OLD_REPLY, featureSlug: COLD, spentCents: 0, ceilingCents: 100 }],
-      [{ offerId: "o1", legKey: NEW_REPLY, featureSlug: COLD, pathKey: "p1" }],
-    );
-    expect(pick).toEqual({ campaignId: "c1", pathKey: "p1" });
-  });
-
-
 });

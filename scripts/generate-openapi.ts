@@ -28,8 +28,6 @@ import {
   TransferBrandResponse,
   DeleteCampaignsByOrgResponse,
   BrandPauseResponse,
-  SetBrandCampaignsDailyBudgetBody,
-  SetBrandCampaignsDailyBudgetResponse,
   BrandPauseHistoryResponse,
   SpendableBudgetResponse,
   BatchSpendableBudgetBody,
@@ -208,20 +206,6 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/internal/sales-funnel-campaigns/convert",
-  tags: ["Sales funnel campaigns"],
-  summary: "Convert the live (leg x channel) campaigns into sales funnel campaigns (staff, dry run by default)",
-  description: "Owner GO 2026-10-10. Body {apply?: boolean (default false = dry run), orgId?: string}. Per offer: ONE proactive funnel campaign (the offer's live lead sources + its live proactive pipe; funnel = its ticked sales path starting with that pipe, else the best-ROI catalogue path; max budget DAILY = the sum of those campaigns' current billing ceilings) and ONE reactive-only funnel campaign per live reactive pipe (catalogue funnel starting at that pipe whose pipes are all reactive; daily max budget = its ceiling). A reactive campaign with no ceiling, or with no reactive-only funnel in the catalogue yet, is left exactly as it is and listed (`skipped`). Apply, per group, all or nothing: rows linked as units (no status move, nothing starts, nothing emailed) in a transaction that commits only after billing's atomic swap (cap written, the per-pipe ceilings it replaces deleted; billing 409 = nothing written, reported in `error`). A brand on a global/items sales budget or a positive offer-less ceiling is `skipped`, never forced. Idempotent. Header x-email = the person who ordered it (rides billing's writes).",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: { body: { content: { "application/json": { schema: z.object({ apply: z.boolean().optional(), orgId: z.string().optional(), brandId: z.string().optional(), includeUnfundedReactive: z.boolean().optional().openapi({ description: "Also convert a reactive campaign with no ceiling, into its reactive funnel with no cap (held, unfunded)." }), allowOfferLessCeilings: z.boolean().optional().openapi({ description: "Let billing replace a positive ceiling stating no offer (once billing serves that swap)." }) }) } } } },
-  responses: {
-    200: { description: "The plan (or what was applied), per group", content: { "application/json": { schema: z.object({ applied: z.boolean(), groups: z.array(z.record(z.string(), z.unknown())), counts: z.object({ campaigns: z.number(), converted: z.number(), skipped: z.number() }) }) } } },
-    502: { description: "The channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-registry.registerPath({
-  method: "post",
   path: "/internal/sales-funnel-campaigns/complete-units",
   tags: ["Sales funnel campaigns"],
   summary: "Give every funnel campaign a unit on each \"Your team\" leg of its funnel (staff, dry run by default)",
@@ -395,24 +379,6 @@ registry.registerPath({
   responses: {
     200: { description: "Brand pause state", content: { "application/json": { schema: BrandPauseResponse } } },
     400: { description: "Missing x-org-id", content: { "application/json": { schema: ErrorResponse } } },
-    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-  },
-});
-
-registry.registerPath({
-  method: "patch",
-  path: "/brands/{brandId}/daily-budget",
-  tags: ["Brands"],
-  summary: "Set the daily budget for ALL of a brand's sales campaigns at once",
-  description: "Propagates a brand-page daily budget edit down to every sales-cold-email-outreach campaign of the brand (cents), so per-campaign pacing enforces it immediately. dailyBudgetCents:null clears each campaign's own budget → they fall back to the brand daily budget. Org-scoped via x-org-id; only this org's campaigns for the brand are touched.",
-  security: [{ [apiKeyAuth.name]: [] }],
-  request: {
-    params: z.object({ brandId: z.string() }),
-    body: { content: { "application/json": { schema: SetBrandCampaignsDailyBudgetBody } } },
-  },
-  responses: {
-    200: { description: "Updated campaigns count + applied budget", content: { "application/json": { schema: SetBrandCampaignsDailyBudgetResponse } } },
-    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
   },
 });

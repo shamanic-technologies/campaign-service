@@ -1,34 +1,20 @@
 import { Router } from "express";
-import { and, asc, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
 import { brandPauseTransitions, campaigns, salesFunnelCampaigns } from "../db/schema.js";
 import { fetchBrandSalesFunnelCaps } from "../lib/sales-funnel-campaigns.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
-import { BatchSpendableBudgetBody, SetBrandCampaignsDailyBudgetBody } from "../schemas.js";
-import { fetchCampaignBudgets } from "../lib/campaign-budget-client.js";
-import { brandHeldFromBudgets } from "../lib/campaign-funding.js";
-import {
-  OUTBOUND_SALES_FEATURE_SLUGS,
-  SALES_FAMILY_FEATURE_SLUGS,
-} from "../lib/sales-outreach-campaign.js";
+import { BatchSpendableBudgetBody } from "../schemas.js";
+import { fetchBrandDailyBudget } from "../lib/brand-daily-budget-client.js";
+import { SALES_FAMILY_FEATURE_SLUGS } from "../lib/sales-outreach-campaign.js";
 import { LIVE_SOURCE_ORIGIN_SLUGS, RETIRED_SOURCE_ORIGIN_SLUGS } from "../lib/source-campaigns.js";
 import {
   computeSpendableBudget,
   type SpendableBudget,
   type SpendableCampaign,
 } from "../lib/spendable-budget.js";
-
-// The per-campaign `daily_budget_cents` MIRROR — the legacy brand-page lever, which gate-check
-// still prefers over every billing ceiling when it is set. Scoped to the OUTBOUND cold-email
-// channels, i.e. exactly the campaigns that carry it today.
-//
-// A paid-reach campaign is deliberately NOT stamped: its ceiling is billing's, stated per (offer,
-// leg, channel) and read live on every plan, and writing a brand-level number onto its row would
-// bind it AHEAD of the offer ceiling it was funded on — a second representation of one fact, which
-// is the thing this service keeps deleting.
-const SALES_FEATURE_SLUGS = [...OUTBOUND_SALES_FEATURE_SLUGS];
 
 const SOURCE_ORIGIN_SLUGS = [...LIVE_SOURCE_ORIGIN_SLUGS, ...RETIRED_SOURCE_ORIGIN_SLUGS];
 
@@ -37,15 +23,10 @@ const router = Router();
 /**
  * GET /brands/:brandId/pause — is this brand HELD, i.e. does the customer fund nothing for it?
  *
- * The answer is the MONEY's, not a flag's. It used to be a stored boolean (`brand_pause.paused`)
- * that the customer dashboard wrote; that control was deleted when the product decided a customer
- * stops a campaign by dropping its ceiling to zero, and the flag outlived its writer — 27 brands
- * stored paused, 10 of them funded, holding campaigns with no API path back. The flag is gone and
- * this route answers from billing's per-campaign ceilings, which is the same fact the customer is
- * already editing.
- *
- * Held ⟺ no campaign ceiling of this (org, brand) is positive AND the brand-level pot
- * is not positive either. Funding any one campaign releases it, with no other step.
+ * The answer is the MONEY's, not a flag's (the stored `brand_pause.paused` flag outlived its writer
+ * and is gone). Held ⟺ billing's brand daily budget (`GET /internal/brands/:id/daily-budget`) is not
+ * positive AND no sales funnel of the brand is funded (billing's verdict, max budget and/or max
+ * volume). billing's retired per-campaign ceilings are never read (owner 2026-10-14).
  *
  * Fail-LOUD (502) when billing cannot be read: answering `paused:false` on an unreadable budget
  * would tell a consumer a brand is running when nobody knows whether it is.
@@ -58,14 +39,14 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
     const { brandId } = req.params;
     const orgId = req.orgId!;
 
-    const budgets = await fetchCampaignBudgets(brandId, { orgId, userId: req.userId ?? undefined });
-    if (!budgets.ok) {
+    const budget = await fetchBrandDailyBudget(brandId, { orgId, userId: req.userId ?? undefined });
+    if (!budget.ok) {
       res.status(502).json({ error: "Brand funding unavailable" });
       return;
     }
 
     // A brand with a FUNDED sales funnel (max budget and/or max volume, billing's verdict) is not held.
-    let paused = brandHeldFromBudgets(budgets);
+    let paused = !(budget.dailyBudgetCents !== null && budget.dailyBudgetCents > 0);
     if (paused) {
       const caps = await fetchBrandSalesFunnelCaps(orgId, brandId);
       if (!caps.ok) {
@@ -83,47 +64,6 @@ router.get("/brands/:brandId/pause", requireApiKey, serviceAuth, async (req: Aut
     });
   } catch (error) {
     console.error("[campaign-service] Get brand pause error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-/**
- * PATCH /brands/:brandId/daily-budget — set the daily budget (cents) for EVERY sales campaign
- * of a brand at once.
- *
- * This is the brand-page propagation lever (NEED 5b): when a customer edits their daily budget
- * on the brand page, that number must flow down to the brand's campaign(s) so per-campaign
- * pacing enforces it immediately. Org-scoped (only this org's campaigns for the brand are
- * touched). dailyBudgetCents:null clears each campaign's own budget → they fall back to the
- * brand daily budget again. Scoped to the OUTBOUND cold-email channels — see SALES_FEATURE_SLUGS
- * for why a paid-reach campaign is left to the live billing ceiling instead.
- */
-router.patch("/brands/:brandId/daily-budget", requireApiKey, serviceAuth, validateBody(SetBrandCampaignsDailyBudgetBody), async (req: AuthenticatedRequest, res) => {
-  try {
-    const { brandId } = req.params;
-    const orgId = req.orgId!;
-    const { dailyBudgetCents } = req.body as { dailyBudgetCents: number | null };
-
-    const updated = await db
-      .update(campaigns)
-      .set({ dailyBudgetCents, updatedAt: new Date() })
-      .where(and(
-        eq(campaigns.orgId, orgId),
-        arrayContains(campaigns.brandIds, [brandId]),
-        inArray(campaigns.featureSlug, SALES_FEATURE_SLUGS),
-        // A SALES FUNNEL unit never gets a per-campaign budget: its money is its funnel's caps.
-        isNull(campaigns.salesFunnelCampaignId),
-      ))
-      .returning({ id: campaigns.id });
-
-    res.json({
-      brandId,
-      orgId,
-      dailyBudgetCents,
-      updatedCount: updated.length,
-    });
-  } catch (error) {
-    console.error("[campaign-service] Set brand campaigns daily budget error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -203,20 +143,15 @@ async function loadSalesCampaigns(orgId: string, brandId: string): Promise<Spend
   return rows;
 }
 
-/** Read billing once for the pair, join the pair's campaigns onto it, and answer both figures. */
+/** Read the pair's funnel caps, join the pair's campaigns onto them, and answer both figures. */
 async function spendableBudgetFor(
   orgId: string,
   brandId: string,
   userId?: string,
 ): Promise<{ ok: true; budget: SpendableBudget } | { ok: false; reason: string }> {
-  const budgets = await fetchCampaignBudgets(brandId, { orgId, userId });
-  // Fail LOUD. A brand whose ceilings cannot be read is not a brand funding nothing, and
-  // reporting it as a smaller figure is exactly the silent under-count this endpoint exists to
-  // remove from the staff numbers.
-  if (!budgets.ok) return { ok: false, reason: "billing did not answer the brand's budget" };
-
-  // The brand's SALES FUNNEL caps (billing) count each funnel campaign by its max budget per day.
-  // Fail LOUD like the ceilings: a smaller figure is the silent under-count this endpoint removes.
+  // The brand's SALES FUNNEL caps (billing) count each funnel campaign by its max budget per day: the
+  // only money a campaign has (owner 2026-10-14). Fail LOUD: a smaller figure is the silent
+  // under-count this endpoint removes.
   const caps = await fetchBrandSalesFunnelCaps(orgId, brandId);
   if (!caps.ok) return { ok: false, reason: `billing did not answer the brand's sales funnel caps (${caps.detail})` };
   const ownerRows = await db
@@ -232,7 +167,7 @@ async function spendableBudgetFor(
   const campaignRows = await loadSalesCampaigns(orgId, brandId);
   return {
     ok: true,
-    budget: computeSpendableBudget(orgId, brandId, budgets, campaignRows, {
+    budget: computeSpendableBudget(orgId, brandId, campaignRows, {
       caps: caps.caps,
       salesFunnelCampaigns: ownerRows,
     }),

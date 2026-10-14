@@ -1,33 +1,11 @@
 import { and, arrayContains, eq } from "drizzle-orm";
-import { listRuns, type IdentityHeaders } from "@distribute/runs-client";
+import { listRuns } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
-import {
-  fetchCampaignBudgets,
-  legKeylessFundedCeilings,
-} from "./campaign-budget-client.js";
-import { buildProvisioningIdentity } from "./provisioning-identity.js";
 import { isOutboundSalesFeature, isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { acquisitionChannelForFeature } from "./campaign-identity.js";
-import { fundingFromBudgets } from "./campaign-funding.js";
 import { salesFunnelUnitMoney, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
-import { sourceCampaignsFeeding } from "./source-campaign-store.js";
-import { adoptOfferForPairSafely } from "./campaign-offer-adoption.js";
 import { reportTurnHolds, type TurnHold } from "./turn-hold-event.js";
-import { fetchBrandSalesBudget } from "./brand-sales-budget-client.js";
-import { fetchOfferSalesPaths, type SalesPathEntry } from "./offer-sales-paths-client.js";
-import { fetchChannelCatalogue } from "./channel-operator-client.js";
-import type { CatalogueLegView } from "./leg-identity.js";
-import {
-  isGlobalBudgetExhausted,
-  isReactiveLeg,
-  rankEntryTargets,
-  selectByPathRoi,
-  type GlobalCandidate,
-} from "./global-sales-budget.js";
-import { brandSalesSpentTodayCents, potRecheckAt, readSpentTodayCents } from "./global-sales-pot.js";
-import { itemVerdict } from "./sales-items-pace.js";
-import type { SalesItem } from "./sales-items.js";
 
 // A campaign that did not get this brand's turn re-checks on the next active tick. The turn is
 // re-ranked from scratch every tick, so this is a "wait your turn", not a backoff. EVERY alive
@@ -72,8 +50,6 @@ export interface ClaimedSalesCampaign {
   workflowSlug: string | null;
   brandIds: string[] | null;
   featureSlug: string | null;
-  /** This campaign's own daily budget. Stated → it IS the ceiling this campaign runs on. */
-  dailyBudgetCents: number | null;
   /** The offer this campaign sells — brand-service's id, carried and never derived. */
   offerId?: string | null;
   /** The single LEG this campaign was bought for — features-service's identifier, never derived. */
@@ -133,24 +109,16 @@ export function selectLowestFillRatio(candidates: TurnCandidate[]): string | nul
  * Returns the campaigns that must NOT fire, each with the time it should be re-checked. A
  * campaign absent from the map fires — so every non-sales campaign is untouched.
  *
- * Three things happen per brand, in this order:
- *   0. Hold — a campaign the customer funds nothing for does not run. This is the ONLY thing that
- *      holds a brand's sales campaigns now: `brand_pause` is gone, and funding says it instead.
- *      Fail-CLOSED (an unreadable answer holds), because the gate refuses to spend on a ceiling
- *      it cannot read anyway, so firing would only burn a run.
- *   1. Serialize — at most ONE run in flight per brand ACROSS ITS SALES CAMPAIGNS. This is the
- *      deliberate constraint that keeps campaigns from running concurrently; removing it is what
- *      unlocks parallelism later, and nothing else has to be undone for that. It is not a lock:
- *      the same runs-service liveness read the per-campaign guard already uses, asked of each of
- *      the brand's sales campaigns. It deliberately does NOT count the brand's PR / AI-visibility
- *      / hiring / VC runs — those share neither leads nor sending accounts, and counting them
- *      stopped a brand's sales outreach outright (see hasLiveRunForBrandCohort), and it counts
- *      only the campaigns of the SAME cohort — a paid-reach run and a cold-email run share
- *      neither leads nor mailboxes, so neither holds the other.
- *   2. Rank — the funded campaign with the lowest spent/ceiling ratio takes the turn.
+ * Per brand cohort, in this order:
+ *   0. Hold — a SALES FUNNEL unit its funnel does not fund (or whose caps are reached / unreadable)
+ *      does not run; a sales campaign that is NOT a unit has no money at all (owner 2026-10-14, one
+ *      money model) and is held by name. Fail-CLOSED.
+ *   1. Serialize — at most ONE run in flight per brand COHORT (see hasLiveRunForBrandCohort): the
+ *      outbound cold-email channels share leads and sending accounts; every other channel is its own.
+ *   2. Rank — the funded unit with the lowest consumed / max budget takes the turn.
  *
  * Turn-taking is fail-SOFT (it only reorders work already allowed); the HOLD is fail-CLOSED, and
- * so is the per-campaign CEILING in gate-check, which is where spend control belongs.
+ * so is the funnel's caps check in gate-check, which is where spend control belongs.
  */
 export async function planBrandTurns(
   claimed: ClaimedSalesCampaign[],
@@ -163,19 +131,14 @@ export async function planBrandTurns(
   // correctly declining to run was indistinguishable from one that had silently died.
   const holds: TurnHold[] = [];
 
-  // Only the sales family is funded per campaign by billing. Everything else keeps its own pacing
-  // and its own per-campaign serialization, untouched.
-  const groups = new Map<string, ClaimedSalesCampaign[]>();
-  // Funded SALES FUNNEL units, per (org, brand): planned after the pre-funnel campaigns, on the same
-  // cohort rule (one run in flight per brand cohort), ranked on their funnel's consumed / max budget.
+  // Funded SALES FUNNEL units, per (org, brand), on the cohort rule (one run in flight per brand cohort), ranked on their funnel's consumed / max budget.
   const unitGroups = new Map<string, Array<{ campaign: ClaimedSalesCampaign; candidate: TurnCandidate }>>();
   for (const c of claimed) {
     // A SALES FUNNEL unit is planned whatever its channel's family: its money is its funnel's caps
     // (a LinkedIn Posting pipe is a funnel pipe like any other, campaign-service #608).
     if (!isSalesFamilyFeature(c.featureSlug) && !c.salesFunnelCampaignId) continue;
-    // A SALES FUNNEL unit's money is its funnel's caps (lib/sales-funnel-campaigns.ts), never the
-    // brand's per-pipe ceilings, items or pot this planner reads: a unit its funnel does not fund is
-    // held here, on the funding cadence, and never enters the pre-funnel turn.
+    // A SALES FUNNEL unit's money is its funnel's caps (lib/sales-funnel-campaigns.ts): a unit its
+    // funnel does not fund is held here, on the funding cadence.
     if (c.salesFunnelCampaignId) {
       try {
         const verdict = await salesFunnelUnitMoney(salesFunnelUnitRef(c), now);
@@ -200,38 +163,22 @@ export async function planBrandTurns(
       }
       continue;
     }
-    const brandId = c.brandIds?.[0];
-    if (!brandId) continue;
-    const key = `${c.orgId}::${brandId}`;
-    const bucket = groups.get(key);
-    if (bucket) bucket.push(c);
-    else groups.set(key, [c]);
-  }
-
-  for (const group of groups.values()) {
-    try {
-      await planOneBrand(group, now, deferred, holds);
-    } catch (err) {
-      // A planning failure is not a licence to spend: hold the group and say so. The gate would
-      // refuse these runs anyway (it fail-closes on the same unreadable ceilings), so firing them
-      // buys nothing and costs a run each.
-      console.warn(`[campaign-service] turn planning failed for campaign ${group[0]?.id} — holding the brand:`, err);
-      const heldAt = new Date(now.getTime() + FUNDING_RECHECK_MS);
-      for (const c of group) {
-        deferred.set(c.id, heldAt);
-        holds.push({
-          campaign: c,
-          reason: "planning_failed",
-          detail: `Campaign not run — turn planning failed for this brand: ${err instanceof Error ? err.message : String(err)}. Held rather than spent; re-checked at ${heldAt.toISOString()}.`,
-          nextRunAt: heldAt,
-        });
-      }
-    }
+    // ONE money model (owner 2026-10-14): a sales campaign that is not a sales funnel unit has no
+    // money (the per-campaign ceilings, its own daily budget, items and the global pot are retired).
+    // Held on the funding cadence by name, never run; the gate refuses it the same way.
+    const heldAt = new Date(now.getTime() + FUNDING_RECHECK_MS);
+    deferred.set(c.id, heldAt);
+    holds.push({
+      campaign: c,
+      reason: "not_a_sales_funnel_campaign",
+      detail: `Campaign not run — it is not part of a sales funnel campaign, and a campaign's money is its sales funnel's caps only. Start it as a sales funnel campaign; re-checked at ${heldAt.toISOString()}.`,
+      nextRunAt: heldAt,
+    });
   }
 
   for (const [key, members] of unitGroups) {
     try {
-      await planSalesFunnelUnits(key, members, claimed, now, deferred, holds);
+      await planSalesFunnelUnits(members, now, deferred, holds);
     } catch (err) {
       console.warn(`[campaign-service] turn planning failed for sales funnel units of ${key} — holding them:`, err);
       const heldAt = new Date(now.getTime() + FUNDING_RECHECK_MS);
@@ -252,13 +199,10 @@ export async function planBrandTurns(
 /**
  * The funded SALES FUNNEL units of one (org, brand): same cohort serialization as every sales
  * campaign (at most one run in flight per brand cohort), the turn to the lowest consumed / max
- * budget (a reactive pipe ranks first). A cohort a pre-funnel campaign of the brand just took this
- * tick is busy: its units wait the ordinary turn defer.
+ * budget (a reactive pipe ranks first).
  */
 async function planSalesFunnelUnits(
-  key: string,
   members: Array<{ campaign: ClaimedSalesCampaign; candidate: TurnCandidate }>,
-  claimed: ClaimedSalesCampaign[],
   now: Date,
   deferred: Map<string, Date>,
   holds: TurnHold[],
@@ -267,450 +211,14 @@ async function planSalesFunnelUnits(
   const brandId = members[0].campaign.brandIds?.[0];
   if (!brandId) return;
   const byId = new Map(members.map((m) => [m.campaign.id, m.campaign]));
-  const firedLegacyCohorts = new Set(
-    claimed
-      .filter((c) => !c.salesFunnelCampaignId && `${c.orgId}::${c.brandIds?.[0] ?? ""}` === key)
-      .filter((c) => (isSalesFamilyFeature(c.featureSlug) || !!c.salesFunnelCampaignId) && !deferred.has(c.id))
-      .map((c) => serializationCohort(c.featureSlug)),
-  );
   const cohorts = new Map<string, TurnCandidate[]>();
   for (const { campaign, candidate } of members) {
     const cohort = serializationCohort(campaign.featureSlug);
     cohorts.set(cohort, [...(cohorts.get(cohort) ?? []), candidate]);
   }
   for (const [cohort, candidates] of cohorts) {
-    if (firedLegacyCohorts.has(cohort)) {
-      for (const c of candidates) deferred.set(c.campaignId, new Date(now.getTime() + TURN_DEFER_MS));
-      continue;
-    }
     await planOneCohort(orgId, brandId, cohort, candidates, byId, now, deferred, holds);
   }
-}
-
-async function planOneBrand(
-  group: ClaimedSalesCampaign[],
-  now: Date,
-  deferred: Map<string, Date>,
-  holds: TurnHold[],
-): Promise<void> {
-  const seed = group[0];
-  const orgId = seed.orgId;
-  const brandId = seed.brandIds![0];
-  const featureSlug = seed.featureSlug!;
-
-  const identity: IdentityHeaders = {
-    orgId,
-    userId: seed.createdByUserId ?? undefined,
-    campaignId: seed.id,
-    brandId,
-    workflowSlug: seed.workflowSlug ?? undefined,
-  };
-
-  const heldAt = new Date(now.getTime() + FUNDING_RECHECK_MS);
-
-  const budgets = await fetchCampaignBudgets(brandId, identity);
-  // Fail-CLOSED. An unreadable ceiling is not "spend freely for a tick": the gate refuses the run
-  // on the very same read, so firing it only burns a run and re-asks in a minute.
-  if (!budgets.ok) {
-    for (const c of group) {
-      deferred.set(c.id, heldAt);
-      holds.push({
-        campaign: c,
-        reason: "budgets_unreadable",
-        detail: `Campaign not run — billing's campaign budgets for brand ${brandId} could not be read, so the ceiling that paces this campaign is unknown. Held rather than spent (fail-closed); re-checked at ${heldAt.toISOString()}.`,
-        nextRunAt: heldAt,
-      });
-    }
-    return;
-  }
-
-  // A funded ceiling that names NO leg is a DISAGREEMENT, not a coarser statement.
-  //
-  // A customer buys a LEG and a campaign states the single leg it was bought for. Money without
-  // one is matched only through billing's "no other leg on this channel" rule, which is how one
-  // identity once grew two campaigns. It is reported, naming the ceiling, and nothing is created
-  // or started from it.
-  //
-  // It does not hold the brand. The disagreement is about a ceiling that has no campaign — holding
-  // would stop the brand's live campaigns for a fault that is not theirs.
-  reportLegKeylessCeilings(orgId, brandId, legKeylessFundedCeilings(budgets), now);
-
-  // The brand's funding MODE. `campaigns` (every brand until one states a global sales budget) is
-  // today's planner, byte-identical. Fail-CLOSED exactly like an unreadable ceiling: a mode we
-  // cannot read is a cap we cannot read.
-  const salesBudget = await fetchBrandSalesBudget(brandId, identity);
-  if (!salesBudget.ok) {
-    console.error(
-      `[campaign-service] brand ${brandId} (org ${orgId}): billing's sales-budget mode could not be read (${salesBudget.detail}) — holding the brand (fail-closed).`,
-    );
-    for (const c of group) {
-      deferred.set(c.id, heldAt);
-      holds.push({
-        campaign: c,
-        reason: "budgets_unreadable",
-        detail: `Campaign not run — billing's sales-budget mode for brand ${brandId} could not be read (${salesBudget.detail}), so whether a brand-wide sales budget caps this campaign is unknown. Held rather than spent (fail-closed); re-checked at ${heldAt.toISOString()}.`,
-        nextRunAt: heldAt,
-      });
-    }
-    return;
-  }
-
-  // Attribution only — it creates no campaign, starts none, and changes no status. Nothing about
-  // money reaches it: it states which OFFER a campaign already running sells, so its history lands
-  // in the totals the customer reads. Fail-soft, and a no-op on an ordinary tick.
-
-  const provisioning = await buildProvisioningIdentity(seed, brandId);
-  if (provisioning) {
-    await adoptOfferForPairSafely({ orgId, brandId }, provisioning, now);
-  }
-
-  // (0) The hold. A campaign the customer funds nothing for waits for money, not for a turn — so
-  // it is out of the running entirely and re-checked on the funding cadence. This is the only
-  // thing that holds a brand's sales campaigns now.
-  //
-  // EVERY funded campaign of the brand is in the running, every tick: each is ranked on what IT has already spent today
-  // against the ceiling that actually binds IT, so nothing starves and nothing overspends.
-  // ITEMS mode (see sales-items.ts): each campaign is judged on its OWN item and nothing else, and
-  // the global pot does not exist. One campaign held never holds another.
-  if (salesBudget.mode === "items") {
-    await planItemsBrand(group, salesBudget.items, budgets, now, deferred, holds);
-    return;
-  }
-
-  let candidates: TurnCandidate[] = [];
-  const cohortOf = new Map<string, string>();
-  // Strict per-campaign spend (null = unreadable). Only GLOBAL mode reads it: the brand-wide cap
-  // must not treat an unreadable spend as zero. Campaigns mode keeps the lenient 0 it always had.
-  const strictSpent = new Map<string, number | null>();
-  for (const c of group) {
-    // The sources feeding it: its spend read below already counts theirs, so its pace ceiling must
-    // add their money (campaign-funding.ts). [] for any channel features-service lists no source for; an unreadable
-    // map throws and the brand is held (planning_failed), never paced as if fed by nothing.
-    const feeding = c.featureSlug ? await sourceCampaignsFeeding(c.id, c.featureSlug) : [];
-    const verdict = fundingFromBudgets(c, budgets, feeding);
-    if (!verdict.funded) {
-      deferred.set(c.id, heldAt);
-      holds.push({
-        campaign: c,
-        reason: "unfunded",
-        detail: `Campaign not run — the customer funds no positive daily ceiling for it (offer ${c.offerId ?? "(none stated)"}, leg ${c.legKey ?? "(none stated)"}, channel ${c.featureSlug ?? "(none stated)"}). It is waiting for money, not for its turn; re-checked at ${heldAt.toISOString()}.`,
-        nextRunAt: heldAt,
-      });
-      continue;
-    }
-    cohortOf.set(c.id, serializationCohort(c.featureSlug));
-    candidates.push({
-      campaignId: c.id,
-      legKey: c.legKey ?? "",
-      // The campaign's OWN feature, never the seed's: the spend read filters on it, so asking
-      // runs-service for a Google Ads campaign's spend under the seed's cold-email slug answers
-      // ZERO — the ad campaign then reads as perfectly empty and takes every turn, forever.
-      spentCents: await (async () => {
-        const strict = await readSpentTodayCents(orgId, c.id, c.featureSlug ?? featureSlug);
-        strictSpent.set(c.id, strict);
-        return strict ?? 0;
-      })(),
-      ceilingCents: verdict.ceilingCents,
-    });
-  }
-
-  if (candidates.length === 0) return;
-
-  const byId = new Map(group.map((c) => [c.id, c]));
-
-  // Bottom of the funnel first (global mode only): a reactive candidate takes its cohort's turn
-  // ahead of an entry leg.
-  let firstServed = new Set<string>();
-  if (salesBudget.mode === "global") {
-    const allocation = await allocateGlobalBudget({
-      orgId,
-      brandId,
-      featureSlug,
-      budgetCents: salesBudget.dailyBudgetCents,
-      candidates,
-      byId,
-      strictSpent,
-      provisioning,
-      now,
-      deferred,
-      holds,
-    });
-    candidates = allocation.candidates;
-    firstServed = allocation.reactiveIds;
-    if (candidates.length === 0) return;
-  }
-
-  // Serial WITHIN A COHORT, and a cohort is what actually shares something: the outbound
-  // cold-email channels share the brand's lead population and its sending accounts, so two of
-  // their runs at once would contact the same people from the same mailboxes. A paid-reach
-  // channel shares neither with them — it buys impressions — so serializing it behind cold email
-  // would hold a funded Google Ads campaign for a reason that is not true of it, every tick,
-  // showing up in no log at all. That is the same mistake `hasLiveRunForBrandCohort` was written to
-  // undo one level up, where a brand's PR runs were holding its sales outreach.
-  //
-  // Concurrency INSIDE a cohort still needs the lead-de-duplication and sending-account audit
-  // nobody has done, so it stays serial; a paid channel is serial against ITSELF for the same
-  // conservatism (one live run per external ad account per brand).
-  const cohorts = new Map<string, TurnCandidate[]>();
-  for (const c of candidates) {
-    const key = cohortOf.get(c.campaignId)!;
-    const bucket = cohorts.get(key);
-    if (bucket) bucket.push(c);
-    else cohorts.set(key, [c]);
-  }
-
-  for (const [cohort, members] of cohorts) {
-    await planOneCohort(orgId, brandId, cohort, members, byId, now, deferred, holds, firstServed);
-  }
-}
-
-/**
- * ITEMS MODE: the customer budgets each campaign (offer, leg, channel) and billing serves the items.
- *
- * Every campaign is judged alone on its item (`itemVerdict`, the same verdict gate-check and the
- * step trigger give): no item = held as unfunded; spent = parked until a raise or the rollover;
- * unreadable = held (fail-closed) — each for THAT campaign only. The ones that may spend take the
- * cohort turn exactly as in campaigns mode, ranked on their fill ratio against today's allowance,
- * reactive legs first (bottom of the funnel first, as in global mode).
- */
-async function planItemsBrand(
-  group: ClaimedSalesCampaign[],
-  items: readonly SalesItem[],
-  budgets: Awaited<ReturnType<typeof fetchCampaignBudgets>>,
-  now: Date,
-  deferred: Map<string, Date>,
-  holds: TurnHold[],
-): Promise<void> {
-  const seed = group[0];
-  const orgId = seed.orgId;
-  const brandId = seed.brandIds![0];
-
-  const catalogue = await fetchChannelCatalogue();
-  let legs: CatalogueLegView = { legs: [] };
-  if (catalogue.ok) legs = catalogue;
-  else {
-    console.error(
-      `[campaign-service] brand ${brandId} (org ${orgId}) is in ITEMS sales-budget mode but the channel catalogue could not be read (${catalogue.detail}) — every leg is paced as proactive.`,
-    );
-  }
-
-  const candidates: TurnCandidate[] = [];
-  const cohortOf = new Map<string, string>();
-  const reactiveIds = new Set<string>();
-  for (const c of group) {
-    const reactive = isReactiveLeg(c.legKey, legs, c.featureSlug);
-    const verdict = await itemVerdict({
-      campaign: {
-        id: c.id,
-        orgId,
-        offerId: c.offerId ?? null,
-        legKey: c.legKey ?? null,
-        featureSlug: c.featureSlug,
-        dailyBudgetCents: c.dailyBudgetCents,
-      },
-      brandId,
-      items,
-      reactive,
-      identity: { orgId, userId: c.createdByUserId ?? undefined, campaignId: c.id, brandId },
-      now,
-      budgets,
-    });
-    if (!verdict.run) {
-      const nextRunAt = verdict.kind === "unfunded" ? new Date(now.getTime() + FUNDING_RECHECK_MS) : verdict.nextRunAt;
-      deferred.set(c.id, nextRunAt);
-      const reason = verdict.kind === "unfunded" ? "unfunded" : verdict.kind === "reached" ? "item_budget_reached" : "budgets_unreadable";
-      const leadNote = reactive && verdict.kind !== "unfunded"
-        ? " A lead waiting at this step is not dropped: it stays due and is worked by the first run the item can pay for."
-        : "";
-      holds.push({
-        campaign: c,
-        reason,
-        detail: `Campaign not run — ${verdict.detail}.${leadNote} Re-checked at ${nextRunAt.toISOString()}.`,
-        nextRunAt,
-        data: verdict.capCents !== undefined ? { spentCents: verdict.spentCents, itemCapCents: verdict.capCents } : undefined,
-      });
-      continue;
-    }
-    if (verdict.reactive) reactiveIds.add(c.id);
-    cohortOf.set(c.id, serializationCohort(c.featureSlug));
-    candidates.push({ campaignId: c.id, legKey: c.legKey ?? "", spentCents: verdict.spentCents, ceilingCents: verdict.capCents });
-  }
-  if (candidates.length === 0) return;
-
-  const byId = new Map(group.map((c) => [c.id, c]));
-  const cohorts = new Map<string, TurnCandidate[]>();
-  for (const c of candidates) {
-    const key = cohortOf.get(c.campaignId)!;
-    const bucket = cohorts.get(key);
-    if (bucket) bucket.push(c);
-    else cohorts.set(key, [c]);
-  }
-  for (const [cohort, members] of cohorts) {
-    await planOneCohort(orgId, brandId, cohort, members, byId, now, deferred, holds, reactiveIds);
-  }
-}
-
-interface GlobalAllocationInput {
-  orgId: string;
-  brandId: string;
-  featureSlug: string;
-  budgetCents: number;
-  candidates: TurnCandidate[];
-  byId: Map<string, ClaimedSalesCampaign>;
-  strictSpent: Map<string, number | null>;
-  provisioning: Awaited<ReturnType<typeof buildProvisioningIdentity>>;
-  now: Date;
-  deferred: Map<string, Date>;
-  holds: TurnHold[];
-}
-
-interface GlobalAllocation {
-  /** The candidates that stay in the running for this tick's cohort ranking. */
-  candidates: TurnCandidate[];
-  /** Which of them are REACTIVE: they take their cohort's turn first (bottom of the funnel first). */
-  reactiveIds: Set<string>;
-}
-
-/**
- * GLOBAL MODE: the brand stated ONE daily sales budget, and it is the ONE pot for every sales
- * campaign of the brand, reactive and proactive (owner, 2026-10-03; see global-sales-budget.ts).
- * Returns the candidates that stay in the running for this tick's cohort ranking — every REACTIVE
- * candidate plus AT MOST ONE proactive campaign, the one the rest of the pot goes to. Every other
- * candidate is deferred here.
- *
- *   - Brand-wide spend today (ALL legs, reactive included) >= the pot, or a $0 pot: EVERY candidate
- *     is parked until a raise or the rollover. A reactive one loses no lead: the lead stays due in
- *     lead-service's queue and the first run the pot can pay for works it.
- *   - Spend unreadable: every candidate is held (fail-closed); the pot cannot be judged.
- *   - Otherwise reactive candidates run (only when a lead is waiting: their DAG ends idle
- *     otherwise), and what is left of the pot goes to the best-ROI sales path that can run
- *     (`selectByPathRoi`); an offer whose paths cannot be read, or are not `ok`, falls back to
- *     fill-ratio pacing — loudly — still inside the pot.
- *
- * Per-campaign ceilings are untouched: gate-check still paces every run on them, and on the pot
- * itself (`globalSalesPotBlock`), so a run dispatched by the step trigger is bound too.
- */
-async function allocateGlobalBudget(input: GlobalAllocationInput): Promise<GlobalAllocation> {
-  const { orgId, brandId, featureSlug, budgetCents, candidates, byId, strictSpent, provisioning, now, deferred, holds } = input;
-
-  const catalogue = await fetchChannelCatalogue();
-  let legs: CatalogueLegView = { legs: [] };
-  if (catalogue.ok) {
-    legs = catalogue;
-  } else {
-    // Conservative: with no catalogue every leg reads PROACTIVE, i.e. no leg jumps the queue. The
-    // pot binds every leg either way.
-    console.error(
-      `[campaign-service] brand ${brandId} (org ${orgId}) is in GLOBAL sales-budget mode but the channel catalogue could not be read (${catalogue.detail}) — treating every leg as proactive (no leg served first).`,
-    );
-  }
-
-  const reactive: TurnCandidate[] = [];
-  const proactive: TurnCandidate[] = [];
-  for (const c of candidates) {
-    if (isReactiveLeg(byId.get(c.campaignId)?.legKey ?? null, legs, byId.get(c.campaignId)?.featureSlug ?? null)) reactive.push(c);
-    else proactive.push(c);
-  }
-  const reactiveIds = new Set(reactive.map((c) => c.campaignId));
-
-  // EVERY leg's spend comes out of the pot — reactive included.
-  const known = new Map<string, number | null>(candidates.map((c) => [c.campaignId, strictSpent.get(c.campaignId) ?? null]));
-  const spent = await brandSalesSpentTodayCents(orgId, brandId, featureSlug, known);
-  const recheck = new Date(now.getTime() + FUNDING_RECHECK_MS);
-
-  if (spent === null) {
-    console.error(
-      `[campaign-service] brand ${brandId} (org ${orgId}): brand-wide sales spend today could not be read — holding its sales campaigns rather than spending past a global sales budget of ${budgetCents} cents (fail-closed).`,
-    );
-    for (const c of candidates) {
-      deferred.set(c.campaignId, recheck);
-      const campaign = byId.get(c.campaignId);
-      if (!campaign) continue;
-      holds.push({
-        campaign,
-        reason: "budgets_unreadable",
-        detail: `Campaign not run — the brand's spend today could not be read, so its global daily sales budget of ${budgetCents} cents cannot be judged. Held rather than spent (fail-closed); re-checked at ${recheck.toISOString()}.`,
-        nextRunAt: recheck,
-      });
-    }
-    return { candidates: [], reactiveIds };
-  }
-
-  if (isGlobalBudgetExhausted(spent, budgetCents)) {
-    const reset = potRecheckAt(now);
-    for (const c of candidates) {
-      deferred.set(c.campaignId, reset);
-      const campaign = byId.get(c.campaignId);
-      if (!campaign) continue;
-      const leadNote = reactiveIds.has(c.campaignId)
-        ? " A lead waiting at this step is not dropped: it stays due and is worked by the first run the budget can pay for."
-        : "";
-      holds.push({
-        campaign,
-        reason: "global_sales_budget_reached",
-        detail: `Campaign not run — the brand's global daily sales budget is ${budgetCents} cents and ${spent.toFixed(0)} cents of sales spend (every leg) is already committed today.${leadNote} It runs again when the budget is raised or the day rolls over; re-checked at ${reset.toISOString()}.`,
-        nextRunAt: reset,
-        data: { spentCents: spent, globalBudgetCents: budgetCents },
-      });
-    }
-    return { candidates: [], reactiveIds };
-  }
-
-  if (proactive.length === 0) return { candidates: reactive, reactiveIds };
-
-  // Rank the paths of every offer the proactive candidates sell.
-  const pathsByOffer = new Map<string, SalesPathEntry[]>();
-  const offers = new Set<string>();
-  for (const c of proactive) {
-    const offerId = byId.get(c.campaignId)?.offerId;
-    if (offerId) offers.add(offerId);
-  }
-  for (const offerId of offers) {
-    if (!provisioning) {
-      console.error(
-        `[campaign-service] brand ${brandId} (org ${orgId}), offer ${offerId}: no identity to read its sales paths with — falling back to fill-ratio pacing inside the global sales budget.`,
-      );
-      continue;
-    }
-    const read = await fetchOfferSalesPaths(offerId, brandId, provisioning);
-    if (!read.ok) {
-      console.error(
-        `[campaign-service] brand ${brandId} (org ${orgId}), offer ${offerId}: sales paths could not be read (${read.detail}) — falling back to fill-ratio pacing inside the global sales budget.`,
-      );
-      continue;
-    }
-    if (read.status !== "ok") {
-      console.error(
-        `[campaign-service] brand ${brandId} (org ${orgId}), offer ${offerId}: sales paths status is ${read.status} — falling back to fill-ratio pacing inside the global sales budget.`,
-      );
-      continue;
-    }
-    pathsByOffer.set(offerId, read.paths);
-  }
-
-  const globalCandidates: GlobalCandidate[] = proactive.map((c) => {
-    const row = byId.get(c.campaignId);
-    return {
-      campaignId: c.campaignId,
-      offerId: row?.offerId ?? null,
-      legKey: c.legKey,
-      featureSlug: row?.featureSlug ?? null,
-      spentCents: c.spentCents,
-      ceilingCents: c.ceilingCents,
-    };
-  });
-  const pick = selectByPathRoi(globalCandidates, rankEntryTargets(pathsByOffer));
-
-  // Nobody can run: every proactive candidate is at its own ceiling. Hand them all to the cohort
-  // ranking unchanged, which parks them on the ceiling exactly as campaigns mode does.
-  if (!pick) return { candidates: [...reactive, ...proactive], reactiveIds };
-
-  for (const c of proactive) {
-    if (c.campaignId === pick.campaignId) continue;
-    // Yielding the brand's budget to a better path is a turn, not a hold: silent, on the turn cadence.
-    deferred.set(c.campaignId, new Date(now.getTime() + TURN_DEFER_MS));
-  }
-  return { candidates: [...reactive, ...proactive.filter((c) => c.campaignId === pick.campaignId)], reactiveIds };
 }
 
 /**
@@ -735,7 +243,6 @@ async function planOneCohort(
   now: Date,
   deferred: Map<string, Date>,
   holds: TurnHold[],
-  firstServed: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (await hasLiveRunForBrandCohort(orgId, brandId, cohort, now)) {
     for (const c of candidates) {
@@ -744,12 +251,7 @@ async function planOneCohort(
     return;
   }
 
-  // Bottom of the funnel first (global mode): a reactive candidate under its ceiling takes the turn
-  // before any entry leg. It only holds the turn while a lead is waiting — a reactive run with
-  // nobody due ends idle and waits NO_WORK_RECHECK_MS — so it cannot starve the entry legs.
-  const winner =
-    selectLowestFillRatio(candidates.filter((c) => firstServed.has(c.campaignId))) ??
-    selectLowestFillRatio(candidates);
+  const winner = selectLowestFillRatio(candidates);
   // Every funded pair is at its ceiling. What re-opens it is NOT only the day rollover: a customer
   // who raises a ceiling at 14:57 has bought headroom that exists the moment they buy it. The defer
   // is written ONCE, from the ceiling current at this instant, and nothing else looks at an ongoing
@@ -845,47 +347,6 @@ export async function hasLiveRunForBrandCohort(
     if (runs.length > 0) return true;
   }
   return false;
-}
-
-/**
- * How long the same leg-less ceiling waits before it is reported again.
- *
- * The disagreement is real and has to be visible, but it does not move between ticks — a person
- * fixes it by setting the money at the grain a campaign is bought at. Reporting it once per tick
- * would be one error line per brand per minute for a state that changes hours or days apart, which
- * is how a real signal gets buried. Same figure and same argument as FUNDING_RECHECK_MS.
- */
-export const LEG_KEYLESS_CEILING_REPORT_MS = 10 * 60_000; // 10 min
-
-/** In-process, so a restart reports every one of them again — which is the right direction. */
-const lastLegKeylessReportAt = new Map<string, number>();
-
-/** Test seam: forget what has already been reported. */
-export function resetLegKeylessCeilingReports(): void {
-  lastLegKeylessReportAt.clear();
-}
-
-/**
- * Say, by name, that a funded ceiling states no leg.
- *
- * Not a warning and not a skip: this is the error that the two sides disagree about what one
- * campaign is. Nothing is defaulted, nothing is provisioned, and no pacing decision reads it.
- */
-export function reportLegKeylessCeilings(
-  orgId: string,
-  brandId: string,
-  ceilings: ReturnType<typeof legKeylessFundedCeilings>,
-  now: Date,
-): void {
-  for (const c of ceilings) {
-    const key = `${orgId}::${brandId}::${c.featureSlug}::${c.offerId ?? ""}`;
-    const last = lastLegKeylessReportAt.get(key) ?? 0;
-    if (now.getTime() - last < LEG_KEYLESS_CEILING_REPORT_MS) continue;
-    lastLegKeylessReportAt.set(key, now.getTime());
-    console.error(
-      `[campaign-service] FUNDED CEILING STATES NO LEG — org ${orgId}, brand ${brandId}, channel ${c.featureSlug}, offer ${c.offerId ?? "(none stated)"}, ${c.dailyBudgetCents} cents/day. A campaign is bought for ONE leg, so money that names none is matched only through billing's "no other leg on this channel" rule: restate it at the leg it was bought for. Nothing is created or started from this ceiling.`,
-    );
-  }
 }
 
 function nextDayStart(now: Date): Date {

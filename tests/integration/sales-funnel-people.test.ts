@@ -44,6 +44,13 @@ vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
   return { ...original, salesFunnelUnitMoney: mockFunnelMoney };
 });
 
+// /start-run reads the leg's reactivity from the catalogue: answered unreadable here (reactive null),
+// never a real network read that outlives the test timeout.
+vi.mock("../../src/lib/channel-operator-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/channel-operator-client.js")>();
+  return { ...original, fetchChannelCatalogue: vi.fn(async () => ({ ok: false, detail: "not served in this test" })) };
+});
+
 vi.mock("../../src/lib/sales-funnel-people.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/sales-funnel-people.js")>();
   return { ...original, scheduleNamedPersonDue: mockSchedule, fileNamedPerson: mockFile };

@@ -16,10 +16,10 @@ vi.mock("../../src/db/schema.js", () => ({
   campaigns: { orgId: "org_id", status: "status", brandIds: "brand_ids" },
 }));
 
-const { mockCatalogue, mockFunding, mockLiveCampaign, mockLiveCohort, mockAnchor, mockResolveSlug, mockExhausted, mockExecute } =
+const { mockCatalogue, mockUnitMoney, mockLiveCampaign, mockLiveCohort, mockAnchor, mockResolveSlug, mockExhausted, mockExecute } =
   vi.hoisted(() => ({
     mockCatalogue: vi.fn(),
-    mockFunding: vi.fn(),
+    mockUnitMoney: vi.fn(),
     mockLiveCampaign: vi.fn(),
     mockLiveCohort: vi.fn(),
     mockAnchor: vi.fn(),
@@ -29,14 +29,23 @@ const { mockCatalogue, mockFunding, mockLiveCampaign, mockLiveCohort, mockAnchor
   }));
 
 vi.mock("../../src/lib/channel-operator-client.js", () => ({ fetchChannelCatalogue: mockCatalogue }));
-vi.mock("../../src/lib/campaign-funding.js", () => ({ campaignFunding: mockFunding }));
+// ONE money model (owner 2026-10-14): a campaign's money is its sales funnel's caps only.
+vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>()),
+  salesFunnelUnitMoney: mockUnitMoney,
+}));
+vi.mock("../../src/lib/sales-funnel-people-store.js", () => ({
+  targetingOfSalesFunnelCampaigns: vi.fn().mockResolvedValue(new Map()),
+  fileSalesFunnelCampaignPeople: vi.fn(),
+}));
 vi.mock("../../src/lib/scheduler.js", () => ({
   hasLiveRunForCampaign: mockLiveCampaign,
   STUCK_RUN_FRESHNESS_THRESHOLD_MS: 900_000,
 }));
 vi.mock("../../src/lib/brand-turns.js", () => ({
   hasLiveRunForBrandCohort: mockLiveCohort,
-  serializationCohort: (slug: string) => `cohort:${slug}`,
+  // The outbound cold-email channels are ONE cohort (same leads, same mailboxes).
+  serializationCohort: (slug: string) => (slug.startsWith("sales-cold-") ? "cohort:outbound" : `cohort:${slug}`),
 }));
 vi.mock("../../src/lib/trigger-run.js", () => ({ ensureCampaignRunId: mockAnchor }));
 vi.mock("../../src/lib/features-workflow-projection-client.js", () => ({
@@ -47,12 +56,6 @@ vi.mock("../../src/lib/audience-exhaustion.js", () => ({
   NO_SERVEABLE_AUDIENCE_RECHECK_MS: 10 * 60_000,
 }));
 vi.mock("../../src/lib/workflows.js", () => ({ executeCampaignWorkflow: mockExecute }));
-const { mockPotBlock } = vi.hoisted(() => ({ mockPotBlock: vi.fn() }));
-vi.mock("../../src/lib/global-sales-pot.js", () => ({ globalSalesPotBlock: mockPotBlock }));
-const { mockSalesBudget, mockItemVerdict } = vi.hoisted(() => ({ mockSalesBudget: vi.fn(), mockItemVerdict: vi.fn() }));
-vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({ fetchBrandSalesBudget: mockSalesBudget }));
-vi.mock("../../src/lib/sales-items-pace.js", () => ({ itemVerdict: mockItemVerdict }));
-
 import {
   triggerCampaignsForStep,
   StepTriggerScopeError,
@@ -104,9 +107,12 @@ function campaign(over: Record<string, unknown> = {}) {
     activeGoalId: null,
     brandProfileId: null,
     audienceId: null,
-    dailyBudgetCents: null,
     offerId: OFFER,
     legKey: LEG_OUT,
+    // Every campaign is a sales funnel campaign's unit: its money is its funnel's caps.
+    salesFunnelCampaignId: "sfc-1",
+    salesFunnelId: "sf-1",
+    createdAt: new Date("2026-10-01T00:00:00Z"),
     ...over,
   };
 }
@@ -122,15 +128,13 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
   beforeEach(() => {
     vi.clearAllMocks();
     catalogueAnswers();
-    mockSalesBudget.mockResolvedValue({ ok: true, mode: "campaigns" });
-    mockFunding.mockResolvedValue({ funded: true, ceilingCents: 5000 });
+    mockUnitMoney.mockResolvedValue({ run: true });
     mockLiveCampaign.mockResolvedValue(false);
     mockLiveCohort.mockResolvedValue(false);
     mockAnchor.mockResolvedValue("run-anchor");
     mockResolveSlug.mockResolvedValue({ workflowSlug: "aurora-v3", audienceId: null });
     mockExhausted.mockResolvedValue([]);
     mockExecute.mockResolvedValue(undefined);
-    mockPotBlock.mockResolvedValue(null);
   });
 
   it("executes the campaign of that (brand, offer) stating that leg", async () => {
@@ -179,7 +183,7 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
 
   it("never lets a reply make a DEFUNDED campaign spend", async () => {
     mockFindMany.mockResolvedValue([campaign()]);
-    mockFunding.mockResolvedValue({ funded: false, reason: "campaign is funded at zero" });
+    mockUnitMoney.mockResolvedValue({ run: false, kind: "unfunded", detail: "its sales funnel funds nothing" });
 
     const outcome = await triggerCampaignsForStep(request);
 
@@ -189,22 +193,54 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
         campaignId: CAMPAIGN,
         legKey: LEG_OUT,
         reason: STEP_TRIGGER_SKIPS.UNFUNDED,
-        detail: "campaign is funded at zero",
+        detail: "its sales funnel funds nothing",
       },
     ]);
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
-  it("prices the hold on the LEG the campaign was bought for", async () => {
+  it("asks the money of the campaign's OWN sales funnel unit (leg, offer, funnel)", async () => {
     mockFindMany.mockResolvedValue([campaign()]);
 
     await triggerCampaignsForStep(request);
 
-    expect(mockFunding).toHaveBeenCalledWith(
-      expect.objectContaining({ legKey: LEG_OUT, offerId: OFFER }),
-      BRAND,
-      { orgId: ORG },
+    expect(mockUnitMoney).toHaveBeenCalledWith(
+      expect.objectContaining({ id: CAMPAIGN, legKey: LEG_OUT, offerId: OFFER, salesFunnelCampaignId: "sfc-1", salesFunnelId: "sf-1" }),
+      expect.any(Date),
     );
+  });
+
+  it("a campaign that is not a sales funnel unit has no money: named skip, never dispatched", async () => {
+    mockFindMany.mockResolvedValue([campaign({ salesFunnelCampaignId: null, salesFunnelId: null })]);
+
+    const outcome = await triggerCampaignsForStep(request);
+
+    expect(outcome.triggered).toEqual([]);
+    expect(outcome.skipped).toEqual([
+      expect.objectContaining({ campaignId: CAMPAIGN, reason: STEP_TRIGGER_SKIPS.NOT_A_SALES_FUNNEL_CAMPAIGN }),
+    ]);
+    expect(mockUnitMoney).not.toHaveBeenCalled();
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("a funnel cap reached holds the lead (named skip)", async () => {
+    mockFindMany.mockResolvedValue([campaign()]);
+    mockUnitMoney.mockResolvedValue({ run: false, kind: "cap_reached", detail: "cap reached" });
+
+    const outcome = await triggerCampaignsForStep(request);
+
+    expect(outcome.skipped[0].reason).toBe(STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAP);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("unreadable funnel caps hold fail-closed (named skip)", async () => {
+    mockFindMany.mockResolvedValue([campaign()]);
+    mockUnitMoney.mockResolvedValue({ run: false, kind: "unreadable", detail: "billing timed out" });
+
+    const outcome = await triggerCampaignsForStep(request);
+
+    expect(outcome.skipped[0].reason).toBe(STEP_TRIGGER_SKIPS.SALES_FUNNEL_CAPS_UNAVAILABLE);
+    expect(mockExecute).not.toHaveBeenCalled();
   });
 
   it("does not fire a second run of a campaign that is already running", async () => {
@@ -228,7 +264,8 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
   });
 
   it("fires ONE campaign per cohort in a single pass", async () => {
-    mockFindMany.mockResolvedValue([campaign(), campaign({ id: "twin" })]);
+    // Two channels of one cohort (cold email + cold WhatsApp share leads and mailboxes).
+    mockFindMany.mockResolvedValue([campaign(), campaign({ id: "twin", featureSlug: "sales-cold-whatsapp-outreach" })]);
 
     const outcome = await triggerCampaignsForStep(request);
 
@@ -295,76 +332,6 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     expect(outcome.triggered).toEqual([]);
     // Nothing is even looked up: no leg means no campaign can be responsible.
     expect(mockFindMany).not.toHaveBeenCalled();
-  });
-
-  describe("GLOBAL mode: a spent pot holds the lead, never drops it", () => {
-    it("does not fire when the brand's pot is spent, and names the skip (the lead stays due)", async () => {
-      mockFindMany.mockResolvedValue([campaign({ featureSlug: "ai-meeting-booking" })]);
-      mockPotBlock.mockResolvedValue({
-        reason: "Global sales budget reached",
-        detail: "brand has committed 1000 of its 1000 cents",
-        nextRunAt: new Date("2026-10-04T00:00:00Z"),
-      });
-
-      const outcome = await triggerCampaignsForStep(request);
-
-      expect(mockExecute).not.toHaveBeenCalled();
-      expect(outcome.triggered).toEqual([]);
-      expect(outcome.skipped).toEqual([
-        expect.objectContaining({ campaignId: CAMPAIGN, reason: STEP_TRIGGER_SKIPS.GLOBAL_SALES_BUDGET_REACHED }),
-      ]);
-      expect(outcome.skipped[0].detail).toMatch(/stays due/);
-      expect(mockPotBlock).toHaveBeenCalledWith(
-        expect.objectContaining({ orgId: ORG, brandId: BRAND }),
-        expect.any(Date),
-        { ok: true, mode: "campaigns" },
-      );
-    });
-
-    it("fires while the pot has money", async () => {
-      mockFindMany.mockResolvedValue([campaign()]);
-      mockPotBlock.mockResolvedValue(null);
-      const outcome = await triggerCampaignsForStep(request);
-      expect(outcome.triggered).toHaveLength(1);
-    });
-  });
-
-  describe("ITEMS mode: the campaign's own item is its money", () => {
-    const items = [{ offerId: OFFER, legKey: LEG_OUT, featureSlug: "sales-cold-email-outreach", budgetCents: 500, period: "day", periodStart: null, periodEnd: null, managed: true }];
-
-    it("a spent item holds the lead (named skip, the lead stays due) and the funding/pot path is not asked", async () => {
-      mockFindMany.mockResolvedValue([campaign()]);
-      mockSalesBudget.mockResolvedValue({ ok: true, mode: "items", items });
-      mockItemVerdict.mockResolvedValue({ run: false, kind: "reached", detail: "its daily item budget allows 500 cents today and 500 are committed", nextRunAt: new Date("2026-10-04T00:00:00Z") });
-
-      const outcome = await triggerCampaignsForStep(request);
-
-      expect(mockExecute).not.toHaveBeenCalled();
-      expect(mockFunding).not.toHaveBeenCalled();
-      expect(outcome.skipped).toEqual([
-        expect.objectContaining({ campaignId: CAMPAIGN, reason: STEP_TRIGGER_SKIPS.ITEM_BUDGET_REACHED }),
-      ]);
-      expect(outcome.skipped[0].detail).toMatch(/stays due/);
-      // A step-triggered leg is reactive by definition.
-      expect(mockItemVerdict).toHaveBeenCalledWith(expect.objectContaining({ reactive: true, items }));
-    });
-
-    it("no item for this campaign = unfunded", async () => {
-      mockFindMany.mockResolvedValue([campaign()]);
-      mockSalesBudget.mockResolvedValue({ ok: true, mode: "items", items: [] });
-      mockItemVerdict.mockResolvedValue({ run: false, kind: "unfunded", detail: "no active sales path budgets this campaign", nextRunAt: new Date() });
-      const outcome = await triggerCampaignsForStep(request);
-      expect(outcome.skipped).toEqual([expect.objectContaining({ reason: STEP_TRIGGER_SKIPS.UNFUNDED })]);
-    });
-
-    it("fires while the item has money", async () => {
-      mockFindMany.mockResolvedValue([campaign()]);
-      mockSalesBudget.mockResolvedValue({ ok: true, mode: "items", items });
-      mockItemVerdict.mockResolvedValue({ run: true, spentCents: 0, capCents: 500 });
-      mockPotBlock.mockResolvedValue(null);
-      const outcome = await triggerCampaignsForStep(request);
-      expect(outcome.triggered).toHaveLength(1);
-    });
   });
 
   describe("a scope that cannot be resolved fails LOUD", () => {

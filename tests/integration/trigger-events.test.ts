@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 
-const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockSalesBudget, mockGetStatsBudget } = vi.hoisted(() => ({
-  mockSalesBudget: vi.fn(),
+const { mockExecute, mockCatalogue, mockFunding, mockListRuns, mockResolveSlug, mockGetStatsBudget } = vi.hoisted(() => ({
   mockGetStatsBudget: vi.fn(),
   mockExecute: vi.fn(),
   mockCatalogue: vi.fn(),
@@ -17,21 +16,30 @@ vi.mock("@distribute/runs-client", () => ({
   listRuns: mockListRuns,
   getStatsBudget: (p: { featureSlug?: string }) => (p?.featureSlug?.startsWith("sourcing-") ? Promise.resolve({ windows: [] }) : mockGetStatsBudget(p)),
 }));
-vi.mock("../../src/lib/brand-sales-budget-client.js", () => ({ fetchBrandSalesBudget: mockSalesBudget }));
 vi.mock("../../src/lib/workflows.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/workflows.js")>();
   return { ...original, executeCampaignWorkflow: mockExecute };
 });
 vi.mock("../../src/lib/channel-operator-client.js", () => ({ fetchChannelCatalogue: mockCatalogue }));
-vi.mock("../../src/lib/campaign-funding.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../src/lib/campaign-funding.js")>();
-  return { ...original, campaignFunding: mockFunding };
-});
 vi.mock("../../src/lib/features-workflow-projection-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/features-workflow-projection-client.js")>();
   return { ...original, resolveSelectionForTrigger: mockResolveSlug };
 });
 
+// The dispatched campaigns are sales funnel UNITS: their money is their funnel's caps, driven here
+// by `mockFunding` (funded = runs; not funded = held, `kind` defaulting to `unfunded`).
+vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>();
+  return {
+    ...original,
+    salesFunnelUnitMoney: async () => {
+      const f = await mockFunding();
+      return f.funded
+        ? { run: true, pace: { spentCents: 0, ceilingCents: f.ceilingCents } }
+        : { run: false, kind: f.kind ?? "unfunded", reason: "Unfunded", detail: f.reason, nextRunAt: new Date(Date.now() + 600_000) };
+    },
+  };
+});
 import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
 import { triggerEvents, triggerSilenceWatch } from "../../src/db/schema.js";
@@ -82,6 +90,8 @@ const meetingBooking = (status: "ongoing" | "stopped") =>
     parentRunId: "9f0d1c22-0000-4000-8000-000000000019",
     offerId: OFFER,
     legKey: LEG_OUT,
+    salesFunnelCampaignId: crypto.randomUUID(),
+    salesFunnelId: "sf-meeting",
   });
 
 const postStep = (body: Record<string, unknown>) =>
@@ -99,7 +109,6 @@ describe("trigger events", () => {
     mockListRuns.mockResolvedValue({ runs: [] });
     mockResolveSlug.mockResolvedValue({ workflowSlug: "aurora-v3", audienceId: null });
     mockExecute.mockResolvedValue(undefined);
-    mockSalesBudget.mockResolvedValue({ ok: true, mode: "campaigns" });
   });
 
   afterAll(async () => {

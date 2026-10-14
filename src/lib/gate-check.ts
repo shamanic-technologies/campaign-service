@@ -1,15 +1,6 @@
 import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type IdentityHeaders } from "@distribute/runs-client";
-import { getChannelStatsBudget } from "./channel-spend.js";
-import { sourceCampaignsFeeding } from "./source-campaign-store.js";
-import { db } from "../db/index.js";
-import { campaigns } from "../db/schema.js";
-import { eq } from "drizzle-orm";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
-import { campaignCeilingCents, ceilingEntriesOf, feedingSourceCeilingCents, fetchCampaignBudgets } from "./campaign-budget-client.js";
-import { fetchCampaignSplitToday, isSplitCeiling, splitPartReached, SPLIT_GATE_REASONS } from "./campaign-budget-split.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
-import { globalSalesPotBlock } from "./global-sales-pot.js";
-import { salesItemsGate } from "./sales-items-pace.js";
 import { salesFunnelUnitMoney, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
 
 // THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
@@ -27,10 +18,12 @@ const STALE_THRESHOLD_MS = RUN_LIVENESS_THRESHOLD_MS;
 // cleaned on a later pass once the newer ones finish.
 const RUNNING_RUNS_LIMIT = 200;
 
-// The sales feature family (every acquisition channel funded per (offer, leg, channel)) is paced
-// by billing's per-campaign ceilings.
-// Every other feature is paced by the campaign's own budget windows and runs through a pause.
-// See isSalesFamilyFeature (sales-outreach-campaign.ts) for membership.
+/**
+ * The gate's refusal for a campaign that is not a SALES FUNNEL unit (owner 2026-10-14: one money
+ * model, a campaign's money is its sales funnel's caps). Billing's per-campaign daily ceilings, the
+ * campaign's own daily budget, items mode and the global pot are retired as money: never read here.
+ */
+export const NOT_A_SALES_FUNNEL_CAMPAIGN = "Not a sales funnel campaign";
 
 export interface GateCheckInput {
   campaignId: string;
@@ -42,23 +35,16 @@ export interface GateCheckInput {
   workflowSlug?: string;
   featureSlug?: string;
   status: string;
-  // Daily campaign cap. Enforced as a campaign-scoped runs window (resets at day rollover) for
-  // EVERY feature except the sales feature, which is paced by the campaign's own daily budget
-  // (dailyBudgetCents below) — falling back to the brand daily budget when unset.
+  // Campaign budget windows, enforced only for a unit whose channel is outside the sales family.
   maxBudgetDailyUsd: string | null;
   maxBudgetWeeklyUsd: string | null;
   maxBudgetMonthlyUsd: string | null;
   maxBudgetTotalUsd: string | null;
-  // Per-CAMPAIGN daily budget for the sales feature (CENTS). When set, the sales gate paces
-  // THIS campaign on its OWN committed spend today vs this ceiling (two campaigns under one
-  // brand pace independently). NULL = no own budget → fall back to the brand daily budget.
-  dailyBudgetCents: number | null;
   // The OFFER this campaign sells and the single LEG it was bought for — carried, never derived.
-  // With the channel (`featureSlug`) they are what billing states the campaign's ceiling at.
   offerId: string | null;
   legKey: string | null;
   // Set on a SALES FUNNEL unit (lib/sales-funnel-campaigns.ts): its money is its funnel's caps and
-  // nothing else. Optional so a caller that predates funnels reads as a pre-funnel campaign.
+  // nothing else. Absent = not a unit = refused (NOT_A_SALES_FUNNEL_CAMPAIGN).
   salesFunnelCampaignId?: string | null;
   salesFunnelId?: string | null;
   maxLeads: number | null;
@@ -134,30 +120,30 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     return { allowed: false, reason: "A run is already in progress" };
   }
 
-  // 2b. A SALES FUNNEL unit spends only what its funnel's caps allow (lib/sales-funnel-campaigns.ts).
-  // Asked BEFORE every pre-funnel money path below (per-pipe ceiling, items, global pot, brand
-  // budget), none of which is its money. Fail-CLOSED, as everywhere else.
-  const paidByCaps = !!campaign.salesFunnelCampaignId;
-  if (paidByCaps) {
-    const verdict = await salesFunnelUnitMoney(salesFunnelUnitRef({
-      id: campaign.campaignId,
-      orgId: campaign.orgId,
-      brandId: campaign.brandIds[0] ?? (campaign.brandId || null),
-      offerId: campaign.offerId,
-      featureSlug: campaign.featureSlug ?? null,
-      legKey: campaign.legKey,
-      salesFunnelCampaignId: campaign.salesFunnelCampaignId,
-      salesFunnelId: campaign.salesFunnelId ?? null,
-    }));
-    if (!verdict.run) {
-      return { allowed: false, reason: verdict.reason, reasonDetail: verdict.detail, nextRunAt: verdict.nextRunAt };
-    }
+  // 2b. ONE money model (owner 2026-10-14): a campaign IS a sales funnel campaign, and what it may
+  // spend is its sales funnel's caps (lib/sales-funnel-campaigns.ts), nothing else. A campaign that
+  // is not a sales funnel unit has no money at all: refused by name, never paced on a retired
+  // per-campaign ceiling, its own daily budget column or the brand total. Fail-CLOSED.
+  if (!campaign.salesFunnelCampaignId) {
+    return { allowed: false, reason: NOT_A_SALES_FUNNEL_CAMPAIGN };
+  }
+  const verdict = await salesFunnelUnitMoney(salesFunnelUnitRef({
+    id: campaign.campaignId,
+    orgId: campaign.orgId,
+    brandId: campaign.brandIds[0] ?? (campaign.brandId || null),
+    offerId: campaign.offerId,
+    featureSlug: campaign.featureSlug ?? null,
+    legKey: campaign.legKey,
+    salesFunnelCampaignId: campaign.salesFunnelCampaignId,
+    salesFunnelId: campaign.salesFunnelId ?? null,
+  }));
+  if (!verdict.run) {
+    return { allowed: false, reason: verdict.reason, reasonDetail: verdict.detail, nextRunAt: verdict.nextRunAt };
   }
 
-  // 3. Campaign budget windows — enforced for EVERY feature EXCEPT the sales feature, which is
-  // paced by the brand daily budget (block 3c below) instead. For non-sales campaigns the
-  // campaign's own configured caps govern at their cadence: daily (today's spend, resets at day
-  // rollover), weekly, monthly, and total (one-off — auto-stops the campaign when hit).
+  // 3. Campaign budget windows — enforced for a unit whose channel is OUTSIDE the sales family (a
+  // LinkedIn Posting pipe), on top of its funnel's caps, exactly as before: daily (today's spend,
+  // resets at day rollover), weekly, monthly, and total.
   const isSalesFeature = isSalesFamilyFeature(campaign.featureSlug);
 
   if (!isSalesFeature) {
@@ -220,154 +206,6 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
           // condition has passed (a raised cap, a cancelled hold that settles below it).
           return { allowed: false, reason: `${budgetLimit.label} budget exceeded`, nextRunAt: budgetLimit.nextRunAt };
         }
-      }
-    }
-  }
-
-  // 3c. Daily budget pacing — ONLY for the sales feature. Two paths:
-  //
-  //   (a) The campaign has its OWN daily budget (dailyBudgetCents != null): pace THIS campaign
-  //       on its OWN committed spend today (runs-service, campaignId + featureSlug keyed) vs
-  //       that ceiling. Two campaigns under one brand each carry their own budget → one hitting
-  //       its cap does NOT stop the other. Not a terminal stop: no nextRunAt, so internal.ts
-  //       backs it off ~15min; the day rollover resets today's spend and re-opens the cap.
-  //
-  //   (b) No own budget (dailyBudgetCents == null): the campaign's own (offer, leg, channel)
-  //       ceiling from billing, live-read here (never a stale copied value) — or, for a brand
-  //       whose money is one pot, the BRAND daily budget paced on the brand's committed spend.
-  //
-  // Units: dailyBudgetCents (campaign + brand) and runs *CostInUsdCents are BOTH cents →
-  // compared directly (NO ×100, unlike the maxBudget*Usd columns above which are USD).
-  //
-  // Read fail-CLOSED on the brand path: if the brand cap cannot be read or parsed, block this
-  // tick. This is spend control, not an optimization; treating an unreadable cap as "unbounded"
-  // lets campaigns keep spending past a configured ceiling. Explicit billing dailyBudgetCents
-  // :null (and a null campaign budget with a null brand budget) remain the only unbounded signals.
-  //
-  // ITEMS mode (2026-10-04, see sales-items.ts): a brand holding a subscriber's monthly campaign
-  // budgets paces each campaign on ITS item alone (the per-campaign ceiling an upper
-  // bound), and the global pot is gone for it. Every other brand takes the path below, unchanged.
-  // A funnel-paid unit skips every pre-funnel money path below (items, own/per-pipe ceiling,
-  // brand budget, global pot): its funnel's caps, read in 2b, are its money.
-  const itemsGate = isSalesFeature && !paidByCaps
-    ? await salesItemsGate(
-        {
-          id: campaign.campaignId,
-          orgId: campaign.orgId,
-          offerId: campaign.offerId,
-          legKey: campaign.legKey,
-          featureSlug: campaign.featureSlug ?? null,
-          dailyBudgetCents: campaign.dailyBudgetCents,
-          brandIds: campaign.brandIds,
-        },
-        identity,
-      )
-    : null;
-  if (itemsGate?.applies) {
-    if (itemsGate.block) {
-      return { allowed: false, reason: itemsGate.block.reason, nextRunAt: itemsGate.block.nextRunAt };
-    }
-  } else if (isSalesFeature && !paidByCaps) {
-    if (campaign.dailyBudgetCents !== null) {
-      // (a) Campaign's OWN daily budget vs its OWN committed spend today.
-      const campaignSpend = await getChannelStatsBudget({
-        orgId: campaign.orgId,
-        campaignId: campaign.campaignId,
-        featureSlug: campaign.featureSlug,
-        windows: [{ label: "today", since: startOfToday().toISOString() }],
-      });
-      const today = campaignSpend.windows.find(w => w.label === "today");
-      // Pace on NET committed spend (post-usage-discount) — the same committed + net decision as
-      // the brand daily cap below and the campaign budget windows (block 3): count reserved
-      // follow-up-send holds and judge the ceiling on what the org actually PAYS, falling back to
-      // gross only if an older runs-service omits the net twin (safe: over-counts → stops earlier).
-      const spentCents = today
-        ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
-        : 0;
-      if (spentCents >= campaign.dailyBudgetCents) {
-        return { allowed: false, reason: "Campaign daily budget reached" };
-      }
-    } else {
-      // (a2) The campaign's own (OFFER, LEG, CHANNEL) ceiling — the grain a customer funds, read
-      // from billing fail-CLOSED, the same answer `campaignFunding` gives the turn planner. A brand
-      // whose money is not split per campaign at all has one pot, and the campaign paces on it
-      // exactly as (b) does.
-      // Read once, and only when a per-campaign ceiling actually has to be compared against it.
-      let spentCents: number | null = null;
-      const campaignSpentToday = async (): Promise<number> => {
-        if (spentCents !== null) return spentCents;
-        const campaignSpend = await getChannelStatsBudget({
-          orgId: campaign.orgId,
-          campaignId: campaign.campaignId,
-          featureSlug: campaign.featureSlug,
-          windows: [{ label: "today", since: startOfToday().toISOString() }],
-        });
-        const today = campaignSpend.windows.find(w => w.label === "today");
-        spentCents = today
-          ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
-          : 0;
-        return spentCents;
-      };
-
-      for (const brandId of campaign.brandIds) {
-        const budgets = await fetchCampaignBudgets(brandId, identity);
-        if (!budgets.ok) {
-          return { allowed: false, reason: "Campaign daily budget unavailable" };
-        }
-        const ceiling = campaignCeilingCents(budgets, campaign);
-        if (ceiling.grain === "brand") {
-          // (b) One pot: paced on the brand's committed spend, exactly as before.
-          const blocked = await brandDailyBudgetBlock(campaign, brandId, budgets.brandDailyBudgetCents);
-          if (blocked) return blocked;
-          continue;
-        }
-        // The brand's money IS split per campaign and none of it (or zero) is this one's — a
-        // deliberate customer decision, so never a fallback to the brand total.
-        if (ceiling.cents === null || ceiling.cents <= 0) {
-          return { allowed: false, reason: "Campaign not funded" };
-        }
-        // The lead sources feeding this campaign: its spend read counts what they spent, so their
-        // ongoing ceilings join its own here (campaign-budget-client.ts feedingSourceCeilingCents).
-        const feeding = await sourceCampaignsFeeding(campaign.campaignId, campaign.featureSlug!);
-        const paceCents = ceiling.cents + feedingSourceCeilingCents(budgets, campaign, feeding);
-        if ((await campaignSpentToday()) >= paceCents) {
-          return { allowed: false, reason: "Campaign daily budget reached" };
-        }
-        // (a3) The ceiling in TWO parts (outreach + sourcing "up to"): each part binds on its own,
-        // the total above stays the max. Unsplit = nothing read, nothing changed. Fail-CLOSED.
-        // See campaign-budget-split.ts for the rule.
-        if (isSplitCeiling(ceilingEntriesOf(budgets, campaign))) {
-          const split = await fetchCampaignSplitToday(brandId, {
-            campaignId: campaign.campaignId,
-            offerId: campaign.offerId!,
-            legKey: campaign.legKey!,
-            featureSlug: campaign.featureSlug!,
-            sourceCampaignIds: feeding.map((f) => f.id),
-          }, identity);
-          if (!split.ok) {
-            return { allowed: false, reason: SPLIT_GATE_REASONS.unavailable, reasonDetail: split.detail };
-          }
-          const reached = splitPartReached(split.value);
-          if (reached) {
-            return { allowed: false, reason: reached.reason, reasonDetail: reached.detail };
-          }
-        }
-      }
-    }
-
-    // (c) GLOBAL mode: the brand's ONE pot binds every sales run, reactive legs included, whatever
-    // dispatched it (scheduler or step trigger). Fail-CLOSED. A refused reactive run loses no lead:
-    // the DAG claims its lead only AFTER this node, so the lead stays due and the next run the pot
-    // can pay for works it. See global-sales-pot.ts.
-    for (const brandId of campaign.brandIds) {
-      const pot = await globalSalesPotBlock({
-        orgId: campaign.orgId,
-        brandId,
-        featureSlug: campaign.featureSlug ?? "",
-        identity,
-      }, undefined, campaign.brandIds.length === 1 ? itemsGate?.salesBudget : null);
-      if (pot) {
-        return { allowed: false, reason: pot.reason, nextRunAt: pot.nextRunAt };
       }
     }
   }
@@ -578,73 +416,4 @@ export function nextMonthStart(): Date {
   d.setDate(1);
   d.setHours(0, 0, 0, 0);
   return d;
-}
-
-/**
- * The per-brand daily budget check, for a campaign that is not paced on a ceiling of its own.
- *
- * Returns the blocking result, or null when this brand does not stop the tick. Fail-CLOSED on an
- * unreadable cap: spend control must never read "cannot tell" as "unbounded".
- */
-async function brandDailyBudgetBlock(
-  campaign: GateCheckInput,
-  brandId: string,
-  // The brand's PRE-FUNNEL pot, from the same `/campaign-budgets` read that chose this path
-  // (billing's legacy figure: global amount / scalar). NOT `/internal/brands/:id/daily-budget`:
-  // since billing v0.83.9 that one adds every sales funnel's max budget, and a funnel's money
-  // must never pace a pre-funnel campaign (lib/sales-funnel-campaigns.ts).
-  dailyBudgetCents: number | null,
-): Promise<GateCheckResult | null> {
-  // A budget nobody ever stated is NOT "no cap this tick" — it is nothing funded, and a campaign
-  // the customer funds nothing for does not run. Reading it as unbounded is exactly how two
-  // brands that fund nothing at all kept sending against no ceiling while 27 brands that DID
-  // state a zero were held by a flag nobody could write. Funding is what makes a campaign
-  // eligible; its absence cannot be the thing that removes the limit.
-  //
-  // Only ever reached for a sales-outreach campaign (this whole block is `if (isSalesFeature)`),
-  // so no other feature family is held by it.
-  if (dailyBudgetCents === null) {
-    return { allowed: false, reason: "Brand not funded" };
-  }
-  if (dailyBudgetCents <= 0) {
-    return { allowed: false, reason: "Brand not funded" };
-  }
-
-  const brandSpend = await getChannelStatsBudget({
-    orgId: campaign.orgId,
-    brandId,
-    featureSlug: campaign.featureSlug,
-    windows: [{ label: "today", since: startOfToday().toISOString() }],
-  });
-  const today = brandSpend.windows.find(w => w.label === "today");
-  // Pace on COMMITTED spend = actual + provisioned (the window's totalCostInUsdCents).
-  // This DELIBERATELY REVERSES #223 ("pace on actual, not actual+provisioned") FOR THIS
-  // per-brand daily cap ONLY. #223's concern was real: a provisioned row can be a worst-case
-  // affordability RESERVATION (an LLM call reserves ~26¢, reconciles to ~0.7¢, then cancels
-  // the hold), so counting open holds could block on phantom spend for ~15min until the day
-  // rolls over. The product owner has weighed that tradeoff and accepted it: in practice the
-  // bulk of the committed-minus-actual gap is genuine instantly-account-email-sent holds for
-  // already-scheduled follow-up sends (real future spend), and the dashboard already shows
-  // the brand's "Budget spent today" as this same committed number. Pacing the cap on
-  // committed makes the enforced ceiling match what the customer sees and stops a campaign
-  // from committing NEW work above the daily budget while reserved follow-up holds sit
-  // uncounted. The worst-case-LLM-hold over-block is the accepted cost of that alignment.
-  // checkAffordability below stays the hard money gate (org credit balance); this is daily
-  // pacing. NOTE: the campaign budget WINDOWS (block 3 above) — daily, weekly, monthly AND
-  // total — now ALL pace on committed too, for full coherence with the dashboard.
-  // NET committed (post-usage-discount): the brand daily budget is what the org PAYS,
-  // so pace on the net twin, not gross list price. A 50%-discounted brand must be able
-  // to run until net spend reaches the daily cap; pacing on gross stopped it at half.
-  // The dashboard "Budget spent today" reads features-service /revenue with pricing=net
-  // for the same reason, keeping the enforced ceiling coherent with what the customer sees.
-  // Fallback to gross only if an older runs-service omits the net twin (safe: stops earlier).
-  const spentCents = today
-    ? parseFloat(today.netTotalCostInUsdCents ?? today.totalCostInUsdCents) || 0
-    : 0;
-
-  if (spentCents >= dailyBudgetCents) {
-    return { allowed: false, reason: "Brand daily budget reached" };
-  }
-
-  return null;
 }

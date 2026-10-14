@@ -7,7 +7,6 @@ import {
   resetSalesFunnelCapsCache,
   serializeSalesFunnelCampaign,
 } from "../../src/lib/sales-funnel-campaigns.js";
-import { fundingFromBudgets, campaignFunding } from "../../src/lib/campaign-funding.js";
 import { resolveSalesFunnelPlan } from "../../src/lib/startable-pair.js";
 import type { ChannelCatalogueRead } from "../../src/lib/channel-operator-client.js";
 
@@ -209,19 +208,6 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
     const { verdict } = await withCaps({}, false);
     expect(verdict).toMatchObject({ run: false, kind: "unreadable", reason: "Sales funnel caps unavailable" });
     errors.mockRestore();
-  });
-
-  it("is never funded by the per-(offer, leg, channel) ceiling of the pre-funnel model", async () => {
-    const budgets = {
-      ok: true as const,
-      brandDailyBudgetCents: 5000,
-      campaigns: [{ offerId: "o1", legKey: ENTRY, featureSlug: COLD, dailyBudgetCents: 2500 }],
-    } as unknown as Parameters<typeof fundingFromBudgets>[1];
-    const preFunnel = { featureSlug: COLD, offerId: "o1", legKey: ENTRY };
-    expect(fundingFromBudgets({ ...preFunnel, dailyBudgetCents: 900, salesFunnelCampaignId: "F1" }, budgets).funded).toBe(false);
-    expect((await campaignFunding({ ...preFunnel, dailyBudgetCents: 900, salesFunnelCampaignId: "F1" }, "b1", { orgId: "o" })).funded).toBe(false);
-    // The same row without a funnel keeps its own daily budget, as before.
-    expect(fundingFromBudgets({ ...preFunnel, dailyBudgetCents: 900 }, budgets)).toEqual({ funded: true, ceilingCents: 900 });
   });
 });
 

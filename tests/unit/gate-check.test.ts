@@ -37,22 +37,19 @@ vi.mock("drizzle-orm", () => ({
   eq: vi.fn(),
 }));
 
-// The global-mode pot has its own reads (billing's mode, brand-wide spend) and its own unit test
-// (global-sales-pot.test.ts). Here it is "not in global mode" unless a test says otherwise.
-const { mockPotBlock } = vi.hoisted(() => ({ mockPotBlock: vi.fn() }));
-vi.mock("../../src/lib/global-sales-pot.js", () => ({ globalSalesPotBlock: mockPotBlock }));
-
-// Items mode has its own unit test (sales-items-gate.test.ts). Here the brand is never in items
-// mode unless a test says otherwise, so every path below is today's.
-const { mockItemsGate } = vi.hoisted(() => ({ mockItemsGate: vi.fn() }));
-vi.mock("../../src/lib/sales-items-pace.js", () => ({ salesItemsGate: mockItemsGate }));
+// A unit's money is its sales funnel's caps (lib/sales-funnel-campaigns.ts). Every test below runs
+// a funded unit (run: true) unless it says otherwise; the caps describe restores the real read.
+const { mockUnitMoney } = vi.hoisted(() => ({ mockUnitMoney: vi.fn() }));
+vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>();
+  return { ...actual, salesFunnelUnitMoney: mockUnitMoney };
+});
 
 // Mock fetch for lead stats
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { sourceCampaignsFeeding } from "../../src/lib/source-campaign-store.js";
-import { runGateChecks, nextWeekStart, nextMonthStart, nextDayStart, type GateCheckInput } from "../../src/lib/gate-check.js";
+import { runGateChecks, nextWeekStart, nextMonthStart, nextDayStart, NOT_A_SALES_FUNNEL_CAMPAIGN, type GateCheckInput } from "../../src/lib/gate-check.js";
 
 // A feature paced by the CAMPAIGN budget windows (not the brand daily budget). Any slug that
 // isn't sales-cold-email-outreach qualifies.
@@ -64,20 +61,17 @@ function makeCampaign(overrides: Partial<GateCheckInput> = {}): GateCheckInput {
     orgId: "org-1",
     brandId: "brand-1",
     featureSlug: "sales-cold-email-outreach",
-    // Empty by default so the per-brand daily-budget loop is a no-op in tests that exercise
-    // the OTHER gates. The brand-budget describe block sets brandIds explicitly.
     brandIds: [],
     status: "ongoing",
     maxBudgetDailyUsd: "10.00",
     maxBudgetWeeklyUsd: null,
     maxBudgetMonthlyUsd: null,
     maxBudgetTotalUsd: null,
-    // Null by default → the sales gate falls back to the brand daily budget, so the existing
-    // brand-budget describe block exercises unchanged. The campaign-own-budget block sets it.
-    dailyBudgetCents: null,
-    // Null by default. The per-campaign ceiling block sets both.
-    offerId: null,
-    legKey: null,
+    // A SALES FUNNEL unit by default: the only campaign the gate lets spend (owner 2026-10-14).
+    offerId: "offer-1",
+    legKey: "lead_found_to_conversation",
+    salesFunnelCampaignId: "funnel-campaign-1",
+    salesFunnelId: "f@x",
     maxLeads: null,
     ...overrides,
   };
@@ -159,8 +153,7 @@ describe("Gate Check", () => {
     mockRuns();
     mockGetStatsBudget.mockResolvedValue({ windows: [] });
     mockUpdateRun.mockResolvedValue({});
-    mockPotBlock.mockResolvedValue(null);
-    mockItemsGate.mockResolvedValue({ applies: false, salesBudget: null });
+    mockUnitMoney.mockResolvedValue({ run: true, pace: { spentCents: 0, ceilingCents: 1000 } });
   });
 
   it("should block if campaign is not ongoing", async () => {
@@ -174,14 +167,70 @@ describe("Gate Check", () => {
     expect(result.allowed).toBe(true);
   });
 
-  describe("a SALES FUNNEL unit is paid by its funnel's caps (billing), nothing else", () => {
-    const unitInput = (featureSlug = "sales-cold-email-outreach") => ({
-      ...makeCampaign({ dailyBudgetCents: 5000, featureSlug } as never),
-      offerId: "offer-1",
-      legKey: "lead_found_to_conversation",
-      salesFunnelCampaignId: "funnel-campaign-1",
-      salesFunnelId: "f@x",
+  describe("ONE money model: a campaign that is not a sales funnel unit is refused by name", () => {
+    beforeEach(() => {
+      process.env.BILLING_SERVICE_URL = "https://billing.test.local";
+      process.env.BILLING_SERVICE_API_KEY = "k";
     });
+    afterEach(() => {
+      delete process.env.BILLING_SERVICE_URL;
+      delete process.env.BILLING_SERVICE_API_KEY;
+    });
+
+    it("refuses NOT_A_SALES_FUNNEL_CAMPAIGN and reads no billing, no caps, no spend", async () => {
+      const result = await runGateChecks(makeCampaign({
+        salesFunnelCampaignId: null,
+        salesFunnelId: null,
+        brandIds: ["brand-1"],
+        maxBudgetDailyUsd: "10.00",
+      }));
+      expect(result).toEqual({ allowed: false, reason: NOT_A_SALES_FUNNEL_CAMPAIGN });
+      expect(NOT_A_SALES_FUNNEL_CAMPAIGN).toBe("Not a sales funnel campaign");
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockGetStatsBudget).not.toHaveBeenCalled();
+      expect(mockUnitMoney).not.toHaveBeenCalled();
+    });
+
+    it("refuses a non-unit on a non-sales channel too (no channel escapes the funnel)", async () => {
+      const result = await runGateChecks(makeCampaign({ salesFunnelCampaignId: undefined, featureSlug: NON_SALES_FEATURE }));
+      expect(result).toEqual({ allowed: false, reason: NOT_A_SALES_FUNNEL_CAMPAIGN });
+      expect(mockGetStatsBudget).not.toHaveBeenCalled();
+    });
+
+    it("still answers the running-run guard first", async () => {
+      mockRuns({ running: [makeRun({ status: "running" })] });
+      const result = await runGateChecks(makeCampaign({ salesFunnelCampaignId: null }));
+      expect(result.reason).toBe("A run is already in progress");
+    });
+
+    it("allows a unit whose caps say run:true, asking the caps with the unit's identity", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ affordable: true }) });
+      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
+      expect(result).toMatchObject({ allowed: true, creditCheck: "affordable" });
+      expect(mockUnitMoney).toHaveBeenCalledWith(expect.objectContaining({
+        id: "campaign-1",
+        orgId: "org-1",
+        brandId: "brand-1",
+        offerId: "offer-1",
+        legKey: "lead_found_to_conversation",
+        salesFunnelCampaignId: "funnel-campaign-1",
+        salesFunnelId: "f@x",
+      }));
+      // The only billing read is the credit pre-filter; no retired ceiling is asked.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(String(mockFetch.mock.calls[0][0])).toContain("/affordability");
+      expect(mockGetStatsBudget).not.toHaveBeenCalled();
+    });
+
+    it("refuses a unit with its caps' own verdict", async () => {
+      const nextRunAt = new Date(Date.now() + 600_000);
+      mockUnitMoney.mockResolvedValue({ run: false, kind: "cap_reached", reason: "Sales funnel max budget reached", detail: "d", nextRunAt });
+      expect(await runGateChecks(makeCampaign())).toEqual({ allowed: false, reason: "Sales funnel max budget reached", reasonDetail: "d", nextRunAt });
+    });
+  });
+
+  describe("a SALES FUNNEL unit is paid by its funnel's caps (billing), nothing else", () => {
+    const unitInput = (featureSlug = "sales-cold-email-outreach") => makeCampaign({ featureSlug });
     const capsAnswer = (body: Record<string, unknown>) =>
       mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ pipes: null, maxVolume: null, ...body }) });
     const budget = (consumedCents: string | null, reached: boolean | null) => ({
@@ -192,7 +241,13 @@ describe("Gate Check", () => {
     beforeEach(async () => {
       process.env.BILLING_SERVICE_URL = "https://billing.test.local";
       process.env.BILLING_SERVICE_API_KEY = "k";
-      (await import("../../src/lib/sales-funnel-campaigns.js")).resetSalesFunnelCapsCache();
+      const actual = await vi.importActual<typeof import("../../src/lib/sales-funnel-campaigns.js")>("../../src/lib/sales-funnel-campaigns.js");
+      actual.resetSalesFunnelCapsCache();
+      mockUnitMoney.mockImplementation(actual.salesFunnelUnitMoney);
+    });
+    afterEach(() => {
+      delete process.env.BILLING_SERVICE_URL;
+      delete process.env.BILLING_SERVICE_API_KEY;
     });
 
     it("refuses when no max budget is stated, before any pre-funnel money path is read", async () => {
@@ -202,7 +257,6 @@ describe("Gate Check", () => {
       expect(result.reasonDetail).toContain("funnel-campaign-1");
       expect(mockFetch.mock.calls[0][0]).toContain("/internal/brands/");
       expect(mockFetch.mock.calls[0][0]).toContain("/sales-funnels/f%40x/campaigns/funnel-campaign-1/caps");
-      expect(mockItemsGate).not.toHaveBeenCalled();
     });
 
     it("refuses a proactive pipe once the max budget is reached (new first touches stop)", async () => {
@@ -223,7 +277,6 @@ describe("Gate Check", () => {
       });
       const input = { ...unitInput("ai-meeting-booking"), legKey: "conversation_to_meeting_booked" };
       expect(await runGateChecks(input)).toMatchObject({ allowed: false, reason: "Sales funnel max budget reached" });
-      expect(mockItemsGate).not.toHaveBeenCalled();
     });
 
     it("runs a proactive pipe under its caps, reading none of the pre-funnel money", async () => {
@@ -295,10 +348,9 @@ describe("Gate Check", () => {
       expect(mockGetStatsBudget).not.toHaveBeenCalled();
     });
 
-    it("sales feature ignores the campaign budget windows entirely (brand budget governs)", async () => {
-      // Sales is paced by the brand daily budget, NOT the campaign caps. Even with every
-      // campaign window configured and way over, the campaign-window path never runs (and with
-      // brandIds empty the brand loop is a no-op) → allowed, no runs-service window call.
+    it("sales feature ignores the campaign budget windows entirely (its funnel's caps govern)", async () => {
+      // A sales-family unit is paced by its funnel's caps, NOT the campaign windows. Even with
+      // every window configured and way over, the window path never runs → allowed, no window call.
       mockGetStatsBudget.mockResolvedValue(
         makeBudgetResponse([{ label: "total", totalCostInUsdCents: "999999" }])
       );
@@ -734,714 +786,8 @@ describe("Gate Check", () => {
     });
   });
 
-  describe("Per-campaign (offer, leg, channel) daily ceiling pacing", () => {
-    const ORIG_URL = process.env.BILLING_SERVICE_URL;
-    const ORIG_KEY = process.env.BILLING_SERVICE_API_KEY;
 
-    beforeEach(() => {
-      process.env.BILLING_SERVICE_URL = "https://billing.test.local";
-      process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "0" }]),
-      );
-    });
-
-    afterEach(() => {
-      if (ORIG_URL === undefined) delete process.env.BILLING_SERVICE_URL;
-      else process.env.BILLING_SERVICE_URL = ORIG_URL;
-      if (ORIG_KEY === undefined) delete process.env.BILLING_SERVICE_API_KEY;
-      else process.env.BILLING_SERVICE_API_KEY = ORIG_KEY;
-    });
-
-    type Entry = { offerId: string | null; legKey: string | null; featureSlug: string; dailyBudgetCents: string };
-    function mockCampaignBudgets(campaigns: Entry[], dailyBudgetCents: string | null = "3000") {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ brandId: "brand-1", dailyBudgetCents, campaigns: campaigns.map((c) => ({ ...c, updatedAt: null })) }),
-      });
-    }
-
-    function legCampaign(overrides: Partial<GateCheckInput> = {}) {
-      return makeCampaign({
-        brandIds: ["brand-1"],
-        offerId: "offer-1",
-        legKey: "start_to_conversation",
-        ...overrides,
-      });
-    }
-
-    const OWN: Entry = { offerId: "offer-1", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "1000" };
-    const SIBLING: Entry = { offerId: "offer-1", legKey: "start_to_website_visit", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "2000" };
-
-    it("paces on THIS campaign's own ceiling, not the brand total", async () => {
-      mockCampaignBudgets([OWN, SIBLING]);
-      mockGetStatsBudget.mockResolvedValue(
-        // 1500 is under the 3000 brand total but at 150% of this campaign's own 1000.
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1500" }]),
-      );
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign daily budget reached");
-      expect(result.nextRunAt).toBeUndefined();
-    });
-
-    it("allows while this campaign is under its own ceiling", async () => {
-      mockCampaignBudgets([OWN, SIBLING]);
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "999" }]),
-      );
-      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(true);
-    });
-
-    it("adds the ceiling of each ONGOING lead source feeding it, since its spend read counts theirs", async () => {
-      const VISIT: Entry = { offerId: "offer-1", legKey: "lead_found_to_website_visit", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "300" };
-      const COLD: Entry = { offerId: "offer-1", legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-cold-filters", dailyBudgetCents: "1700" };
-      const SIGNALS: Entry = { offerId: "offer-1", legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-buying-signals", dailyBudgetCents: "500" };
-      vi.mocked(sourceCampaignsFeeding).mockResolvedValue([
-        { id: "src-cold", featureSlug: "sourcing-apollo-cold-filters", status: "ongoing" },
-        { id: "src-signals", featureSlug: "sourcing-apollo-buying-signals", status: "stopped" },
-      ]);
-      try {
-        // Olive, prod 2026-10-09: 348 cents committed today (sourcing + sending) against outreach $3
-        // alone was held; against outreach $3 + the running source's $17 it runs.
-        mockCampaignBudgets([VISIT, COLD, SIGNALS]);
-        mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "348" }]));
-        mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
-        const under = await runGateChecks(legCampaign({ legKey: "lead_found_to_website_visit" }));
-        expect(under.allowed).toBe(true);
-
-        // The stopped source's 500 never joins: 2000 committed = 300 + 1700, the pace is reached.
-        mockFetch.mockReset();
-        mockCampaignBudgets([VISIT, COLD, SIGNALS]);
-        mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "2000" }]));
-        const reached = await runGateChecks(legCampaign({ legKey: "lead_found_to_website_visit" }));
-        expect(reached.allowed).toBe(false);
-        expect(reached.reason).toBe("Campaign daily budget reached");
-      } finally {
-        vi.mocked(sourceCampaignsFeeding).mockResolvedValue([]);
-      }
-    });
-
-    it("a lead source's money never funds an outreach campaign whose own ceiling is missing", async () => {
-      vi.mocked(sourceCampaignsFeeding).mockResolvedValue([
-        { id: "src-cold", featureSlug: "sourcing-apollo-cold-filters", status: "ongoing" },
-      ]);
-      try {
-        mockCampaignBudgets([
-          { offerId: "offer-1", legKey: "start_to_lead_found", featureSlug: "sourcing-apollo-cold-filters", dailyBudgetCents: "1700" },
-        ]);
-        const result = await runGateChecks(legCampaign({ legKey: "lead_found_to_website_visit" }));
-        expect(result.allowed).toBe(false);
-        expect(result.reason).toBe("Campaign not funded");
-      } finally {
-        vi.mocked(sourceCampaignsFeeding).mockResolvedValue([]);
-      }
-    });
-
-    it("never falls back to the brand total when none of the money is this campaign's", async () => {
-      mockCampaignBudgets([SIBLING]);
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign not funded");
-    });
-
-    it("never runs a campaign funded at zero", async () => {
-      mockCampaignBudgets([{ ...OWN, dailyBudgetCents: "0" }, SIBLING]);
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign not funded");
-    });
-
-    it("a leg-less ceiling on the channel funds the campaign while the channel names no other leg (billing's rule)", async () => {
-      mockCampaignBudgets([
-        { offerId: "offer-1", legKey: null, featureSlug: "ai-meeting-booking", dailyBudgetCents: "100" },
-        { offerId: "offer-2", legKey: "start_to_website_visit", featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "300" },
-      ]);
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "100" }]),
-      );
-
-      const result = await runGateChecks(legCampaign({
-        featureSlug: "ai-meeting-booking",
-        legKey: "conversation_to_meeting_booked",
-      }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign daily budget reached");
-    });
-
-    it("a campaign stating no leg is not funded once the brand's money is split per campaign", async () => {
-      mockCampaignBudgets([OWN]);
-
-      const result = await runGateChecks(legCampaign({ legKey: null }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign not funded");
-    });
-
-    it("a brand with no per-campaign ceilings paces on its brand budget", async () => {
-      // The pre-funnel pot of the SAME read; billing's /daily-budget (which adds funnel caps) is not read.
-      mockCampaignBudgets([], "1000");
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1000" }]),
-      );
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand daily budget reached");
-      expect(mockFetch.mock.calls.map((c) => String(c[0])).some((u) => u.includes("/daily-budget"))).toBe(false);
-    });
-
-    it("fails CLOSED when the per-campaign ceilings cannot be read", async () => {
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign daily budget unavailable");
-    });
-
-    it("reads billing's campaign-budgets contract, org-scoped", async () => {
-      mockCampaignBudgets([OWN]);
-      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ affordable: true }) });
-
-      await runGateChecks(legCampaign());
-
-      const [calledUrl, calledInit] = mockFetch.mock.calls[0];
-      expect(calledUrl).toBe("https://billing.test.local/internal/brands/brand-1/campaign-budgets");
-      expect(calledInit.headers["x-api-key"]).toBe("test-billing-key");
-      expect(calledInit.headers["x-org-id"]).toBe("org-1");
-    });
-
-    it("a campaign's OWN daily budget still wins over its billing ceiling", async () => {
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "500" }]),
-      );
-
-      const result = await runGateChecks(legCampaign({ dailyBudgetCents: 500 }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign daily budget reached");
-      expect(mockFetch).not.toHaveBeenCalledWith(
-        expect.stringContaining("/campaign-budgets"),
-        expect.anything(),
-      );
-    });
-  });
-
-  describe("Split campaign budget: outreach + sourcing on demand (billing v0.82.0)", () => {
-    const ORIG_URL = process.env.BILLING_SERVICE_URL;
-    const ORIG_KEY = process.env.BILLING_SERVICE_API_KEY;
-
-    beforeEach(() => {
-      process.env.BILLING_SERVICE_URL = "https://billing.test.local";
-      process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
-      // Today's TOTAL is under the $20 max, so only the parts can refuse.
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "500" }]),
-      );
-    });
-
-    afterEach(() => {
-      if (ORIG_URL === undefined) delete process.env.BILLING_SERVICE_URL;
-      else process.env.BILLING_SERVICE_URL = ORIG_URL;
-      if (ORIG_KEY === undefined) delete process.env.BILLING_SERVICE_API_KEY;
-      else process.env.BILLING_SERVICE_API_KEY = ORIG_KEY;
-    });
-
-    const OWN = {
-      offerId: "offer-1", legKey: "start_to_conversation", featureSlug: "sales-cold-email-outreach",
-      dailyBudgetCents: "2000.0000000000",
-    };
-
-    function mockList(sourcingCeilingCents: string | null | undefined) {
-      const entry: Record<string, unknown> = { ...OWN, updatedAt: null };
-      if (sourcingCeilingCents !== undefined) entry.sourcingCeilingCents = sourcingCeilingCents;
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ brandId: "brand-1", dailyBudgetCents: "2000", campaigns: [entry] }),
-      });
-    }
-
-    function mockSplitToday(parts: { outreach: string; sourcing: string | null; sourcingSpent: string; outreachSpent: string }) {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          dailyBudgetCents: "2000.0000000000",
-          outreachDailyBudgetCents: parts.outreach,
-          sourcingCeilingCents: parts.sourcing,
-          split: parts.sourcing !== null,
-          today: {
-            date: "2026-10-07", campaignIds: ["campaign-1"],
-            spentCents: String(parseFloat(parts.sourcingSpent) + parseFloat(parts.outreachSpent)),
-            sourcingSpentCents: parts.sourcingSpent, outreachSpentCents: parts.outreachSpent,
-          },
-        }),
-      });
-    }
-
-    const affordable = () => mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ affordable: true }) });
-
-    function legCampaign(overrides: Partial<GateCheckInput> = {}) {
-      return makeCampaign({ brandIds: ["brand-1"], offerId: "offer-1", legKey: "start_to_conversation", ...overrides });
-    }
-
-    it("refuses when today's sourcing spend reached its ceiling, with the figures", async () => {
-      mockList("1700.0000000000");
-      mockSplitToday({ outreach: "300.0000000000", sourcing: "1700.0000000000", sourcingSpent: "1700", outreachSpent: "100" });
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign sourcing budget reached");
-      expect(result.reasonDetail).toBe("sourcing spent $17.00 today of its $17.00/day ceiling");
-    });
-
-    it("refuses when today's outreach spend reached its budget", async () => {
-      mockList("1700.0000000000");
-      mockSplitToday({ outreach: "300.0000000000", sourcing: "1700.0000000000", sourcingSpent: "200", outreachSpent: "300" });
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign outreach budget reached");
-    });
-
-    it("passes under both limits, and reads billing's one-campaign split contract scoped to THIS campaign", async () => {
-      mockList("1700.0000000000");
-      mockSplitToday({ outreach: "300.0000000000", sourcing: "1700.0000000000", sourcingSpent: "1699", outreachSpent: "299" });
-      affordable();
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(true);
-      const [url, init] = mockFetch.mock.calls[1];
-      expect(url).toBe(
-        "https://billing.test.local/internal/brands/brand-1/campaign-budget?offerId=offer-1&legKey=start_to_conversation&featureSlug=sales-cold-email-outreach&campaignIds=campaign-1",
-      );
-      expect(init.headers["x-org-id"]).toBe("org-1");
-      expect(init.headers["x-api-key"]).toBe("test-billing-key");
-    });
-
-    it("a part stated at $0 gates nothing (the 100%-sourcing CRM row: outreach $0)", async () => {
-      mockList("2000.0000000000");
-      mockSplitToday({ outreach: "0.0000000000", sourcing: "2000.0000000000", sourcingSpent: "400", outreachSpent: "100" });
-      affordable();
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(true);
-    });
-
-    it("a reactive leg with sourcing $0 is never refused on sourcing", async () => {
-      mockList("0.0000000000");
-      mockSplitToday({ outreach: "2000.0000000000", sourcing: "0.0000000000", sourcingSpent: "0", outreachSpent: "100" });
-      affordable();
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(true);
-    });
-
-    it("the TOTAL still binds first: max daily spend unchanged", async () => {
-      mockList("1700.0000000000");
-      mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "2000" }]));
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign daily budget reached");
-    });
-
-    it("fails CLOSED when billing cannot say today's split spend (its 502 on a runs-service failure)", async () => {
-      mockList("1700.0000000000");
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({}) });
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign budget split unavailable");
-      expect(result.reasonDetail).toBe("billing responded 502");
-    });
-
-    it("fails CLOSED on a split answer with no today block", async () => {
-      mockList("1700.0000000000");
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ outreachDailyBudgetCents: "300", sourcingCeilingCents: "1700", split: true, today: null }),
-      });
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign budget split unavailable");
-    });
-
-    it.each([
-      ["null (unsplit)", null],
-      ["absent (pre-v0.82 billing)", undefined],
-    ])("an UNSPLIT ceiling (%s) makes no split read and decides exactly as before", async (_label, sourcing) => {
-      mockList(sourcing);
-      affordable();
-
-      const result = await runGateChecks(legCampaign());
-      expect(result.allowed).toBe(true);
-      expect(mockFetch).not.toHaveBeenCalledWith(expect.stringContaining("/campaign-budget?"), expect.anything());
-    });
-  });
-
-  describe("Per-brand daily budget pacing", () => {
-    const ORIG_URL = process.env.BILLING_SERVICE_URL;
-    const ORIG_KEY = process.env.BILLING_SERVICE_API_KEY;
-
-    beforeEach(() => {
-      process.env.BILLING_SERVICE_URL = "https://billing.test.local";
-      process.env.BILLING_SERVICE_API_KEY = "test-billing-key";
-      // Default: brand spend is 0 (today=0).
-      // Per-test overrides drive the "today" window to exercise the cap.
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          { label: "today", totalCostInUsdCents: "0" },
-        ])
-      );
-    });
-
-    afterEach(() => {
-      if (ORIG_URL === undefined) delete process.env.BILLING_SERVICE_URL;
-      else process.env.BILLING_SERVICE_URL = ORIG_URL;
-      if (ORIG_KEY === undefined) delete process.env.BILLING_SERVICE_API_KEY;
-      else process.env.BILLING_SERVICE_API_KEY = ORIG_KEY;
-    });
-
-    // A brand with NO per-campaign ceilings: billing's campaign-budgets read comes back empty, so
-    // the gate paces on the brand pot. Queued before every brand daily-budget response.
-    function mockNoCampaignCeilings(brandId = "brand-1") {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ brandId, dailyBudgetCents: null, campaigns: [] }),
-      });
-    }
-
-    // Queue the brand's PRE-FUNNEL pot: billing's campaign-budgets read with no per-campaign
-    // ceilings answers the brand total, and that ONE read is what paces the campaign. The
-    // `/daily-budget` read is never made: since billing v0.83.9 it adds sales funnel caps.
-    function mockDailyBudget(dailyBudgetCents: string | null, brandId = "brand-1") {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ brandId, dailyBudgetCents, campaigns: [] }),
-      });
-    }
-
-    it("blocks (paced, not stopped) when today's feature spend for the brand reaches the ceiling", async () => {
-      mockDailyBudget("1000"); // ceiling 1000 cents
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          { label: "today", totalCostInUsdCents: "1000" }, // spend == ceiling
-        ])
-      );
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand daily budget reached");
-      // D1: not parked till midnight, not terminal — internal.ts applies the 15min backoff,
-      // so a raised ceiling re-enables on the next loop.
-      expect(result.nextRunAt).toBeUndefined();
-          });
-
-    it("allows when today's brand spend is below the ceiling", async () => {
-      mockDailyBudget("1000");
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          { label: "today", totalCostInUsdCents: "999" },
-        ])
-      );
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(true);
-    });
-
-    it("paces the brand daily budget on NET, not gross — a 50%-discounted brand runs to its FULL net budget", async () => {
-      // The core bug: a $10 (1000c) brand daily budget with a 50% usage discount. Gross committed
-      // hits 1000 (the cap) while the brand has only PAID 500 net. Pacing on gross halted the
-      // campaign at half its real budget; pacing on net must ALLOW it to keep running.
-      mockDailyBudget("1000"); // ceiling 1000 cents = what the org PAYS
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          { label: "today", totalCostInUsdCents: "1000", netTotalCostInUsdCents: "500" },
-        ])
-      );
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(true);
-    });
-
-    it("blocks the brand daily budget when NET committed reaches the ceiling", async () => {
-      mockDailyBudget("1000");
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          // gross 2000 but the ceiling is judged on net 1000 == cap → blocks at the real budget.
-          { label: "today", totalCostInUsdCents: "2000", netTotalCostInUsdCents: "1000" },
-        ])
-      );
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand daily budget reached");
-    });
-
-    it("falls back to gross pacing when runs-service omits the net twin (older build)", async () => {
-      // No netTotalCostInUsdCents on the window → gate uses gross, preserving pre-net behavior
-      // (safe direction: over-counts → stops earlier, never overspends).
-      mockDailyBudget("1000");
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          { label: "today", totalCostInUsdCents: "1000" }, // gross only, == ceiling
-        ])
-      );
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand daily budget reached");
-    });
-
-    it("blocks when COMMITTED (actual + provisioned) is over the ceiling even though actual alone is under", async () => {
-      // Committed-pacing decision (supersedes #223 for this brand daily cap): the cap now
-      // counts reserved follow-up-send holds toward the daily budget, matching the dashboard's
-      // committed "Budget spent today". Actual alone (999 < 1000) is under the ceiling, but
-      // committed total 5999 (provisioned 5000) is over — so the gate MUST block. This is the
-      // deliberate reversal of the old #223 regression test (which asserted this case allows).
-      mockDailyBudget("1000"); // ceiling 1000 cents
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          // actual 999 (< 1000) but committed total 5999 (provisioned 5000) — must BLOCK.
-          { label: "today", totalCostInUsdCents: "5999", actualCostInUsdCents: "999" },
-        ])
-      );
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand daily budget reached");
-    });
-
-    it("holds a sales campaign whose brand states NO budget — unfunded is not unbounded", async () => {
-      // This is the hole the retired brand-pause flag was papering over: a null brand budget used
-      // to read as "no cap this tick", so a brand funding nothing at all sent against no ceiling
-      // while brands that DID state a zero were held by a flag nobody could write.
-      mockDailyBudget(null);
-      mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([]));
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand not funded");
-    });
-
-    it("holds a sales campaign whose brand states a ZERO budget", async () => {
-      mockDailyBudget("0");
-      mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([]));
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand not funded");
-    });
-
-    it("re-enables on the next loop once the ceiling is raised", async () => {
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          { label: "today", totalCostInUsdCents: "1000" }, // spend fixed at 1000
-        ])
-      );
-
-      // loop 1: ceiling 1000, spend 1000 → blocked
-      mockDailyBudget("1000");
-      const blocked = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(blocked.allowed).toBe(false);
-
-      // loop 2: ceiling raised to 5000, same spend → allowed
-      mockDailyBudget("5000");
-      const allowed = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(allowed.allowed).toBe(true);
-    });
-
-    it("blocks when the billing read throws (fail-closed spend control)", async () => {
-      mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          { label: "today", totalCostInUsdCents: "999999" },
-        ])
-      );
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign daily budget unavailable");
-    });
-
-    it("blocks when the billing read returns non-2xx (fail-closed spend control)", async () => {
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign daily budget unavailable");
-    });
-
-    it("blocks when the billing read returns malformed dailyBudgetCents", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ brandId: "brand-1", dailyBudgetCents: "not-a-number", campaigns: [] }),
-      });
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign daily budget unavailable");
-    });
-
-    it("blocks the tick if ANY brand in a multi-brand campaign hits its ceiling", async () => {
-      mockDailyBudget("1000", "brand-1");
-      mockDailyBudget("1000", "brand-2");
-      // getStatsBudget call order: brand-1 spend, brand-2 spend
-      mockGetStatsBudget
-        .mockResolvedValueOnce(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "0" }]))
-        .mockResolvedValueOnce(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "2000" }]));
-
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1", "brand-2"] }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Brand daily budget reached");
-    });
-
-    it("compares the daily cap against same-feature brand-day spend only", async () => {
-      mockDailyBudget("1000");
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "750" }])
-      );
-
-      const result = await runGateChecks(makeCampaign({
-        campaignId: "campaign-active",
-        brandIds: ["brand-1"],
-        maxBudgetDailyUsd: "999999.00",
-        featureSlug: "sales-cold-email-outreach",
-      }));
-
-      expect(result.allowed).toBe(true);
-      expect(mockGetStatsBudget).toHaveBeenCalledWith({
-        orgId: "org-1",
-        brandId: "brand-1",
-        featureSlug: "sales-cold-email-outreach",
-        windows: [expect.objectContaining({ label: "today" })],
-      });
-      const brandSpendCall = mockGetStatsBudget.mock.calls[0][0];
-      expect(brandSpendCall).not.toHaveProperty("campaignId");
-    });
-
-    it("paces on the PRE-FUNNEL pot of its one campaign-budgets read, never on /daily-budget (which adds funnel caps)", async () => {
-      mockDailyBudget("999999");
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], runId: "run-1" }));
-      expect(result.allowed).toBe(true);
-
-      const brandReads = mockFetch.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/internal/brands/"));
-      expect(brandReads).toEqual(["https://billing.test.local/internal/brands/brand-1/campaign-budgets"]);
-      const [, opts] = mockFetch.mock.calls[0];
-      expect(opts.headers["x-api-key"]).toBe("test-billing-key");
-      expect(opts.headers["x-org-id"]).toBe("org-1");
-      expect(opts.headers["x-brand-id"]).toBe("brand-1");
-      expect(mockGetStatsBudget.mock.calls[0][0]).not.toHaveProperty("campaignId");
-    });
-  });
-
-  describe("Per-campaign daily budget pacing (sales feature, own budget)", () => {
-    // No billing env — the campaign-own path never calls billing; it paces on the campaign's
-    // OWN committed spend today (getStatsBudget, campaignId + featureSlug keyed) vs its own cap.
-    it("blocks when the campaign's OWN committed spend reaches its OWN daily budget", async () => {
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1000" }]) // spend == cap
-      );
-
-      const result = await runGateChecks(makeCampaign({
-        brandIds: ["brand-1"],
-        dailyBudgetCents: 1000,
-      }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign daily budget reached");
-      // Paced, not terminal — internal.ts applies the 15min backoff.
-      expect(result.nextRunAt).toBeUndefined();
-          });
-
-    it("allows when the campaign's OWN spend is below its OWN budget", async () => {
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "999" }])
-      );
-
-      const result = await runGateChecks(makeCampaign({
-        brandIds: ["brand-1"],
-        dailyBudgetCents: 1000,
-      }));
-      expect(result.allowed).toBe(true);
-    });
-
-    it("keys the spend query on campaignId (its OWN spend), NEVER the brand — and never reads billing", async () => {
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([{ label: "today", totalCostInUsdCents: "0" }])
-      );
-
-      const result = await runGateChecks(makeCampaign({
-        campaignId: "campaign-A",
-        brandIds: ["brand-1"],
-        dailyBudgetCents: 5000,
-      }));
-      expect(result.allowed).toBe(true);
-      expect(mockGetStatsBudget).toHaveBeenCalledWith({
-        orgId: "org-1",
-        campaignId: "campaign-A",
-        featureSlug: "sales-cold-email-outreach",
-        windows: [expect.objectContaining({ label: "today" })],
-      });
-      const spendCall = mockGetStatsBudget.mock.calls[0][0];
-      expect(spendCall).not.toHaveProperty("brandId");
-      // Own-budget path must NOT hit the brand daily-budget billing endpoint.
-      expect(mockFetch).not.toHaveBeenCalledWith(
-        expect.stringContaining("/daily-budget"),
-        expect.anything(),
-      );
-    });
-
-    it("paces on NET committed, not gross — a 50%-discounted campaign runs to its FULL net budget", async () => {
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          { label: "today", totalCostInUsdCents: "1000", netTotalCostInUsdCents: "500" },
-        ])
-      );
-
-      const result = await runGateChecks(makeCampaign({
-        brandIds: ["brand-1"],
-        dailyBudgetCents: 1000,
-      }));
-      expect(result.allowed).toBe(true);
-    });
-
-    it("blocks on COMMITTED (actual + provisioned) over the cap even when actual alone is under", async () => {
-      mockGetStatsBudget.mockResolvedValue(
-        makeBudgetResponse([
-          { label: "today", totalCostInUsdCents: "5999", actualCostInUsdCents: "999" },
-        ])
-      );
-
-      const result = await runGateChecks(makeCampaign({
-        brandIds: ["brand-1"],
-        dailyBudgetCents: 1000,
-      }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Campaign daily budget reached");
-    });
-
-    it("one campaign hitting its cap does NOT depend on another — pacing is campaign-scoped", async () => {
-      // Campaign A over its cap → blocked; campaign B (own budget, under) → allowed. Distinct
-      // campaignIds mean distinct spend queries, so A's cap never gates B.
-      mockGetStatsBudget
-        .mockResolvedValueOnce(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "1000" }]))
-        .mockResolvedValueOnce(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "10" }]));
-
-      const a = await runGateChecks(makeCampaign({ campaignId: "campaign-A", brandIds: ["brand-1"], dailyBudgetCents: 1000 }));
-      expect(a.allowed).toBe(false);
-      expect(a.reason).toBe("Campaign daily budget reached");
-
-      const b = await runGateChecks(makeCampaign({ campaignId: "campaign-B", brandIds: ["brand-1"], dailyBudgetCents: 1000 }));
-      expect(b.allowed).toBe(true);
-    });
-  });
-
-  describe("nextRunAt on temporal budget exceeded (non-sales feature)", () => {
+  describe("nextRunAt on temporal budget exceeded (unit on a non-sales channel)", () => {
     it("paces the weekly (non-terminal) budget on COMMITTED, not actual", async () => {
       // Committed-pacing: actual 4000 (< $50 = 5000) but committed total 6000 (provisioned
       // 2000) is over the cap — the non-terminal weekly window MUST block (matches the
@@ -1563,48 +909,4 @@ describe("Gate Check", () => {
     });
   });
 
-  describe("GLOBAL mode: the brand's ONE sales pot binds every sales run", () => {
-    beforeEach(() => {
-      mockPotBlock.mockResolvedValue(null);
-      mockGetStatsBudget.mockResolvedValue(makeBudgetResponse([{ label: "today", totalCostInUsdCents: "0" }]));
-    });
-
-    it("refuses a sales run whose brand pot is spent, and re-checks at the pot's time (not the 15-min backoff)", async () => {
-      const nextRunAt = new Date(Date.now() + 10 * 60_000);
-      mockPotBlock.mockResolvedValue({ reason: "Global sales budget reached", detail: "spent", nextRunAt });
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], dailyBudgetCents: 5000 }));
-      expect(result).toMatchObject({ allowed: false, reason: "Global sales budget reached", nextRunAt });
-      expect(mockPotBlock).toHaveBeenCalledWith(
-        expect.objectContaining({ orgId: "org-1", brandId: "brand-1", featureSlug: "sales-cold-email-outreach" }),
-        undefined,
-        null,
-      );
-    });
-
-    it("binds a REACTIVE leg's run too: the pot is not asked about the leg", async () => {
-      mockPotBlock.mockResolvedValue({ reason: "Global sales budget reached", detail: "spent", nextRunAt: new Date() });
-      const result = await runGateChecks(
-        makeCampaign({ brandIds: ["brand-1"], dailyBudgetCents: 5000, featureSlug: "ai-meeting-booking", legKey: "conversation_to_meeting_booked" }),
-      );
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Global sales budget reached");
-    });
-
-    it("an unreadable pot refuses (fail-closed)", async () => {
-      mockPotBlock.mockResolvedValue({ reason: "Global sales budget unavailable", detail: "HTTP 500", nextRunAt: new Date() });
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], dailyBudgetCents: 5000 }));
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toBe("Global sales budget unavailable");
-    });
-
-    it("a pot with money left lets the run through", async () => {
-      const result = await runGateChecks(makeCampaign({ brandIds: ["brand-1"], dailyBudgetCents: 5000 }));
-      expect(result.allowed).toBe(true);
-    });
-
-    it("a non-sales feature never asks the pot", async () => {
-      await runGateChecks(makeCampaign({ brandIds: ["brand-1"], featureSlug: NON_SALES_FEATURE }));
-      expect(mockPotBlock).not.toHaveBeenCalled();
-    });
-  });
 });

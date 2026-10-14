@@ -47,45 +47,26 @@ const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const orgId = "funding-eligibility-org";
 const past = () => new Date(Date.now() - 60_000);
 
-// billing-service is the ONE source of "is this funded": per-campaign ceilings, at the grain a
-// campaign is bought — (offer, leg, channel).
+// billing-service states the brand's daily budget and its sales funnel caps. Since the one money
+// model (owner 2026-10-14) a campaign's money is its sales funnel's caps, and billing's per-campaign
+// ceilings are never read.
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 const OFFER = "11111111-1111-4111-8111-111111111111";
 const LEG = "start_to_conversation";
 
-type Entry = { offerId?: string | null; legKey?: string | null; featureSlug?: string; dailyBudgetCents: string };
-
-/** billing answers these per-campaign ceilings for every brand asked about. */
-function billingAnswers(entries: Entry[], brandDailyBudgetCents: string | null, funnelCaps: unknown[] = []) {
+/** billing answers this brand daily budget (and funnel caps) for every brand asked about. */
+function billingAnswers(brandDailyBudgetCents: string | null, funnelCaps: unknown[] = []) {
   mockFetch.mockImplementation(async (url: string) => {
-    // The brand's SALES FUNNEL caps: none unless the test states some.
     if (String(url).includes("/sales-funnel-caps")) {
       return { ok: true, json: async () => ({ orgId, brandId: "b", caps: funnelCaps }) };
     }
-    if (String(url).includes("/campaign-budgets")) {
-      return {
-        ok: true,
-        json: async () => ({
-          brandId: "b",
-          dailyBudgetCents: brandDailyBudgetCents,
-          campaigns: entries.map((e) => ({
-            offerId: OFFER,
-            legKey: LEG,
-            featureSlug: SALES_OUTREACH_FEATURE_SLUG,
-            ...e,
-            updatedAt: null,
-          })),
-        }),
-      };
+    if (String(url).includes("/campaign-budgets") || String(url).includes("/campaign-budget?")) {
+      throw new Error(`retired per-campaign ceilings read: ${url}`);
     }
-    // The brand's funding mode: no stored global sales budget IS campaigns mode (billing's default).
-    if (String(url).includes("/sales-budget")) {
-      return {
-        ok: true,
-        json: async () => ({ brandId: "b", orgId, mode: "campaigns", dailyBudgetCents: null, updatedAt: null }),
-      };
+    if (String(url).includes("/daily-budget")) {
+      return { ok: true, json: async () => ({ brandId: "b", dailyBudgetCents: brandDailyBudgetCents, updatedAt: null }) };
     }
     return { ok: false, status: 500, json: async () => ({}) };
   });
@@ -133,75 +114,24 @@ beforeEach(async () => {
   process.env.FEATURES_SERVICE_API_KEY = "test-features-key";
 });
 
-describe("the scheduler holds what the customer funds nothing for", () => {
-  it("holds a sales campaign funded at zero, and leaves it ongoing", async () => {
-    billingAnswers([{ dailyBudgetCents: "0" }], "0");
+describe("the scheduler holds a sales campaign that is not a sales funnel unit", () => {
+  it("holds it by name whatever billing states, reads no money for it, and leaves it ongoing", async () => {
+    billingAnswers("5000");
     const brandId = crypto.randomUUID();
-    const campaign = await insertSalesCampaign(brandId);
+    const campaign = await insertSalesCampaign(brandId, { dailyBudgetCents: 5000 });
 
     await reRunDueCampaigns();
 
     expect(mockExecute).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
     const after = await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaign.id) });
     // HELD, not stopped — and re-checked on the funding cadence rather than every minute.
     expect(after!.status).toBe("ongoing");
     expect(after!.nextRunAt!.getTime()).toBeGreaterThan(Date.now() + FUNDING_RECHECK_MS - 30_000);
   });
 
-  it("holds a brand that states no budget at all — unfunded is not unbounded", async () => {
-    billingAnswers([], null);
-    const brandId = crypto.randomUUID();
-    await insertSalesCampaign(brandId);
-
-    await reRunDueCampaigns();
-    expect(mockExecute).not.toHaveBeenCalled();
-  });
-
-  it("holds fail-CLOSED when billing cannot be read", async () => {
-    billingUnavailable();
-    const brandId = crypto.randomUUID();
-    await insertSalesCampaign(brandId);
-
-    await reRunDueCampaigns();
-    expect(mockExecute).not.toHaveBeenCalled();
-  });
-
-  it("runs a campaign the customer funds — no manual step", async () => {
-    billingAnswers([{ dailyBudgetCents: "5000" }], "5000");
-    const brandId = crypto.randomUUID();
-    await insertSalesCampaign(brandId);
-
-    await reRunDueCampaigns();
-    expect(mockExecute).toHaveBeenCalledTimes(1);
-  });
-
-  it("funding a campaign releases it on the next tick", async () => {
-    const brandId = crypto.randomUUID();
-    const campaign = await insertSalesCampaign(brandId);
-
-    billingAnswers([{ dailyBudgetCents: "0" }], "0");
-    await reRunDueCampaigns();
-    expect(mockExecute).not.toHaveBeenCalled();
-
-    // The customer funds the campaign. Nothing else happens — no button, no API call to us.
-    billingAnswers([{ dailyBudgetCents: "5000" }], "5000");
-    await db.update(campaigns).set({ nextRunAt: past() }).where(eq(campaigns.id, campaign.id));
-
-    await reRunDueCampaigns();
-    expect(mockExecute).toHaveBeenCalledTimes(1);
-  });
-
-  it("still runs a brand with ONE pot and no per-campaign ceilings", async () => {
-    billingAnswers([], "5000");
-    const brandId = crypto.randomUUID();
-    await insertSalesCampaign(brandId);
-
-    await reRunDueCampaigns();
-    expect(mockExecute).toHaveBeenCalledTimes(1);
-  });
-
-  it("does NOT hold a non-sales campaign of an unfunded brand — this is a sales-outreach rule", async () => {
-    billingAnswers([], null);
+  it("does NOT hold a non-sales campaign at the turn — the gate refuses it instead", async () => {
+    billingAnswers(null);
     const brandId = crypto.randomUUID();
     await insertTestCampaign(orgId, {
       status: "ongoing",
@@ -216,7 +146,7 @@ describe("the scheduler holds what the customer funds nothing for", () => {
   });
 
   it("claimStuckCampaigns still recovers a stuck campaign — the hold is applied at the turn, not the claim", async () => {
-    billingAnswers([{ dailyBudgetCents: "0" }], "0");
+    billingAnswers("0");
     const brandId = crypto.randomUUID();
     const campaign = await insertSalesCampaign(brandId, { nextRunAt: null });
 
@@ -235,13 +165,7 @@ describe("money never starts anything", () => {
     // The 2026-09-06 incident. A brand parked at its ceiling funds a SECOND acquisition channel;
     // before this, a sweep created a campaign for it. A campaign exists because the customer said
     // so, so the second channel simply has no campaign until they launch one.
-    billingAnswers(
-      [
-        { featureSlug: "sales-cold-email-outreach", dailyBudgetCents: "3000" },
-        { featureSlug: "feedback-request-cold-email-outreach", dailyBudgetCents: "2000" },
-      ],
-      "5000",
-    );
+    billingAnswers("5000");
     const brandId = crypto.randomUUID();
     await insertSalesCampaign(brandId);
 
@@ -253,7 +177,7 @@ describe("money never starts anything", () => {
   });
 
   it("leaves a brand whose campaigns are ALL STOPPED exactly as it is, however well funded", async () => {
-    billingAnswers([{ dailyBudgetCents: "5000" }], "5000");
+    billingAnswers("5000");
     const brandId = crypto.randomUUID();
     const stopped = await insertSalesCampaign(brandId, { status: "stopped", nextRunAt: null });
 
@@ -267,7 +191,7 @@ describe("money never starts anything", () => {
   });
 
   it("never resumes a campaign the customer stopped, however well funded its ceiling", async () => {
-    billingAnswers([{ dailyBudgetCents: "5000" }], "5000");
+    billingAnswers("5000");
     const brandId = crypto.randomUUID();
     const stopped = await insertSalesCampaign(brandId, {
       status: "stopped",
@@ -285,42 +209,29 @@ describe("money never starts anything", () => {
 });
 
 describe("GET /brands/:brandId/pause answers from the money", () => {
-  it("held when every campaign is funded at zero", async () => {
-    billingAnswers([{ dailyBudgetCents: "0" }], "0");
+  it("held when the brand's daily budget is zero", async () => {
+    billingAnswers("0");
     const brandId = crypto.randomUUID();
     const res = await getPause(brandId).expect(200);
     expect(res.body).toEqual({ brandId, orgId, paused: true, updatedAt: null });
   });
 
   it("held when the brand states no budget at all", async () => {
-    billingAnswers([], null);
+    billingAnswers(null);
     const brandId = crypto.randomUUID();
     const res = await getPause(brandId).expect(200);
     expect(res.body.paused).toBe(true);
   });
 
-  it("NOT held when one campaign carries a positive ceiling", async () => {
-    billingAnswers(
-      [
-        { dailyBudgetCents: "0" },
-        { legKey: "start_to_website_visit", dailyBudgetCents: "1000" },
-      ],
-      "1000",
-    );
-    const brandId = crypto.randomUUID();
-    const res = await getPause(brandId).expect(200);
-    expect(res.body.paused).toBe(false);
-  });
-
-  it("NOT held when the brand has one pot and it is positive", async () => {
-    billingAnswers([], "2500");
+  it("NOT held when the brand's daily budget is positive", async () => {
+    billingAnswers("2500");
     const brandId = crypto.randomUUID();
     const res = await getPause(brandId).expect(200);
     expect(res.body.paused).toBe(false);
   });
 
   it("NOT held when the brand is funded only by a SALES FUNNEL max budget", async () => {
-    billingAnswers([], null, [
+    billingAnswers(null, [
       { offerId: OFFER, salesFunnelId: "f@x", funded: true, fundedBy: "max_budget", maxBudget: { amountCents: "7000", period: "weekly", dailyBudgetCents: "1000" }, maxVolume: null, updatedAt: "2026-10-10T00:00:00Z" },
     ]);
     const res = await getPause(crypto.randomUUID()).expect(200);
@@ -328,7 +239,7 @@ describe("GET /brands/:brandId/pause answers from the money", () => {
   });
 
   it("NOT held when the only funnel cap is a max volume (owner 2026-10-11: max $ AND/OR max volume)", async () => {
-    billingAnswers([], null, [
+    billingAnswers(null, [
       { offerId: OFFER, salesFunnelId: "f@x", funded: true, fundedBy: "max_volume", maxBudget: null, maxVolume: { count: 5, period: "daily", unit: "first_contacts" }, updatedAt: "2026-10-10T00:00:00Z" },
     ]);
     const res = await getPause(crypto.randomUUID()).expect(200);
@@ -336,7 +247,7 @@ describe("GET /brands/:brandId/pause answers from the money", () => {
   });
 
   it("still held when billing says the funnel is not funded", async () => {
-    billingAnswers([], null, [
+    billingAnswers(null, [
       { offerId: OFFER, salesFunnelId: "f@x", funded: false, fundedBy: null, maxBudget: null, maxVolume: { count: 0, period: "daily", unit: "first_contacts" }, updatedAt: "2026-10-10T00:00:00Z" },
     ]);
     const res = await getPause(crypto.randomUUID()).expect(200);
@@ -349,7 +260,7 @@ describe("GET /brands/:brandId/pause answers from the money", () => {
   });
 
   it("requires x-org-id (400) — funding belongs to the (org, brand) pair", async () => {
-    billingAnswers([], "1000");
+    billingAnswers("1000");
     await request(app).get(`/brands/${crypto.randomUUID()}/pause`).set("x-api-key", API_KEY).expect(400);
   });
 
