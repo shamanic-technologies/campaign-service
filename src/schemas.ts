@@ -481,6 +481,23 @@ export const EndRunBody = z.object({
    * byte-identically to before the field existed.
    */
   noWorkAvailable: z.boolean().optional(),
+  /**
+   * What the run did with the item / person its trigger occurrence carried (PUSHED-TRUTH-1015,
+   * lib/trigger-deliveries.ts). `delivered` = done (for a pushed email: the sender accepted it).
+   * `refused` = the SENDER refused it for a reason a retry cannot change (`code` = its refusal code,
+   * `reason` = its human sentence, both verbatim): the occurrence ends for this campaign at once, never
+   * redelivered, whatever `success` says, and the client reads the code + sentence on the occurrence.
+   * OPTIONAL: absent = as before (`success` decides; a failure is redelivered, bounded). A 5xx, a
+   * transport error or a 402 is not a refusal: send no `delivery`, fail the run.
+   */
+  delivery: z.discriminatedUnion("state", [
+    z.object({ state: z.literal("delivered") }),
+    z.object({
+      state: z.literal("refused"),
+      code: z.string().trim().min(1).max(200),
+      reason: z.string().max(2000),
+    }),
+  ]).optional(),
 }).openapi("EndRunBody");
 
 export const EndRunResponse = z.object({
@@ -743,7 +760,8 @@ export const TriggerEventSchema = z.object({
   status: z.string(),
   /**
    * `ran` | `skipped` | `failed` (an occurrence carrying a person / an item whose every campaign failed all its
-   * runs for it: lib/trigger-deliveries.ts); null until done
+   * runs for it: lib/trigger-deliveries.ts) | `refused` (the sender refused what it carried, final: `skipReason`
+   * = the sender's refusal code, `lastError` + `delivery.refusals` its sentence); null until done
    */
   outcome: z.string().nullable(),
   /**
@@ -763,6 +781,17 @@ export const TriggerEventSchema = z.object({
    */
   ranLeads: z.array(z.object({ campaignId: z.string(), leadId: z.string() })).openapi({
     description: "Per campaign that ran: the lead the event's person was filed as on that campaign (lead-service). Empty when no run carried a lead.",
+  }),
+  /**
+   * What happened to what the occurrence carries (a person / an item), the client's answer to "did it leave?".
+   * null when it carries nothing. Always present.
+   */
+  delivery: z.object({
+    state: z.enum(["delivered", "refused", "owed", "in_flight", "failed", "skipped", "unconfirmed"]),
+    refusals: z.array(z.object({ campaignId: z.string(), code: z.string(), reason: z.string() })),
+  }).nullable().openapi({
+    description:
+      "What happened to the item/person the occurrence carries. `delivered`: a run did its work (a pushed email was accepted by the sender). `refused`: the sender refused it, final, never retried (`refusals[]`: the sender's code and sentence). `owed`: not done yet (due later, or waiting for a retry after a temporary failure). `in_flight`: a run carrying it is running. `failed`: every retry failed for a temporary reason, given up (`lastError`). `skipped`: no run carried it (`skipReason`). `unconfirmed`: recorded ran, no run reported back. null when the occurrence carries nothing.",
   }),
   performedByCaller: z.boolean(),
   processedAt: z.string().nullable(),

@@ -1,6 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { triggerEventDeliveries, triggerEvents } from "../db/schema.js";
+import { triggerEventDeliveries, triggerEvents, type TriggerEventDelivery } from "../db/schema.js";
 
 /**
  * AN OCCURRENCE IS CONSUMED ONLY BY A RUN THAT COMPLETED ITS WORK (2026-10-14, PUSHED-EMAIL-REDELIVERY-1014).
@@ -25,6 +25,17 @@ import { triggerEventDeliveries, triggerEvents } from "../db/schema.js";
  *     campaign leaves `ranCampaignIds`, `detail.failedDeliveries` names every run, `lastError` says why, and
  *     with no other campaign served the outcome is `failed` / `run_failed`.
  * A run that succeeded is never redelivered. An event with nothing carried is byte-identical to before.
+ *
+ * A SENDER REFUSAL IS FINAL (2026-10-15, PUSHED-TRUTH-1015). Prod, campaign 25036bda: instantly-service refused a
+ * pushed email (409 `recent_brand_contact`) and the run still ended `success: true`, so the occurrence read
+ * done / ran and the client believed it went out; another was refused (`email_not_verified`) and redelivered six
+ * times over four hours, a retry that could never change the verdict. The run states what happened to what it
+ * carried on `/end-run` `delivery`: `delivered`, or `refused` + the sender's code and sentence. A refusal settles
+ * the delivery `refused` and ends the occurrence for THAT campaign at once, whatever `success` says: it leaves
+ * `retryCampaignIds` and `ranCampaignIds`, `detail.refusals` keeps `{campaignId, runId, code, reason}`, and with no
+ * other campaign served the outcome is `refused`, `skipReason` the code, `lastError` the sentence. Never
+ * redelivered. Transient failures (no `delivery`, `success: false`) keep the bounded redelivery above.
+ * What the client reads: `deliveryOf` (served `delivery` on every event read).
  */
 
 /** Runs a campaign gets for one occurrence before it gives up (the first + 5 redeliveries, ~3h45 apart in all). */
@@ -51,8 +62,22 @@ export function redeliveryDelayMs(failedRuns: number): number {
   return TRIGGER_DELIVERY_RETRY_DELAYS_MS[i];
 }
 
-/** Did a run do the work of the occurrence it carried? Pure. */
-export function runDelivered(end: { success: boolean; stopCampaign?: boolean; noWorkAvailable?: boolean }): boolean {
+/** What a run states it did with the item / person its occurrence carried (`/end-run` `delivery`). */
+export type RunDelivery =
+  | { state: "delivered" }
+  | { state: "refused"; code: string; reason: string };
+
+export interface RunEnd {
+  success: boolean;
+  stopCampaign?: boolean;
+  noWorkAvailable?: boolean;
+  delivery?: RunDelivery;
+}
+
+/** Did a run do the work of the occurrence it carried? A stated `delivered` is the run's own word. Pure. */
+export function runDelivered(end: RunEnd): boolean {
+  if (end.delivery?.state === "delivered") return true;
+  if (end.delivery?.state === "refused") return false;
   return end.success === true && end.stopCampaign !== true && end.noWorkAvailable !== true;
 }
 
@@ -80,6 +105,7 @@ export type DeliverySettlement =
   | { kind: "completed"; eventId: string; campaignId: string }
   | { kind: "redelivered"; eventId: string; campaignId: string; failedRuns: number; dueAt: Date }
   | { kind: "gave_up"; eventId: string; campaignId: string; failedRuns: number }
+  | { kind: "refused"; eventId: string; campaignId: string; code: string }
   | { kind: "event_busy"; eventId: string; campaignId: string };
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
@@ -92,10 +118,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export async function settleTriggerDelivery(
   runId: string,
-  end: { success: boolean; stopCampaign?: boolean; noWorkAvailable?: boolean },
+  end: RunEnd,
   now: Date = new Date(),
   waitMs: number = FIRING_WAIT_MS,
 ): Promise<DeliverySettlement> {
+  if (end.delivery?.state === "refused") return settleRefusedDelivery(runId, end.delivery, now, waitMs);
   const delivered = runDelivered(end);
   const [d] = await db
     .update(triggerEventDeliveries)
@@ -201,4 +228,143 @@ export async function settleTriggerDelivery(
     `[campaign-service] trigger event ${d.eventId} stayed firing while run ${runId} of campaign ${d.campaignId} ended unfinished: NOT redelivered (delivery ${d.id})`,
   );
   return { kind: "event_busy", eventId: d.eventId, campaignId: d.campaignId };
+}
+
+/** Keep a stored text within its column budget. */
+const clip = (v: string, max: number) => (v.length > max ? v.slice(0, max) : v);
+
+/**
+ * A run whose sender REFUSED what its occurrence carried: the delivery is `refused` (code + sentence kept on the
+ * row) and the occurrence is done for that campaign at once, never redelivered (module header).
+ */
+async function settleRefusedDelivery(
+  runId: string,
+  refusal: { code: string; reason: string },
+  now: Date,
+  waitMs: number,
+): Promise<DeliverySettlement> {
+  const code = clip(refusal.code, 200);
+  const reason = clip(refusal.reason, 1000);
+  const [d] = await db
+    .update(triggerEventDeliveries)
+    .set({ status: "refused", endedAt: now, refusalCode: code, refusalReason: reason })
+    .where(and(eq(triggerEventDeliveries.runId, runId), eq(triggerEventDeliveries.status, "dispatched")))
+    .returning();
+  if (!d) return { kind: "not_a_delivery" };
+
+  for (let attempt = 1; attempt <= FIRING_TRIES; attempt++) {
+    const applied = await db.transaction(async (tx) => {
+      const [event] = await tx.select().from(triggerEvents).where(eq(triggerEvents.id, d.eventId)).for("update");
+      if (!event) return "missing" as const;
+      if (event.status === "firing") return "busy" as const;
+      const own = event.detail && typeof event.detail === "object" && !Array.isArray(event.detail)
+        ? (event.detail as Record<string, unknown>)
+        : {};
+      const others = (ids: string[]) => ids.filter((id) => id !== d.campaignId);
+      const ran = others(event.ranCampaignIds ?? []);
+      const priorRan = others(strings(own.priorRanCampaignIds));
+      const retry = others(strings(own.retryCampaignIds));
+      const refusals = [
+        ...(Array.isArray(own.refusals) ? own.refusals : []),
+        { campaignId: d.campaignId, runId, code, reason, refusedAt: now.toISOString() },
+      ];
+      const why = clip(`campaign ${d.campaignId}: refused by the sender (${code}): ${reason}`, 500);
+      // Still owed to OTHER campaigns (their redelivery is pending): they write the outcome when they fire.
+      const stillOwed = event.status === "pending" && retry.length > 0;
+      if (stillOwed) {
+        await tx
+          .update(triggerEvents)
+          .set({ detail: { ...own, refusals, retryCampaignIds: retry, priorRanCampaignIds: priorRan }, lastError: why })
+          .where(eq(triggerEvents.id, d.eventId));
+        return "applied" as const;
+      }
+      // Done now: a pending event owed only to this campaign, or one already recorded done at its fire.
+      const served = [...new Set([...ran, ...priorRan])];
+      const { retryCampaignIds: _r, priorRanCampaignIds: _p, ...rest } = own;
+      await tx
+        .update(triggerEvents)
+        .set({
+          status: "done",
+          claimedAt: null,
+          outcome: served.length > 0 ? "ran" : TRIGGER_EVENT_REFUSED_OUTCOME,
+          skipReason: served.length > 0 ? null : code,
+          ranCampaignIds: served,
+          detail: { ...rest, refusals },
+          lastError: why,
+          processedAt: now,
+        })
+        .where(eq(triggerEvents.id, d.eventId));
+      return "applied" as const;
+    });
+    if (applied === "missing") {
+      console.error(`[campaign-service] delivery ${d.id}: trigger event ${d.eventId} no longer exists, its refusal is recorded on the delivery only`);
+      return { kind: "not_a_delivery" };
+    }
+    if (applied === "applied") {
+      console.log(
+        `[campaign-service] trigger event ${d.eventId}: the sender refused what run ${runId} of campaign ${d.campaignId} carried (${code}); final, not redelivered`,
+      );
+      return { kind: "refused", eventId: d.eventId, campaignId: d.campaignId, code };
+    }
+    if (attempt < FIRING_TRIES) await sleep(waitMs);
+  }
+  console.error(
+    `[campaign-service] trigger event ${d.eventId} stayed firing while run ${runId} of campaign ${d.campaignId} was refused (${code}): the refusal is on delivery ${d.id} only`,
+  );
+  return { kind: "event_busy", eventId: d.eventId, campaignId: d.campaignId };
+}
+
+/** Outcome of an occurrence whose every campaign's sender refused what it carried. */
+export const TRIGGER_EVENT_REFUSED_OUTCOME = "refused";
+
+/**
+ * What happened to what an occurrence carries, as the client reads it (served `delivery` on every event read).
+ * `null` for an occurrence carrying nothing.
+ *  - `delivered`: a run did its work (for a pushed email: the sender accepted it);
+ *  - `refused`: the sender refused it, final (`refusals[]` = code + sentence per campaign);
+ *  - `owed`: not done yet (due later, being fired, or waiting for a redelivery after a transient failure);
+ *  - `in_flight`: a run carrying it is running;
+ *  - `failed`: every run failed for a transient reason, given up (`lastError`);
+ *  - `skipped`: no run carried it (`skipReason` says why);
+ *  - `unconfirmed`: recorded ran, but no run ever reported back on it (dispatched before runs were tracked).
+ */
+export type DeliveryState = "delivered" | "refused" | "owed" | "in_flight" | "failed" | "skipped" | "unconfirmed";
+
+export interface EventDelivery {
+  state: DeliveryState;
+  refusals: Array<{ campaignId: string; code: string; reason: string }>;
+}
+
+/** The read's verdict from the event row + its delivery rows. Pure. */
+export function deliveryOf(
+  event: { status: string; outcome: string | null; detail: unknown },
+  deliveries: ReadonlyArray<{ campaignId: string; status: string; refusalCode: string | null; refusalReason: string | null }>,
+): EventDelivery | null {
+  if (!eventCarries(event.detail)) return null;
+  const refusals = deliveries
+    .filter((d) => d.status === "refused")
+    .map((d) => ({ campaignId: d.campaignId, code: d.refusalCode ?? "", reason: d.refusalReason ?? "" }));
+  const state: DeliveryState = deliveries.some((d) => d.status === "completed")
+    ? "delivered"
+    : event.status !== "done"
+      ? "owed"
+      : deliveries.some((d) => d.status === "dispatched")
+        ? "in_flight"
+        : event.outcome === TRIGGER_EVENT_REFUSED_OUTCOME
+          ? "refused"
+          : event.outcome === TRIGGER_EVENT_FAILED.OUTCOME
+            ? "failed"
+            : event.outcome === "skipped"
+              ? "skipped"
+              : "unconfirmed";
+  return { state, refusals };
+}
+
+/** The delivery rows of several events, grouped by event id (one read). */
+export async function deliveriesByEvent(eventIds: string[]): Promise<Map<string, TriggerEventDelivery[]>> {
+  const out = new Map<string, TriggerEventDelivery[]>();
+  if (eventIds.length === 0) return out;
+  const rows = await db.select().from(triggerEventDeliveries).where(inArray(triggerEventDeliveries.eventId, eventIds));
+  for (const r of rows) out.set(r.eventId, [...(out.get(r.eventId) ?? []), r]);
+  return out;
 }

@@ -495,8 +495,11 @@ export const triggerEventDeliveries = pgTable(
     campaignId: text("campaign_id").notNull(),
     /** The run workflow-service opened on `/execute`: the `x-run-id` its `/end-run` carries. */
     runId: text("run_id").notNull(),
-    /** `dispatched` | `completed` | `failed` */
+    /** `dispatched` | `completed` | `failed` | `refused` (the sender refused what the run carried: final) */
     status: text("status").notNull(),
+    /** When `refused`: the sender's refusal code and its human sentence, verbatim (`/end-run` `delivery`). */
+    refusalCode: text("refusal_code"),
+    refusalReason: text("refusal_reason"),
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true }).notNull().defaultNow(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
   },

@@ -90,18 +90,26 @@ export function eventConcernsPeople(people: readonly NamedPerson[], eventLeadId:
 
 export type ScheduleDueOutcome =
   | { ok: true }
-  | { ok: false; code: "person_not_filed" | "ambiguous_person" | "followup_unavailable"; detail: string };
+  | { ok: false; code: "person_not_filed" | "ambiguous_person" | "followup_unavailable" | "person_not_due"; detail: string };
 
 /**
  * Make ONE named person due NOW on a unit's own follow-up queue at lead-service (`schedule-by-email`).
  * 404 = the person holds no row on this campaign yet (not filed), 409 = the address matches several
  * rows; every other failure is `followup_unavailable`. Never throws: the caller names the skip.
+ *
+ * A 200 whose answered state carries NO due date = `person_not_due` (PUSHED-TRUTH-1015): lead-service kept the
+ * person off the queue (e.g. their thread was handed to the brand's team after a reply), so no run can claim
+ * them; its sentence (`handedReason`, else `stoppedReason`) is the detail. Before, the 200 read as made due,
+ * the run claimed nobody and the occurrence was redelivered six times, never explained (prod 2026-10-15,
+ * admin@ on campaign 25036bda). `statedBy` (the occurrence naming the person, as on the filing) tells
+ * lead-service the brand itself names them for THAT occurrence.
  */
 export async function scheduleNamedPersonDue(input: {
   orgId: string;
   campaignId: string;
   email: string;
   now?: Date;
+  statedBy?: PersonStatement | null;
 }): Promise<ScheduleDueOutcome> {
   const url = process.env.LEAD_SERVICE_URL;
   const apiKey = process.env.LEAD_SERVICE_API_KEY;
@@ -114,11 +122,18 @@ export async function scheduleNamedPersonDue(input: {
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": apiKey, "x-org-id": input.orgId },
-        body: JSON.stringify({ email: input.email, dueAt: (input.now ?? new Date()).toISOString() }),
+        body: JSON.stringify({
+          email: input.email,
+          dueAt: (input.now ?? new Date()).toISOString(),
+          ...(input.statedBy ? { statedBy: input.statedBy } : {}),
+        }),
         signal: AbortSignal.timeout(30_000),
       },
     );
-    if (res.ok) return { ok: true };
+    if (res.ok) {
+      const answer = (await res.json().catch(() => null)) as { followup?: Record<string, unknown> } | null;
+      return notMadeDue(answer?.followup);
+    }
     const body = (await res.text().catch(() => "")).slice(0, 300);
     if (res.status === 404) return { ok: false, code: "person_not_filed", detail: `lead-service 404 ${body}` };
     if (res.status === 409) return { ok: false, code: "ambiguous_person", detail: `lead-service 409 ${body}` };
@@ -126,6 +141,17 @@ export async function scheduleNamedPersonDue(input: {
   } catch (err) {
     return { ok: false, code: "followup_unavailable", detail: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * lead-service's answered follow-up state: made due unless it states a NULL due date. An answer without a
+ * `followup` object (an older shape) is taken as made due, as before. Pure.
+ */
+export function notMadeDue(followup: Record<string, unknown> | null | undefined): ScheduleDueOutcome {
+  if (!followup || typeof followup !== "object" || !("dueAt" in followup) || followup.dueAt) return { ok: true };
+  const said = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const why = said(followup.handedReason) ?? said(followup.stoppedReason) ?? "lead-service kept the person off the follow-up queue";
+  return { ok: false, code: "person_not_due", detail: why.slice(0, 500) };
 }
 
 export type FileNamedPersonOutcome =

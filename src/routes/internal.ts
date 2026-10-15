@@ -41,7 +41,7 @@ import { StepTriggerScopeError } from "../lib/step-trigger.js";
 import {
   listOfferTriggerEvents,
   recordTriggerEvent,
-  serializeTriggerEvent,
+  serializeTriggerEvents,
   summarizeOfferTriggerEvents,
   triggerRanCounts,
   triggerStepAndRecord,
@@ -522,8 +522,8 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
   try {
     const campaignId = req.campaignId!;
     const orgId = req.orgId!;
-    const { success } = req.body;
-    let { stopCampaign, noWorkAvailable } = req.body;
+    const { success, delivery } = req.body as z.infer<typeof EndRunBody>;
+    let { stopCampaign, noWorkAvailable } = req.body as z.infer<typeof EndRunBody>;
 
     // "No lead" from a campaign whose lead sources find leads ON THEIR OWN (lib/on-demand-mode.ts, owner 2026-10-12)
     // means their stock is empty for now: nobody was asked to find anyone, so no audience ran dry. Exhaustion is then
@@ -594,7 +594,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
     // Fire-and-forget: never delays or fails run finalization.
     if (req.runId) {
       const endedRunId = req.runId;
-      void settleTriggerDelivery(endedRunId, { success, stopCampaign, noWorkAvailable }).catch((err) => {
+      void settleTriggerDelivery(endedRunId, { success, stopCampaign, noWorkAvailable, delivery }).catch((err) => {
         console.error(`[campaign-service] could not settle the trigger delivery of run ${endedRunId} (campaign ${campaignId}):`, err);
       });
     }
@@ -958,7 +958,8 @@ router.post("/internal/trigger-events", requireApiKey, serviceAuth, validateBody
       item: b.item,
     });
     if (!result.replayed && result.event.status === "pending") wakeScheduler();
-    res.status(result.replayed ? 200 : 201).json({ event: serializeTriggerEvent(result.event), replayed: result.replayed });
+    const [event] = await serializeTriggerEvents([result.event]);
+    res.status(result.replayed ? 200 : 201).json({ event, replayed: result.replayed });
   } catch (error) {
     if (error instanceof TriggerEventError) {
       console.warn(`[campaign-service] ${error.status} ${error.reason} on /internal/trigger-events — ${error.message}`);
@@ -1072,7 +1073,7 @@ router.get("/internal/offers/:offerId/trigger-events", requireApiKey, validateQu
     const limit = q.limit ? Number(q.limit) : 50;
     if (limit < 1 || limit > 200) return res.status(400).json({ error: "limit must be between 1 and 200" });
     const events = await listOfferTriggerEvents({ orgId, brandId: q.brandId, offerId: req.params.offerId, limit });
-    res.json({ events: events.map(serializeTriggerEvent) });
+    res.json({ events: await serializeTriggerEvents(events) });
   } catch (error) {
     console.error("[campaign-service] trigger-events list error:", error);
     res.status(500).json({ error: "Internal server error" });
