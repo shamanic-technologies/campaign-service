@@ -2044,9 +2044,6 @@
                 "additionalProperties": false
               }
             },
-            "required": [
-              "email"
-            ],
             "additionalProperties": false
           },
           "item": {

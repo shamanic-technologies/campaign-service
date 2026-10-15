@@ -107,9 +107,11 @@ async function sendStuckOccurrenceAlert(event: TriggerEvent): Promise<boolean> {
   const campaign = campaignId
     ? await db.query.campaigns.findFirst({ where: eq(campaigns.id, campaignId), columns: { name: true, createdByUserId: true } })
     : undefined;
-  const detail = (event.detail ?? {}) as { person?: { email?: string; name?: string | null } };
-  const prospect = detail.person?.email
-    ? `${detail.person.name ? `${detail.person.name} ` : ""}<${detail.person.email}>`
+  const detail = (event.detail ?? {}) as { person?: { email?: string | null; phone?: string | null; name?: string | null } };
+  // A person known only by phone (REPLY-PHONE-ONLY-1015) is named by their number.
+  const reach = detail.person?.email ?? detail.person?.phone ?? null;
+  const prospect = reach
+    ? `${detail.person?.name ? `${detail.person.name} ` : ""}<${reach}>`
     : undefined;
   const headers: Record<string, string> = { "Content-Type": "application/json", "x-api-key": apiKey, "x-org-id": event.orgId };
   if (campaign?.createdByUserId) headers["x-user-id"] = campaign.createdByUserId;

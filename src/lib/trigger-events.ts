@@ -18,6 +18,7 @@ import {
   PERSON_NOT_KNOWN_RETRY_MS,
   PERSON_NOT_KNOWN_WAIT_MS,
   storedEventPerson,
+  personLabel,
   type EventPerson,
 } from "./trigger-person.js";
 import { deliveriesByEvent, deliveryOf, eventCarries, recordDeliveries } from "./trigger-deliveries.js";
@@ -474,7 +475,7 @@ export async function fireClaimedEvent(
             priorRanCampaignIds: ranCampaignIds,
             fellDueAt: new Date(fellDueAt).toISOString(),
           },
-          lastError: `${heldBack.map((sk) => `${sk.campaignId} ${sk.reason}`).join(", ")}${person ? `: ${person.email}` : ""}, retried in ${retryMs / 60_000} min`.slice(0, 500),
+          lastError: `${heldBack.map((sk) => `${sk.campaignId} ${sk.reason}`).join(", ")}${person ? `: ${personLabel(person)}` : ""}, retried in ${retryMs / 60_000} min`.slice(0, 500),
         })
         .where(eq(triggerEvents.id, event.id))
         .returning();
