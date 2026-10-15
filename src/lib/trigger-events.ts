@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaigns, triggerEvents, type TriggerEvent } from "../db/schema.js";
+import { campaigns, triggerEvents, type TriggerEvent, type TriggerEventDelivery } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { sameLeg } from "./leg-identity.js";
 import { DELAY_DETECTOR_RECORDED_VIA, GITHUB_ISSUE_RECORDED_VIA, delayGuard, type LeadActivityCache } from "./delay-trigger-detector.js";
@@ -20,7 +20,7 @@ import {
   storedEventPerson,
   type EventPerson,
 } from "./trigger-person.js";
-import { eventCarries, recordDeliveries } from "./trigger-deliveries.js";
+import { deliveriesByEvent, deliveryOf, eventCarries, recordDeliveries } from "./trigger-deliveries.js";
 
 /**
  * THE TRIGGER EVENTS — ONE ROW PER OCCURRENCE, AND WHAT IT DID (owner 2026-10-09).
@@ -691,8 +691,14 @@ export async function listOfferTriggerEvents(
     .limit(scope.limit);
 }
 
-/** The wire shape of one event. */
-export function serializeTriggerEvent(e: TriggerEvent) {
+/** The wire shape of several events, each with its `delivery` (one read of their delivery rows). */
+export async function serializeTriggerEvents(events: TriggerEvent[]) {
+  const byEvent = await deliveriesByEvent(events.filter((e) => eventCarries(e.detail)).map((e) => e.id));
+  return events.map((e) => serializeTriggerEvent(e, byEvent.get(e.id) ?? []));
+}
+
+/** The wire shape of one event, given its delivery rows. */
+export function serializeTriggerEvent(e: TriggerEvent, deliveries: ReadonlyArray<TriggerEventDelivery> = []) {
   return {
     id: e.id,
     triggerId: e.triggerId,
@@ -710,6 +716,7 @@ export function serializeTriggerEvent(e: TriggerEvent) {
     skipReason: e.skipReason,
     ranCampaignIds: e.ranCampaignIds ?? [],
     ranLeads: eventRanLeads(e),
+    delivery: deliveryOf(e, deliveries),
     performedByCaller: e.performedByCaller,
     processedAt: e.processedAt ? e.processedAt.toISOString() : null,
     detail: e.detail ?? null,

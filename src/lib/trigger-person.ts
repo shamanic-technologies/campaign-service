@@ -126,7 +126,7 @@ export type EventPersonOwed =
   | { ok: true; leadId: string }
   | {
       ok: false;
-      code: "person_not_known" | "person_suppressed" | "ambiguous_person" | "person_not_filed" | "followup_unavailable";
+      code: "person_not_known" | "person_suppressed" | "ambiguous_person" | "person_not_filed" | "followup_unavailable" | "person_not_due";
       detail: string;
     };
 
@@ -159,7 +159,13 @@ export async function oweEventPerson(
     }
     return { ok: false, code: "followup_unavailable", detail: `${filed.code}: ${filed.detail}` };
   }
-  const due = await scheduleNamedPersonDue({ orgId: campaign.orgId, campaignId: campaign.id, email: person.email, now });
+  const due = await scheduleNamedPersonDue({
+    orgId: campaign.orgId,
+    campaignId: campaign.id,
+    email: person.email,
+    now,
+    statedBy: statedBy ?? null,
+  });
   if (!due.ok) return { ok: false, code: due.code, detail: due.detail };
   return { ok: true, leadId: filed.leadId };
 }
