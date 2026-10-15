@@ -182,6 +182,20 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
       .toMatchObject({ run: false, kind: "cap_reached", reason: "Sales funnel max volume reached" });
   });
 
+  it("says WHY a max budget is reached with the figure that made it so (FUNNEL-CAP-REACHED-AT-2PCT-1015)", async () => {
+    const refused = { ...budget("200", "4.62615", true, "one_off"), refusedSpend: { at: "2026-10-15T18:23:00.000Z", requiredCents: "196.0000000000" } };
+    const r = await withCaps({ stated: true, funded: true, fundedBy: "max_budget", maxBudget: refused, maxVolume: null, pipes: null });
+    expect(r.verdict).toMatchObject({ run: false, kind: "cap_reached" });
+    expect((r.verdict as { detail: string }).detail).toContain(
+      "its one_off max budget is reached: 4.63 of 200 cents spent, and the next spend of 196 cents would pass the cap (refused at 2026-10-15T18:23:00.000Z).",
+    );
+    // Consumed reached the cap itself (no refusal, or an older billing serving no refusedSpend).
+    for (const b of [{ ...budget("200", "200.4", true), refusedSpend: null }, budget("200", "200.4", true)]) {
+      const v = (await withCaps({ stated: true, funded: true, fundedBy: "max_budget", maxBudget: b, maxVolume: null, pipes: null })).verdict as { detail: string };
+      expect(v.detail).toContain("its weekly max budget is reached: 200.4 of 200 cents spent.");
+    }
+  });
+
   it("holds a proactive pipe LOUDLY when a consumption cannot be measured (never read as not reached)", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const { verdict } = await withCaps({ stated: true, funded: true, fundedBy: "both", maxBudget: budget("1000", "10", false), maxVolume: { count: 5, period: "daily", unit: "first_contacts", consumed: null, reached: null, consumedUnavailableReason: "volume_not_measured_on_channel" }, pipes: null });
