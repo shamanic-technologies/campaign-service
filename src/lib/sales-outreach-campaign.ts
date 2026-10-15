@@ -51,7 +51,9 @@ export const AI_MEETING_BOOKING_FEATURE_SLUG = "ai-meeting-booking";
  * per (offer, leg, channel), and its customer turns it on and off like any other campaign row.
  * It is NOT outbound for the same reasons too: its whole input is people who already answered.
  *
- * What sets it apart is that NO WORKFLOW runs it — see SERVICE_PERFORMED_FEATURE_SLUGS below.
+ * Its pipe's workflow places the call (twilio-service), dispatched on the trigger like every pipe
+ * (AIC-COMMON-1015, owner 2026-10-15: it used to be a side effect inside instantly-service's reply
+ * ingestion, a special case removed).
  */
 export const AI_INSTANT_CALL_FEATURE_SLUG = "ai-instant-call";
 
@@ -149,30 +151,6 @@ export const SALES_FAMILY_FEATURE_SLUGS: ReadonlySet<string> = new Set([
 
 export function isSalesFamilyFeature(slug?: string | null): boolean {
   return !!slug && SALES_FAMILY_FEATURE_SLUGS.has(slug);
-}
-
-/**
- * CHANNELS ANOTHER SERVICE PERFORMS ON AN EVENT: their campaigns have NO workflow, by design.
- *
- * AI Instant Call's work is not a DAG: instantly-service rings the rep when a reply is qualified
- * as a sales interest, and asks this service whether the offer's campaign is ON before it does.
- * The campaign exists so the customer has one on/off switch and one budget line for it, owned
- * here like every other row. So its `workflow_slug` is NULL (the same representation a
- * customer-operated channel already has): never scheduled, never triggered, never handed to
- * workflow-service. Creating or starting one never asks which workflow runs it, and a caller
- * STATING a workflow for one is refused rather than stored (a workflow nothing runs would read as
- * a campaign that runs).
- *
- * Held here rather than read from the catalogue because features-service publishes WHO operates a
- * channel (platform for this one: we ring, not the customer), not WHAT dispatches it, and that
- * second question is this service's alone.
- */
-export const SERVICE_PERFORMED_FEATURE_SLUGS: ReadonlySet<string> = new Set([
-  AI_INSTANT_CALL_FEATURE_SLUG,
-]);
-
-export function isServicePerformedFeature(slug?: string | null): boolean {
-  return !!slug && SERVICE_PERFORMED_FEATURE_SLUGS.has(slug);
 }
 
 // The four per-campaign budget-window columns. gate-check enforces them for every OTHER feature

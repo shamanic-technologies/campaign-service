@@ -100,11 +100,10 @@ export const CampaignSchema = z.object({
 
 export const CreateCampaignBody = z.object({
   name: z.string().min(1, "Campaign name is required"),
-  // The DAG this campaign is born on (the selector's fallback). REQUIRED for every channel a
-  // workflow runs; REFUSED for a channel another service performs on an event (`ai-instant-call`:
-  // its campaign has no workflow, by design, and a stated one is a 400 rather than stored).
+  // The DAG this campaign is born on (the selector's fallback). REQUIRED for every channel (400
+  // `workflow_required`); kept `.optional()` in the schema so the refusal is the named one.
   workflowSlug: z.string().min(1).optional().openapi({
-    description: "Required, except for a channel another service performs on an event (ai-instant-call), where it must be omitted: that campaign has no workflow.",
+    description: "Required for every channel (400 workflow_required when absent).",
   }),
   orgId: z.string().min(1, "orgId is required"),
   brandIds: z.array(z.string().uuid("each brandId must be a valid UUID")).min(1, "at least one brandId is required"),

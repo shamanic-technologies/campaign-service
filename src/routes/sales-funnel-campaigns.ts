@@ -1,3 +1,4 @@
+import { adoptSalesFunnelUnitWorkflows } from "../lib/sales-funnel-unit-workflows.js";
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -513,6 +514,31 @@ router.post("/internal/sales-funnel-campaigns/complete-units", requireApiKey, as
     res.json(await completeSalesFunnelUnits({ apply, orgId }));
   } catch (error) {
     console.error("[campaign-service] Sales funnel unit completion error:", error);
+    res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+/**
+ * POST /internal/sales-funnel-campaigns/adopt-workflows {apply?, orgId?} + a REAL staff x-org-id/x-user-id/x-run-id —
+ * every PLATFORM unit born with no workflow (AI Instant Call, before AIC-COMMON-1015) takes the workflow a launch
+ * would give its pipe today (lib/sales-funnel-unit-workflows.ts). Dry run unless `apply: true`; idempotent; status
+ * never touched.
+ */
+router.post("/internal/sales-funnel-campaigns/adopt-workflows", requireApiKey, async (req, res) => {
+  const orgId = req.headers["x-org-id"];
+  const userId = req.headers["x-user-id"];
+  const runId = req.headers["x-run-id"];
+  if (typeof orgId !== "string" || typeof userId !== "string" || typeof runId !== "string" || !orgId || !userId || !runId) {
+    return res.status(400).json({ error: "x-org-id, x-user-id and x-run-id are required (a real staff run): the workflow read is workflow-service's" });
+  }
+  try {
+    res.json(await adoptSalesFunnelUnitWorkflows({
+      apply: req.body?.apply === true,
+      orgId: typeof req.body?.orgId === "string" ? req.body.orgId : undefined,
+      identity: { orgId, userId, runId },
+    }));
+  } catch (error) {
+    console.error("[campaign-service] Sales funnel unit workflow adoption error:", error);
     res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });

@@ -34,7 +34,7 @@ import {
   type DbTransaction,
 } from "../lib/campaign-status-history.js";
 import type { StatusActor } from "../lib/mission-status-notification.js";
-import { isSalesFamilyFeature, isServicePerformedFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
+import { isSalesFamilyFeature, salesMaxBudgetRefusal } from "../lib/sales-outreach-campaign.js";
 import { resolveStartablePair } from "../lib/startable-pair.js";
 import {
   ProactiveCatalogueUnavailableError,
@@ -280,21 +280,12 @@ router.post("/campaigns", requireApiKey, serviceAuth, refuseRetiredAudienceIds, 
       return res.status(400).json({ error: createMaxBudgetRefusal });
     }
 
-    // WHICH workflow a campaign is born on. A channel another service performs on an event
-    // (ai-instant-call) has NO workflow by design: one stated for it is refused, never stored, and
-    // its campaign is never scheduled or dispatched. Every other channel must state one.
-    const servicePerformed = isServicePerformedFeature(resolvedFeatureSlug);
-    if (servicePerformed && workflowSlug) {
-      return res.status(400).json({
-        error: `A ${resolvedFeatureSlug} campaign has no workflow: another service performs it when ` +
-          `a lead reaches its step. Omit workflowSlug.`,
-        reason: "workflow_not_applicable",
-      });
-    }
-    if (!servicePerformed && !workflowSlug) {
+    // WHICH workflow a campaign is born on: every channel states one (AI Instant Call included since
+    // AIC-COMMON-1015: its pipe's workflow places the call, like every pipe).
+    if (!workflowSlug) {
       return res.status(400).json({ error: "workflowSlug is required", reason: "workflow_required" });
     }
-    const storedWorkflowSlug: string | null = servicePerformed ? null : workflowSlug;
+    const storedWorkflowSlug: string = workflowSlug;
 
     // Validate all required workflow fields BEFORE creating the campaign
     const brandIdCsv = (brandIds as string[]).join(",");
