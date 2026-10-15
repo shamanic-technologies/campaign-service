@@ -85,6 +85,7 @@ const createAic = (over: Record<string, unknown> = {}) =>
     brandIds: [BRAND],
     offerId: OFFER,
     legKey: AIC_LEG,
+    workflowSlug: "ai-instant-call-belenos",
     ...over,
   });
 
@@ -93,7 +94,7 @@ const patchStatus = (id: string, status: "activate" | "stop") =>
 
 const rowOf = async (id: string) => (await db.query.campaigns.findFirst({ where: eq(campaigns.id, id) }))!;
 
-describe("AI Instant Call: a campaign no workflow runs (owner 2026-10-05)", () => {
+describe("AI Instant Call: its pipe's workflow places the call, like every channel (AIC-COMMON-1015)", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     await cleanTestData();
@@ -103,33 +104,23 @@ describe("AI Instant Call: a campaign no workflow runs (owner 2026-10-05)", () =
     mockPaths.mockResolvedValue({ ok: true, value: [] });
   });
 
-  it("is created ON with no workflow, stopped, and re-activated, and nothing ever runs a workflow for it", async () => {
+  it("is created ON with its workflow, stored and dispatched like any channel", async () => {
     const created = await createAic().expect(201);
     const id = created.body.campaign.id as string;
     expect(created.body.campaign).toMatchObject({
       status: "ongoing", featureSlug: AIC, legKey: AIC_LEG, offerId: OFFER,
-      workflowSlug: null, nextRunAt: null, acquisitionChannel: "ai_instant_call",
+      workflowSlug: "ai-instant-call-belenos", acquisitionChannel: "ai_instant_call",
     });
 
     const stopped = await patchStatus(id, "stop").expect(200);
     expect(stopped.body.campaign.status).toBe("stopped");
-
     const restarted = await patchStatus(id, "activate").expect(200);
     expect(restarted.body.campaign.status).toBe("ongoing");
-
-    // Creating it again hands back the same campaign (never a second one), still workflow-less.
-    await patchStatus(id, "stop").expect(200);
-    const again = await createAic().expect(200);
-    expect(again.body.campaign.id).toBe(id);
-    expect(again.body.campaign).toMatchObject({ status: "ongoing", workflowSlug: null, nextRunAt: null });
-
-    expect(mockExecute).not.toHaveBeenCalled();
-    expect(mockWorkflow).not.toHaveBeenCalled();
   });
 
-  it("refuses a stated workflow rather than storing one nothing runs", async () => {
-    const res = await createAic({ workflowSlug: "made-up" }).expect(400);
-    expect(res.body.reason).toBe("workflow_not_applicable");
+  it("refuses a create that states no workflow, like every channel", async () => {
+    const res = await createAic({ workflowSlug: undefined }).expect(400);
+    expect(res.body.reason).toBe("workflow_required");
     expect(await db.query.campaigns.findMany({ where: eq(campaigns.orgId, ORG) })).toHaveLength(0);
   });
 
@@ -163,7 +154,8 @@ describe("AI Instant Call: a campaign no workflow runs (owner 2026-10-05)", () =
     const on = await read().expect(200);
     expect(on.body.campaigns.map((c: { id: string; status: string }) => [c.id, c.status])).toEqual([[id, "ongoing"]]);
 
-    await patchStatus(id, "stop").expect(200);
+    const stop = await patchStatus(id, "stop");
+    expect(stop.status, JSON.stringify(stop.body)).toBe(200);
     const off = await read().query({ status: "ongoing" }).expect(200);
     expect(off.body.campaigns).toEqual([]);
   });

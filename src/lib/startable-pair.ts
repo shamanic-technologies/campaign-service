@@ -1,7 +1,7 @@
 import { publishedSpelling, storedLegKey } from "./leg-identity.js";
 import type { IdentityHeaders } from "@distribute/runs-client";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
-import { isSalesFamilyFeature, isServicePerformedFeature } from "./sales-outreach-campaign.js";
+import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { fetchStartableWorkflowSlug } from "./startable-workflow-client.js";
 import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
 import { fetchPipe, fetchSalesFunnel, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
@@ -180,10 +180,7 @@ export async function resolveReactiveDefaultWorkflow(
   const performed = catalogue.legsBySlug.get(featureSlug);
   if (!performed) return { ok: false, code: "unknown_channel" };
   if (publishedSpelling(featureSlug, performed, legKey) === null) return { ok: false, code: "leg_not_performed" };
-  if (
-    (catalogue.operatorBySlug.get(featureSlug) ?? "platform") === "customer" ||
-    isServicePerformedFeature(featureSlug)
-  ) {
+  if ((catalogue.operatorBySlug.get(featureSlug) ?? "platform") === "customer") {
     return { ok: true, workflowSlug: null };
   }
   const workflow = await (deps.workflow ?? fetchStartableWorkflowSlug)(featureSlug, identity);
@@ -202,7 +199,7 @@ export interface SalesFunnelUnitPlan {
   /** The leg in this service's STORED spelling (lib/leg-identity.ts). */
   legKey: string;
   mode: "proactive" | "reactive";
-  /** The DAG the unit is born on, or null (customer-operated / service-performed channel). */
+  /** The DAG the unit is born on, or null (customer-operated channel). */
   workflowSlug: string | null;
 }
 

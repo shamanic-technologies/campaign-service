@@ -288,7 +288,7 @@
           "workflowSlug": {
             "type": "string",
             "minLength": 1,
-            "description": "Required, except for a channel another service performs on an event (ai-instant-call), where it must be omitted: that campaign has no workflow."
+            "description": "Required for every channel (400 workflow_required when absent)."
           },
           "orgId": {
             "type": "string",

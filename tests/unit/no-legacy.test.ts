@@ -648,7 +648,10 @@ describe('No Legacy Patterns - CRITICAL', () => {
     // answered 410 for the workflow an EXISTING ongoing campaign dispatched — which live dynasty
     // replaces it?" It runs only on that refusal, never on a funded ceiling, never to stand a
     // campaign up (2026-10-09, campaign 1e95a4c3 spun on a deprecated fallback for 3 days).
-    expect(workflowReaders).toEqual(['lib/retired-workflow.ts', 'lib/startable-pair.ts']);
+    // sales-funnel-unit-workflows.ts asks the same question a launch asks, for a unit a person
+    // ALREADY launched before its channel ran a workflow (AIC-COMMON-1015), from a staff route run by
+    // hand: it creates and starts nothing.
+    expect(workflowReaders).toEqual(['lib/retired-workflow.ts', 'lib/sales-funnel-unit-workflows.ts', 'lib/startable-pair.ts']);
 
     const startReaders = files
       .filter((f) => /startable-pair/.test(fs.readFileSync(f, 'utf-8')))
