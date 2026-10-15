@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, salesFunnelCampaigns, triggerEvents } from "../db/schema.js";
 import type { ChannelCatalogueRead } from "./channel-operator-client.js";
@@ -9,7 +9,7 @@ import {
   githubIssueFromKey,
   type GithubIssueCheck,
 } from "./github-issue-trigger.js";
-import { sameLeg } from "./leg-identity.js";
+import { answersTrigger } from "./sales-funnel-head-trigger.js";
 import { fireClaimedEvent } from "./trigger-events.js";
 
 /**
@@ -64,15 +64,17 @@ export async function detectGithubIssueTriggers(
   reads?: GithubIssueReads,
 ): Promise<GithubIssueTickSummary> {
   const summary: GithubIssueTickSummary = { triggers: 0, waiting: 0, checked: 0, fired: 0, failed: 0 };
-  const triggers = detectableTriggers(catalogue, GITHUB_ISSUE_IN_PROD_KIND, () => ({ ok: true, params: null }));
+  const triggers = await detectableTriggers(catalogue, GITHUB_ISSUE_IN_PROD_KIND, () => ({ ok: true, params: null }));
   summary.triggers = triggers.length;
   if (triggers.length === 0) return summary;
 
   const slugs = [...new Set(triggers.flatMap((t) => t.transitions.map((x) => x.featureSlug)))];
+  const triggerIds = triggers.map((t) => t.type.id);
   const units = await db
     .select({
       featureSlug: campaigns.featureSlug,
       legKey: campaigns.legKey,
+      runsOnTriggerId: campaigns.runsOnTriggerId,
       salesFunnelCampaignId: salesFunnelCampaigns.id,
       orgId: salesFunnelCampaigns.orgId,
       brandId: salesFunnelCampaigns.brandId,
@@ -86,14 +88,17 @@ export async function detectGithubIssueTriggers(
       eq(salesFunnelCampaigns.status, "ongoing"),
       isNotNull(salesFunnelCampaigns.githubIssue),
       isNotNull(campaigns.legKey),
-      inArray(campaigns.featureSlug, slugs),
+      // A pipe a github trigger names, or a unit of a funnel headed by one (lib/sales-funnel-head-trigger.ts).
+      slugs.length > 0
+        ? or(inArray(campaigns.featureSlug, slugs), inArray(campaigns.runsOnTriggerId, triggerIds))
+        : inArray(campaigns.runsOnTriggerId, triggerIds),
     ));
 
   const waiters = new Map<string, Waiter>();
   for (const u of units) {
     if (!u.featureSlug || !u.legKey || !u.githubIssue || !githubIssueFromKey(u.githubIssue)) continue;
     for (const t of triggers) {
-      if (!t.transitions.some((x) => x.featureSlug === u.featureSlug && sameLeg(u.featureSlug!, x.legKey, u.legKey))) continue;
+      if (!answersTrigger(u, t.type.id, t.transitions)) continue;
       const key = githubIssueIdempotencyKey(t.type.id, u.salesFunnelCampaignId, u.githubIssue);
       waiters.set(key, {
         salesFunnelCampaignId: u.salesFunnelCampaignId,

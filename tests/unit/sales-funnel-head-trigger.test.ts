@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { doorRefusal, runsOnTrigger, unitRunsOnTrigger } from "../../src/lib/sales-funnel-head-trigger.js";
+import { answersTrigger, doorRefusal, runsOnTrigger, unitRunsOnTrigger } from "../../src/lib/sales-funnel-head-trigger.js";
 import { answersOnDemand } from "../../src/lib/on-demand-mode.js";
 import { resolveSalesFunnelPlan } from "../../src/lib/startable-pair.js";
 import { fetchSalesFunnel } from "../../src/lib/sales-funnel-catalogue-client.js";
@@ -145,5 +145,19 @@ describe("fetchSalesFunnel reads the served trigger", () => {
     expect(await fetchSalesFunnel("f")).toMatchObject({ ok: true, value: { triggerId: null } });
     serve({ id: "f", name: "Radiance", legs });
     expect(await fetchSalesFunnel("f")).toMatchObject({ ok: true, value: { triggerId: null } });
+  });
+});
+
+describe("who answers a trigger (answersTrigger): one rule for the dispatch and every detector", () => {
+  const transitions = [{ featureSlug: "ai-follow-up-email", legKey: "signup_to_paid_client", triggerId: "follow_up_due" }];
+  const pipeUnit = { featureSlug: "ai-follow-up-email", legKey: "signup_to_paid_client", runsOnTriggerId: null };
+  it("a pipe naming the trigger answers it (legacy, unchanged)", () => {
+    expect(answersTrigger(pipeUnit, "follow_up_due", transitions)).toBe(true);
+    expect(answersTrigger(pipeUnit, "signup_not_paid_24_hours", transitions)).toBe(false);
+  });
+  it("a unit of a funnel headed by a delay trigger answers it even though its pipe names another", () => {
+    const headed = { ...pipeUnit, runsOnTriggerId: "signup_not_paid_24_hours" };
+    expect(answersTrigger(headed, "signup_not_paid_24_hours", transitions)).toBe(true);
+    expect(answersTrigger(headed, "follow_up_due", transitions)).toBe(true);
   });
 });

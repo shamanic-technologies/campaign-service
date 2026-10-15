@@ -2,7 +2,6 @@ import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, triggerEvents, type TriggerEvent, type TriggerEventDelivery } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
-import { sameLeg } from "./leg-identity.js";
 import { DELAY_DETECTOR_RECORDED_VIA, GITHUB_ISSUE_RECORDED_VIA, delayGuard, type LeadActivityCache } from "./delay-trigger-detector.js";
 import {
   runCampaignsInScope,
@@ -21,7 +20,7 @@ import {
   type EventPerson,
 } from "./trigger-person.js";
 import { deliveriesByEvent, deliveryOf, eventCarries, recordDeliveries } from "./trigger-deliveries.js";
-import { doorRefusal, runsOnTrigger, TRIGGER_NOT_CALLABLE } from "./sales-funnel-head-trigger.js";
+import { answersTrigger, doorRefusal, TRIGGER_NOT_CALLABLE } from "./sales-funnel-head-trigger.js";
 
 /**
  * THE TRIGGER EVENTS — ONE ROW PER OCCURRENCE, AND WHAT IT DID (owner 2026-10-09).
@@ -184,9 +183,8 @@ export async function fireTrigger(
     (c) =>
       (!onlySalesFunnelCampaignId || c.salesFunnelCampaignId === onlySalesFunnelCampaignId) &&
       (!onlyCampaignIds || onlyCampaignIds.includes(c.id)) &&
-      (transitions.some((t) => t.featureSlug === c.featureSlug && sameLeg(c.featureSlug, t.legKey, c.legKey)) ||
-        // A unit of a funnel headed by this trigger (FUNNEL-HEAD-TRIGGER-1015), its proactive pipes included.
-        runsOnTrigger(c, triggerId)),
+      // A pipe naming this trigger, or a unit of a funnel headed by it (FUNNEL-HEAD-TRIGGER-1015).
+      answersTrigger(c, triggerId, transitions),
     `trigger ${triggerId}`,
     trigger,
     eventLeadId,

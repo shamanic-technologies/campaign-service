@@ -30,7 +30,7 @@ import { canonicalEmail, namedPeople, peopleKeyOf, storedPeople } from "../lib/s
 import { fileSalesFunnelCampaignPeople, type FilingReport } from "../lib/sales-funnel-people-store.js";
 import { GITHUB_ISSUE_IN_PROD_KIND, githubIssueKey, parseGithubIssue } from "../lib/github-issue-trigger.js";
 import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
-import { sameLeg } from "../lib/leg-identity.js";
+import { answersTrigger } from "../lib/sales-funnel-head-trigger.js";
 import { notifySalesFunnelCampaignPrecompute } from "../lib/sales-funnel-campaign-precompute.js";
 import { deleteSalesFunnelCampaign } from "../lib/sales-funnel-campaign-delete.js";
 
@@ -221,9 +221,9 @@ router.post(
         const issueTriggers = new Set(
           [...(catalogue.triggers?.values() ?? [])].filter((t) => t.kind === GITHUB_ISSUE_IN_PROD_KIND).map((t) => t.id),
         );
+        // A pipe a github trigger names, or a unit of a funnel headed by one (lib/sales-funnel-head-trigger.ts).
         const answers = plan.units.some((u) =>
-          (catalogue.triggerTransitions ?? []).some((t) =>
-            issueTriggers.has(t.triggerId) && t.featureSlug === u.featureSlug && sameLeg(u.featureSlug, t.legKey, u.legKey)),
+          [...issueTriggers].some((id) => answersTrigger(u, id, catalogue.triggerTransitions ?? [])),
         );
         if (!answers) {
           return res.status(400).json({

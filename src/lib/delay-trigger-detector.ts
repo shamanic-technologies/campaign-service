@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { campaigns, triggerEvents, type TriggerEvent } from "../db/schema.js";
 import type { CatalogueTriggerTransition, CatalogueTriggerType, ChannelCatalogueRead } from "./channel-operator-client.js";
 import { fetchOfferLeadActivity, type LeadActivityByLead } from "./lead-activity-client.js";
-import { sameLeg } from "./leg-identity.js";
+import { answersTrigger } from "./sales-funnel-head-trigger.js";
 import { ON_DEMAND_TRIGGER_ID } from "./on-demand-mode.js";
 import { fetchStepReachers, hasEverReachedStep } from "./step-reach-client.js";
 
@@ -142,17 +142,34 @@ export function reportUndetectableTrigger(t: CatalogueTriggerType, why: string):
 
 export type ParamsRead<P> = { ok: true; params: P } | { ok: false; error: string };
 
-/** Every trigger of `kind` a reactive leg names, with its parsed parameters. Pure but for the error report. */
-export function detectableTriggers<P>(
+/**
+ * The triggers some ONGOING unit of a funnel headed by a trigger runs on (`campaigns.runs_on_trigger_id`,
+ * lib/sales-funnel-head-trigger.ts). One read per detector pass.
+ */
+export async function liveHeadTriggerIds(): Promise<Set<string>> {
+  const rows = await db
+    .selectDistinct({ id: campaigns.runsOnTriggerId })
+    .from(campaigns)
+    .where(and(eq(campaigns.status, "ongoing"), isNotNull(campaigns.runsOnTriggerId)));
+  return new Set(rows.flatMap((r) => (r.id ? [r.id] : [])));
+}
+
+/**
+ * Every trigger of `kind` something answers (lib/sales-funnel-head-trigger.ts `answersTrigger`): a reactive leg names
+ * it, or a live unit of a funnel headed by it runs on it (FUNNEL-HEAD-TRIGGER-1015), with its parsed parameters.
+ */
+export async function detectableTriggers<P>(
   catalogue: Extract<ChannelCatalogueRead, { ok: true }>,
   kind: "delay" | "poll" | "github_issue_in_prod",
   parse: (params: Record<string, unknown> | null | undefined) => ParamsRead<P>,
-): DetectableTrigger<P>[] {
+): Promise<DetectableTrigger<P>[]> {
   const out: DetectableTrigger<P>[] = [];
-  for (const type of catalogue.triggers?.values() ?? []) {
-    if (type.kind !== kind) continue;
+  const ofKind = [...(catalogue.triggers?.values() ?? [])].filter((type) => type.kind === kind);
+  if (ofKind.length === 0) return out;
+  const heads = await liveHeadTriggerIds();
+  for (const type of ofKind) {
     const transitions = (catalogue.triggerTransitions ?? []).filter((t) => t.triggerId === type.id);
-    if (transitions.length === 0) continue;
+    if (transitions.length === 0 && !heads.has(type.id)) continue;
     const read = parse(type.params);
     if (!read.ok) {
       reportUndetectableTrigger(type, read.error);
@@ -180,10 +197,10 @@ export interface TriggerScope {
   offerId: string;
 }
 
-/** The (org, brand, offer) scopes with an ONGOING campaign on a leg the trigger names. */
-export async function liveScopesBehind(transitions: readonly CatalogueTriggerTransition[]): Promise<TriggerScope[]> {
+/** The (org, brand, offer) scopes with an ONGOING campaign answering the trigger (`answersTrigger`). */
+export async function liveScopesBehind(trigger: { type: { id: string }; transitions: readonly CatalogueTriggerTransition[] }): Promise<TriggerScope[]> {
+  const { transitions } = trigger;
   const slugs = [...new Set(transitions.map((t) => t.featureSlug))];
-  if (slugs.length === 0) return [];
   const live = await db
     .select({
       orgId: campaigns.orgId,
@@ -192,17 +209,20 @@ export async function liveScopesBehind(transitions: readonly CatalogueTriggerTra
       offerId: campaigns.offerId,
       featureSlug: campaigns.featureSlug,
       legKey: campaigns.legKey,
+      runsOnTriggerId: campaigns.runsOnTriggerId,
     })
     .from(campaigns)
     .where(and(
       eq(campaigns.status, "ongoing"),
       isNotNull(campaigns.offerId),
       isNotNull(campaigns.legKey),
-      inArray(campaigns.featureSlug, slugs),
+      slugs.length > 0
+        ? or(inArray(campaigns.featureSlug, slugs), eq(campaigns.runsOnTriggerId, trigger.type.id))
+        : eq(campaigns.runsOnTriggerId, trigger.type.id),
     ));
   const seen = new Map<string, TriggerScope>();
   for (const c of live) {
-    if (!transitions.some((t) => t.featureSlug === c.featureSlug && sameLeg(c.featureSlug!, t.legKey, c.legKey))) continue;
+    if (!answersTrigger(c, trigger.type.id, transitions)) continue;
     const brands = c.brandIds && c.brandIds.length > 0 ? c.brandIds : c.brandId ? [c.brandId] : [];
     for (const brandId of brands) {
       const scope = { orgId: c.orgId, brandId, offerId: c.offerId! };
