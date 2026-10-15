@@ -140,6 +140,12 @@ export const STEP_TRIGGER_SKIPS = {
   PERSON_NOT_FILED: "person_not_filed",
   /** A named person's address matches several rows on this unit at lead-service: who is owed is unclear. */
   AMBIGUOUS_PERSON: "ambiguous_person",
+  /**
+   * lead-service answered but kept the named person OFF the follow-up queue (e.g. their thread was handed to the
+   * brand's team after a reply): no run could claim them, so nothing is dispatched. Final, the detail is
+   * lead-service's sentence (PUSHED-TRUTH-1015).
+   */
+  PERSON_NOT_DUE: "person_not_due",
   /** lead-service could not record the named people's debt (unreachable, non-2xx): nothing dispatched. */
   FOLLOWUP_UNAVAILABLE: "followup_unavailable",
   /**

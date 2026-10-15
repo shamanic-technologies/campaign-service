@@ -1505,6 +1505,49 @@
           "noWorkAvailable": {
             "type": "boolean"
           },
+          "delivery": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "delivered"
+                    ]
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "refused"
+                    ]
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "state",
+                  "code",
+                  "reason"
+                ]
+              }
+            ]
+          },
           "personNotAdmitted": {
             "type": "object",
             "properties": {
@@ -1804,6 +1847,51 @@
             },
             "description": "Per campaign that ran: the lead the event's person was filed as on that campaign (lead-service). Empty when no run carried a lead."
           },
+          "delivery": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "delivered",
+                  "refused",
+                  "owed",
+                  "in_flight",
+                  "failed",
+                  "skipped",
+                  "unconfirmed"
+                ]
+              },
+              "refusals": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "campaignId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "campaignId",
+                    "code",
+                    "reason"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "state",
+              "refusals"
+            ],
+            "description": "What happened to the item/person the occurrence carries. `delivered`: a run did its work (a pushed email was accepted by the sender). `refused`: the sender refused it, final, never retried (`refusals[]`: the sender's code and sentence). `owed`: not done yet (due later, or waiting for a retry after a temporary failure). `in_flight`: a run carrying it is running. `failed`: every retry failed for a temporary reason, given up (`lastError`). `skipped`: no run carried it (`skipReason`). `unconfirmed`: recorded ran, no run reported back. null when the occurrence carries nothing."
+          },
           "performedByCaller": {
             "type": "boolean"
           },
@@ -1832,6 +1920,7 @@
           "skipReason",
           "ranCampaignIds",
           "ranLeads",
+          "delivery",
           "performedByCaller",
           "processedAt"
         ]

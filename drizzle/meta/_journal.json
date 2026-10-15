@@ -526,6 +526,13 @@
       "when": 1779900000000,
       "tag": "0074_campaign_anchor_run",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1780000000000,
+      "tag": "0075_trigger_delivery_refusal",
+      "breakpoints": true
     }
   ]
 }

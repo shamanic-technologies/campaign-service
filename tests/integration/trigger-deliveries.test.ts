@@ -264,6 +264,110 @@ describe("an occurrence carrying something is consumed only by a run that did it
     expect(mockExecute.mock.calls[0][1].trigger).toMatchObject({ eventId: res.body.event.id, item: ITEM });
   });
 
+  const endRun = (campaignId: string, runId: string, body: Record<string, unknown>) =>
+    request(app)
+      .post("/end-run")
+      .set({
+        "x-api-key": API_KEY,
+        "x-org-id": ORG,
+        "x-campaign-id": campaignId,
+        "x-user-id": USER,
+        "x-run-id": runId,
+        "x-workflow-slug": "email-sending-bubup",
+        "x-feature-slug": "email-sending",
+      })
+      .send(body);
+  const listed = async (eventId: string) => {
+    const res = await request(app)
+      .get(`/internal/offers/${OFFER}/trigger-events?brandId=${BRAND}`)
+      .set("x-api-key", API_KEY)
+      .set("x-org-id", ORG)
+      .expect(200);
+    return (res.body.events as Array<Record<string, unknown>>).find((e) => e.id === eventId)!;
+  };
+  const REFUSAL = {
+    state: "refused",
+    code: "recent_brand_contact",
+    reason: "jane.doe@example.com was already emailed for this brand inside the re-contact window. No email was sent and nothing was billed.",
+  };
+
+  it("a SENDER REFUSAL on a run that says success:true ends the occurrence REFUSED with the reason, never ran, never redelivered", async () => {
+    const campaign = await emailSending();
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const eventId = res.body.event.id as string;
+    // Fired, run in flight: the push answer says so (not "delivered").
+    expect(res.body.event.delivery).toEqual({ state: "in_flight", refusals: [] });
+    const [d] = await deliveries(eventId);
+
+    await endRun(campaign.id, d.runId, { success: true, stopCampaign: false, delivery: REFUSAL }).expect(200);
+    let event = await eventRow(eventId);
+    for (let i = 0; i < 50 && event.outcome !== "refused"; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      event = await eventRow(eventId);
+    }
+    expect(event).toMatchObject({ status: "done", outcome: "refused", skipReason: "recent_brand_contact", ranCampaignIds: [] });
+    expect(event.lastError).toContain(REFUSAL.reason);
+    expect(await deliveries(eventId)).toEqual([
+      expect.objectContaining({ status: "refused", refusalCode: "recent_brand_contact", refusalReason: REFUSAL.reason }),
+    ]);
+    expect(await listed(eventId)).toMatchObject({
+      outcome: "refused",
+      delivery: { state: "refused", refusals: [{ campaignId: campaign.id, code: "recent_brand_contact", reason: REFUSAL.reason }] },
+    });
+    // Zero redeliveries.
+    expect(await fireDueTriggerEvents(new Date(Date.now() + 24 * 3_600_000))).toBe(0);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refusal on a REDELIVERED run (after a transient failure) is final at once, success:false included", async () => {
+    const campaign = await emailSending();
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const eventId = res.body.event.id as string;
+    const [first] = await deliveries(eventId);
+    expect((await settleTriggerDelivery(first.runId, { success: false, stopCampaign: false })).kind).toBe("redelivered");
+    expect((await listed(eventId)).delivery).toEqual({ state: "owed", refusals: [] });
+    await db.update(campaigns).set({ consecutiveRunFailures: 0 }).where(eq(campaigns.id, campaign.id));
+    const pending = await eventRow(eventId);
+    expect(await fireDueTriggerEvents(new Date(pending.dueAt.getTime() + 1000))).toBe(1);
+    const second = (await deliveries(eventId)).find((d) => d.status === "dispatched")!;
+    const verdict = { state: "refused" as const, code: "email_not_verified", reason: "not sent: our verifier's verdict is invalid" };
+    expect((await settleTriggerDelivery(second.runId, { success: false, stopCampaign: false, delivery: verdict })).kind).toBe("refused");
+    const event = await eventRow(eventId);
+    expect(event).toMatchObject({ status: "done", outcome: "refused", skipReason: "email_not_verified", ranCampaignIds: [] });
+    expect((event.detail as Record<string, unknown>).retryCampaignIds).toBeUndefined();
+    expect(await fireDueTriggerEvents(new Date(Date.now() + 24 * 3_600_000))).toBe(0);
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+  });
+
+  it("a run stating delivered reads delivered; a transient failure (no delivery) keeps the bounded redelivery", async () => {
+    const campaign = await emailSending();
+    const a = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM, idempotencyKey: "a" });
+    const [da] = await deliveries(a.body.event.id);
+    await endRun(campaign.id, da.runId, { success: true, stopCampaign: false, delivery: { state: "delivered" } }).expect(200);
+    let read = await listed(a.body.event.id);
+    for (let i = 0; i < 50 && (read.delivery as { state: string }).state !== "delivered"; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      read = await listed(a.body.event.id);
+    }
+    expect(read).toMatchObject({ outcome: "ran", delivery: { state: "delivered", refusals: [] } });
+  });
+
+  it("/end-run refuses a malformed delivery (refused without a code)", async () => {
+    const campaign = await emailSending();
+    await endRun(campaign.id, "wf-run-x", { success: true, stopCampaign: false, delivery: { state: "refused", reason: "x" } }).expect(400);
+  });
+
+  it("lead-service keeping the person OFF the queue (handed to the team) = final named skip, nothing dispatched", async () => {
+    await emailSending();
+    mockDue.mockResolvedValue({ ok: false, code: "person_not_due", detail: "Handed to the brand's team: the automated responder could not answer this reply." });
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(res.body.event).toMatchObject({ status: "done", outcome: "skipped", skipReason: "person_not_due", delivery: { state: "skipped" } });
+    expect(mockExecute).not.toHaveBeenCalled();
+    // The occurrence named the person: lead-service is told so.
+    expect(mockDue.mock.calls[0][0]).toMatchObject({ statedBy: { triggerEventId: res.body.event.id, triggerId: PUSHED } });
+    expect(await fireDueTriggerEvents(new Date(Date.now() + 24 * 3_600_000))).toBe(0);
+  });
+
   it("a person the pipe does NOT admit (/end-run personNotAdmitted) is a FINAL named skip, never redelivered (REPLY-ANY-LEAD-1015)", async () => {
     const campaign = await emailSending();
     const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
@@ -322,6 +426,7 @@ describe("an occurrence carrying something is consumed only by a run that did it
     await emailSending();
     const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER });
     expect(res.body.event.outcome).toBe("ran");
+    expect(res.body.event.delivery).toBeNull();
     expect(await deliveries(res.body.event.id)).toHaveLength(0);
   });
 });
