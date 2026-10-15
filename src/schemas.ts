@@ -481,6 +481,16 @@ export const EndRunBody = z.object({
    * byte-identically to before the field existed.
    */
   noWorkAvailable: z.boolean().optional(),
+  /**
+   * The run's PIPE does not admit the person the occurrence it carried names (REPLY-ANY-LEAD-1015): the
+   * workflow stated its strategy's policy on the person's claim (lead-service, e.g. "leads only" = pure
+   * prospect) and lead-service refused them. FINAL for this campaign on this occurrence: never redelivered,
+   * recorded on the occurrence as skipped `person_not_admitted` with `reason` verbatim (lead-service's).
+   * The campaign is rescheduled on the idle cadence, like `noWorkAvailable`. Absent = byte-identical.
+   */
+  personNotAdmitted: z.object({
+    reason: z.string().trim().min(1).max(200),
+  }).optional(),
 }).openapi("EndRunBody");
 
 export const EndRunResponse = z.object({
