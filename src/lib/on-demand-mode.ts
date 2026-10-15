@@ -19,6 +19,10 @@
  *   - a source campaign that is not a unit of a SALES FUNNEL campaign has no money of its own (pre-funnel sources are
  *     paced inside the outreach campaign they feed): it answers on demand whatever the catalogue says.
  * A campaign that is not a source answers on demand only when the catalogue says so; unreadable = it is not (today).
+ *
+ * A unit that RUNS ON a trigger (a funnel headed by it, lib/sales-funnel-head-trigger.ts: `runsOnTriggerId`, stated at
+ * birth) is never dispatched by the scheduler or a person's start either: only that trigger's events run it, so its
+ * proactive pipe never spends on its own cadence. Decided from the row alone, whatever the catalogue answers.
  */
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { sameLeg } from "./leg-identity.js";
@@ -37,10 +41,13 @@ export interface DispatchModeCampaign {
   featureSlug?: string | null;
   legKey?: string | null;
   salesFunnelCampaignId?: string | null;
+  /** The trigger this unit runs on, and only on (lib/sales-funnel-head-trigger.ts). */
+  runsOnTriggerId?: string | null;
 }
 
 /** True when the campaign runs only when another pipe asks for it: the scheduler never dispatches it. */
 export function answersOnDemand(c: DispatchModeCampaign, catalogue: ChannelCatalogueRead): boolean {
+  if (c.runsOnTriggerId) return true;
   const source = isSourceCampaign(c);
   if (!catalogue.ok) return source;
   if (source && !c.salesFunnelCampaignId) return true;

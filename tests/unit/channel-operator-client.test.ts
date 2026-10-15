@@ -161,6 +161,27 @@ describe("fetchChannelCatalogue", () => {
     expect(read.stepKeys.size).toBe(0);
   });
 
+  it("reads a trigger's `callable` only when stated as a boolean (FUNNEL-HEAD-TRIGGER-1015)", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        channels: [],
+        steps: [],
+        triggers: [
+          { id: "signup_not_paid_24_hours", label: "Signup Not Paid In 24 Hours", kind: "delay", callable: false },
+          { id: "follow_up_due", label: "Follow-up Due", kind: "reported", callable: true },
+          { id: "lead_requested", label: "Lead requested", kind: "event" },
+        ],
+      }),
+    });
+    const read = await fetchChannelCatalogue();
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.triggers?.get("signup_not_paid_24_hours")?.callable).toBe(false);
+    expect(read.triggers?.get("follow_up_due")?.callable).toBe(true);
+    expect(read.triggers?.get("lead_requested")?.callable).toBeNull();
+  });
+
   it("says a failure is a failure — never an empty catalogue", async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 503, text: async () => "unavailable" });
     const read = await fetchChannelCatalogue();

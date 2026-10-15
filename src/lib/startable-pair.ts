@@ -7,6 +7,7 @@ import { fetchLegSeedWorkflowSlug } from "./leg-seed-workflow.js";
 import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
 import { fetchPipe, fetchSalesFunnel, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
 import { fetchOfferSteps, missingOfferSteps } from "./sales-funnel-offer-steps.js";
+import { unitRunsOnTrigger } from "./sales-funnel-head-trigger.js";
 
 /**
  * CAN THE CUSTOMER START THE CAMPAIGN FOR THIS (OFFER, LEG, CHANNEL)?
@@ -202,6 +203,8 @@ export interface SalesFunnelUnitPlan {
   mode: "proactive" | "reactive";
   /** The DAG the unit is born on, or null (customer-operated channel). */
   workflowSlug: string | null;
+  /** The trigger the unit runs on, and only on (lib/sales-funnel-head-trigger.ts); null = runs as every unit. */
+  runsOnTriggerId: string | null;
 }
 
 export interface SalesFunnelPlan {
@@ -409,6 +412,13 @@ export async function resolveSalesFunnelPlan(
       legKey: storedLegKey(channelSlug, legKey),
       mode,
       workflowSlug: workflow.workflowSlug,
+      // A funnel HEADED by a trigger (FUNNEL-HEAD-TRIGGER-1015): its head unit and proactive pipes run on that
+      // trigger only. The funnel's head = its first leg's pipe, as the catalogue lists it.
+      runsOnTriggerId: unitRunsOnTrigger(
+        { triggerId: read.value.triggerId ?? null, headPipeId: read.value.legs[0]?.pipe?.id ?? null },
+        { pipeId, featureSlug: channelSlug, legKey, mode },
+        catalogue,
+      ),
     });
   }
 

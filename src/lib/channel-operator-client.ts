@@ -120,6 +120,12 @@ export interface CatalogueTriggerType {
   origin?: "code" | "declared" | null;
   /** The kind's parameters, verbatim (`delay`: `{afterStep, days}`; `poll`: `{source, everyMinutes}`). */
   params?: Record<string, unknown> | null;
+  /**
+   * Whether a caller (API / MCP / Copilot) may fire it through the trigger door (features-service
+   * `triggers[].callable`, owner 2026-10-15): false only on a condition WE compute (delay, poll, GitHub issue in
+   * prod). null = not served yet: accepted, as before (FUNNEL-HEAD-TRIGGER-1015).
+   */
+  callable?: boolean | null;
 }
 
 // `github_issue_in_prod` (2026-10-12): "a GitHub issue reached prod", detected HERE (lib/github-issue-trigger.ts);
@@ -167,6 +173,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
         kind?: unknown;
         origin?: unknown;
         params?: unknown;
+        callable?: unknown;
       }>;
       legs?: Array<{
         legKey?: unknown;
@@ -254,6 +261,8 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
           kind: (CATALOGUE_TRIGGER_KINDS as readonly unknown[]).includes(t.kind) ? (t.kind as CatalogueTriggerKind) : null,
           origin: t.origin === "code" || t.origin === "declared" ? t.origin : null,
           params: t.params && typeof t.params === "object" && !Array.isArray(t.params) ? (t.params as Record<string, unknown>) : null,
+          // Only a stated boolean is read: an absent field changes nothing at the door.
+          callable: typeof t.callable === "boolean" ? t.callable : null,
         });
       }
     }

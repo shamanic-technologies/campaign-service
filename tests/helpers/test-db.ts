@@ -61,6 +61,8 @@ export async function insertTestCampaign(
     /** A SALES FUNNEL unit (its money is its funnel's caps): the funnel campaign + funnel it belongs to. */
     salesFunnelCampaignId?: string | null;
     salesFunnelId?: string | null;
+    /** The trigger a unit of a trigger-headed funnel runs on, and only on (lib/sales-funnel-head-trigger.ts). */
+    runsOnTriggerId?: string | null;
     updatedAt?: Date;
   } = {}
 ) {
@@ -97,6 +99,7 @@ export async function insertTestCampaign(
       acquisitionChannel: data.acquisitionChannel ?? null,
       salesFunnelCampaignId: data.salesFunnelCampaignId ?? null,
       salesFunnelId: data.salesFunnelId ?? null,
+      runsOnTriggerId: data.runsOnTriggerId ?? null,
       ...(data.updatedAt ? { updatedAt: data.updatedAt } : {}),
     })
     .returning();

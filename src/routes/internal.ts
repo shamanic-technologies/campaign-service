@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
 import { legIsReactive } from "../lib/leg-identity.js";
 import { settleTriggerDelivery } from "../lib/trigger-deliveries.js";
@@ -930,7 +930,9 @@ router.post("/internal/campaigns/trigger-for-step", requireApiKey, serviceAuth, 
 });
 
 /**
- * POST /internal/trigger-events
+ * POST /internal/trigger-events          (the INTERNAL door: our own services, every declared trigger)
+ * POST /internal/trigger-events/public   (the PUBLIC door: what api-service `POST /v1/trigger-events` pipes an
+ *                                         outside caller to; FUNNEL-HEAD-TRIGGER-1015)
  *
  * Record ONE occurrence of a declared trigger on (org, brand, offer) and do what it asks: fire it
  * now, fire it later from the tick (`dueAt` in the future), or record what the caller already
@@ -940,10 +942,12 @@ router.post("/internal/campaigns/trigger-for-step", requireApiKey, serviceAuth, 
  *   201 — recorded (and, when due now, fired: `event.outcome` says what ran or why not)
  *   200 — `idempotencyKey` named an event already recorded: that event, `replayed: true`
  *   400 — no org, malformed body, `unknown_trigger` (not in features-service's list: nothing
- *         recorded), `unknown_campaign` (a performed `ran` naming no campaign of the org)
+ *         recorded), `unknown_campaign` (a performed `ran` naming no campaign of the org), and on
+ *         the PUBLIC door only `trigger_not_callable` (features-service serves it `callable: false`:
+ *         fired by distribute itself, never reported by an outside caller; nothing recorded)
  *   502 — `catalogue_unavailable`: the trigger list could not be read, nothing recorded
  */
-router.post("/internal/trigger-events", requireApiKey, serviceAuth, validateBody(RecordTriggerEventBody), async (req: AuthenticatedRequest, res) => {
+const recordTriggerEventRoute = (door: "public" | "internal") => async (req: AuthenticatedRequest, res: Response) => {
   try {
     const b = req.body as z.infer<typeof RecordTriggerEventBody>;
     const result = await recordTriggerEvent({
@@ -959,19 +963,22 @@ router.post("/internal/trigger-events", requireApiKey, serviceAuth, validateBody
       performed: b.performed,
       person: b.person ? eventPerson(b.person) : undefined,
       item: b.item,
+      door,
     });
     if (!result.replayed && result.event.status === "pending") wakeScheduler();
     const [event] = await serializeTriggerEvents([result.event]);
     res.status(result.replayed ? 200 : 201).json({ event, replayed: result.replayed });
   } catch (error) {
     if (error instanceof TriggerEventError) {
-      console.warn(`[campaign-service] ${error.status} ${error.reason} on /internal/trigger-events — ${error.message}`);
+      console.warn(`[campaign-service] ${error.status} ${error.reason} on the ${door} trigger-events door — ${error.message}`);
       return res.status(error.status).json({ error: error.message, reason: error.reason });
     }
     console.error("[campaign-service] trigger-events error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
-});
+};
+router.post("/internal/trigger-events", requireApiKey, serviceAuth, validateBody(RecordTriggerEventBody), recordTriggerEventRoute("internal"));
+router.post("/internal/trigger-events/public", requireApiKey, serviceAuth, validateBody(RecordTriggerEventBody), recordTriggerEventRoute("public"));
 
 /**
  * POST /internal/on-demand-runs  (x-org-id, x-user-id, x-run-id = the ASKING pipe's run; lib/on-demand-runs.ts)
