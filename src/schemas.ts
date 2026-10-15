@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isIanaTimezone } from "./lib/iana-timezone.js";
+import { isE164Phone } from "./lib/e164-phone.js";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 
 extendZodWithOpenApi(z);
@@ -730,8 +731,15 @@ export const RecordTriggerEventBody = z.object({
    * unfunded, a run in flight, a failure backoff) keeps the event pending with no deadline until it can run, once.
    */
   person: z.object({
-    email: z.string().trim().email("person.email must be an email address"),
+    /**
+     * The person's email. Optional when `phone` is stated in E.164 (REPLY-PHONE-ONLY-1015: a person who
+     * writes on WhatsApp is often known only by their number and the name WhatsApp shows): such a person is
+     * filed and made due at lead-service BY PHONE, and reaches the answering pipe exactly like an
+     * email-identified one (its strategy admits or refuses them). Both stated = email-first, as before.
+     */
+    email: z.string().trim().email("person.email must be an email address").optional(),
     name: z.string().max(300).optional(),
+    /** The person's phone. REQUIRED (E.164, e.g. `+447700900123`) when no email is stated. */
     phone: z.string().max(50).optional(),
     /**
      * The person's timezone as the client STATES it (IANA name, e.g. `Europe/London`): handed to
@@ -744,7 +752,12 @@ export const RecordTriggerEventBody = z.object({
       .optional(),
     /** The contact in the brand's own CRM the person came from, carried verbatim. */
     crmContact: z.object({ provider: z.string().min(1), contactId: z.string().min(1) }).strict().optional(),
-  }).strict().optional(),
+  }).strict()
+    .refine((p) => p.email !== undefined || (p.phone !== undefined && isE164Phone(p.phone)), {
+      message: "person needs an email, or a phone in E.164 (e.g. +447700900123) when no email is known",
+      path: ["phone"],
+    })
+    .optional(),
   /**
    * What the occurrence carries (e.g. a form: `{formName, answers, submittedAt}`), opaque JSON kept on the
    * event and handed to the workflow verbatim as `/execute` `trigger.item`. At most 20,000 characters.

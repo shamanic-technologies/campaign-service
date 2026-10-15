@@ -23,7 +23,7 @@ import {
 } from "./sales-funnel-people.js";
 import { fileSalesFunnelCampaignPeople, targetingOfSalesFunnelCampaigns } from "./sales-funnel-people-store.js";
 import { eventConcernsGithubIssue } from "./github-issue-trigger.js";
-import { oweEventPerson, type EventPerson } from "./trigger-person.js";
+import { oweEventPerson, personLabel, type EventPerson } from "./trigger-person.js";
 import { runsOnTrigger } from "./sales-funnel-head-trigger.js";
 
 /**
@@ -378,7 +378,7 @@ export async function runCampaignsInScope(
     const people = unitPeople(campaign, targeting);
     const namedLeadId = trigger?.leadId ?? eventLeadId ?? null;
     if (people && person && !people.some((p) => p.email === person.email)) {
-      skip(STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON, `the event names ${person.email}, not one of the people this campaign names`);
+      skip(STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON, `the event names ${personLabel(person)}, not one of the people this campaign names`);
       continue;
     }
     if (people && !person && !eventConcernsPeople(people, namedLeadId)) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fileNamedPerson } from "../../src/lib/sales-funnel-people.js";
+import { fileNamedPerson, scheduleNamedPersonDue } from "../../src/lib/sales-funnel-people.js";
 
 /** What campaign-service sends lead-service's named-person door, and how it reads the refusals. */
 describe("fileNamedPerson: the brand's statement rides the filing", () => {
@@ -69,5 +69,48 @@ describe("fileNamedPerson: the brand's statement rides the filing", () => {
     const out = await fileNamedPerson({ orgId: "o", campaignId: "c", email: "a@x.com", statedBy: { triggerEventId: "e" } });
     expect(out).toMatchObject({ ok: false, code: "person_suppressed" });
     expect(out.ok ? "" : out.detail).toContain("unsubscribed");
+  });
+
+  it("REPLY-PHONE-ONLY-1015: a person known only by phone is filed on the phone, no email sent", async () => {
+    answer = { status: 201, body: { leadId: "lead-2", status: "filed" } };
+    const out = await fileNamedPerson({
+      orgId: "o",
+      campaignId: "c",
+      email: null,
+      phone: "+447700900123",
+      name: "Velveteen (WA)",
+      statedBy: { triggerEventId: "evt-2", triggerId: "positive_reply_received" },
+    });
+    expect(out).toEqual({ ok: true, leadId: "lead-2", filed: true });
+    expect(calls[0].body).toEqual({
+      phone: "+447700900123",
+      statedBy: { triggerEventId: "evt-2", triggerId: "positive_reply_received" },
+      name: "Velveteen (WA)",
+    });
+  });
+});
+
+describe("scheduleNamedPersonDue: who lead-service makes due", () => {
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  beforeEach(() => {
+    process.env.LEAD_SERVICE_URL = "http://lead:3000";
+    process.env.LEAD_SERVICE_API_KEY = "k";
+    calls.length = 0;
+    vi.stubGlobal("fetch", async (url: string, init: { body: string }) => {
+      calls.push({ url, body: JSON.parse(init.body) });
+      return new Response(JSON.stringify({ followup: { dueAt: "2026-10-15T16:00:00.000Z" } }), { status: 200 });
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("an email-identified person: the email only, byte-identical to before (the phone never rides here)", async () => {
+    await scheduleNamedPersonDue({ orgId: "o", campaignId: "c", email: "a@x.com", phone: "+447700900123", now: new Date("2026-10-15T16:00:00.000Z") });
+    expect(calls[0].body).toEqual({ email: "a@x.com", dueAt: "2026-10-15T16:00:00.000Z" });
+  });
+
+  it("REPLY-PHONE-ONLY-1015: a person known only by phone is made due on the phone", async () => {
+    const out = await scheduleNamedPersonDue({ orgId: "o", campaignId: "c", email: null, phone: "+447700900123", now: new Date("2026-10-15T16:00:00.000Z") });
+    expect(out).toEqual({ ok: true });
+    expect(calls[0].body).toEqual({ phone: "+447700900123", dueAt: "2026-10-15T16:00:00.000Z" });
   });
 });

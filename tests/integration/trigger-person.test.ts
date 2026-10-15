@@ -138,6 +138,38 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     expect(mockFile).toHaveBeenCalledWith(expect.objectContaining({ phone: "+44 7700 900124", timezone: null }));
   });
 
+  it("REPLY-PHONE-ONLY-1015: a person known only by phone + name is recorded, filed and made due BY PHONE, and reaches the pipe", async () => {
+    const campaign = await meetingBooking("ongoing");
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: { phone: "+44 7700 900123", name: "Velveteen (WA)" }, item: ITEM });
+    expect(res.status).toBe(201);
+    expect(res.body.event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+    expect(res.body.event.detail.person).toMatchObject({ email: null, phone: "+447700900123", name: "Velveteen (WA)" });
+    expect(mockFile).toHaveBeenCalledWith(expect.objectContaining({
+      campaignId: campaign.id,
+      email: null,
+      phone: "+447700900123",
+      name: "Velveteen (WA)",
+      statedBy: { triggerEventId: res.body.event.id, triggerId: FORM },
+    }));
+    expect(mockDue).toHaveBeenCalledWith(expect.objectContaining({ campaignId: campaign.id, email: null, phone: "+447700900123" }));
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(mockExecute.mock.calls[0][1].trigger).toMatchObject({
+      leadId: "lead-jane",
+      person: { email: null, phone: "+447700900123", name: "Velveteen (WA)" },
+    });
+  });
+
+  it("REPLY-PHONE-ONLY-1015: a person with neither email nor an E.164 phone is refused by name, nothing written", async () => {
+    await meetingBooking("ongoing");
+    for (const person of [{ name: "Nobody" }, { phone: "07700 900123", name: "Local number" }]) {
+      const bad = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person });
+      expect(bad.status).toBe(400);
+      expect(JSON.stringify(bad.body)).toContain("phone in E.164");
+    }
+    expect(mockFile).not.toHaveBeenCalled();
+    expect(await allEvents()).toHaveLength(0);
+  });
+
   it("a live campaign on the pipe: the person is filed and made due on it, and the workflow receives them + the item", async () => {
     const campaign = await meetingBooking("ongoing");
     const started = Date.now();
