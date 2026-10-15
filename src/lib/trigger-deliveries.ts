@@ -36,6 +36,14 @@ import { triggerEventDeliveries, triggerEvents, type TriggerEventDelivery } from
  * other campaign served the outcome is `refused`, `skipReason` the code, `lastError` the sentence. Never
  * redelivered. Transient failures (no `delivery`, `success: false`) keep the bounded redelivery above.
  * What the client reads: `deliveryOf` (served `delivery` on every event read).
+ *
+ * A PERSON THE PIPE DOES NOT ADMIT (REPLY-ANY-LEAD-1015, owner 2026-10-15): who a pipe answers is its strategy's
+ * (features-service plays), stated by its workflow on the person's claim at lead-service ("leads only" = pure
+ * prospect: never the owner's personal contacts, the brand's customers, team, investors...). A refused person is
+ * reported on `/end-run` `personNotAdmitted {reason}`: the delivery settles `not_admitted`, FINAL for that campaign
+ * (never redelivered: asking again cannot change who the person is), the campaign leaves `ranCampaignIds`,
+ * `detail.notAdmitted[]` names it with lead-service's reason verbatim, and with no other campaign served the
+ * outcome is `skipped` / `person_not_admitted`. campaign-service never judges who a person is.
  */
 
 /** Runs a campaign gets for one occurrence before it gives up (the first + 5 redeliveries, ~3h45 apart in all). */
@@ -44,6 +52,9 @@ export const TRIGGER_DELIVERY_MAX = 6;
 export const TRIGGER_DELIVERY_RETRY_DELAYS_MS = [2, 10, 30, 60, 120].map((m) => m * 60_000);
 /** Outcome + skip reason of an occurrence whose every campaign gave up. */
 export const TRIGGER_EVENT_FAILED = { OUTCOME: "failed", REASON: "run_failed" } as const;
+
+/** Skip reason of an occurrence whose person no campaign's pipe admitted (and nobody else served it). */
+export const PERSON_NOT_ADMITTED = "person_not_admitted" as const;
 
 /** While the event is being fired, a settle waits this long between tries (the fire ends in seconds). */
 const FIRING_WAIT_MS = 3_000;
@@ -72,6 +83,8 @@ export interface RunEnd {
   stopCampaign?: boolean;
   noWorkAvailable?: boolean;
   delivery?: RunDelivery;
+  /** The run's pipe does not admit the occurrence's person (REPLY-ANY-LEAD-1015). */
+  personNotAdmitted?: { reason: string };
 }
 
 /** Did a run do the work of the occurrence it carried? A stated `delivered` is the run's own word. Pure. */
@@ -106,6 +119,7 @@ export type DeliverySettlement =
   | { kind: "redelivered"; eventId: string; campaignId: string; failedRuns: number; dueAt: Date }
   | { kind: "gave_up"; eventId: string; campaignId: string; failedRuns: number }
   | { kind: "refused"; eventId: string; campaignId: string; code: string }
+  | { kind: "not_admitted"; eventId: string; campaignId: string; reason: string }
   | { kind: "event_busy"; eventId: string; campaignId: string };
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
@@ -123,6 +137,7 @@ export async function settleTriggerDelivery(
   waitMs: number = FIRING_WAIT_MS,
 ): Promise<DeliverySettlement> {
   if (end.delivery?.state === "refused") return settleRefusedDelivery(runId, end.delivery, now, waitMs);
+  if (end.success === true && end.personNotAdmitted) return settleNotAdmitted(runId, end.personNotAdmitted.reason, now, waitMs);
   const delivered = runDelivered(end);
   const [d] = await db
     .update(triggerEventDeliveries)
@@ -367,4 +382,77 @@ export async function deliveriesByEvent(eventIds: string[]): Promise<Map<string,
   const rows = await db.select().from(triggerEventDeliveries).where(inArray(triggerEventDeliveries.eventId, eventIds));
   for (const r of rows) out.set(r.eventId, [...(out.get(r.eventId) ?? []), r]);
   return out;
+}
+
+/**
+ * The run's pipe refused the occurrence's person (see header): final for that campaign, never redelivered. Waits
+ * out a fire in progress like a failed delivery does.
+ */
+async function settleNotAdmitted(runId: string, reason: string, now: Date, waitMs: number): Promise<DeliverySettlement> {
+  const [d] = await db
+    .update(triggerEventDeliveries)
+    .set({ status: "not_admitted", endedAt: now })
+    .where(and(eq(triggerEventDeliveries.runId, runId), eq(triggerEventDeliveries.status, "dispatched")))
+    .returning();
+  if (!d) return { kind: "not_a_delivery" };
+
+  for (let attempt = 1; attempt <= FIRING_TRIES; attempt++) {
+    const applied = await db.transaction(async (tx) => {
+      const [event] = await tx
+        .select()
+        .from(triggerEvents)
+        .where(eq(triggerEvents.id, d.eventId))
+        .for("update");
+      if (!event) return "missing" as const;
+      if (event.status === "firing") return "busy" as const;
+
+      const own = event.detail && typeof event.detail === "object" && !Array.isArray(event.detail)
+        ? (event.detail as Record<string, unknown>)
+        : {};
+      const others = (ids: string[]) => ids.filter((id) => id !== d.campaignId);
+      const ran = others(event.ranCampaignIds ?? []);
+      const priorRan = others(strings(own.priorRanCampaignIds));
+      const notAdmitted = [
+        ...(Array.isArray(own.notAdmitted) ? own.notAdmitted : []),
+        { campaignId: d.campaignId, runId, reason, at: now.toISOString() },
+      ];
+      const detail = {
+        ...own,
+        notAdmitted,
+        priorRanCampaignIds: priorRan,
+        ...(own.retryCampaignIds !== undefined ? { retryCampaignIds: others(strings(own.retryCampaignIds)) } : {}),
+      };
+      // `ranLeads` is served only for campaigns still in `ranCampaignIds` / `priorRanCampaignIds`: nothing to drop.
+      const servedElsewhere = ran.length > 0 || priorRan.length > 0;
+      await tx
+        .update(triggerEvents)
+        .set(event.status === "pending"
+          // Still owed to other campaigns: their fire writes the outcome, this campaign is no longer asked.
+          ? { ranCampaignIds: ran, detail }
+          : {
+              ranCampaignIds: ran,
+              outcome: servedElsewhere ? "ran" : "skipped",
+              skipReason: servedElsewhere ? null : PERSON_NOT_ADMITTED,
+              detail,
+              processedAt: now,
+            })
+        .where(eq(triggerEvents.id, d.eventId));
+      return "applied" as const;
+    });
+    if (applied === "missing") {
+      console.error(`[campaign-service] delivery ${d.id}: trigger event ${d.eventId} no longer exists, nothing to record`);
+      return { kind: "not_a_delivery" };
+    }
+    if (applied === "applied") {
+      console.log(
+        `[campaign-service] trigger event ${d.eventId}: campaign ${d.campaignId}'s pipe does not admit its person (${reason}, run ${runId}); final, not redelivered`,
+      );
+      return { kind: "not_admitted", eventId: d.eventId, campaignId: d.campaignId, reason };
+    }
+    if (attempt < FIRING_TRIES) await sleep(waitMs);
+  }
+  console.error(
+    `[campaign-service] trigger event ${d.eventId} stayed firing while run ${runId} of campaign ${d.campaignId} reported its person not admitted: outcome not rewritten (delivery ${d.id})`,
+  );
+  return { kind: "event_busy", eventId: d.eventId, campaignId: d.campaignId };
 }
