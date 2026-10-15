@@ -88,6 +88,16 @@ export function eventConcernsPeople(people: readonly NamedPerson[], eventLeadId:
   return people.some((p) => p.leadId === eventLeadId);
 }
 
+/**
+ * Who lead-service identifies: the email when there is one (email-first, as always), else the phone
+ * (REPLY-PHONE-ONLY-1015). The phone rides beside an email too (lead-service infers the timezone from it);
+ * lead-service refuses a phone shorter than 3 characters: such a value carries no country. Pure.
+ */
+export function personIdentity(input: { email: string | null; phone?: string | null }): { email?: string; phone?: string } {
+  const phone = input.phone && input.phone.trim().length >= 3 ? input.phone.trim() : null;
+  return { ...(input.email ? { email: input.email } : {}), ...(phone ? { phone } : {}) };
+}
+
 export type ScheduleDueOutcome =
   | { ok: true }
   | { ok: false; code: "person_not_filed" | "ambiguous_person" | "followup_unavailable" | "person_not_due"; detail: string };
@@ -107,7 +117,9 @@ export type ScheduleDueOutcome =
 export async function scheduleNamedPersonDue(input: {
   orgId: string;
   campaignId: string;
-  email: string;
+  /** Null = a person known only by phone (REPLY-PHONE-ONLY-1015): identified by `phone` (E.164). */
+  email: string | null;
+  phone?: string | null;
   now?: Date;
   statedBy?: PersonStatement | null;
 }): Promise<ScheduleDueOutcome> {
@@ -123,7 +135,8 @@ export async function scheduleNamedPersonDue(input: {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": apiKey, "x-org-id": input.orgId },
         body: JSON.stringify({
-          email: input.email,
+          // An email-identified person: byte-identical to before (the phone is the filing's, never sent here).
+          ...(input.email ? { email: input.email } : personIdentity(input)),
           dueAt: (input.now ?? new Date()).toISOString(),
           ...(input.statedBy ? { statedBy: input.statedBy } : {}),
         }),
@@ -181,7 +194,8 @@ export interface PersonStatement {
 export async function fileNamedPerson(input: {
   orgId: string;
   campaignId: string;
-  email: string;
+  /** Null = a person known only by phone (REPLY-PHONE-ONLY-1015): filed on `phone` (E.164). */
+  email: string | null;
   userId?: string | null;
   runId?: string | null;
   /** Absent = the door as before: only people the brand already knows. */
@@ -208,11 +222,9 @@ export async function fileNamedPerson(input: {
         method: "POST",
         headers,
         body: JSON.stringify({
-          email: input.email,
+          ...personIdentity(input),
           ...(input.statedBy ? { statedBy: input.statedBy } : {}),
           ...(input.statedBy && input.name ? { name: input.name } : {}),
-          // lead-service refuses a phone shorter than 3 characters: such a value carries no country.
-          ...(input.phone && input.phone.trim().length >= 3 ? { phone: input.phone.trim() } : {}),
           ...(input.timezone ? { timezone: input.timezone } : {}),
         }),
         signal: AbortSignal.timeout(30_000),

@@ -1,4 +1,5 @@
 import type { Campaign } from "../db/schema.js";
+import { canonicalPhone } from "./e164-phone.js";
 import { canonicalEmail, fileNamedPerson, scheduleNamedPersonDue, type PersonStatement } from "./sales-funnel-people.js";
 
 /**
@@ -38,9 +39,13 @@ import { canonicalEmail, fileNamedPerson, scheduleNamedPersonDue, type PersonSta
  */
 
 export interface EventPerson {
-  /** Canonical (trimmed, lowercased). The key lead-service files and identifies the person on. */
-  email: string;
+  /**
+   * Canonical (trimmed, lowercased). The key lead-service files and identifies the person on. Null = a
+   * person known only by PHONE (REPLY-PHONE-ONLY-1015: a WhatsApp writer): filed and made due by `phone`.
+   */
+  email: string | null;
   name?: string | null;
+  /** As stated; canonical E.164 (`+447700900123`) when it is the identity (no email). */
   phone?: string | null;
   /** IANA zone the client STATED for the person (validated at the door); absent = none stated, never guessed here. */
   timezone?: string | null;
@@ -89,16 +94,18 @@ export const PERSON_EVENT_RETRY_SKIPS: ReadonlySet<string> = new Set([...OWED_UN
 
 /** The caller's person, canonical. Pure. */
 export function eventPerson(input: {
-  email: string;
+  email?: string;
   name?: string;
   phone?: string;
   timezone?: string;
   crmContact?: { provider: string; contactId: string };
 }): EventPerson {
+  const email = input.email ? canonicalEmail(input.email) : null;
   return {
-    email: canonicalEmail(input.email),
+    email,
     name: input.name?.trim() || null,
-    phone: input.phone?.trim() || null,
+    // The identity of a phone-only person is its canonical E.164 spelling (validated at the door).
+    phone: email ? input.phone?.trim() || null : input.phone ? canonicalPhone(input.phone) || null : null,
     // Present only when stated: a push stating none is byte-identical to before (row, `/execute`).
     ...(input.timezone?.trim() ? { timezone: input.timezone.trim() } : {}),
     crmContact: input.crmContact ?? null,
@@ -109,10 +116,12 @@ export function eventPerson(input: {
 export function storedEventPerson(value: unknown): EventPerson | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const r = value as Record<string, unknown>;
-  if (typeof r.email !== "string" || !r.email) return null;
+  const email = typeof r.email === "string" && r.email ? r.email : null;
+  // A person with no email is identified by phone (REPLY-PHONE-ONLY-1015); neither = no person.
+  if (!email && !(typeof r.phone === "string" && r.phone)) return null;
   const crm = r.crmContact && typeof r.crmContact === "object" ? (r.crmContact as Record<string, unknown>) : null;
   return {
-    email: r.email,
+    email,
     name: typeof r.name === "string" ? r.name : null,
     phone: typeof r.phone === "string" ? r.phone : null,
     ...(typeof r.timezone === "string" && r.timezone ? { timezone: r.timezone } : {}),
@@ -163,9 +172,15 @@ export async function oweEventPerson(
     orgId: campaign.orgId,
     campaignId: campaign.id,
     email: person.email,
+    phone: person.phone ?? null,
     now,
     statedBy: statedBy ?? null,
   });
   if (!due.ok) return { ok: false, code: due.code, detail: due.detail };
   return { ok: true, leadId: filed.leadId };
+}
+
+/** How a person is named in a log line or a skip detail: email, else phone. Pure. */
+export function personLabel(person: Pick<EventPerson, "email" | "phone">): string {
+  return person.email ?? person.phone ?? "an unidentified person";
 }
