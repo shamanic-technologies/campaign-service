@@ -201,7 +201,8 @@ router.post(
       // A campaign naming its people only ANSWERS events for them: a pipe that prospects (an entry or
       // sourcing pipe) would act on strangers, so such a funnel is refused, naming the pipe.
       if (people) {
-        const prospecting = plan.units.filter((u) => u.mode !== "reactive");
+        // A unit running on its funnel's head trigger (lib/sales-funnel-head-trigger.ts) only answers that trigger's people.
+        const prospecting = plan.units.filter((u) => u.mode !== "reactive" && !u.runsOnTriggerId);
         if (prospecting.length > 0) {
           return res.status(400).json({
             error: `A campaign that names its people only answers triggers, but this sales funnel also finds new people (${prospecting.map((u) => u.pipeId).join(", ")}).`,
@@ -254,6 +255,7 @@ router.post(
             featureSlug: u.featureSlug,
             legKey: u.legKey,
             workflowSlug: u.workflowSlug,
+            runsOnTriggerId: u.runsOnTriggerId,
             acquisitionChannel: acquisitionChannelForFeature(u.featureSlug)!,
             // Names are unique per org; the funnel campaign's id keeps two funnels sharing a pipe apart.
             name: `${plan.salesFunnelName} ${idTag} - ${derivedCampaignName(u.featureSlug, brandId, offerId, u.legKey)}`,

@@ -126,6 +126,12 @@ export const campaigns = pgTable(
     salesFunnelId: text("sales_funnel_id"),
     salesFunnelCampaignId: text("sales_funnel_campaign_id"),
 
+    // FUNNEL-HEAD-TRIGGER-1015 (lib/sales-funnel-head-trigger.ts): the trigger this UNIT runs on, and ONLY on: a unit
+    // of a funnel features-service heads with a trigger, on its head leg or a proactive pipe, that its own pipe
+    // does not already answer. Never dispatched by the scheduler (parked like an on-demand unit), fired by that
+    // trigger's events. Written once at birth from the funnel read; NULL = every unit before it, unchanged.
+    runsOnTriggerId: text("runs_on_trigger_id"),
+
     // Volume limit (optional, total leads across all runs)
     maxLeads: integer("max_leads"),
 
