@@ -31,7 +31,7 @@ import { ensureCampaignRunId } from "../../src/lib/trigger-run.js";
 const CAMPAIGN = {
   id: "campaign-1",
   orgId: "org-1",
-  parentRunId: null as string | null,
+  anchorRunId: null as string | null,
   createdByUserId: "user-1",
   brandIds: ["brand-a", "brand-b"],
   workflowSlug: "sales-email-cold-outreach",
@@ -47,12 +47,26 @@ describe("ensureCampaignRunId", () => {
     mockDbWhere.mockResolvedValue(undefined);
   });
 
-  it("returns the stored ancestor untouched — it already resolves", async () => {
-    const runId = await ensureCampaignRunId({ ...CAMPAIGN, parentRunId: "run-existing" });
+  it("returns the campaign's own stored anchor untouched — it already resolves", async () => {
+    const runId = await ensureCampaignRunId({ ...CAMPAIGN, anchorRunId: "anchor-existing" });
 
-    expect(runId).toBe("run-existing");
+    expect(runId).toBe("anchor-existing");
     expect(mockCreateRun).not.toHaveBeenCalled();
     expect(mockDbSet).not.toHaveBeenCalled();
+  });
+
+  it("NEVER dispatches under the creator's run — it can belong to another campaign's tree", async () => {
+    // Prod 2026-10-12: Affection's units were born under a chat-service judgment run stamped with
+    // ANOTHER funnel campaign's Apollo unit; runs-service refused every child (409 Parent-child
+    // field conflict) and a Meta Ads form waited 14 h.
+    const campaign = { ...CAMPAIGN, parentRunId: "judgment-run-of-another-campaign" };
+    const runId = await ensureCampaignRunId(campaign);
+
+    expect(runId).toBe("anchor-1");
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
+    expect(mockCreateRun.mock.calls[0][0]).not.toHaveProperty("parentRunId");
+    expect(mockDbSet).toHaveBeenCalledWith(expect.objectContaining({ anchorRunId: "anchor-1" }));
+    expect(mockDbSet.mock.calls[0][0]).not.toHaveProperty("parentRunId");
   });
 
   it("creates a real root run when the campaign never stored one", async () => {
@@ -94,10 +108,10 @@ describe("ensureCampaignRunId", () => {
     await ensureCampaignRunId(campaign);
 
     expect(mockDbSet).toHaveBeenCalledWith(
-      expect.objectContaining({ parentRunId: "anchor-1" }),
+      expect.objectContaining({ anchorRunId: "anchor-1" }),
     );
     // The in-memory row follows the write, so a second call in the same tick reuses it.
-    expect(campaign.parentRunId).toBe("anchor-1");
+    expect(campaign.anchorRunId).toBe("anchor-1");
 
     mockCreateRun.mockClear();
     expect(await ensureCampaignRunId(campaign)).toBe("anchor-1");
@@ -119,7 +133,7 @@ describe("ensureCampaignRunId", () => {
 
     await expect(ensureCampaignRunId({ ...CAMPAIGN })).rejects.toThrow("runs-service unavailable");
     expect(mockDbSet).toHaveBeenCalledWith(
-      expect.objectContaining({ parentRunId: "anchor-1" }),
+      expect.objectContaining({ anchorRunId: "anchor-1" }),
     );
   });
 

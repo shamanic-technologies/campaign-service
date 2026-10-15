@@ -45,6 +45,8 @@ export async function insertTestCampaign(
     nextRunAt?: Date | null;
     createdByUserId?: string;
     parentRunId?: string;
+    /** The campaign's own root run. Defaults to `parentRunId`: a fixture stating an ancestor means "dispatchable without minting". */
+    anchorRunId?: string;
     // WHY it stopped — only `audience_exhausted` is resumable (src/lib/stop-reason.ts).
     stopReason?: string | null;
     /** The offer the campaign sells — brand-service's id, carried and never derived. */
@@ -87,6 +89,7 @@ export async function insertTestCampaign(
       nextRunAt: data.nextRunAt ?? null,
       createdByUserId: data.createdByUserId || null,
       parentRunId: data.parentRunId || null,
+      anchorRunId: data.anchorRunId || data.parentRunId || null,
       stopReason: data.stopReason ?? null,
       offerId: data.offerId ?? null,
       legKey: data.legKey ?? null,
