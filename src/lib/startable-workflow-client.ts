@@ -134,3 +134,35 @@ async function listActiveWorkflows(
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
 }
+
+/**
+ * Every workflow of a channel, ANY status, slug → its dynasty (workflow-service `GET /workflows/summaries`, no
+ * DAG): a unit may store a version slug (`…-v4`) while features-service ranks dynasties. Unreadable = `{ok: false}`.
+ */
+export async function fetchWorkflowDynastyBySlug(
+  featureSlug: string,
+  identity: IdentityHeaders & { userId: string; runId: string },
+): Promise<{ ok: true; dynastyBySlug: Map<string, string> } | { ok: false; detail: string }> {
+  const baseUrl = process.env.WORKFLOW_SERVICE_URL;
+  const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
+  if (!baseUrl || !apiKey) return { ok: false, detail: "WORKFLOW_SERVICE_URL / WORKFLOW_SERVICE_API_KEY not configured" };
+  try {
+    const url = new URL(`${baseUrl.replace(/\/$/, "")}/workflows/summaries`);
+    url.searchParams.set("featureSlug", featureSlug);
+    url.searchParams.set("status", "all");
+    const res = await fetch(url, {
+      headers: { "x-api-key": apiKey, "x-org-id": identity.orgId, "x-user-id": identity.userId, "x-run-id": identity.runId },
+    });
+    if (!res.ok) return { ok: false, detail: `HTTP ${res.status} ${(await res.text()).slice(0, 200)}` };
+    const data = await res.json() as { workflows?: Array<{ workflowSlug?: string; workflowDynastySlug?: string }> } | Array<{ workflowSlug?: string; workflowDynastySlug?: string }>;
+    const list = Array.isArray(data) ? data : data.workflows;
+    if (!Array.isArray(list)) return { ok: false, detail: "response states no workflows array" };
+    const dynastyBySlug = new Map<string, string>();
+    for (const w of list) {
+      if (w.workflowSlug && w.workflowDynastySlug) dynastyBySlug.set(w.workflowSlug, w.workflowDynastySlug);
+    }
+    return { ok: true, dynastyBySlug };
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+  }
+}

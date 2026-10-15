@@ -3,6 +3,7 @@ import type { IdentityHeaders } from "@distribute/runs-client";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { fetchStartableWorkflowSlug } from "./startable-workflow-client.js";
+import { fetchLegSeedWorkflowSlug } from "./leg-seed-workflow.js";
 import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
 import { fetchPipe, fetchSalesFunnel, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
 import { fetchOfferSteps, missingOfferSteps } from "./sales-funnel-offer-steps.js";
@@ -255,7 +256,7 @@ export async function resolveSalesFunnelPlan(
     salesFunnel?: typeof fetchSalesFunnel;
     pipe?: typeof fetchPipe;
     catalogue?: () => Promise<ChannelCatalogueRead>;
-    workflow?: typeof fetchStartableWorkflowSlug;
+    workflow?: typeof fetchLegSeedWorkflowSlug;
   } = {},
 ): Promise<{ ok: true; plan: SalesFunnelPlan } | { ok: false; refusal: SalesFunnelRefusal }> {
   const refuseLaunch = (status: SalesFunnelRefusal["status"], code: SalesFunnelRefusal["code"], message: string) =>
@@ -359,8 +360,10 @@ export async function resolveSalesFunnelPlan(
     // one it rules out (the Entrust unit was born on `ai-meeting-booking-torcular-v2`, a workflow its play
     // forbade, while features-service said nothing may run it). A play allowing NONE refuses the launch with
     // features-service's reason, stopped or not: the unit would have to name a workflow, and every one is forbidden.
+    // The seed is features-service's first choice ON THIS PIPE'S LEG (CAMPAIGN-FALLBACK-WORKFLOW-LEG-1015): never
+    // the channel's newest workflow whatever the leg ("Merrily"'s reply unit was born on a website-visit workflow).
     const play = pipe.value.play ?? null;
-    const readWorkflow = deps.workflow ?? fetchStartableWorkflowSlug;
+    const readWorkflow = deps.workflow ?? fetchLegSeedWorkflowSlug;
     const workflow = await resolveReactiveDefaultWorkflow(
       channelSlug,
       legKey,
@@ -370,7 +373,7 @@ export async function resolveSalesFunnelPlan(
         workflow: async (slug, id) =>
           play && play.allowedActiveWorkflowCount === 0
             ? { ok: true as const, workflowSlug: null }
-            : readWorkflow(slug, id, play?.excludedWorkflowDynastySlugs ?? []),
+            : readWorkflow(slug, legKey, { ...id, brandId: identity.brandId, offerId: identity.offerId }, play?.excludedWorkflowDynastySlugs ?? []),
       },
       { pacedBySalesFunnelCaps: true },
     );

@@ -48,7 +48,7 @@ export interface ProjectionRow {
 // Raw endpoint row shape — richer than ProjectionRow. We extract only the fields both legs
 // (workflow greedy + audience Thompson) need; the audience grain's raw evidence is folded into
 // the normalized `audienceEvidence` so downstream code never reaches into estimatesByGrain.
-interface RawProjectionRow {
+export interface RawProjectionRow {
   audienceId: string | null;
   workflow: { workflowDynastySlug: string; workflowDynastyName: string | null };
   estimatesByGrain?: {
@@ -134,7 +134,11 @@ function normalizeProjectionRows(rows: RawProjectionRow[]): ProjectionRow[] {
  * The raw leg-keyed row. It is the SAME row shape the pricing read serves (one endpoint, one
  * body), carrying the verdict block on top — so it is normalized like any other row.
  */
-interface RawEligibilityRow extends RawProjectionRow {
+export interface RawEligibilityRow extends RawProjectionRow {
+  /** features-service's order on the leg (1 = its first choice); see fetchLegAssignedWorkflows. */
+  rank?: number;
+  /** Whether the workflow is ASSIGNED to the leg read (`active` | `deprecated` | `unassigned`), features-service's statement. */
+  legAssignment?: { state?: string; selectable?: boolean };
   modelEligibility?: {
     eligible?: boolean;
     modelAlias?: string | null;
@@ -204,7 +208,7 @@ function parseServedPlay(raw: unknown): ServedPlay | null {
   };
 }
 
-interface LegProjectionInput {
+export interface LegProjectionInput {
   featureSlug: string;
   brandId: string;
   legKey: string;
@@ -212,7 +216,17 @@ interface LegProjectionInput {
    * the offer the read is priced on — brand-service answers instead of refusing a brand selling
    * several with 409 `several_offers`. Omitted keeps today's brand-scoped read. */
   campaignId?: string | null;
+  /** The offer the leg is priced for when no campaign exists yet (a funnel being launched). Never beside `campaignId`. */
+  offerId?: string | null;
   identity: DownstreamIdentity;
+}
+
+/** A non-2xx answer of the leg-keyed read, with its status (a 404 `Feature not found` is a channel features-service does not rank). */
+export class LegProjectionReadError extends Error {
+  constructor(readonly status: number, body: string) {
+    super(`workflow-projection (leg) failed (${status}): ${body}`);
+    this.name = "LegProjectionReadError";
+  }
 }
 
 /**
@@ -230,6 +244,7 @@ async function fetchLegProjectionBody({
   brandId,
   legKey,
   campaignId,
+  offerId,
   identity,
 }: LegProjectionInput): Promise<{ rows: RawEligibilityRow[]; play: ServedPlay | null }> {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
@@ -246,17 +261,59 @@ async function fetchLegProjectionBody({
   // read always carries.
   if (campaignId && campaignId.trim() !== "") {
     url.searchParams.set("campaignId", campaignId);
+  } else if (offerId && offerId.trim() !== "") {
+    url.searchParams.set("offerId", offerId);
   }
   // NET — the basis the dashboard's campaign Workflows page ranks this same body on. The pick
   // ranks on these figures, so it asks for them on the basis the customer reads them on.
   url.searchParams.set("pricing", "net");
 
-  const res = await fetch(url, { method: "GET", headers: buildServiceHeaders(apiKey, identity) });
-  if (!res.ok) throw new Error(`workflow-projection (leg) failed (${res.status}): ${await res.text()}`);
+  const headers = buildServiceHeaders(apiKey, identity);
+  // A funnel being launched has no campaign yet: no campaign header rather than an empty one.
+  if (!identity.campaignId) delete headers["x-campaign-id"];
+  const res = await fetch(url, { method: "GET", headers });
+  if (!res.ok) throw new LegProjectionReadError(res.status, await res.text());
 
   const body = await res.json() as { rows?: RawEligibilityRow[]; play?: unknown };
   if (!Array.isArray(body.rows)) throw new Error("workflow-projection (leg) returned an invalid rows payload");
   return { rows: body.rows, play: parseServedPlay(body.play) };
+}
+
+/**
+ * THE WORKFLOWS FEATURES-SERVICE ASSIGNS TO A LEG, in ITS order (CAMPAIGN-FALLBACK-WORKFLOW-LEG-1015).
+ *
+ * Every workflow whose `legAssignment.state` is `active` on the leg read (a `deprecated` or `unassigned` one is
+ * never run there), ordered on features-service's `rank` (1 = its first choice, `recommendedWorkflowDynastySlug`
+ * by construction). Brand-level rows only (one per workflow). A read naming the CAMPAIGN is judged on its own play
+ * already, so `selectable` is the answer; a read with no campaign (a funnel being launched) applies the pipe's
+ * DEFAULT play, so the assignment `state` is read and the caller applies the play its pipe names itself
+ * (features-service's own exclusion list): a non-default play is never judged by the default's strategy.
+ *
+ * `null` = features-service does not know the channel at all (404 `Feature not found`, e.g. `email-sending`):
+ * nothing ranks it. Any other failure THROWS (never read as "no workflow").
+ */
+export async function fetchLegAssignedWorkflows(input: LegProjectionInput): Promise<string[] | null> {
+  let body: { rows: RawEligibilityRow[] };
+  try {
+    body = await fetchLegProjectionBody(input);
+  } catch (err) {
+    if (err instanceof LegProjectionReadError && err.status === 404 && /feature not found/i.test(err.message)) return null;
+    throw err;
+  }
+  return assignedWorkflowsInRankOrder(body.rows, { playApplied: Boolean(input.campaignId) });
+}
+
+/** Pure: the `active`-on-the-leg workflows of a leg-keyed body, features-service's rank first (served order breaks ties). */
+export function assignedWorkflowsInRankOrder(rows: readonly RawEligibilityRow[], opts: { playApplied: boolean }): string[] {
+  const seen = new Set<string>();
+  const runnable = (row: RawEligibilityRow) =>
+    opts.playApplied ? row.legAssignment?.selectable === true : row.legAssignment?.state === "active";
+  return rows
+    .map((row, i) => ({ row, i }))
+    .filter(({ row }) => row.audienceId === null && runnable(row))
+    .sort((a, b) => (a.row.rank ?? Number.MAX_SAFE_INTEGER) - (b.row.rank ?? Number.MAX_SAFE_INTEGER) || a.i - b.i)
+    .map(({ row }) => row.workflow.workflowDynastySlug)
+    .filter((slug) => (seen.has(slug) ? false : (seen.add(slug), true)));
 }
 
 /**

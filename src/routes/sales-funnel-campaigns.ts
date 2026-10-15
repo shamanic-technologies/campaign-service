@@ -1,4 +1,4 @@
-import { adoptSalesFunnelUnitWorkflows } from "../lib/sales-funnel-unit-workflows.js";
+import { adoptSalesFunnelUnitWorkflows, repairSalesFunnelUnitLegWorkflows } from "../lib/sales-funnel-unit-workflows.js";
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -539,6 +539,32 @@ router.post("/internal/sales-funnel-campaigns/adopt-workflows", requireApiKey, a
     }));
   } catch (error) {
     console.error("[campaign-service] Sales funnel unit workflow adoption error:", error);
+    res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+/**
+ * POST /internal/sales-funnel-campaigns/leg-workflow-repair {apply?, orgId?} + a REAL staff x-org-id/x-user-id/x-run-id
+ * (CAMPAIGN-FALLBACK-WORKFLOW-LEG-1015) — every platform unit whose stored workflow features-service does not assign
+ * to its leg (or its play rules out) takes the seed a launch gives its pipe today
+ * (lib/sales-funnel-unit-workflows.ts `repairSalesFunnelUnitLegWorkflows`). Dry run unless `apply: true`;
+ * idempotent; status and `next_run_at` never touched.
+ */
+router.post("/internal/sales-funnel-campaigns/leg-workflow-repair", requireApiKey, async (req, res) => {
+  const orgId = req.headers["x-org-id"];
+  const userId = req.headers["x-user-id"];
+  const runId = req.headers["x-run-id"];
+  if (typeof orgId !== "string" || typeof userId !== "string" || typeof runId !== "string" || !orgId || !userId || !runId) {
+    return res.status(400).json({ error: "x-org-id, x-user-id and x-run-id are required (a real staff run): the workflow reads are workflow-service's and features-service's" });
+  }
+  try {
+    res.json(await repairSalesFunnelUnitLegWorkflows({
+      apply: req.body?.apply === true,
+      orgId: typeof req.body?.orgId === "string" ? req.body.orgId : undefined,
+      identity: { orgId, userId, runId },
+    }));
+  } catch (error) {
+    console.error("[campaign-service] Sales funnel unit leg workflow repair error:", error);
     res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });

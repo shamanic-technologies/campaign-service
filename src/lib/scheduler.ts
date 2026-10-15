@@ -323,6 +323,8 @@ export async function reRunDueCampaigns(): Promise<number> {
           const successor = await replaceRetiredWorkflow(err, {
             campaignId: campaign.id,
             storedSlug: campaign.workflowSlug,
+            legKey: campaign.legKey,
+            primaryBrandId: campaign.brandIds![0],
             featureSlug,
             identity: { orgId: campaign.orgId, userId, runId, brandId: brandIdCsv },
           });

@@ -110,6 +110,8 @@ export async function dispatchSelectedRun(
     const successor = await replaceRetiredWorkflow(err, {
       campaignId: campaign.id,
       storedSlug: campaign.workflowSlug,
+      legKey: campaign.legKey,
+      primaryBrandId: brandIds[0],
       featureSlug: campaign.featureSlug,
       identity: { ...identity, brandId: brandIdCsv },
     });

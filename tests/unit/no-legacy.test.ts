@@ -651,7 +651,9 @@ describe('No Legacy Patterns - CRITICAL', () => {
     // sales-funnel-unit-workflows.ts asks the same question a launch asks, for a unit a person
     // ALREADY launched before its channel ran a workflow (AIC-COMMON-1015), from a staff route run by
     // hand: it creates and starts nothing.
-    expect(workflowReaders).toEqual(['lib/retired-workflow.ts', 'lib/sales-funnel-unit-workflows.ts', 'lib/startable-pair.ts']);
+    // leg-seed-workflow.ts is the ONE seed read those three ask (CAMPAIGN-FALLBACK-WORKFLOW-LEG-1015): features-service's
+    // first choice on the unit's leg; workflow-service only for a channel features-service does not rank.
+    expect(workflowReaders).toEqual(['lib/leg-seed-workflow.ts', 'lib/retired-workflow.ts', 'lib/sales-funnel-unit-workflows.ts', 'lib/startable-pair.ts']);
 
     const startReaders = files
       .filter((f) => /startable-pair/.test(fs.readFileSync(f, 'utf-8')))

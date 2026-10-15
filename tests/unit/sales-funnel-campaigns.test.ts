@@ -301,7 +301,7 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
     const active = ["ai-meeting-booking-torcular-v2", "ai-meeting-booking-algenib"];
     let workflow = vi.fn();
     beforeEach(() => {
-      workflow = vi.fn(async (_slug: string, _id: unknown, excluded: readonly string[] = []) => ({
+      workflow = vi.fn(async (_slug: string, _leg: string, _id: unknown, excluded: readonly string[] = []) => ({
         ok: true as const,
         workflowSlug: active.find((w) => !excluded.includes(w)) ?? null,
       }));
@@ -345,11 +345,63 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
       expect(await resolveSalesFunnelPlan("f@x", identity, d)).toMatchObject({ ok: false, refusal: { code: "play_allows_no_workflow" } });
     });
 
-    it("a bare pipe cataloguing no play is unchanged: the channel's newest workflow", async () => {
+    it("a bare pipe cataloguing no play excludes nothing: features-service's first choice on its leg", async () => {
       const d = { ...deps([`ai-meeting-booking|${REACTIVE}`]), workflow };
       const res = await resolveSalesFunnelPlan("f@x", identity, d);
       expect(res).toMatchObject({ ok: true, plan: { units: [{ workflowSlug: "ai-meeting-booking-torcular-v2" }] } });
-      expect(workflow).toHaveBeenLastCalledWith("ai-meeting-booking", expect.anything(), []);
+      expect(workflow).toHaveBeenLastCalledWith("ai-meeting-booking", REACTIVE, expect.objectContaining({ brandId: identity.brandId, offerId: identity.offerId }), []);
+    });
+  });
+
+  describe("the seed is features-service's first choice ON THE PIPE'S LEG (CAMPAIGN-FALLBACK-WORKFLOW-LEG-1015)", () => {
+    // Prod 2026-10-15, "Merrily": the reply-leg unit stored `denebola`, a website-visit workflow, because the
+    // seed was the channel's newest workflow whatever the leg.
+    const REPLY = "lead_found_to_conversation";
+    const byLeg: Record<string, string> = { [REPLY]: "uklun", [ENTRY]: "denebola" };
+    const legPipes: Record<string, { channelSlug: string; legKey: string; mode: "proactive" }> = {
+      [`${COLD}|${ENTRY}`]: { channelSlug: COLD, legKey: ENTRY, mode: "proactive" },
+      [`${COLD}|${REPLY}`]: { channelSlug: COLD, legKey: REPLY, mode: "proactive" },
+    };
+    const legCatalogue = {
+      ok: true,
+      legsBySlug: new Map([[COLD, new Set([ENTRY, REPLY])]]),
+      operatorBySlug: new Map([[COLD, "platform"]]),
+    } as unknown as ChannelCatalogueRead;
+
+    it("each pipe's unit is born on the workflow features-service ranks first on ITS leg", async () => {
+      const workflow = vi.fn(async (_slug: string, legKey: string) => ({ ok: true as const, workflowSlug: byLeg[legKey] ?? null }));
+      const d = {
+        ...deps([`${COLD}|${REPLY}`, `${COLD}|${ENTRY}`]),
+        pipe: vi.fn(async (id: string) => ({ ok: true as const, value: { id, name: "Dotterel", ...legPipes[id] } })),
+        catalogue: vi.fn(async () => legCatalogue),
+        workflow,
+      };
+      const res = await resolveSalesFunnelPlan("f@x", identity, d);
+      expect(res).toMatchObject({
+        ok: true,
+        plan: { units: [{ legKey: REPLY, workflowSlug: "uklun" }, { legKey: ENTRY, workflowSlug: "denebola" }] },
+      });
+      expect(workflow.mock.calls.map((c) => c[1])).toEqual([REPLY, ENTRY]);
+    });
+
+    it("a leg features-service assigns no workflow to refuses the launch (never another leg's workflow)", async () => {
+      const d = {
+        ...deps([`${COLD}|${ENTRY}`]),
+        pipe: vi.fn(async (id: string) => ({ ok: true as const, value: { id, name: "Dotterel", ...legPipes[id] } })),
+        catalogue: vi.fn(async () => legCatalogue),
+        workflow: vi.fn(async () => ({ ok: true as const, workflowSlug: null })),
+      };
+      expect(await resolveSalesFunnelPlan("f@x", identity, d)).toMatchObject({ ok: false, refusal: { status: 409, code: "no_workflow" } });
+    });
+
+    it("an unreadable leg ranking refuses the launch 502, nothing born on a guess", async () => {
+      const d = {
+        ...deps([`${COLD}|${ENTRY}`]),
+        pipe: vi.fn(async (id: string) => ({ ok: true as const, value: { id, name: "Dotterel", ...legPipes[id] } })),
+        catalogue: vi.fn(async () => legCatalogue),
+        workflow: vi.fn(async () => ({ ok: false as const, detail: "HTTP 503" })),
+      };
+      expect(await resolveSalesFunnelPlan("f@x", identity, d)).toMatchObject({ ok: false, refusal: { status: 502, code: "workflow_unavailable" } });
     });
   });
 
