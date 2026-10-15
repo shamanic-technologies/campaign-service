@@ -519,6 +519,13 @@
       "when": 1779800000000,
       "tag": "0073_drop_campaign_audience_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1779900000000,
+      "tag": "0074_campaign_anchor_run",
+      "breakpoints": true
     }
   ]
 }
