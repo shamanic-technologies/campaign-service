@@ -495,7 +495,7 @@ export const triggerEventDeliveries = pgTable(
     campaignId: text("campaign_id").notNull(),
     /** The run workflow-service opened on `/execute`: the `x-run-id` its `/end-run` carries. */
     runId: text("run_id").notNull(),
-    /** `dispatched` | `completed` | `failed` */
+    /** `dispatched` | `completed` | `failed` | `not_admitted` (REPLY-ANY-LEAD-1015) */
     status: text("status").notNull(),
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true }).notNull().defaultNow(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
