@@ -230,6 +230,24 @@ describe("generic trigger detectors", () => {
   describe("poll: a new item appeared at the source", () => {
     const answer = (ids: string[]): TregAnswer => ({ status: 200, body: { data: { items: ids.map((urn) => ({ urn, name: `person ${urn}` })) } }, chargedMicro: 1200, runId: "run-x" });
 
+    it("a funnel HEADED by the poll trigger (no pipe names it) is the scope, the payer and the one fired (FUNNEL-HEAD-TRIGGER-1015)", async () => {
+      const unit = await insertTestCampaign(ORG, {
+        brandIds: [BRAND], brandId: BRAND, status: "ongoing", featureSlug: "sales-cold-email-outreach", workflowSlug: "cold-email-v1",
+        createdByUserId: USER, parentRunId: "9f0d1c22-0000-4000-8000-000000000029", offerId: OFFER, legKey: "lead_found_to_conversation",
+        salesFunnelCampaignId: crypto.randomUUID(), salesFunnelId: `trigger:${POLL}+x`, runsOnTriggerId: POLL,
+      });
+      // A campaign on the pipe the poll trigger used to name is gone: only the head makes anything answer it.
+      const cat = { ...catalogue(), triggerTransitions: [] } as never;
+      const treg = vi.fn();
+      const t0 = new Date();
+      treg.mockResolvedValueOnce(answer(["a"]));
+      expect(await pollDueTriggers(cat, t0, treg)).toMatchObject({ triggers: 1, scopes: 1, baseline: 1, fired: 0 });
+      treg.mockResolvedValueOnce(answer(["a", "b"]));
+      expect(await pollDueTriggers(cat, new Date(t0.getTime() + 5 * 60_000), treg)).toMatchObject({ polled: 1, fired: 1 });
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+      expect(mockExecute.mock.calls[0][1]).toMatchObject({ campaignId: unit.id, trigger: { triggerId: POLL, item: { urn: "b", name: "person b" } } });
+    });
+
     it("fires once per NEW item across ticks, never twice; the first read is the baseline", async () => {
       const campaign = await campaignOn(REACT_SLUG, REACT_LEG);
       const treg = vi.fn();

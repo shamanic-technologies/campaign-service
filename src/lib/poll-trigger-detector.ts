@@ -12,7 +12,7 @@ import {
   type ParamsRead,
   type TriggerScope,
 } from "./delay-trigger-detector.js";
-import { sameLeg } from "./leg-identity.js";
+import { answersTrigger } from "./sales-funnel-head-trigger.js";
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { meteredTregCall, TregInsufficientCreditError, type TregAnswer, type TregBilling, type TregCallRequest } from "./treg-meter.js";
 import { fireClaimedEvent } from "./trigger-events.js";
@@ -177,7 +177,7 @@ async function campaignsBehind(trigger: DetectableTrigger<PollParams>, scope: Tr
   });
   return live.filter((c) => {
     const brands = c.brandIds && c.brandIds.length > 0 ? c.brandIds : c.brandId ? [c.brandId] : [];
-    return brands.includes(scope.brandId) && trigger.transitions.some((t) => t.featureSlug === c.featureSlug && sameLeg(c.featureSlug!, t.legKey, c.legKey));
+    return brands.includes(scope.brandId) && answersTrigger(c, trigger.type.id, trigger.transitions);
   });
 }
 
@@ -356,9 +356,9 @@ export async function pollDueTriggers(
   callTreg: TregCaller = meteredTregCall,
 ): Promise<PollTickSummary> {
   const summary: PollTickSummary = { triggers: 0, scopes: 0, polled: 0, baseline: 0, fired: 0, held: 0, failed: 0 };
-  for (const trigger of detectableTriggers(catalogue, "poll", readPollParams)) {
+  for (const trigger of await detectableTriggers(catalogue, "poll", readPollParams)) {
     summary.triggers += 1;
-    for (const scope of await liveScopesBehind(trigger.transitions)) {
+    for (const scope of await liveScopesBehind(trigger)) {
       summary.scopes += 1;
       const r = await pollScope(trigger, scope, catalogue, now, callTreg);
       if (r.outcome === "polled") summary.polled += 1;
