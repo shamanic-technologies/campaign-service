@@ -58,6 +58,7 @@ import { triggerEvents } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { fireDueTriggerEvents } from "../../src/lib/trigger-events.js";
 import { runTriggerDetectorsTick } from "../../src/lib/trigger-detectors.js";
+import { reRunDueCampaigns } from "../../src/lib/scheduler.js";
 
 const ORG = "b645207b-0000-4000-8000-000000000031";
 const BRAND = "75d7e3e8-0000-4000-8000-000000000032";
@@ -151,6 +152,44 @@ describe("fact not followed: a delay trigger with unlessStep", () => {
       campaignId: campaign.id,
       trigger: { triggerId: TRIGGER, leadId: "lead-filed", person: { email: "quiet@distribute.you" } },
     });
+  });
+
+  it("a funnel HEADED by the delay trigger (its pipe names another trigger) is planned and fired per person, never by the tick (FUNNEL-HEAD-TRIGGER-1015)", async () => {
+    // The pipe answers follow_up_due, not this delay trigger: only the funnel head makes the unit answer it.
+    mockCatalogue.mockResolvedValue({ ...catalogue(), triggerTransitions: [{ featureSlug: SLUG, legKey: LEG, triggerId: "follow_up_due" }] });
+    const past = new Date(Date.now() - MIN);
+    const unit = await insertTestCampaign(ORG, {
+      brandIds: [BRAND], brandId: BRAND, status: "ongoing", featureSlug: SLUG, workflowSlug: `${SLUG}-v1`,
+      createdByUserId: USER, parentRunId: "9f0d1c22-0000-4000-8000-000000000039", offerId: OFFER, legKey: LEG,
+      salesFunnelCampaignId: crypto.randomUUID(), salesFunnelId: `trigger:${TRIGGER}+${LEG}@${SLUG}`,
+      runsOnTriggerId: TRIGGER, nextRunAt: past,
+    });
+
+    // The tick never dispatches it.
+    await reRunDueCampaigns();
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    const now = new Date();
+    const t0 = new Date(now.getTime() - 5 * MIN);
+    mockReachers.mockResolvedValue([{ email: "quiet@distribute.you", name: "Quiet", phone: null, reachedAt: t0 }]);
+    expect((await runTriggerDetectorsTick(now))?.delay).toEqual({ triggers: 1, scopes: 1, planned: 1 });
+    // Once per person x trigger x offer, as for a pipe trigger.
+    expect((await runTriggerDetectorsTick(now))?.delay.planned).toBe(0);
+
+    mockEver.mockResolvedValue(false);
+    expect(await fireDueTriggerEvents(new Date(t0.getTime() + 31 * MIN))).toBe(1);
+    const [event] = await events();
+    expect(event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [unit.id] });
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(mockExecute.mock.calls[0][1]).toMatchObject({ campaignId: unit.id, trigger: { triggerId: TRIGGER, person: { email: "quiet@distribute.you" } } });
+  });
+
+  it("a delay trigger nothing answers (no pipe names it, no funnel heads it) is not detected", async () => {
+    mockCatalogue.mockResolvedValue({ ...catalogue(), triggerTransitions: [] });
+    await campaignOn();
+    mockReachers.mockResolvedValue([{ email: "quiet@distribute.you", name: null, phone: null, reachedAt: new Date(Date.now() - 5 * MIN) }]);
+    expect((await runTriggerDetectorsTick(new Date()))?.delay).toEqual({ triggers: 0, scopes: 0, planned: 0 });
+    expect(await events()).toHaveLength(0);
   });
 
   it("a person who reached the step longer ago than the delay is never planned (backfill)", async () => {

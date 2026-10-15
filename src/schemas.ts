@@ -698,7 +698,10 @@ const isoDateTime = (name: string) =>
   z.string().refine((v) => !Number.isNaN(Date.parse(v)), `${name} must be an ISO date-time`);
 
 export const RecordTriggerEventBody = z.object({
-  /** A trigger type features-service declares (`GET /public/channels` `triggers[].id`). Unknown = 400 `unknown_trigger`. */
+  /**
+   * A trigger type features-service declares (`GET /public/channels` `triggers[].id`). Unknown = 400 `unknown_trigger`;
+   * served `callable: false` (a condition we compute: delay, poll, GitHub issue in prod) = 400 `trigger_not_callable`.
+   */
   triggerId: z.string().min(1, "triggerId is required"),
   brandId: z.string().uuid("brandId must be a valid UUID"),
   offerId: z.string().uuid("offerId must be a valid UUID"),

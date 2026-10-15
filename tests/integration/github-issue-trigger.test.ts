@@ -143,6 +143,25 @@ describe("github_issue_in_prod: a funnel campaign waiting on a GitHub issue", ()
     expect(await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.orgId, ORG))).toHaveLength(0);
   });
 
+  it("a funnel HEADED by github_issue_in_prod (no pipe names it) is born and fired once the issue is in prod (FUNNEL-HEAD-TRIGGER-1015)", async () => {
+    mockCatalogue.mockResolvedValue({ ...catalogue(), triggerTransitions: [] });
+    mockPlan.mockResolvedValue({
+      ok: true,
+      plan: { ...plan.plan, salesFunnelId: `trigger:${TRIGGER}+${FUNNEL}`, units: [{ ...plan.plan.units[0], runsOnTriggerId: TRIGGER }] },
+    });
+    const res = await launch({ githubIssue: ISSUE, salesFunnelId: `trigger:${TRIGGER}+${FUNNEL}` }).expect(201);
+    const unit = res.body.salesFunnelCampaign.units[0].campaignId;
+
+    const headed = { ...catalogue(), triggerTransitions: [] } as never;
+    expect(await detectGithubIssueTriggers(headed, new Date(), reads)).toMatchObject({ triggers: 1, waiting: 1, fired: 0 });
+    facts = merged;
+    served = [{ target: "chat-service", sha: NEW }];
+    expect(await detectGithubIssueTriggers(headed, new Date(), reads)).toMatchObject({ fired: 1, failed: 0 });
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect((mockExecute.mock.calls[0][1] as { campaignId: string }).campaignId).toBe(unit);
+    expect((await detectGithubIssueTriggers(headed, new Date(), reads)).fired).toBe(0);
+  });
+
   it("open: nothing; merged not deployed: nothing; deployed: exactly one dispatch, never again", async () => {
     const res = await launch({ githubIssue: ISSUE }).expect(201);
     const id = res.body.salesFunnelCampaign.id;

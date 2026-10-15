@@ -5804,8 +5804,8 @@
         "tags": [
           "Internal"
         ],
-        "summary": "Record one occurrence of a declared trigger, and fire it now, later, or record it as already performed",
-        "description": "TRIGGER EVENTS (owner 2026-10-09): every leg is PROACTIVE (ticked on its budget, no trigger) or REACTIVE (runs ON DEMAND when exactly one TRIGGER asks: a positive reply received, a lead requested, a meeting booked...). The trigger TYPES are features-service's (GET /public/channels `triggers[]`, each reactive leg naming one on `channels[].stepTransitions[].triggerId`); each campaign's On/Off is its status; THIS service records the EVENTS, one per occurrence, with what each did: `ran` (`ranCampaignIds`) or `skipped` with one named `skipReason` (a campaign's own skip such as `unfunded` / `run_in_flight` / `no_workflow`, else `campaign_off` = a campaign is bought for the leg and is OFF, `no_campaign` = nobody bought it, `no_leg` = no published leg answers the trigger, `trigger_not_declared`). The campaigns a trigger runs are the ones of (org, brand, offer) bought for a (channel, leg) whose reactive transition names it, dispatched exactly like the scheduler's (same funding, budget, in-flight and cohort guards; the run starts at gate-check). WRITE CONTRACT: name a declared `triggerId` (unknown = 400 `unknown_trigger`, nothing recorded; trigger list unreadable = 502 `catalogue_unavailable`, nothing recorded). Due now (no `dueAt`, or `dueAt` <= now) = fired in this call, the outcome is on the returned event. `dueAt` later = recorded `pending` and fired by the scheduler when due (a planned event, e.g. 3h before a meeting), same rules. `performed` = the caller already did the work in-process (lead-service serving a lead on `lead_requested`): `{outcome: \"ran\", campaignId}` (a campaign of the org, else 400 `unknown_campaign`) or `{outcome: \"skipped\", reason, detail?}`; recorded as is, nothing dispatched. `idempotencyKey` (unique per org) makes a retry return the first event with `replayed: true` (200). The org rides on x-org-id.",
+        "summary": "The INTERNAL trigger door (our own services, every declared trigger): record one occurrence, and fire it now, later, or record it as already performed",
+        "description": "TRIGGER EVENTS (owner 2026-10-09): every leg is PROACTIVE (ticked on its budget, no trigger) or REACTIVE (runs ON DEMAND when exactly one TRIGGER asks: a positive reply received, a lead requested, a meeting booked...). The trigger TYPES are features-service's (GET /public/channels `triggers[]`, each reactive leg naming one on `channels[].stepTransitions[].triggerId`); each campaign's On/Off is its status; THIS service records the EVENTS, one per occurrence, with what each did: `ran` (`ranCampaignIds`) or `skipped` with one named `skipReason` (a campaign's own skip such as `unfunded` / `run_in_flight` / `no_workflow`, else `campaign_off` = a campaign is bought for the leg and is OFF, `no_campaign` = nobody bought it, `no_leg` = no published leg answers the trigger, `trigger_not_declared`). The campaigns a trigger runs are the ones of (org, brand, offer) bought for a (channel, leg) whose reactive transition names it, dispatched exactly like the scheduler's (same funding, budget, in-flight and cohort guards; the run starts at gate-check). WRITE CONTRACT: name a declared `triggerId` (unknown = 400 `unknown_trigger`, nothing recorded; trigger list unreadable = 502 `catalogue_unavailable`, nothing recorded). The trigger fires every live campaign whose pipe answers it AND every unit of a sales funnel headed by it (features-service `trigger:<id>+...`), its proactive pipes included, which never run on their own cadence. Due now (no `dueAt`, or `dueAt` <= now) = fired in this call, the outcome is on the returned event. `dueAt` later = recorded `pending` and fired by the scheduler when due (a planned event, e.g. 3h before a meeting), same rules. `performed` = the caller already did the work in-process (lead-service serving a lead on `lead_requested`): `{outcome: \"ran\", campaignId}` (a campaign of the org, else 400 `unknown_campaign`) or `{outcome: \"skipped\", reason, detail?}`; recorded as is, nothing dispatched. `idempotencyKey` (unique per org) makes a retry return the first event with `replayed: true` (200). The org rides on x-org-id.",
         "security": [
           {
             "apiKeyAuth": []
@@ -5855,6 +5855,103 @@
           },
           "400": {
             "description": "No org, malformed body, `unknown_trigger` or `unknown_campaign` (`reason` names it)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`catalogue_unavailable`: the trigger list could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/trigger-events/public": {
+      "post": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "The PUBLIC trigger door (what api-service POST /v1/trigger-events pipes an outside caller to): same write, refuses a trigger served callable: false",
+        "description": "TRIGGER EVENTS (owner 2026-10-09): every leg is PROACTIVE (ticked on its budget, no trigger) or REACTIVE (runs ON DEMAND when exactly one TRIGGER asks: a positive reply received, a lead requested, a meeting booked...). The trigger TYPES are features-service's (GET /public/channels `triggers[]`, each reactive leg naming one on `channels[].stepTransitions[].triggerId`); each campaign's On/Off is its status; THIS service records the EVENTS, one per occurrence, with what each did: `ran` (`ranCampaignIds`) or `skipped` with one named `skipReason` (a campaign's own skip such as `unfunded` / `run_in_flight` / `no_workflow`, else `campaign_off` = a campaign is bought for the leg and is OFF, `no_campaign` = nobody bought it, `no_leg` = no published leg answers the trigger, `trigger_not_declared`). The campaigns a trigger runs are the ones of (org, brand, offer) bought for a (channel, leg) whose reactive transition names it, dispatched exactly like the scheduler's (same funding, budget, in-flight and cohort guards; the run starts at gate-check). Same contract as POST /internal/trigger-events, plus: a trigger features-service serves `callable: false` (fired by distribute itself: a delay/poll/GitHub-issue condition, or a request between our services such as `on_demand` / `lead_requested`) = 400 `trigger_not_callable`, nothing recorded; a trigger with no `callable` served is accepted. WRITE CONTRACT: name a declared `triggerId` (unknown = 400 `unknown_trigger`, nothing recorded; a trigger features-service serves `callable: false`, a condition we compute such as a delay, a poll or a GitHub issue in prod = 400 `trigger_not_callable`, nothing recorded; trigger list unreadable = 502 `catalogue_unavailable`, nothing recorded). The trigger fires every live campaign whose pipe answers it AND every unit of a sales funnel headed by it (features-service `trigger:<id>+...`), its proactive pipes included, which never run on their own cadence. Due now (no `dueAt`, or `dueAt` <= now) = fired in this call, the outcome is on the returned event. `dueAt` later = recorded `pending` and fired by the scheduler when due (a planned event, e.g. 3h before a meeting), same rules. `performed` = the caller already did the work in-process (lead-service serving a lead on `lead_requested`): `{outcome: \"ran\", campaignId}` (a campaign of the org, else 400 `unknown_campaign`) or `{outcome: \"skipped\", reason, detail?}`; recorded as is, nothing dispatched. `idempotencyKey` (unique per org) makes a retry return the first event with `replayed: true` (200). The org rides on x-org-id.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service"
+            },
+            "required": true,
+            "description": "Internal org UUID from client-service",
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordTriggerEventBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Idempotent replay: the event already recorded under this key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordTriggerEventResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Recorded (and fired when due now)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordTriggerEventResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No org, malformed body, `unknown_trigger`, `trigger_not_callable` or `unknown_campaign` (`reason` names it)",
             "content": {
               "application/json": {
                 "schema": {

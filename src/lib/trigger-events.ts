@@ -2,7 +2,6 @@ import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, triggerEvents, type TriggerEvent, type TriggerEventDelivery } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
-import { sameLeg } from "./leg-identity.js";
 import { DELAY_DETECTOR_RECORDED_VIA, GITHUB_ISSUE_RECORDED_VIA, delayGuard, type LeadActivityCache } from "./delay-trigger-detector.js";
 import {
   runCampaignsInScope,
@@ -22,6 +21,7 @@ import {
   type EventPerson,
 } from "./trigger-person.js";
 import { deliveriesByEvent, deliveryOf, eventCarries, recordDeliveries } from "./trigger-deliveries.js";
+import { answersTrigger, doorRefusal, TRIGGER_NOT_CALLABLE } from "./sales-funnel-head-trigger.js";
 
 /**
  * THE TRIGGER EVENTS — ONE ROW PER OCCURRENCE, AND WHAT IT DID (owner 2026-10-09).
@@ -41,6 +41,12 @@ import { deliveriesByEvent, deliveryOf, eventCarries, recordDeliveries } from ".
  *
  *  - The caller names a DECLARED `triggerId` (features-service's list). Unknown = 400
  *    `unknown_trigger`, nothing recorded. Catalogue unreadable = 502, nothing recorded.
+ *  - Two doors, one write. The INTERNAL door (`POST /internal/trigger-events`, our own services:
+ *    lead-service's `lead_requested`, the Copilot's `follow_up_due`...) takes every declared trigger.
+ *    The PUBLIC door (`POST /internal/trigger-events/public`, what api-service's `POST /v1/trigger-events`
+ *    pipes an outside caller to) refuses a trigger features-service serves `callable: false` (a
+ *    condition we compute, or a request between our services) = 400 `trigger_not_callable`, nothing
+ *    recorded; `callable` not served = accepted (lib/sales-funnel-head-trigger.ts). Detectors write their own rows.
  *  - Due NOW (no `dueAt`, or `dueAt` <= now): fired in the same call through the step route's own
  *    dispatch (`runCampaignsInScope`: same guards, same funding, same `/execute`).
  *  - Due LATER (a planned event, "meeting in 3h" due 3h before it): recorded `pending`, fired by the
@@ -154,7 +160,8 @@ export function eventVerdict(answer: ScopeAnswer): EventVerdict {
 
 /**
  * Run the campaigns a TRIGGER asks for on (org, brand, offer): the ones bought for a (channel, leg)
- * whose reactive transition names this trigger id. Same dispatch as the step route.
+ * whose reactive transition names this trigger id, and the units of a funnel HEADED by it that run on
+ * it (`campaigns.runs_on_trigger_id`, lib/sales-funnel-head-trigger.ts). Same dispatch as the step route.
  */
 export async function fireTrigger(
   scope: { orgId: string; brandId: string; offerId: string },
@@ -172,13 +179,13 @@ export async function fireTrigger(
 ): Promise<ScopeAnswer> {
   const transitions = (catalogue.triggerTransitions ?? []).filter((t) => t.triggerId === triggerId);
   const legKeys = [...new Set(transitions.map((t) => t.legKey))];
-  if (transitions.length === 0) return { triggered: [], skipped: [], offCampaignIds: [], legKeys };
   const run = await runCampaignsInScope(
     scope,
     (c) =>
       (!onlySalesFunnelCampaignId || c.salesFunnelCampaignId === onlySalesFunnelCampaignId) &&
       (!onlyCampaignIds || onlyCampaignIds.includes(c.id)) &&
-      transitions.some((t) => t.featureSlug === c.featureSlug && sameLeg(c.featureSlug, t.legKey, c.legKey)),
+      // A pipe naming this trigger, or a unit of a funnel headed by it (FUNNEL-HEAD-TRIGGER-1015).
+      answersTrigger(c, triggerId, transitions),
     `trigger ${triggerId}`,
     trigger,
     eventLeadId,
@@ -252,6 +259,11 @@ export interface RecordTriggerEventInput {
   person?: EventPerson;
   /** What the occurrence carries (a form's name and answers...), opaque JSON handed to the workflow. */
   item?: unknown;
+  /**
+   * Which door it came through: `public` = an outside caller (api-service `POST /v1/trigger-events`), refused a
+   * non-callable trigger; `internal` (default) = one of our services, every declared trigger, as before.
+   */
+  door?: "public" | "internal";
 }
 
 export interface RecordTriggerEventResult {
@@ -289,6 +301,9 @@ export async function recordTriggerEvent(
       "unknown_trigger",
     );
   }
+  // The public door (owner 2026-10-15): a trigger no outside caller may fire is refused there, never internally.
+  const refused = input.door === "public" ? doorRefusal(type) : null;
+  if (refused) throw new TriggerEventError(refused, 400, TRIGGER_NOT_CALLABLE);
 
   if (input.idempotencyKey) {
     const existing = await findByIdempotencyKey(input.orgId, input.idempotencyKey);

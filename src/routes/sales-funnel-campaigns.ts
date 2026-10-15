@@ -30,7 +30,7 @@ import { canonicalEmail, namedPeople, peopleKeyOf, storedPeople } from "../lib/s
 import { fileSalesFunnelCampaignPeople, type FilingReport } from "../lib/sales-funnel-people-store.js";
 import { GITHUB_ISSUE_IN_PROD_KIND, githubIssueKey, parseGithubIssue } from "../lib/github-issue-trigger.js";
 import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
-import { sameLeg } from "../lib/leg-identity.js";
+import { answersTrigger } from "../lib/sales-funnel-head-trigger.js";
 import { notifySalesFunnelCampaignPrecompute } from "../lib/sales-funnel-campaign-precompute.js";
 import { deleteSalesFunnelCampaign } from "../lib/sales-funnel-campaign-delete.js";
 
@@ -201,7 +201,8 @@ router.post(
       // A campaign naming its people only ANSWERS events for them: a pipe that prospects (an entry or
       // sourcing pipe) would act on strangers, so such a funnel is refused, naming the pipe.
       if (people) {
-        const prospecting = plan.units.filter((u) => u.mode !== "reactive");
+        // A unit running on its funnel's head trigger (lib/sales-funnel-head-trigger.ts) only answers that trigger's people.
+        const prospecting = plan.units.filter((u) => u.mode !== "reactive" && !u.runsOnTriggerId);
         if (prospecting.length > 0) {
           return res.status(400).json({
             error: `A campaign that names its people only answers triggers, but this sales funnel also finds new people (${prospecting.map((u) => u.pipeId).join(", ")}).`,
@@ -220,9 +221,9 @@ router.post(
         const issueTriggers = new Set(
           [...(catalogue.triggers?.values() ?? [])].filter((t) => t.kind === GITHUB_ISSUE_IN_PROD_KIND).map((t) => t.id),
         );
+        // A pipe a github trigger names, or a unit of a funnel headed by one (lib/sales-funnel-head-trigger.ts).
         const answers = plan.units.some((u) =>
-          (catalogue.triggerTransitions ?? []).some((t) =>
-            issueTriggers.has(t.triggerId) && t.featureSlug === u.featureSlug && sameLeg(u.featureSlug, t.legKey, u.legKey)),
+          [...issueTriggers].some((id) => answersTrigger(u, id, catalogue.triggerTransitions ?? [])),
         );
         if (!answers) {
           return res.status(400).json({
@@ -254,6 +255,7 @@ router.post(
             featureSlug: u.featureSlug,
             legKey: u.legKey,
             workflowSlug: u.workflowSlug,
+            runsOnTriggerId: u.runsOnTriggerId,
             acquisitionChannel: acquisitionChannelForFeature(u.featureSlug)!,
             // Names are unique per org; the funnel campaign's id keeps two funnels sharing a pipe apart.
             name: `${plan.salesFunnelName} ${idTag} - ${derivedCampaignName(u.featureSlug, brandId, offerId, u.legKey)}`,

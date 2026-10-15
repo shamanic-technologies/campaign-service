@@ -24,6 +24,7 @@ import {
 import { fileSalesFunnelCampaignPeople, targetingOfSalesFunnelCampaigns } from "./sales-funnel-people-store.js";
 import { eventConcernsGithubIssue } from "./github-issue-trigger.js";
 import { oweEventPerson, personLabel, type EventPerson } from "./trigger-person.js";
+import { runsOnTrigger } from "./sales-funnel-head-trigger.js";
 
 /**
  * A LEAD JUST REACHED A STEP — RUN THE CAMPAIGN THAT WAS BOUGHT TO TAKE THEM OUT OF IT, NOW.
@@ -265,8 +266,9 @@ export async function runStep(
 
   const run = await runCampaignsInScope(
     req,
-    // Either outbound spelling names the same leg (lib/leg-identity.ts).
-    (c) => legKeys.some((k) => sameLeg(c.featureSlug, k, c.legKey)),
+    // Either outbound spelling names the same leg (lib/leg-identity.ts). A unit of a funnel headed by the
+    // trigger this step IS runs on it too (lib/sales-funnel-head-trigger.ts), its proactive pipes included.
+    (c) => legKeys.some((k) => sameLeg(c.featureSlug, k, c.legKey)) || runsOnTrigger(c, triggerId),
     `step ${req.step}`,
     undefined,
     req.leadId,
