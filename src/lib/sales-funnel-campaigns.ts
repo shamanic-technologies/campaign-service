@@ -114,6 +114,9 @@ const SalesFunnelCapsResponse = z.object({
       period: CapPeriod,
       consumedCents: Figure,
       reached: z.boolean().nullable(),
+      // billing v0.83.44: the spend its authorize refused because consumed + it passes the cap.
+      // Absent on an older billing: the held sentence then names the consumed figure only.
+      refusedSpend: z.object({ at: z.string(), requiredCents: z.union([z.string(), z.number()]).transform(Number) }).nullable().optional(),
       consumedUnavailableReason: z.string().nullable(),
       consumedUnavailableDetail: z.string().nullable().optional(),
     })
@@ -274,6 +277,29 @@ export function salesFunnelFundedBy(caps: SalesFunnelCaps): z.infer<typeof Funde
   return caps.funded ? caps.fundedBy : null;
 }
 
+/** Cents as a reader reads them: at most 2 decimals, no trailing zeros (4.62615 -> "4.63"). */
+function readableCents(cents: number): string {
+  return String(Number(cents.toFixed(2)));
+}
+
+/**
+ * Why a max budget is reached, with the figure that MADE it reached (FUNNEL-CAP-REACHED-AT-2PCT-1015:
+ * "4.62615 of 200 cents" beside "reached" told the reader nothing). A refused spend = consumed is
+ * under the cap but the next spend would pass it: name that spend. Otherwise consumed reached the cap.
+ */
+export function maxBudgetReachedWhy(
+  period: string,
+  consumedCents: number,
+  amountCents: number,
+  refusedSpend: { at: string; requiredCents: number } | null,
+): string {
+  const spent = `${readableCents(consumedCents)} of ${readableCents(amountCents)} cents spent`;
+  if (refusedSpend) {
+    return `its ${period} max budget is reached: ${spent}, and the next spend of ${readableCents(refusedSpend.requiredCents)} cents would pass the cap (refused at ${refusedSpend.at}).`;
+  }
+  return `its ${period} max budget is reached: ${spent}.`;
+}
+
 /**
  * May this UNIT spend now? The ONE money answer for a sales funnel unit: the turn planner, the step
  * trigger and gate-check ask it before any pre-funnel money path (none of which is its money).
@@ -348,7 +374,7 @@ export async function salesFunnelUnitMoney(
     return held("unreadable", "Sales funnel budget unavailable", `billing could not measure what its max budget consumed (${budget.consumedUnavailableReason}). Held rather than spent (fail-closed).`);
   }
   if (budget?.reached) {
-    return held("cap_reached", "Sales funnel max budget reached", `its ${budget.period} max budget is reached (${budget.consumedCents} of ${amountCents} cents). Every pipe of the funnel stops spending until the next period or a raise.`);
+    return held("cap_reached", "Sales funnel max budget reached", `${maxBudgetReachedWhy(budget.period, budget.consumedCents!, amountCents, budget.refusedSpend ?? null)} Every pipe of the funnel stops spending until the next period or a raise.`);
   }
   const volume = caps.maxVolume;
   if (volume) {
