@@ -44,9 +44,9 @@ export async function runTriggerDetectorsTick(
     }
 
     const delay = { triggers: 0, scopes: 0, planned: 0 };
-    for (const trigger of detectableTriggers(catalogue, "delay", readDelayParams)) {
+    for (const trigger of await detectableTriggers(catalogue, "delay", readDelayParams)) {
       delay.triggers += 1;
-      for (const scope of await liveScopesBehind(trigger.transitions)) {
+      for (const scope of await liveScopesBehind(trigger)) {
         delay.scopes += 1;
         delay.planned += await planDelayScope({ id: trigger.type.id, params: trigger.params }, scope, now);
       }

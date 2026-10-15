@@ -23,7 +23,7 @@
  *
  * Every unit born before this, and every funnel features-service serves with no trigger, has NULL: unchanged.
  */
-import type { ChannelCatalogueRead, CatalogueTriggerType } from "./channel-operator-client.js";
+import type { CatalogueTriggerTransition, ChannelCatalogueRead, CatalogueTriggerType } from "./channel-operator-client.js";
 import { sameLeg } from "./leg-identity.js";
 
 export interface HeadTriggerUnit {
@@ -47,6 +47,22 @@ export function unitRunsOnTrigger(
     (t) => t.triggerId === triggerId && t.featureSlug === unit.featureSlug && sameLeg(unit.featureSlug, t.legKey, unit.legKey),
   );
   return pipeAnswers ? null : triggerId;
+}
+
+/**
+ * WHO ANSWERS TRIGGER T, the ONE rule every reader shares (the event dispatch, the delay / poll / GitHub detectors'
+ * scopes and payers): a campaign on a (channel, leg) whose reactive transition names T, or a unit of a funnel headed
+ * by T (`runsOnTriggerId`). Pure.
+ */
+export function answersTrigger(
+  c: { featureSlug: string | null; legKey: string | null; runsOnTriggerId?: string | null },
+  triggerId: string,
+  transitions: ReadonlyArray<CatalogueTriggerTransition>,
+): boolean {
+  if (runsOnTrigger(c, triggerId)) return true;
+  const slug = c.featureSlug;
+  if (!slug || !c.legKey) return false;
+  return transitions.some((t) => t.triggerId === triggerId && t.featureSlug === slug && sameLeg(slug, t.legKey, c.legKey));
 }
 
 /** True when an event of `triggerId` fires this campaign as a unit of a funnel headed by it. Pure. */
