@@ -4,7 +4,11 @@ import { campaigns } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { catalogueLegOf, sameLeg, withOtherOutboundSpellings } from "./leg-identity.js";
 import { resolvePredecessorCampaign, PredecessorScopeError } from "./predecessor-campaign.js";
-import { SALES_FAMILY_FEATURE_SLUGS, isServicePerformedFeature } from "./sales-outreach-campaign.js";
+import { AI_INSTANT_CALL_FEATURE_SLUG, SALES_FAMILY_FEATURE_SLUGS } from "./sales-outreach-campaign.js";
+
+/** Channels whose pipe acts ONCE on the step (a call to the rep) and never writes a follow-up. */
+const ONE_SHOT_FEATURE_SLUGS: ReadonlySet<string> = new Set([AI_INSTANT_CALL_FEATURE_SLUG]);
+const isOneShotFeature = (slug?: string | null): boolean => !!slug && ONE_SHOT_FEATURE_SLUGS.has(slug);
 
 /**
  * WHO ANSWERS THE PEOPLE THIS CAMPAIGN IS HOLDING — the inverse of `/predecessor`, and nothing else.
@@ -45,9 +49,8 @@ import { SALES_FAMILY_FEATURE_SLUGS, isServicePerformedFeature } from "./sales-o
  *
  * ── A ONE-SHOT CHANNEL NEVER ANSWERS ──────────────────────────────────────────────────────────
  *
- * A service-performed channel (`SERVICE_PERFORMED_FEATURE_SLUGS`: AI Instant Call rings the rep
- * once on a qualified reply) runs a continuing leg but never claims from the follow-up queue and
- * never sends a follow-up. It is neither a candidate nor a startable channel here: naming it put
+ * A one-shot channel (`ONE_SHOT_FEATURE_SLUGS`: AI Instant Call's workflow rings the rep once per
+ * occurrence) runs a continuing leg but never sends a follow-up. It is neither a candidate nor a startable channel here: naming it put
  * "Next follow-up by AI Instant Call" on a lead page (Doc Dinners, 2026-10-06), and an offer whose
  * only live continuing campaign is one reads `no_answering_campaign`. Several live answerers are
  * tried oldest first (then id), so the answer never depends on row order.
@@ -191,7 +194,7 @@ export async function resolveAnsweringCampaign(
     .filter((leg) => leg.legKey !== ownLeg.legKey && leg.fromStepKey === toStepKey)
     .map((leg) => leg.legKey);
   const startableFeatureSlugs = [...SALES_FAMILY_FEATURE_SLUGS].filter((slug) => {
-    if (isServicePerformedFeature(slug)) return false;
+    if (isOneShotFeature(slug)) return false;
     const performed = catalogue.legsBySlug.get(slug);
     return performed ? [...performed].some((leg) => continuingLegKeys.some((k) => sameLeg(slug, k, leg))) : false;
   });
@@ -209,7 +212,7 @@ export async function resolveAnsweringCampaign(
         inArray(campaigns.legKey, withOtherOutboundSpellings(continuingLegKeys)),
       ),
     })
-  ).filter((row) => !isServicePerformedFeature(row.featureSlug)
+  ).filter((row) => !isOneShotFeature(row.featureSlug)
     && continuingLegKeys.some((k) => sameLeg(row.featureSlug, k, row.legKey)));
   if (rows.length === 0) return answer(ANSWERING_ABSENCES.NO_CAMPAIGN, partial);
 
