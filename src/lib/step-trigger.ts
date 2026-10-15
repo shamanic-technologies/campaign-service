@@ -525,6 +525,8 @@ export async function runCampaignsInScope(
         const successor = await replaceRetiredWorkflow(err, {
           campaignId: campaign.id,
           storedSlug: campaign.workflowSlug,
+          legKey: campaign.legKey,
+          primaryBrandId: brandIds[0],
           featureSlug: campaign.featureSlug,
           identity: { orgId: req.orgId, userId: campaign.createdByUserId, runId, brandId: brandIdCsv },
         });

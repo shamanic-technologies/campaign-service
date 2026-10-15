@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { mockWhere, mockLiveDynasty } = vi.hoisted(() => ({
+const { mockWhere, mockLiveDynasty, mockLegSeed } = vi.hoisted(() => ({
   mockWhere: vi.fn(),
   mockLiveDynasty: vi.fn(),
+  mockLegSeed: vi.fn(),
+}));
+
+vi.mock("../../src/lib/leg-seed-workflow.js", () => ({
+  fetchLegSeedWorkflowSlug: mockLegSeed,
 }));
 
 vi.mock("../../src/db/index.js", () => ({
@@ -88,5 +93,20 @@ describe("replaceRetiredWorkflow", () => {
     expect(mockWhere).not.toHaveBeenCalled();
     expect(err).toHaveBeenCalledTimes(2);
     err.mockRestore();
+  });
+
+  it("a campaign on a LEG takes features-service's first choice on that leg, never another leg's (CAMPAIGN-FALLBACK-WORKFLOW-LEG-1015)", async () => {
+    mockLegSeed.mockResolvedValue({ ok: true, workflowSlug: "wf-uklun" });
+    const legCtx = { ...ctx, legKey: "lead_found_to_conversation", primaryBrandId: "b1" };
+    const next = await replaceRetiredWorkflow(refusal(410, "wf-rudder", { upgradedToWorkflowSlug: null }), legCtx);
+    expect(next).toBe("wf-uklun");
+    expect(mockLiveDynasty).not.toHaveBeenCalled();
+    expect(mockLegSeed).toHaveBeenCalledWith(
+      "sales-cold-email-outreach",
+      "lead_found_to_conversation",
+      expect.objectContaining({ brandId: "b1", campaignId: "c1" }),
+      ["wf-rudder"],
+    );
+    expect(mockWhere).toHaveBeenCalledTimes(1);
   });
 });

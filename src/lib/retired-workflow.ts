@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
+import { fetchLegSeedWorkflowSlug } from "./leg-seed-workflow.js";
 import { fetchLiveDynastyOtherThan } from "./startable-workflow-client.js";
 import { isRetiredWorkflowRefusal } from "./workflow-refusal.js";
 
@@ -14,8 +15,9 @@ import { isRetiredWorkflowRefusal } from "./workflow-refusal.js";
  * 1e95a4c3: stored `sales-cold-email-outreach-rudder` (deprecated, no successor), 217 projection rows
  * all unpriced, ~130 stuck-sweep recoveries an hour, no run for 3 days.
  *
- * So a 410 is answered once, here: the successor workflow-service names, else the channel's newest
- * live dynasty other than the dead one. When the dead slug is the stored fallback, the row's
+ * So a 410 is answered once, here: the successor workflow-service names, else features-service's first choice on
+ * the campaign's LEG other than the dead one (CAMPAIGN-FALLBACK-WORKFLOW-LEG-1015: never a workflow of another leg;
+ * a campaign stating no leg keeps the channel's newest live dynasty other than the dead one). When the dead slug is the stored fallback, the row's
  * fallback is REPLACED (only `workflow_slug` moves; never a status: the customer's intent is
  * untouched), guarded on the dead value so a concurrent write is never overwritten. The caller
  * dispatches the successor in the same breath.
@@ -30,6 +32,9 @@ export async function replaceRetiredWorkflow(
     campaignId: string;
     storedSlug: string | null;
     featureSlug: string;
+    /** The campaign's leg and its ONE brand (the leg read names a brand); absent = the channel-wide read. */
+    legKey?: string | null;
+    primaryBrandId?: string | null;
     identity: { orgId: string; userId: string; runId: string; brandId?: string };
   },
 ): Promise<string | null> {
@@ -38,7 +43,14 @@ export async function replaceRetiredWorkflow(
 
   let successor = err.upgradedToWorkflowSlug;
   if (!successor) {
-    const read = await fetchLiveDynastyOtherThan(ctx.featureSlug, dead, ctx.identity);
+    const read = ctx.legKey && ctx.primaryBrandId
+      ? await fetchLegSeedWorkflowSlug(
+          ctx.featureSlug,
+          ctx.legKey,
+          { ...ctx.identity, brandId: ctx.primaryBrandId, campaignId: ctx.campaignId },
+          [dead],
+        )
+      : await fetchLiveDynastyOtherThan(ctx.featureSlug, dead, ctx.identity);
     if (!read.ok) {
       console.error(
         `[campaign-service] campaign ${ctx.campaignId}: workflow ${dead} is deprecated and the live ` +
