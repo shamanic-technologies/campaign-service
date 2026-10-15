@@ -128,6 +128,8 @@ export async function reRunDueCampaigns(): Promise<number> {
       // A SALES FUNNEL unit is paced on its funnel's caps (lib/sales-funnel-campaigns.ts).
       salesFunnelCampaignId: campaigns.salesFunnelCampaignId,
       salesFunnelId: campaigns.salesFunnelId,
+      // A unit running only on its funnel's head trigger is parked like an on-demand one (lib/sales-funnel-head-trigger.ts).
+      runsOnTriggerId: campaigns.runsOnTriggerId,
     });
 
   if (dueCampaigns.length === 0) return 0;

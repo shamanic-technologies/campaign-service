@@ -34,6 +34,13 @@ export interface SalesFunnelFromCatalogue {
    * it: the second is a funnel with a hole (`legsWithoutChannel`), never launched or converted.
    */
   legs: Array<{ legKey: string; pipe: { id: string; mode: "proactive" | "reactive" } | null; channelIds: string[] }>;
+  /**
+   * The trigger the funnel STARTS on (features-service `trigger.slug` = the trigger id, owner 2026-10-15): a funnel
+   * headed by a trigger (`trigger:<id>+<legs>`), or a legacy reactive one (its first pipe's trigger). Null on a
+   * proactive funnel (it starts at Start) and while features-service serves no field. Read, never split off the id
+   * (lib/sales-funnel-head-trigger.ts).
+   */
+  triggerId: string | null;
 }
 
 export interface PipeFromCatalogue {
@@ -71,6 +78,7 @@ export interface PipePlay {
 const SalesFunnelResponse = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
+  trigger: z.object({ slug: z.string().min(1), name: z.string() }).nullish(),
   legs: z.array(
     z.object({
       legKey: z.string().min(1),
@@ -123,6 +131,7 @@ export async function fetchSalesFunnel(salesFunnelId: string): Promise<Catalogue
     return {
       id: parsed.id,
       name: parsed.name,
+      triggerId: parsed.trigger?.slug ?? null,
       pipeIds: parsed.legs.flatMap((leg) => (leg.pipe ? [leg.pipe.id] : [])),
       legs: parsed.legs.map((leg) => ({
         legKey: leg.legKey,

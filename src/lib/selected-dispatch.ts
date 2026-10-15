@@ -44,6 +44,8 @@ export async function dispatchSelectedRun(
     activeGoalId: string | null;
     brandProfileId: string | null;
     salesFunnelCampaignId?: string | null;
+    /** A unit running only on its funnel's head trigger (lib/sales-funnel-head-trigger.ts): parked, never dispatched here. */
+    runsOnTriggerId?: string | null;
   },
   identity: { orgId: string; userId: string; runId: string },
 ): Promise<string | null> {

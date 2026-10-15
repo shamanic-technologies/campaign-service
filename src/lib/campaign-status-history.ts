@@ -381,6 +381,8 @@ export interface SalesFunnelUnitBirth {
   workflowSlug: string | null;
   name: string;
   acquisitionChannel: string;
+  /** The trigger the unit runs on, and only on (lib/sales-funnel-head-trigger.ts); absent/null = runs as every unit. */
+  runsOnTriggerId?: string | null;
 }
 
 /**
@@ -479,6 +481,7 @@ export async function insertSalesFunnelUnits(
       legKey: u.legKey,
       salesFunnelId: parent.salesFunnelId,
       salesFunnelCampaignId: parent.id,
+      runsOnTriggerId: u.runsOnTriggerId ?? null,
       featureInputs: null,
       status: parent.status,
       stopReason: parent.status === "stopped" ? (parent.stopReason ?? STOP_REASONS.MANUAL) : null,

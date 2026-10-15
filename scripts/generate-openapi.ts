@@ -630,8 +630,8 @@ registry.registerPath({
   method: "post",
   path: "/internal/trigger-events",
   tags: ["Internal"],
-  summary: "Record one occurrence of a declared trigger, and fire it now, later, or record it as already performed",
-  description: TRIGGER_EVENTS_DOC + " WRITE CONTRACT: name a declared `triggerId` (unknown = 400 `unknown_trigger`, nothing recorded; trigger list unreadable = 502 `catalogue_unavailable`, nothing recorded). Due now (no `dueAt`, or `dueAt` <= now) = fired in this call, the outcome is on the returned event. `dueAt` later = recorded `pending` and fired by the scheduler when due (a planned event, e.g. 3h before a meeting), same rules. `performed` = the caller already did the work in-process (lead-service serving a lead on `lead_requested`): `{outcome: \"ran\", campaignId}` (a campaign of the org, else 400 `unknown_campaign`) or `{outcome: \"skipped\", reason, detail?}`; recorded as is, nothing dispatched. `idempotencyKey` (unique per org) makes a retry return the first event with `replayed: true` (200). The org rides on x-org-id.",
+  summary: "The INTERNAL trigger door (our own services, every declared trigger): record one occurrence, and fire it now, later, or record it as already performed",
+  description: TRIGGER_EVENTS_DOC + " WRITE CONTRACT: name a declared `triggerId` (unknown = 400 `unknown_trigger`, nothing recorded; trigger list unreadable = 502 `catalogue_unavailable`, nothing recorded). The trigger fires every live campaign whose pipe answers it AND every unit of a sales funnel headed by it (features-service `trigger:<id>+...`), its proactive pipes included, which never run on their own cadence. Due now (no `dueAt`, or `dueAt` <= now) = fired in this call, the outcome is on the returned event. `dueAt` later = recorded `pending` and fired by the scheduler when due (a planned event, e.g. 3h before a meeting), same rules. `performed` = the caller already did the work in-process (lead-service serving a lead on `lead_requested`): `{outcome: \"ran\", campaignId}` (a campaign of the org, else 400 `unknown_campaign`) or `{outcome: \"skipped\", reason, detail?}`; recorded as is, nothing dispatched. `idempotencyKey` (unique per org) makes a retry return the first event with `replayed: true` (200). The org rides on x-org-id.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: {
     headers: z.object({ "x-org-id": z.string().openapi({ description: "Internal org UUID from client-service" }) }),
@@ -641,6 +641,27 @@ registry.registerPath({
     201: { description: "Recorded (and fired when due now)", content: { "application/json": { schema: RecordTriggerEventResponse } } },
     200: { description: "Idempotent replay: the event already recorded under this key", content: { "application/json": { schema: RecordTriggerEventResponse } } },
     400: { description: "No org, malformed body, `unknown_trigger` or `unknown_campaign` (`reason` names it)", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "`catalogue_unavailable`: the trigger list could not be read", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/trigger-events/public",
+  tags: ["Internal"],
+  summary: "The PUBLIC trigger door (what api-service POST /v1/trigger-events pipes an outside caller to): same write, refuses a trigger served callable: false",
+  description: TRIGGER_EVENTS_DOC + " Same contract as POST /internal/trigger-events, plus: a trigger features-service serves `callable: false` (fired by distribute itself: a delay/poll/GitHub-issue condition, or a request between our services such as `on_demand` / `lead_requested`) = 400 `trigger_not_callable`, nothing recorded; a trigger with no `callable` served is accepted. WRITE CONTRACT: name a declared `triggerId` (unknown = 400 `unknown_trigger`, nothing recorded; a trigger features-service serves `callable: false`, a condition we compute such as a delay, a poll or a GitHub issue in prod = 400 `trigger_not_callable`, nothing recorded; trigger list unreadable = 502 `catalogue_unavailable`, nothing recorded). The trigger fires every live campaign whose pipe answers it AND every unit of a sales funnel headed by it (features-service `trigger:<id>+...`), its proactive pipes included, which never run on their own cadence. Due now (no `dueAt`, or `dueAt` <= now) = fired in this call, the outcome is on the returned event. `dueAt` later = recorded `pending` and fired by the scheduler when due (a planned event, e.g. 3h before a meeting), same rules. `performed` = the caller already did the work in-process (lead-service serving a lead on `lead_requested`): `{outcome: \"ran\", campaignId}` (a campaign of the org, else 400 `unknown_campaign`) or `{outcome: \"skipped\", reason, detail?}`; recorded as is, nothing dispatched. `idempotencyKey` (unique per org) makes a retry return the first event with `replayed: true` (200). The org rides on x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    headers: z.object({ "x-org-id": z.string().openapi({ description: "Internal org UUID from client-service" }) }),
+    body: { content: { "application/json": { schema: RecordTriggerEventBody } } },
+  },
+  responses: {
+    201: { description: "Recorded (and fired when due now)", content: { "application/json": { schema: RecordTriggerEventResponse } } },
+    200: { description: "Idempotent replay: the event already recorded under this key", content: { "application/json": { schema: RecordTriggerEventResponse } } },
+    400: { description: "No org, malformed body, `unknown_trigger`, `trigger_not_callable` or `unknown_campaign` (`reason` names it)", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     502: { description: "`catalogue_unavailable`: the trigger list could not be read", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
