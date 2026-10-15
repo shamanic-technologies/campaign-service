@@ -264,6 +264,60 @@ describe("an occurrence carrying something is consumed only by a run that did it
     expect(mockExecute.mock.calls[0][1].trigger).toMatchObject({ eventId: res.body.event.id, item: ITEM });
   });
 
+  it("a person the pipe does NOT admit (/end-run personNotAdmitted) is a FINAL named skip, never redelivered (REPLY-ANY-LEAD-1015)", async () => {
+    const campaign = await emailSending();
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const eventId = res.body.event.id as string;
+    const [d] = await deliveries(eventId);
+    await request(app)
+      .post("/end-run")
+      .set({
+        "x-api-key": API_KEY,
+        "x-org-id": ORG,
+        "x-campaign-id": campaign.id,
+        "x-user-id": USER,
+        "x-run-id": d.runId,
+        "x-workflow-slug": "email-sending-bubup",
+        "x-feature-slug": "email-sending",
+      })
+      .send({ success: true, stopCampaign: false, personNotAdmitted: { reason: "relationship_personal" } })
+      .expect(200);
+    let event = await eventRow(eventId);
+    for (let i = 0; i < 50 && event.outcome !== "skipped"; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      event = await eventRow(eventId);
+    }
+    expect(event).toMatchObject({ status: "done", outcome: "skipped", skipReason: "person_not_admitted", ranCampaignIds: [] });
+    expect((event.detail as Record<string, unknown>).notAdmitted).toEqual([
+      expect.objectContaining({ campaignId: campaign.id, runId: d.runId, reason: "relationship_personal" }),
+    ]);
+    expect((await deliveries(eventId))[0].status).toBe("not_admitted");
+    expect(await fireDueTriggerEvents(new Date(Date.now() + 24 * 3_600_000))).toBe(0);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    // The campaign waits on the idle cadence, it did not fail.
+    const [row] = await db.select().from(campaigns).where(eq(campaigns.id, campaign.id));
+    expect(row.consecutiveRunFailures ?? 0).toBe(0);
+  });
+
+  it("a not-admitted person while ANOTHER campaign ran for the occurrence keeps the outcome ran", async () => {
+    const campaign = await emailSending();
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const eventId = res.body.event.id as string;
+    const [d] = await deliveries(eventId);
+    // Another campaign (another pipe answering the same occurrence) ran for it too.
+    const other = crypto.randomUUID();
+    await db.update(triggerEvents).set({ ranCampaignIds: [campaign.id, other] }).where(eq(triggerEvents.id, eventId));
+    expect((await settleTriggerDelivery(d.runId, { success: true, stopCampaign: false, personNotAdmitted: { reason: "relationship_customer" } })).kind).toBe("not_admitted");
+    expect(await eventRow(eventId)).toMatchObject({ status: "done", outcome: "ran", skipReason: null, ranCampaignIds: [other] });
+  });
+
+  it("personNotAdmitted on a FAILED run is a failure (redelivered), never a decline", async () => {
+    await emailSending();
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const [d] = await deliveries(res.body.event.id);
+    expect((await settleTriggerDelivery(d.runId, { success: false, personNotAdmitted: { reason: "x" } })).kind).toBe("redelivered");
+  });
+
   it("an occurrence carrying nothing records no delivery (byte-identical to before)", async () => {
     await emailSending();
     const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER });

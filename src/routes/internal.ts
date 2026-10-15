@@ -522,8 +522,11 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
   try {
     const campaignId = req.campaignId!;
     const orgId = req.orgId!;
-    const { success } = req.body;
+    const { success, personNotAdmitted } = req.body;
     let { stopCampaign, noWorkAvailable } = req.body;
+    // The pipe's strategy refused the person the occurrence carried (REPLY-ANY-LEAD-1015): nothing was owed by this
+    // campaign, so it waits on the idle cadence like a run with nothing to do; the occurrence settles below as final.
+    if (personNotAdmitted && success === true) noWorkAvailable = true;
 
     // "No lead" from a campaign whose lead sources find leads ON THEIR OWN (lib/on-demand-mode.ts, owner 2026-10-12)
     // means their stock is empty for now: nobody was asked to find anyone, so no audience ran dry. Exhaustion is then
@@ -555,7 +558,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
         service: "campaign-service",
         event: "end-run",
         detail: `Ending run for campaign ${campaignId} — success=${success}, stopCampaign=${stopCampaign}, noWorkAvailable=${noWorkAvailable === true}, status=${status}`,
-        data: { campaignId, success, stopCampaign, noWorkAvailable: noWorkAvailable === true, status },
+        data: { campaignId, success, stopCampaign, noWorkAvailable: noWorkAvailable === true, personNotAdmitted: personNotAdmitted?.reason ?? null, status },
       }, req.headers).catch(() => {});
     }
 
@@ -594,7 +597,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
     // Fire-and-forget: never delays or fails run finalization.
     if (req.runId) {
       const endedRunId = req.runId;
-      void settleTriggerDelivery(endedRunId, { success, stopCampaign, noWorkAvailable }).catch((err) => {
+      void settleTriggerDelivery(endedRunId, { success, stopCampaign, noWorkAvailable, personNotAdmitted }).catch((err) => {
         console.error(`[campaign-service] could not settle the trigger delivery of run ${endedRunId} (campaign ${campaignId}):`, err);
       });
     }
