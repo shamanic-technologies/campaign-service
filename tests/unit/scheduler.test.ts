@@ -132,6 +132,7 @@ vi.mock("../../src/lib/trigger-events.js", () => ({
   nextPendingTriggerDueAt: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("../../src/lib/trigger-silence.js", () => ({ alertSilentTriggers: vi.fn().mockResolvedValue([]) }));
+vi.mock("../../src/lib/stuck-trigger-alert.js", () => ({ alertStuckOccurrences: vi.fn().mockResolvedValue([]) }));
 
 // The catalogue's reading of each claimed campaign's leg decides who dispatches it (lib/on-demand-mode.ts).
 const SOURCE = "sourcing-apollo-cold-filters";
@@ -423,7 +424,7 @@ describe("Scheduler - reRunDueCampaigns", () => {
     expect(mockCreateRun.mock.calls[0][0]).toMatchObject({ taskName: "campaign-trigger" });
   });
 
-  it("should use parentRunId as runId when available", async () => {
+  it("dispatches under the campaign's OWN anchor run, never the creator's run", async () => {
     mockDbReturning.mockResolvedValue([
       {
         id: "campaign-1",
@@ -431,7 +432,9 @@ describe("Scheduler - reRunDueCampaigns", () => {
         workflowSlug: "sales-email-cold-outreach",
         brandIds: ["brand-123"],
         createdByUserId: "user-1",
-        parentRunId: "parent-run-abc",
+        // The creator's run can belong to another campaign's tree (HOTFIX ANCESTOR-1015).
+        parentRunId: "creator-run-of-another-campaign",
+        anchorRunId: "own-anchor-abc",
         featureSlug: "sales-cold-email-v1",
       },
     ]);
@@ -440,7 +443,7 @@ describe("Scheduler - reRunDueCampaigns", () => {
 
     expect(mockExecuteCampaignWorkflow).toHaveBeenCalledWith(
       "sales-email-cold-outreach",
-      expect.objectContaining({ runId: "parent-run-abc" }),
+      expect.objectContaining({ runId: "own-anchor-abc" }),
     );
   });
 

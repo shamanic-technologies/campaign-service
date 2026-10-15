@@ -9,8 +9,13 @@ export const campaigns = pgTable(
     orgId: text("org_id").notNull(),
     createdByUserId: text("created_by_user_id"),
 
-    // The run ID that initiated the campaign (from x-run-id at creation time)
+    // The run ID that initiated the campaign (from x-run-id at creation time). PROVENANCE only:
+    // nothing is ever dispatched under it (it can belong to another campaign's run tree).
     parentRunId: text("parent_run_id"),
+
+    // The campaign's OWN root run, minted by campaign-service (lib/trigger-run.ts): every execution
+    // it dispatches hangs under it. NULL until the first dispatch establishes it.
+    anchorRunId: text("anchor_run_id"),
 
     name: text("name").notNull(),
 

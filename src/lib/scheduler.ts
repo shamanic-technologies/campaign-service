@@ -17,6 +17,7 @@ import { sourcesOffHold, SOURCES_OFF_RECHECK_MS } from "./sources-off-hold.js";
 import { reportTurnHolds } from "./turn-hold-event.js";
 import { fireDueTriggerEvents, nextPendingTriggerDueAt } from "./trigger-events.js";
 import { alertSilentTriggers } from "./trigger-silence.js";
+import { alertStuckOccurrences } from "./stuck-trigger-alert.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -112,6 +113,7 @@ export async function reRunDueCampaigns(): Promise<number> {
       orgId: campaigns.orgId,
       createdByUserId: campaigns.createdByUserId,
       parentRunId: campaigns.parentRunId,
+      anchorRunId: campaigns.anchorRunId,
       // Named in the staff alert a failing dispatch raises (backOffFailedDispatch).
       name: campaigns.name,
       workflowSlug: campaigns.workflowSlug,
@@ -581,6 +583,10 @@ async function tick(): Promise<void> {
       });
       await alertSilentTriggers().catch((err) => {
         console.error("[campaign-service] Trigger silence sweep error:", err);
+      });
+      // A person (or what they sent) waiting on an occurrence that cannot be delivered is told to staff.
+      await alertStuckOccurrences().catch((err) => {
+        console.error("[campaign-service] Stuck occurrence sweep error:", err);
       });
     } catch (err) {
       console.error("[campaign-service] Scheduler tick error:", err);
