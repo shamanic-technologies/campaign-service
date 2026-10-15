@@ -203,6 +203,17 @@ describe("leg-workflow-repair: a unit stores a workflow features-service assigns
     expect((await rowOf(unitId)).workflowSlug).toBe(`${COLD}-denebola`);
   });
 
+  it("a unit whose funnel the catalogue no longer knows is listed, and the pass goes on", async () => {
+    const gone = await coldUnit(REPLY, `${COLD}-denebola`);
+    const deps = repairDeps() as unknown as Record<string, unknown>;
+    const out = await repairSalesFunnelUnitLegWorkflows({
+      apply: true, orgId: ORG, identity: IDENTITY,
+      deps: { ...deps, salesFunnel: async () => ({ ok: false as const, notFound: true as const, detail: "404" }) } as never,
+    });
+    expect(out.units).toEqual([expect.objectContaining({ campaignId: gone, skipped: "sales_funnel_not_found" })]);
+    expect((await rowOf(gone)).workflowSlug).toBe(`${COLD}-denebola`);
+  });
+
   it("a customer-operated unit is never checked", async () => {
     const row = await insertTestCampaign(ORG, {
       status: "ongoing", featureSlug: TEAM, legKey: TEAM_LEG, brandIds: [BRAND], brandId: BRAND, offerId: OFFER,

@@ -18,8 +18,10 @@ type PipeRead = Extract<Awaited<ReturnType<typeof fetchPipe>>, { ok: true }>;
 async function unitPipe(
   unit: UnitRow,
   deps: { salesFunnel?: typeof fetchSalesFunnel; pipe?: typeof fetchPipe },
-): Promise<{ id: string; read: PipeRead } | null> {
+): Promise<{ id: string; read: PipeRead } | null | "funnel_not_found"> {
   const funnel = await (deps.salesFunnel ?? fetchSalesFunnel)(unit.salesFunnelId!);
+  // A funnel the catalogue no longer knows (retired) is that unit's skip, never the whole pass's failure.
+  if (!funnel.ok && funnel.notFound) return "funnel_not_found";
   if (!funnel.ok) throw new Error(`sales funnel ${unit.salesFunnelId} unreadable: ${funnel.detail}`);
   for (const leg of funnel.value.legs) {
     if (!leg.pipe || !sameLeg(unit.featureSlug, leg.legKey, unit.legKey)) continue;
@@ -115,8 +117,8 @@ export async function adoptSalesFunnelUnitWorkflows(opts: {
     out.push(entry);
 
     const found = await unitPipe(unit, opts.deps ?? {});
-    if (!found) {
-      entry.skipped = "pipe_not_in_funnel";
+    if (found === "funnel_not_found" || !found) {
+      entry.skipped = found === "funnel_not_found" ? "sales_funnel_not_found" : "pipe_not_in_funnel";
       continue;
     }
     entry.pipeId = found.id;
@@ -236,8 +238,8 @@ export async function repairSalesFunnelUnitLegWorkflows(opts: {
       continue;
     }
     const found = await unitPipe(unit, opts.deps ?? {});
-    if (!found) {
-      entry.skipped = "pipe_not_in_funnel";
+    if (found === "funnel_not_found" || !found) {
+      entry.skipped = found === "funnel_not_found" ? "sales_funnel_not_found" : "pipe_not_in_funnel";
       continue;
     }
     const excluded = found.read.value.play?.excludedWorkflowDynastySlugs ?? [];
