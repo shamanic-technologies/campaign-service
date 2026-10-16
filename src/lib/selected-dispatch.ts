@@ -6,6 +6,7 @@ import { campaigns } from "../db/schema.js";
 import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./on-demand-mode.js";
+import { answersATrigger, reactiveWake } from "./reactive-wake.js";
 
 /**
  * A RUN A PERSON STARTED GOES THROUGH THE SAME SELECTION AS EVERY OTHER RUN.
@@ -49,12 +50,21 @@ export async function dispatchSelectedRun(
   },
   identity: { orgId: string; userId: string; runId: string },
 ): Promise<string | null> {
-  if (answersOnDemand(campaign, await readDispatchCatalogue())) {
+  const catalogue = await readDispatchCatalogue();
+  if (answersOnDemand(campaign, catalogue)) {
     await db
       .update(campaigns)
       .set({ nextRunAt: new Date(Date.now() + ON_DEMAND_RECHECK_MS), updatedAt: new Date() })
       .where(eq(campaigns.id, campaign.id));
     return null;
+  }
+  // A REACTIVE pipe a person turns on waits for its work (lib/reactive-wake.ts): nobody owed = parked, no run.
+  if (answersATrigger(campaign, catalogue)) {
+    const wake = await reactiveWake({ ...campaign, orgId: identity.orgId }, catalogue);
+    if (!wake.run) {
+      await db.update(campaigns).set({ nextRunAt: wake.nextRunAt, updatedAt: new Date() }).where(eq(campaigns.id, campaign.id));
+      return null;
+    }
   }
   const brandIds = campaign.brandIds ?? [];
   const brandIdCsv = brandIds.join(",");

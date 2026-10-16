@@ -23,7 +23,7 @@ import {
   type RecordedFailure,
 } from "../lib/run-failure-backoff.js";
 import { OpenOnDemandRunBody, TriggerRanCountsQuery } from "../schemas.js";
-import { AnsweringCampaignsBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
+import { AnsweringCampaignsBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventForPersonQuery, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import type { z } from "zod";
 import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
 import { wakeScheduler } from "../lib/scheduler.js";
@@ -40,6 +40,7 @@ import { STOP_REASONS } from "../lib/stop-reason.js";
 import { StepTriggerScopeError } from "../lib/step-trigger.js";
 import {
   listOfferTriggerEvents,
+  firstTriggerEventForPerson,
   recordTriggerEvent,
   serializeTriggerEvents,
   summarizeOfferTriggerEvents,
@@ -1086,6 +1087,38 @@ router.get("/internal/offers/:offerId/trigger-events", requireApiKey, validateQu
     res.json({ events: await serializeTriggerEvents(events) });
   } catch (error) {
     console.error("[campaign-service] trigger-events list error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /internal/offers/:offerId/trigger-events/for-person?brandId=&triggerId=&(leadId=|email=|phone=)  (+ x-org-id)
+ *
+ * The FIRST event of one trigger about one person on the offer, whichever door or caller recorded it, or null.
+ * lead-service asks it before ringing an outcome trigger: an occurrence an outside caller already pushed for that
+ * person is not fired a second time. Person = the event's lead OR its `detail.person` (email case-folded, phone).
+ * A read.
+ */
+router.get("/internal/offers/:offerId/trigger-events/for-person", requireApiKey, validateQuery(OfferTriggerEventForPersonQuery), async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"];
+    if (typeof orgId !== "string" || !orgId) {
+      return res.status(400).json({ error: "x-org-id header is required: an offer belongs to one (org, brand) pair" });
+    }
+    const q = req.query as { brandId: string; triggerId: string; leadId?: string; email?: string; phone?: string };
+    if (!q.leadId && !q.email && !q.phone) return res.status(400).json({ error: "one of leadId, email or phone is required" });
+    const event = await firstTriggerEventForPerson({
+      orgId,
+      brandId: q.brandId,
+      offerId: req.params.offerId,
+      triggerId: q.triggerId,
+      leadId: q.leadId,
+      email: q.email,
+      phone: q.phone,
+    });
+    res.json({ event: event ? (await serializeTriggerEvents([event]))[0] : null, idempotencyKey: event?.idempotencyKey ?? null });
+  } catch (error) {
+    console.error("[campaign-service] trigger-events for-person error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

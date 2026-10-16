@@ -718,6 +718,43 @@ export async function listOfferTriggerEvents(
     .limit(scope.limit);
 }
 
+/**
+ * The FIRST event of one trigger about one person on an offer, whichever door or caller recorded it (an outside
+ * caller's push, lead-service's outcome detector, a detector here), or null. The person is matched by the event's
+ * lead (`lead_id`) OR the identity it carries (`detail.person`: email case-folded, phone as stored). Lets a caller
+ * about to ring an outcome trigger see that the same occurrence already reached the door (one fire per person,
+ * every caller alike). A read.
+ */
+export async function firstTriggerEventForPerson(scope: {
+  orgId: string;
+  brandId: string;
+  offerId: string;
+  triggerId: string;
+  leadId?: string;
+  email?: string;
+  phone?: string;
+}): Promise<TriggerEvent | null> {
+  const who = [
+    scope.leadId ? sql`${triggerEvents.leadId} = ${scope.leadId}` : null,
+    scope.email ? sql`lower(${triggerEvents.detail}->'person'->>'email') = ${scope.email.trim().toLowerCase()}` : null,
+    scope.phone ? sql`${triggerEvents.detail}->'person'->>'phone' = ${scope.phone.trim()}` : null,
+  ].filter((c): c is NonNullable<typeof c> => c !== null);
+  if (who.length === 0) return null;
+  const [row] = await db
+    .select()
+    .from(triggerEvents)
+    .where(and(
+      eq(triggerEvents.orgId, scope.orgId),
+      eq(triggerEvents.brandId, scope.brandId),
+      eq(triggerEvents.offerId, scope.offerId),
+      eq(triggerEvents.triggerId, scope.triggerId),
+      sql`(${sql.join(who, sql` OR `)})`,
+    ))
+    .orderBy(triggerEvents.occurredAt, triggerEvents.createdAt)
+    .limit(1);
+  return row ?? null;
+}
+
 /** The wire shape of several events, each with its `delivery` (one read of their delivery rows). */
 export async function serializeTriggerEvents(events: TriggerEvent[]) {
   const byEvent = await deliveriesByEvent(events.filter((e) => eventCarries(e.detail)).map((e) => e.id));

@@ -19,7 +19,7 @@
  * vocabulary, list or matrix exists in this service, and the identifier is never SPLIT back into
  * the two steps it connects (they ride beside it on the very same payload).
  *
- * Contract (features-service): GET /public/channels (no auth, no identity)
+ * Contract (features-service): GET /public/channels?includeInline=true (no auth, no identity)
  *   -> { channels: [{ slug, operatedBy: "platform" | "customer",
  *                     stepTransitions: [{ legKey, from, to }], ... }],
  *        legs: [{ legKey, fromStep: { key } | null, toStep: { key } | null }],
@@ -155,7 +155,10 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
   }
 
   try {
-    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/public/channels`);
+    // `includeInline=true` (features-service, 2026-10-16): this service's own door validates EVERY declared trigger,
+    // the inline requests between our services (`on_demand`, `lead_requested`) included; outside readers get the
+    // entry doors only.
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/public/channels?includeInline=true`);
     if (!res.ok) {
       let body = "";
       try {
