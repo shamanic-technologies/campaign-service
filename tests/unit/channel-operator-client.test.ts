@@ -183,6 +183,45 @@ describe("fetchChannelCatalogue", () => {
     expect(read.triggers?.get("lead_requested")?.callable).toBeNull();
   });
 
+  it("reads the merged trigger ids and serves a pipe still named on one on its target (STD-VOCAB-CONDITION-1016)", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        channels: [
+          {
+            slug: "ai-follow-up-email",
+            operatedBy: "platform",
+            stepTransitions: [
+              { legKey: "start_to_conversation", mode: "reactive", triggerId: "follow_up_date_reached" },
+              { legKey: "signup_to_paid_client", mode: "reactive", triggerId: "follow_up_due" },
+            ],
+          },
+        ],
+        triggers: [{ id: "follow_up_due", label: "Follow-up Due", fromStep: null, firedBy: "campaign-service", coded: true, kind: "reported" }],
+        triggerAliases: [{ id: "follow_up_date_reached", mergedInto: "follow_up_due" }, { id: "x" }, { id: "y", mergedInto: "y" }],
+      }),
+    });
+    const read = await fetchChannelCatalogue();
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect([...(read.triggerAliases ?? new Map())]).toEqual([["follow_up_date_reached", "follow_up_due"]]);
+    expect(read.triggerTransitions).toEqual([
+      { featureSlug: "ai-follow-up-email", legKey: "start_to_conversation", triggerId: "follow_up_due" },
+      { featureSlug: "ai-follow-up-email", legKey: "signup_to_paid_client", triggerId: "follow_up_due" },
+    ]);
+    const { resolveTriggerType } = await import("../../src/lib/trigger-aliases.js");
+    expect(resolveTriggerType(read, "follow_up_date_reached")?.id).toBe("follow_up_due");
+    expect(resolveTriggerType(read, "follow_up_due")?.id).toBe("follow_up_due");
+    expect(resolveTriggerType(read, "nope")).toBeNull();
+  });
+
+  it("states NO merged trigger when the catalogue serves none (byte-identical before the merge)", async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ channels: [], triggers: [] }) });
+    const read = await fetchChannelCatalogue();
+    if (!read.ok) throw new Error("expected ok");
+    expect(read.triggerAliases?.size).toBe(0);
+  });
+
   it("says a failure is a failure — never an empty catalogue", async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 503, text: async () => "unavailable" });
     const read = await fetchChannelCatalogue();

@@ -437,4 +437,79 @@ describe("trigger events", () => {
       expect(late.map((a) => a.triggerId)).toEqual([REPLY]);
     });
   });
+
+  describe("one trigger per fact: follow_up_date_reached merged into follow_up_due (STD-VOCAB-CONDITION-1016)", () => {
+    const FOLLOW_UP = "follow_up_due";
+    const MERGED = "follow_up_date_reached";
+    const FOLLOW_UP_LEG = "start_to_conversation";
+    const mergedCatalogue = () => {
+      const base = catalogue();
+      return {
+        ...base,
+        triggers: new Map([...base.triggers, [FOLLOW_UP, { id: FOLLOW_UP, label: "Follow-up Due", fromStepKey: null, firedBy: "campaign-service", coded: true, kind: "reported" }]]),
+        triggerTransitions: [...base.triggerTransitions, { featureSlug: "ai-follow-up-email", legKey: FOLLOW_UP_LEG, triggerId: FOLLOW_UP }],
+        triggerAliases: new Map([[MERGED, FOLLOW_UP]]),
+      };
+    };
+    const followUp = () =>
+      insertTestCampaign(ORG, {
+        brandIds: [BRAND],
+        brandId: BRAND,
+        status: "ongoing",
+        featureSlug: "ai-follow-up-email",
+        workflowSlug: "ai-follow-up-email-alasia",
+        createdByUserId: USER,
+        parentRunId: "9f0d1c22-0000-4000-8000-000000000019",
+        offerId: OFFER,
+        legKey: FOLLOW_UP_LEG,
+        salesFunnelCampaignId: crypto.randomUUID(),
+        salesFunnelId: "sf-follow-up",
+      });
+
+    beforeEach(() => {
+      mockCatalogue.mockResolvedValue(mergedCatalogue());
+    });
+
+    it("an occurrence reported under the merged id is recorded and fired as the one trigger, the stated id kept", async () => {
+      const campaign = await followUp();
+      const res = await postEvent({ triggerId: MERGED, brandId: BRAND, offerId: OFFER, leadId: "lead-9" });
+      expect(res.status).toBe(201);
+      expect(res.body.event).toMatchObject({ triggerId: FOLLOW_UP, status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+      const [event] = await allEvents();
+      expect(event.triggerId).toBe(FOLLOW_UP);
+      expect(event.detail).toMatchObject({ statedTriggerId: MERGED });
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+    });
+
+    it("an occurrence reported under the one trigger fires the same campaign, nothing stated beside it", async () => {
+      const campaign = await followUp();
+      const res = await postEvent({ triggerId: FOLLOW_UP, brandId: BRAND, offerId: OFFER, leadId: "lead-9" });
+      expect(res.body.event).toMatchObject({ triggerId: FOLLOW_UP, outcome: "ran", ranCampaignIds: [campaign.id] });
+      const [event] = await allEvents();
+      expect((event.detail as Record<string, unknown>)?.statedTriggerId).toBeUndefined();
+    });
+
+    it("an occurrence recorded under the merged id BEFORE the merge still fires once at its due time", async () => {
+      const campaign = await followUp();
+      const dueAt = new Date(Date.now() + 60_000);
+      await db.insert(triggerEvents).values({
+        orgId: ORG, brandId: BRAND, offerId: OFFER, triggerId: MERGED, leadId: "lead-7", recordedVia: "trigger_events",
+        occurredAt: new Date(), dueAt, status: "pending",
+      });
+      expect(await fireDueTriggerEvents(new Date(dueAt.getTime() + 1_000))).toBe(1);
+      const [event] = await allEvents();
+      expect(event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+      expect(await fireDueTriggerEvents(new Date(dueAt.getTime() + 60_000))).toBe(0);
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+    });
+
+    it("before features-service serves the merge, the merged id is still the declared trigger it was (byte-identical)", async () => {
+      const base = catalogue();
+      mockCatalogue.mockResolvedValue({ ...base, triggers: new Map([...base.triggers, [MERGED, { id: MERGED, label: "Follow-up Date Reached", fromStepKey: null, firedBy: "campaign-service", coded: false, kind: "reported" }]]) });
+      const res = await postEvent({ triggerId: MERGED, brandId: BRAND, offerId: OFFER, leadId: "lead-9" });
+      expect(res.status).toBe(201);
+      expect(res.body.event.triggerId).toBe(MERGED);
+    });
+  });
 });
