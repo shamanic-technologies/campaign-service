@@ -309,6 +309,63 @@ describe("trigger events", () => {
     });
   });
 
+  describe("GET /internal/offers/:offerId/trigger-events/for-person", () => {
+    const LEAD = "6b1f3c2e-0000-4000-8000-0000000000aa";
+    const insert = (over: Partial<typeof triggerEvents.$inferInsert>) =>
+      db.insert(triggerEvents).values({
+        id: crypto.randomUUID(),
+        orgId: ORG,
+        brandId: BRAND,
+        offerId: OFFER,
+        triggerId: MEETING,
+        recordedVia: "trigger_events",
+        occurredAt: new Date("2026-10-16T10:00:00Z"),
+        dueAt: new Date("2026-10-16T10:00:00Z"),
+        status: "done",
+        ...over,
+      }).returning();
+    const ask = (q: Record<string, string>) =>
+      request(app)
+        .get(`/internal/offers/${OFFER}/trigger-events/for-person`)
+        .query({ brandId: BRAND, triggerId: MEETING, ...q })
+        .set("x-api-key", API_KEY)
+        .set("x-org-id", ORG);
+
+    it("answers the FIRST event of the trigger about the person, by lead, email (case-folded) or phone, any caller", async () => {
+      const [pushed] = await insert({ detail: { person: { email: "Ann@Acme.com", phone: "+33612345678" } } });
+      await insert({ leadId: LEAD, occurredAt: new Date("2026-10-16T11:00:00Z"), idempotencyKey: "lead-service:outcome:x" });
+
+      const byEmail = await ask({ email: "ann@acme.com" });
+      expect(byEmail.status).toBe(200);
+      expect(byEmail.body.event).toMatchObject({ id: pushed.id, triggerId: MEETING });
+      expect((await ask({ phone: "+33612345678" })).body.event.id).toBe(pushed.id);
+      // Lead OR email: the earliest of either wins.
+      expect((await ask({ leadId: LEAD, email: "ann@acme.com" })).body.event.id).toBe(pushed.id);
+      const byLead = await ask({ leadId: LEAD });
+      expect(byLead.body.event.leadId).toBe(LEAD);
+      expect(byLead.body.idempotencyKey).toBe("lead-service:outcome:x");
+      expect(byEmail.body.idempotencyKey).toBeNull();
+    });
+
+    it("another trigger, offer or person is none", async () => {
+      await insert({ triggerId: REPLY, detail: { person: { email: "ann@acme.com" } } });
+      await insert({ offerId: crypto.randomUUID(), detail: { person: { email: "ann@acme.com" } } });
+      await insert({ detail: { person: { email: "bob@acme.com" } } });
+      const res = await ask({ email: "ann@acme.com" });
+      expect(res.status).toBe(200);
+      expect(res.body.event).toBeNull();
+    });
+
+    it("names a person or refuses", async () => {
+      expect((await ask({})).status).toBe(400);
+      const noOrg = await request(app)
+        .get(`/internal/offers/${OFFER}/trigger-events/for-person`)
+        .query({ brandId: BRAND, triggerId: MEETING, email: "ann@acme.com" })
+        .set("x-api-key", API_KEY);
+      expect(noOrg.status).toBe(400);
+    });
+  });
+
   describe("silence alert", () => {
     const DAY = 24 * 60 * 60_000;
     let sends: Array<{ url: string; body: Record<string, unknown> }>;

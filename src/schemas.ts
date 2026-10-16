@@ -895,6 +895,22 @@ export const OfferTriggerEventsListResponse = z.object({
   events: z.array(TriggerEventSchema),
 }).openapi("OfferTriggerEventsListResponse");
 
+export const OfferTriggerEventForPersonQuery = z.object({
+  brandId: z.string().uuid("brandId must be a valid UUID"),
+  triggerId: z.string().min(1),
+  /** At least one of leadId / email / phone. */
+  leadId: z.string().min(1).optional(),
+  email: z.string().min(3).optional(),
+  phone: z.string().min(3).optional(),
+}).openapi("OfferTriggerEventForPersonQuery");
+
+export const OfferTriggerEventForPersonResponse = z.object({
+  /** The first event of the trigger about the person on the offer, any door or caller; null = none. */
+  event: TriggerEventSchema.nullable(),
+  /** That event's idempotency key (null = none, or no event): a caller recognises its own earlier write. */
+  idempotencyKey: z.string().nullable(),
+}).openapi("OfferTriggerEventForPersonResponse");
+
 /**
  * WHICH CAMPAIGN RAN THE LEG THAT ENDS WHERE THIS ONE BEGINS.
  *
