@@ -808,6 +808,10 @@ export const TriggerEventSchema = z.object({
   ranLeads: z.array(z.object({ campaignId: z.string(), leadId: z.string() })).openapi({
     description: "Per campaign that ran: the lead the event's person was filed as on that campaign (lead-service). Empty when no run carried a lead.",
   }),
+  sourceTriggerId: z.string().nullable().openapi({
+    description:
+      "An occurrence of a trigger made of other triggers (`lead_event` \"Lead event\", kind `any_of`): the trigger id of the fact it stands for (`positive_reply_received`, `signed_up`, `signup_not_paid_30_min`...), also on `detail.sourceTriggerId` with `detail.sourceEventId` (that fact's own occurrence) and `detail.sourceStep`, and handed to the workflow as `trigger.sourceTriggerId`. null for any other occurrence.",
+  }),
   /**
    * What happened to what the occurrence carries (a person / an item), the client's answer to "did it leave?".
    * null when it carries nothing. Always present.
@@ -882,6 +886,13 @@ export const OfferTriggerEventsSummaryResponse = z.object({
     pending: z.number().int(),
     skippedByReason: z.array(z.object({ reason: z.string(), count: z.number().int() })),
     lastOccurredAt: z.string().nullable(),
+    bySourceTrigger: z.array(z.object({
+      sourceTriggerId: z.string(),
+      events: z.number().int(),
+      ran: z.number().int(),
+      skipped: z.number().int(),
+      pending: z.number().int(),
+    })).openapi({ description: "A trigger made of other triggers (`lead_event`): the same counts per fact it stood for. Empty for any other trigger." }),
   })),
 }).openapi("OfferTriggerEventsSummaryResponse");
 

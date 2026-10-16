@@ -23,6 +23,7 @@ import {
 } from "./trigger-person.js";
 import { deliveriesByEvent, deliveryOf, eventCarries, recordDeliveries } from "./trigger-deliveries.js";
 import { answersTrigger, doorRefusal, TRIGGER_NOT_CALLABLE } from "./sales-funnel-head-trigger.js";
+import { COMPOSITE_TRIGGER_RECORDED_VIA, eventSourceTriggerId, recordCompositeOccurrences } from "./composite-trigger.js";
 
 /**
  * THE TRIGGER EVENTS — ONE ROW PER OCCURRENCE, AND WHAT IT DID (owner 2026-10-09).
@@ -99,6 +100,8 @@ export const TRIGGER_EVENT_RECORDED_VIA = {
   POLL_DETECTOR: "poll_detector",
   /** A GitHub issue a funnel campaign waits on reached prod (lib/github-issue-trigger-detector.ts). */
   GITHUB_ISSUE_DETECTOR: "github_issue_detector",
+  /** One occurrence of a trigger made of other triggers (`lead_event`), for a member's occurrence (lib/composite-trigger.ts). */
+  COMPOSITE_TRIGGER: COMPOSITE_TRIGGER_RECORDED_VIA,
 } as const;
 
 const POLL_RECORDED_VIA = TRIGGER_EVENT_RECORDED_VIA.POLL_DETECTOR;
@@ -228,7 +231,13 @@ export async function triggerStepAndRecord(
       attempts: 1,
       claimedAt: now,
       processedAt: now,
-    }).returning({ id: triggerEvents.id });
+    }).returning();
+    // The fact also counts for every trigger made of it (`lead_event`, lib/composite-trigger.ts).
+    if (row.triggerId) {
+      const catalogue = await fetchChannelCatalogue();
+      if (catalogue.ok) await recordCompositeOccurrences(row, catalogue, (e) => fireClaimedEvent(e, catalogue, new Date()));
+      else console.error(`[campaign-service] trigger event ${row.id} (${row.triggerId}): composite occurrences not recorded, catalogue unreadable (${catalogue.detail})`);
+    }
     return { outcome: run.outcome, eventId: row.id, triggerId: run.triggerId };
   } catch (err) {
     console.error(
@@ -387,6 +396,8 @@ export async function recordTriggerEvent(
     return { event: existing, replayed: true };
   }
   const event = inserted[0];
+  // A fact the caller performed itself happened now: every trigger made of it records it (lib/composite-trigger.ts).
+  if (event.status === "done") await recordCompositeOccurrences(event, catalogue, (e) => fireClaimedEvent(e, catalogue, now), now);
   if (event.status !== "firing") return { event, replayed: false };
 
   return { event: await fireClaimedEvent(event, catalogue, now), replayed: false };
@@ -415,7 +426,7 @@ export async function fireClaimedEvent(
       detail: { legKeys: [], triggered: [], skipped: [], offCampaignIds: [], ...extra },
     });
     const detected = event.recordedVia === DELAY_DETECTOR_RECORDED_VIA || event.recordedVia === POLL_RECORDED_VIA
-      || event.recordedVia === GITHUB_ISSUE_RECORDED_VIA;
+      || event.recordedVia === GITHUB_ISSUE_RECORDED_VIA || event.recordedVia === COMPOSITE_TRIGGER_RECORDED_VIA;
     const own = event.detail && typeof event.detail === "object" && !Array.isArray(event.detail)
       ? (event.detail as Record<string, unknown>)
       : null;
@@ -436,6 +447,7 @@ export async function fireClaimedEvent(
     const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
     const retryCampaignIds = delivers && Array.isArray(own?.retryCampaignIds) ? strings(own?.retryCampaignIds) : null;
     const priorRanCampaignIds = delivers ? strings(own?.priorRanCampaignIds) : [];
+    const sourceTriggerId = event.recordedVia === COMPOSITE_TRIGGER_RECORDED_VIA ? eventSourceTriggerId(own) : null;
     // An occurrence recorded under a since-merged id fires as the one trigger of its fact.
     const type = event.triggerId ? resolveTriggerType(catalogue, event.triggerId) : null;
     if (!type) {
@@ -448,7 +460,15 @@ export async function fireClaimedEvent(
         verdict = skipped(guard.reason, { guardDetail: guard.detail });
       } else {
         const trigger: WorkflowTriggerInput | undefined = detected || carries
-          ? { eventId: event.id, triggerId: type.id, leadId: event.leadId, item, ...(person ? { person } : {}) }
+          ? {
+            eventId: event.id,
+            triggerId: type.id,
+            leadId: event.leadId,
+            item,
+            ...(person ? { person } : {}),
+            // The fact a composite occurrence (`lead_event`) stands for: what a pipe's strategy filters on.
+            ...(sourceTriggerId ? { sourceTriggerId } : {}),
+          }
           : undefined;
         verdict = eventVerdict(
           await fireTrigger(event, type.id, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId, person, retryCampaignIds),
@@ -461,6 +481,9 @@ export async function fireClaimedEvent(
             console.error(`[campaign-service] trigger event ${event.id}: the runs just dispatched could not be recorded, a failure of them will not redeliver it:`, err);
           }
         }
+        // The fact happened: every trigger made of it (`lead_event`) records its own occurrence, once, and fires it.
+        // Never throws (the member is already dispatched).
+        await recordCompositeOccurrences(event, catalogue, (e) => fireClaimedEvent(e, catalogue, now), now);
       }
     }
     // Campaigns that ran on an earlier attempt still count.
@@ -653,13 +676,21 @@ export interface TriggerSummaryRow {
   pending: number;
   skippedByReason: Array<{ reason: string; count: number }>;
   lastOccurredAt: string | null;
+  /**
+   * A trigger made of other triggers (`lead_event`, lib/composite-trigger.ts): the same counts per fact it stood for
+   * (`sourceTriggerId`). Empty for any other trigger.
+   */
+  bySourceTrigger: Array<{ sourceTriggerId: string; events: number; ran: number; skipped: number; pending: number }>;
 }
 
 /** Per trigger, over `[from, to]` on `occurred_at`: how many occurred, ran, were skipped (by reason). */
 export async function summarizeOfferTriggerEvents(scope: OfferTriggerScope): Promise<TriggerSummaryRow[]> {
+  // A constant inlined (never a bound parameter): the same expression must appear in SELECT and GROUP BY.
+  const sourceTrigger = sql<string | null>`CASE WHEN ${triggerEvents.recordedVia} = ${sql.raw(`'${COMPOSITE_TRIGGER_RECORDED_VIA}'`)} THEN ${triggerEvents.detail}->>'sourceTriggerId' END`;
   const rows = await db
     .select({
       triggerId: triggerEvents.triggerId,
+      sourceTriggerId: sourceTrigger,
       status: triggerEvents.status,
       outcome: triggerEvents.outcome,
       skipReason: triggerEvents.skipReason,
@@ -674,20 +705,34 @@ export async function summarizeOfferTriggerEvents(scope: OfferTriggerScope): Pro
       gte(triggerEvents.occurredAt, scope.from),
       lte(triggerEvents.occurredAt, scope.to),
     ))
-    .groupBy(triggerEvents.triggerId, triggerEvents.status, triggerEvents.outcome, triggerEvents.skipReason);
+    .groupBy(triggerEvents.triggerId, sourceTrigger, triggerEvents.status, triggerEvents.outcome, triggerEvents.skipReason);
 
   const byTrigger = new Map<string | null, TriggerSummaryRow>();
   for (const r of rows) {
     let s = byTrigger.get(r.triggerId);
     if (!s) {
-      s = { triggerId: r.triggerId, events: 0, ran: 0, skipped: 0, pending: 0, skippedByReason: [], lastOccurredAt: null };
+      s = { triggerId: r.triggerId, events: 0, ran: 0, skipped: 0, pending: 0, skippedByReason: [], lastOccurredAt: null, bySourceTrigger: [] };
       byTrigger.set(r.triggerId, s);
     }
     const n = Number(r.count);
     s.events += n;
-    if (r.status !== "done") s.pending += n;
-    else if (r.outcome === "ran") s.ran += n;
-    else {
+    let fact: TriggerSummaryRow["bySourceTrigger"][number] | undefined;
+    if (r.sourceTriggerId) {
+      fact = s.bySourceTrigger.find((f) => f.sourceTriggerId === r.sourceTriggerId);
+      if (!fact) {
+        fact = { sourceTriggerId: r.sourceTriggerId, events: 0, ran: 0, skipped: 0, pending: 0 };
+        s.bySourceTrigger.push(fact);
+      }
+      fact.events += n;
+    }
+    if (r.status !== "done") {
+      s.pending += n;
+      if (fact) fact.pending += n;
+    } else if (r.outcome === "ran") {
+      s.ran += n;
+      if (fact) fact.ran += n;
+    } else {
+      if (fact) fact.skipped += n;
       s.skipped += n;
       const reason = r.skipReason ?? "unknown";
       const entry = s.skippedByReason.find((e) => e.reason === reason);
@@ -698,7 +743,10 @@ export async function summarizeOfferTriggerEvents(scope: OfferTriggerScope): Pro
     if (last && (!s.lastOccurredAt || last > s.lastOccurredAt)) s.lastOccurredAt = last;
   }
   const out = [...byTrigger.values()];
-  for (const s of out) s.skippedByReason.sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
+  for (const s of out) {
+    s.skippedByReason.sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
+    s.bySourceTrigger.sort((a, b) => b.events - a.events || a.sourceTriggerId.localeCompare(b.sourceTriggerId));
+  }
   return out.sort((a, b) => (a.triggerId ?? "~").localeCompare(b.triggerId ?? "~"));
 }
 
@@ -780,6 +828,8 @@ export function serializeTriggerEvent(e: TriggerEvent, deliveries: ReadonlyArray
     skipReason: e.skipReason,
     ranCampaignIds: e.ranCampaignIds ?? [],
     ranLeads: eventRanLeads(e),
+    /** A composite occurrence (`lead_event`): the fact it stands for; null otherwise. */
+    sourceTriggerId: e.recordedVia === COMPOSITE_TRIGGER_RECORDED_VIA ? eventSourceTriggerId(e.detail) : null,
     delivery: deliveryOf(e, deliveries),
     performedByCaller: e.performedByCaller,
     processedAt: e.processedAt ? e.processedAt.toISOString() : null,
