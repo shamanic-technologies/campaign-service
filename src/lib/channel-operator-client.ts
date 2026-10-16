@@ -95,6 +95,14 @@ export type ChannelCatalogueRead =
        * "reactive"` + `triggerId`). The campaigns a trigger runs are the ones bought for exactly these.
        */
       triggerTransitions?: readonly CatalogueTriggerTransition[];
+      /**
+       * ONE TRIGGER PER FACT (features-service `triggerAliases[]`, owner 2026-10-16, STD-VOCAB-CONDITION-1016): a
+       * trigger id MERGED into another (`follow_up_date_reached` -> `follow_up_due`) -> the one it resolves to. Keys
+       * are frozen, so a caller reporting under the old id, and an occurrence recorded under it before the merge,
+       * resolve to the target (`resolveTriggerType`). Never in `triggers`; transitions are served on the target.
+       * Absent / not served = empty: byte-identical.
+       */
+      triggerAliases?: ReadonlyMap<string, string>;
     }
   | { ok: false; detail: string };
 
@@ -181,11 +189,20 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
         toStep?: { key?: unknown } | null;
       }>;
       steps?: Array<{ key?: unknown }>;
+      triggerAliases?: Array<{ id?: unknown; mergedInto?: unknown }>;
     };
     if (!Array.isArray(data.channels)) {
       return { ok: false, detail: "response states no channels array" };
     }
 
+    const triggerAliases = new Map<string, string>();
+    if (Array.isArray(data.triggerAliases)) {
+      for (const a of data.triggerAliases) {
+        if (typeof a?.id === "string" && a.id.length > 0 && typeof a.mergedInto === "string" && a.mergedInto.length > 0 && a.id !== a.mergedInto) {
+          triggerAliases.set(a.id, a.mergedInto);
+        }
+      }
+    }
     const operatorBySlug = new Map<string, ChannelOperator>();
     const legsBySlug = new Map<string, ReadonlySet<string>>();
     const reactiveBySlug = new Map<string, ReadonlyMap<string, boolean>>();
@@ -210,7 +227,8 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
               triggerTransitions.push({
                 featureSlug: channel.slug,
                 legKey: transition.legKey,
-                triggerId: transition.triggerId,
+                // A pipe still served on a merged id answers the one trigger of its fact.
+                triggerId: triggerAliases.get(transition.triggerId) ?? transition.triggerId,
               });
             }
           }
@@ -267,7 +285,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       }
     }
 
-    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug, triggers, triggerTransitions };
+    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug, triggers, triggerTransitions, triggerAliases };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

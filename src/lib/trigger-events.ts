@@ -2,6 +2,7 @@ import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, triggerEvents, type TriggerEvent, type TriggerEventDelivery } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
+import { resolveTriggerType } from "./trigger-aliases.js";
 import { DELAY_DETECTOR_RECORDED_VIA, GITHUB_ISSUE_RECORDED_VIA, delayGuard, type LeadActivityCache } from "./delay-trigger-detector.js";
 import {
   runCampaignsInScope,
@@ -293,7 +294,8 @@ export async function recordTriggerEvent(
       "catalogue_unavailable",
     );
   }
-  const type = catalogue.triggers?.get(input.triggerId);
+  // A merged id (`follow_up_date_reached`) is recorded as the one trigger of its fact (`follow_up_due`).
+  const type = resolveTriggerType(catalogue, input.triggerId);
   if (!type) {
     throw new TriggerEventError(
       `trigger ${JSON.stringify(input.triggerId)} is not a trigger type features-service declares`,
@@ -342,9 +344,16 @@ export async function recordTriggerEvent(
     recordedVia: TRIGGER_EVENT_RECORDED_VIA.TRIGGER_ROUTE,
     occurredAt,
     dueAt,
-    // Kept on the row so a planned event and a retry fire with them (fireClaimedEvent reads `detail`).
-    ...(input.person || input.item !== undefined
-      ? { detail: { ...(input.person ? { person: input.person } : {}), ...(input.item !== undefined ? { item: input.item } : {}) } }
+    // Kept on the row so a planned event and a retry fire with them (fireClaimedEvent reads `detail`). The id the
+    // caller stated, when it was a merged one, is kept beside it (`statedTriggerId`).
+    ...(input.person || input.item !== undefined || type.id !== input.triggerId
+      ? {
+        detail: {
+          ...(input.person ? { person: input.person } : {}),
+          ...(input.item !== undefined ? { item: input.item } : {}),
+          ...(type.id !== input.triggerId ? { statedTriggerId: input.triggerId } : {}),
+        },
+      }
       : {}),
   };
 
@@ -427,7 +436,9 @@ export async function fireClaimedEvent(
     const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
     const retryCampaignIds = delivers && Array.isArray(own?.retryCampaignIds) ? strings(own?.retryCampaignIds) : null;
     const priorRanCampaignIds = delivers ? strings(own?.priorRanCampaignIds) : [];
-    if (!event.triggerId || !catalogue.triggers?.has(event.triggerId)) {
+    // An occurrence recorded under a since-merged id fires as the one trigger of its fact.
+    const type = event.triggerId ? resolveTriggerType(catalogue, event.triggerId) : null;
+    if (!type) {
       verdict = skipped(TRIGGER_EVENT_SKIPS.TRIGGER_NOT_DECLARED);
     } else {
       const guard = event.recordedVia === DELAY_DETECTOR_RECORDED_VIA
@@ -437,10 +448,10 @@ export async function fireClaimedEvent(
         verdict = skipped(guard.reason, { guardDetail: guard.detail });
       } else {
         const trigger: WorkflowTriggerInput | undefined = detected || carries
-          ? { eventId: event.id, triggerId: event.triggerId, leadId: event.leadId, item, ...(person ? { person } : {}) }
+          ? { eventId: event.id, triggerId: type.id, leadId: event.leadId, item, ...(person ? { person } : {}) }
           : undefined;
         verdict = eventVerdict(
-          await fireTrigger(event, event.triggerId, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId, person, retryCampaignIds),
+          await fireTrigger(event, type.id, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId, person, retryCampaignIds),
         );
         if (delivers && verdict.detail.triggered.length > 0) {
           // Already dispatched: a failure to record must never put the event back (it would dispatch twice).
