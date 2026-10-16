@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 
-const { mockExecute, mockCreateRun, mockLiveDynasty } = vi.hoisted(() => ({
+const { mockExecute, mockCreateRun, mockLiveDynasty, mockFollowupDue } = vi.hoisted(() => ({
   mockExecute: vi.fn(),
   mockCreateRun: vi.fn(),
   mockLiveDynasty: vi.fn(),
+  mockFollowupDue: vi.fn(),
 }));
+
+// Who is owed on a reactive campaign's queues (lead-service, lib/reactive-wake.ts).
+vi.mock("../../src/lib/followup-due-client.js", () => ({ fetchFollowupDue: mockFollowupDue }));
 
 vi.mock("../../src/lib/startable-workflow-client.js", () => ({
   fetchLiveDynastyOtherThan: mockLiveDynasty,
@@ -104,6 +108,54 @@ describe("Scheduler - reRunDueCampaigns (integration)", () => {
     await db.update(campaigns).set({ salesFunnelCampaignId: "00000000-0000-4000-8000-00000000f001" }).where(eq(campaigns.id, source.id));
     await reRunDueCampaigns();
     expect(mockExecute).toHaveBeenCalledWith("lead-sourcing-vega", expect.objectContaining({ campaignId: source.id }));
+  });
+
+  describe("a REACTIVE pipe runs only when someone is owed (WA-REACTIVE-LOOP-1016)", () => {
+    const reactiveCatalogue = {
+      ok: true as const,
+      operatorBySlug: new Map(),
+      legsBySlug: new Map([["cold-whatsapp-outreach", new Set(["start_to_signup"])]]),
+      legs: [],
+      stepKeys: new Set<string>(),
+      triggerTransitions: [{ featureSlug: "cold-whatsapp-outreach", legKey: "start_to_signup", triggerId: "whatsapp_number_given" }],
+    };
+    const insertReactiveUnit = () =>
+      insertTestCampaign(orgId, {
+        status: "ongoing",
+        nextRunAt: new Date(Date.now() - 60_000),
+        featureSlug: "cold-whatsapp-outreach",
+        legKey: "start_to_signup",
+        workflowSlug: "cold-whatsapp-outreach-zaurak",
+        createdByUserId: "user_scheduler_test",
+      });
+
+    it("stays idle, no run, while ON with nobody owed: parked until lead-service's next owed moment", async () => {
+      const { readDispatchCatalogue } = await import("../../src/lib/on-demand-mode.js");
+      vi.mocked(readDispatchCatalogue).mockResolvedValue(reactiveCatalogue);
+      const next = new Date(Date.now() + 4 * 60_000);
+      mockFollowupDue.mockResolvedValue({ owedNow: false, nextDueAt: next });
+      const unit = await insertReactiveUnit();
+      await reRunDueCampaigns();
+      expect(mockExecute).not.toHaveBeenCalled();
+      expect(mockFollowupDue).toHaveBeenCalledWith(expect.objectContaining({ actingCampaignId: unit.id, campaignIds: [unit.id] }));
+      const [row] = await db.select().from(campaigns).where(eq(campaigns.id, unit.id));
+      expect(row.nextRunAt!.getTime()).toBe(next.getTime());
+      expect(row.status).toBe("ongoing");
+      vi.mocked(readDispatchCatalogue).mockReset();
+      vi.mocked(readDispatchCatalogue).mockResolvedValue({ ok: false, detail: "not read in tests" });
+    });
+
+    it("runs when someone is owed on its queue (a dated follow-up fell due)", async () => {
+      const { readDispatchCatalogue } = await import("../../src/lib/on-demand-mode.js");
+      vi.mocked(readDispatchCatalogue).mockResolvedValue(reactiveCatalogue);
+      mockFollowupDue.mockResolvedValue({ owedNow: true, nextDueAt: null });
+      const unit = await insertReactiveUnit();
+      await db.update(campaigns).set({ salesFunnelCampaignId: "00000000-0000-4000-8000-00000000f002" }).where(eq(campaigns.id, unit.id));
+      await reRunDueCampaigns();
+      expect(mockExecute).toHaveBeenCalledWith("cold-whatsapp-outreach-zaurak", expect.objectContaining({ campaignId: unit.id }));
+      vi.mocked(readDispatchCatalogue).mockReset();
+      vi.mocked(readDispatchCatalogue).mockResolvedValue({ ok: false, detail: "not read in tests" });
+    });
   });
 
   it("should not trigger anything when no campaigns are due", async () => {
