@@ -3,6 +3,7 @@ import { holdPaymentDeclinedOrgs, PAYMENT_HOLD_RECHECK_MS } from "./payment-hold
 import { campaigns } from "../db/schema.js";
 import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./on-demand-mode.js";
+import { answersATrigger, reactiveWake } from "./reactive-wake.js";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
@@ -143,14 +144,23 @@ export async function reRunDueCampaigns(): Promise<number> {
   const parkedUntil = new Date(now.getTime() + ON_DEMAND_RECHECK_MS);
   const runnable: typeof dueCampaigns = [];
   for (const campaign of dueCampaigns) {
-    if (!answersOnDemand(campaign, catalogue)) {
+    let parkUntil: Date | null = null;
+    if (answersOnDemand(campaign, catalogue)) {
+      parkUntil = parkedUntil;
+    } else if (answersATrigger(campaign, catalogue)) {
+      // A REACTIVE pipe runs only when someone is owed (lib/reactive-wake.ts); its trigger's occurrences dispatch it
+      // through the trigger path, never here. Nobody owed = parked until the next owed moment, no run.
+      const wake = await reactiveWake(campaign, catalogue, now);
+      if (!wake.run) parkUntil = wake.nextRunAt;
+    }
+    if (!parkUntil) {
       runnable.push(campaign);
       continue;
     }
     try {
-      await db.update(campaigns).set({ nextRunAt: parkedUntil, updatedAt: new Date() }).where(eq(campaigns.id, campaign.id));
+      await db.update(campaigns).set({ nextRunAt: parkUntil, updatedAt: new Date() }).where(eq(campaigns.id, campaign.id));
     } catch (err) {
-      console.error(`[campaign-service] Failed to park on-demand campaign ${campaign.id}:`, err);
+      console.error(`[campaign-service] Failed to park campaign ${campaign.id}:`, err);
     }
   }
   if (runnable.length === 0) return dueCampaigns.length;
