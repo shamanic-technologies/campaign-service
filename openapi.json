@@ -1847,6 +1847,11 @@
             },
             "description": "Per campaign that ran: the lead the event's person was filed as on that campaign (lead-service). Empty when no run carried a lead."
           },
+          "sourceTriggerId": {
+            "type": "string",
+            "nullable": true,
+            "description": "An occurrence of a trigger made of other triggers (`lead_event` \"Lead event\", kind `any_of`): the trigger id of the fact it stands for (`positive_reply_received`, `signed_up`, `signup_not_paid_30_min`...), also on `detail.sourceTriggerId` with `detail.sourceEventId` (that fact's own occurrence) and `detail.sourceStep`, and handed to the workflow as `trigger.sourceTriggerId`. null for any other occurrence."
+          },
           "delivery": {
             "type": "object",
             "nullable": true,
@@ -1920,6 +1925,7 @@
           "skipReason",
           "ranCampaignIds",
           "ranLeads",
+          "sourceTriggerId",
           "delivery",
           "performedByCaller",
           "processedAt"
@@ -2121,6 +2127,37 @@
                 "lastOccurredAt": {
                   "type": "string",
                   "nullable": true
+                },
+                "bySourceTrigger": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "sourceTriggerId": {
+                        "type": "string"
+                      },
+                      "events": {
+                        "type": "integer"
+                      },
+                      "ran": {
+                        "type": "integer"
+                      },
+                      "skipped": {
+                        "type": "integer"
+                      },
+                      "pending": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "sourceTriggerId",
+                      "events",
+                      "ran",
+                      "skipped",
+                      "pending"
+                    ]
+                  },
+                  "description": "A trigger made of other triggers (`lead_event`): the same counts per fact it stood for. Empty for any other trigger."
                 }
               },
               "required": [
@@ -2130,7 +2167,8 @@
                 "skipped",
                 "pending",
                 "skippedByReason",
-                "lastOccurredAt"
+                "lastOccurredAt",
+                "bySourceTrigger"
               ]
             }
           }

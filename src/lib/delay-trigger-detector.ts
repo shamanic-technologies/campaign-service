@@ -4,6 +4,7 @@ import { campaigns, triggerEvents, type TriggerEvent } from "../db/schema.js";
 import type { CatalogueTriggerTransition, CatalogueTriggerType, ChannelCatalogueRead } from "./channel-operator-client.js";
 import { fetchOfferLeadActivity, type LeadActivityByLead } from "./lead-activity-client.js";
 import { answersTrigger } from "./sales-funnel-head-trigger.js";
+import { COMPOSITE_TRIGGER_RECORDED_VIA, compositesListing } from "./composite-trigger.js";
 import { ON_DEMAND_TRIGGER_ID } from "./on-demand-mode.js";
 import { fetchStepReachers, hasEverReachedStep } from "./step-reach-client.js";
 
@@ -69,7 +70,11 @@ export const DELAY_DETECTOR_RECORDED_VIA = "delay_detector";
 export const POLL_DETECTOR_RECORDED_VIA = "poll_detector";
 /** lib/github-issue-trigger.ts `GITHUB_ISSUE_DETECTOR_RECORDED_VIA` (kept literal here: that module imports this one's helpers). */
 export const GITHUB_ISSUE_RECORDED_VIA = "github_issue_detector";
-export const DETECTOR_RECORDED_VIA = [DELAY_DETECTOR_RECORDED_VIA, POLL_DETECTOR_RECORDED_VIA, GITHUB_ISSUE_RECORDED_VIA] as const;
+/**
+ * Rows that are not an outside fact of their own (never an anchor, never "the lead progressed"); a composite occurrence
+ * (`lead_event`, lib/composite-trigger.ts) re-states a fact already recorded.
+ */
+export const DETECTOR_RECORDED_VIA = [DELAY_DETECTOR_RECORDED_VIA, POLL_DETECTOR_RECORDED_VIA, GITHUB_ISSUE_RECORDED_VIA, COMPOSITE_TRIGGER_RECORDED_VIA] as const;
 
 /** An anchor whose due time passed longer ago than this is never planned. */
 export const DELAY_PLAN_LATE_MS = 2 * 24 * 60 * 60_000;
@@ -127,6 +132,11 @@ export interface DetectableTrigger<P> {
   type: CatalogueTriggerType;
   params: P;
   transitions: CatalogueTriggerTransition[];
+  /**
+   * The triggers made of this one (`lead_event`, lib/composite-trigger.ts) and their transitions: a campaign answering
+   * one of them answers this trigger's occurrences too, so its scopes are watched. Optional (hand-built reads).
+   */
+  composites?: Array<{ type: { id: string }; transitions: CatalogueTriggerTransition[] }>;
 }
 
 const reportedBadParams = new Set<string>();
@@ -167,15 +177,20 @@ export async function detectableTriggers<P>(
   const ofKind = [...(catalogue.triggers?.values() ?? [])].filter((type) => type.kind === kind);
   if (ofKind.length === 0) return out;
   const heads = await liveHeadTriggerIds();
+  const transitionsOf = (id: string) => (catalogue.triggerTransitions ?? []).filter((t) => t.triggerId === id);
   for (const type of ofKind) {
-    const transitions = (catalogue.triggerTransitions ?? []).filter((t) => t.triggerId === type.id);
-    if (transitions.length === 0 && !heads.has(type.id)) continue;
+    const transitions = transitionsOf(type.id);
+    // A campaign answering a trigger made of this one (`lead_event`) answers this one's occurrences too.
+    const composites = compositesListing(catalogue, type.id)
+      .map((c) => ({ type: { id: c.id }, transitions: transitionsOf(c.id) }))
+      .filter((c) => c.transitions.length > 0 || heads.has(c.type.id));
+    if (transitions.length === 0 && !heads.has(type.id) && composites.length === 0) continue;
     const read = parse(type.params);
     if (!read.ok) {
       reportUndetectableTrigger(type, read.error);
       continue;
     }
-    out.push({ type, params: read.params, transitions });
+    out.push({ type, params: read.params, transitions, ...(composites.length > 0 ? { composites } : {}) });
   }
   return out;
 }
@@ -198,7 +213,18 @@ export interface TriggerScope {
 }
 
 /** The (org, brand, offer) scopes with an ONGOING campaign answering the trigger (`answersTrigger`). */
-export async function liveScopesBehind(trigger: { type: { id: string }; transitions: readonly CatalogueTriggerTransition[] }): Promise<TriggerScope[]> {
+export async function liveScopesBehind(trigger: {
+  type: { id: string };
+  transitions: readonly CatalogueTriggerTransition[];
+  composites?: ReadonlyArray<{ type: { id: string }; transitions: readonly CatalogueTriggerTransition[] }>;
+}): Promise<TriggerScope[]> {
+  if (trigger.composites && trigger.composites.length > 0) {
+    // This trigger's own scopes, and the scopes of every trigger made of it (lib/composite-trigger.ts).
+    const all = await Promise.all([{ type: trigger.type, transitions: trigger.transitions }, ...trigger.composites].map((t) => liveScopesBehind(t)));
+    const seen = new Map<string, TriggerScope>();
+    for (const scope of all.flat()) seen.set(`${scope.orgId}|${scope.brandId}|${scope.offerId}`, scope);
+    return [...seen.values()];
+  }
   const { transitions } = trigger;
   const slugs = [...new Set(transitions.map((t) => t.featureSlug))];
   const live = await db

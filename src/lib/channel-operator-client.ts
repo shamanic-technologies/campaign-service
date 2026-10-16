@@ -138,7 +138,8 @@ export interface CatalogueTriggerType {
 
 // `github_issue_in_prod` (2026-10-12): "a GitHub issue reached prod", detected HERE (lib/github-issue-trigger.ts);
 // the issue is the waiting campaign's own fact, the type carries no params.
-export const CATALOGUE_TRIGGER_KINDS = ["event", "delay", "poll", "github_issue_in_prod"] as const;
+// `any_of` (2026-10-16, LEAD-EVENT-TRIGGER-1016): a trigger made of other triggers, its members in `params` (lib/composite-trigger.ts).
+export const CATALOGUE_TRIGGER_KINDS = ["event", "delay", "poll", "github_issue_in_prod", "any_of"] as const;
 export type CatalogueTriggerKind = (typeof CATALOGUE_TRIGGER_KINDS)[number];
 
 /** A reactive (channel, leg) and the trigger that asks for it. */
