@@ -26,6 +26,8 @@ export interface WorkflowTriggerInput {
   item: unknown;
   /** The person an event names by identity (lib/trigger-person.ts); absent otherwise. */
   person?: EventPerson | null;
+  /** A composite occurrence (`lead_event`, lib/composite-trigger.ts): the trigger id of the fact it stands for. */
+  sourceTriggerId?: string;
 }
 
 /** What workflow-service answered: the run it opened, the one whose `/end-run` carries it as `x-run-id`. */

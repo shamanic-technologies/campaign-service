@@ -288,6 +288,7 @@ describe("trigger events", () => {
           pending: 1,
           skippedByReason: [{ reason: "unfunded", count: 1 }],
           lastOccurredAt: expect.any(String),
+          bySourceTrigger: [],
         },
       ]);
 
