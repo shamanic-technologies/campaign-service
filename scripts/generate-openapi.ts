@@ -50,6 +50,8 @@ import {
   OfferTriggerEventsSummaryResponse,
   OfferTriggerEventsListQuery,
   OfferTriggerEventsListResponse,
+  OfferTriggerEventForPersonQuery,
+  OfferTriggerEventForPersonResponse,
   PredecessorCampaignResponse,
   AnsweringCampaignResponse,
   AnsweringCampaignsBody,
@@ -703,6 +705,28 @@ registry.registerPath({
   responses: {
     200: { description: "The events", content: { "application/json": { schema: OfferTriggerEventsListResponse } } },
     400: { description: "Missing x-org-id or a malformed query", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/offers/{offerId}/trigger-events/for-person",
+  tags: ["Internal"],
+  summary: "The first event of one trigger about one person on an offer, any door or caller",
+  description:
+    TRIGGER_EVENTS_DOC +
+    " The FIRST event of `triggerId` on the offer about the person (the event's lead, or the email/phone its `detail.person` carries; email case-folded), whichever door or caller recorded it; `event: null` = none. lead-service asks it before ringing an outcome trigger, so an occurrence an outside caller already pushed is not fired twice. At least one of leadId, email, phone. Requires header x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ offerId: z.string() }),
+    query: OfferTriggerEventForPersonQuery,
+    headers: z.object({ "x-org-id": z.string() }),
+  },
+  responses: {
+    200: { description: "The first event, or null", content: { "application/json": { schema: OfferTriggerEventForPersonResponse } } },
+    400: { description: "Missing x-org-id or a malformed query (no person named)", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },

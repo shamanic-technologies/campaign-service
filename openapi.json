@@ -2159,6 +2159,29 @@
           "events"
         ]
       },
+      "OfferTriggerEventForPersonResponse": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TriggerEvent"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "event",
+          "idempotencyKey"
+        ]
+      },
       "OfferSourceCampaignsResponse": {
         "type": "object",
         "properties": {
@@ -6153,6 +6176,125 @@
           },
           "400": {
             "description": "Missing x-org-id or a malformed query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/offers/{offerId}/trigger-events/for-person": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "The first event of one trigger about one person on an offer, any door or caller",
+        "description": "TRIGGER EVENTS (owner 2026-10-09): every leg is PROACTIVE (ticked on its budget, no trigger) or REACTIVE (runs ON DEMAND when exactly one TRIGGER asks: a positive reply received, a lead requested, a meeting booked...). The trigger TYPES are features-service's (GET /public/channels `triggers[]`, each reactive leg naming one on `channels[].stepTransitions[].triggerId`); each campaign's On/Off is its status; THIS service records the EVENTS, one per occurrence, with what each did: `ran` (`ranCampaignIds`) or `skipped` with one named `skipReason` (a campaign's own skip such as `unfunded` / `run_in_flight` / `no_workflow`, else `campaign_off` = a campaign is bought for the leg and is OFF, `no_campaign` = nobody bought it, `no_leg` = no published leg answers the trigger, `trigger_not_declared`). The campaigns a trigger runs are the ones of (org, brand, offer) bought for a (channel, leg) whose reactive transition names it, dispatched exactly like the scheduler's (same funding, budget, in-flight and cohort guards; the run starts at gate-check). The FIRST event of `triggerId` on the offer about the person (the event's lead, or the email/phone its `detail.person` carries; email case-folded), whichever door or caller recorded it; `event: null` = none. lead-service asks it before ringing an outcome trigger, so an occurrence an outside caller already pushed is not fired twice. At least one of leadId, email, phone. Requires header x-org-id.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "triggerId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "leadId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3
+            },
+            "required": false,
+            "name": "email",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3
+            },
+            "required": false,
+            "name": "phone",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The first event, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferTriggerEventForPersonResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing x-org-id or a malformed query (no person named)",
             "content": {
               "application/json": {
                 "schema": {
