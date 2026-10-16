@@ -1,5 +1,6 @@
 import { adoptSalesFunnelUnitWorkflows, repairSalesFunnelUnitLegWorkflows } from "../lib/sales-funnel-unit-workflows.js";
 import { Router } from "express";
+import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -486,16 +487,25 @@ router.post("/internal/sales-funnel-campaigns/lead-sourcing-switch", requireApiK
 });
 
 /**
- * POST /internal/sales-funnel-campaigns/name-repair {apply?, orgId?} — a funnel campaign whose stored name differs
- * from the name features-service serves for its EXACT id takes that name, on the row and its units' prefix
- * (lib/sales-funnel-name.ts). Legacy ids and unreadable funnels are listed under `skipped`, never renamed. Dry run
- * unless `apply: true`; idempotent; no status or billing write.
+ * POST /internal/sales-funnel-campaigns/name-repair {apply?, orgId?, retiredFunnelNames?} — a funnel campaign whose
+ * stored name differs from the name features-service serves for its id (a legacy id: the id it resolves to) takes
+ * that name, on the row and its units' prefix (lib/sales-funnel-name.ts). A funnel id the catalogue answers 404 takes
+ * its `retiredFunnelNames[salesFunnelId]` entry, else is skipped; unreadable funnels are skipped. Dry run unless
+ * `apply: true`; idempotent; no status, funnel id or billing write.
  */
+const RetiredFunnelNames = z.record(z.string().min(1), z.string().trim().min(1).max(60));
+
 router.post("/internal/sales-funnel-campaigns/name-repair", requireApiKey, async (req, res) => {
+  const retired = RetiredFunnelNames.optional().safeParse(req.body?.retiredFunnelNames);
+  if (!retired.success) {
+    res.status(400).json({ error: "retiredFunnelNames must map a sales funnel id to a name (1-60 chars)", details: retired.error.issues });
+    return;
+  }
   try {
     res.json(await runSalesFunnelNameRepair({
       apply: req.body?.apply === true,
       orgId: typeof req.body?.orgId === "string" ? req.body.orgId : undefined,
+      retiredFunnelNames: retired.data,
     }));
   } catch (error) {
     console.error("[campaign-service] Sales funnel name repair error:", error);
