@@ -84,7 +84,8 @@ describe("fetchChannelCatalogue", () => {
     mockFetch.mockResolvedValue({ ok: true, json: async () => ({ channels: [], steps: [] }) });
     await fetchChannelCatalogue();
     const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit | undefined];
-    expect(url).toBe("https://features.test.local/public/channels");
+    // Every declared trigger, the inline ones included: this service's own door accepts them all.
+    expect(url).toBe("https://features.test.local/public/channels?includeInline=true");
     expect(init).toBeUndefined();
   });
 
