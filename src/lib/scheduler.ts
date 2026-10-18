@@ -6,6 +6,7 @@ import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./
 import { answersATrigger, reactiveWake } from "./reactive-wake.js";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
+import { attributeRunPlay } from "./run-play-attribution.js";
 import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
 import { listRuns, updateRun } from "@distribute/runs-client";
 import { planBrandTurns } from "./brand-turns.js";
@@ -327,8 +328,10 @@ export async function reRunDueCampaigns(): Promise<number> {
           // before the pick moved here, so a non-rotating feature is byte-unchanged.
           audienceId: selection.audienceId ?? campaign.audienceId,
         };
+        let dispatchedSlug = selection.workflowSlug;
+        let execution;
         try {
-          await executeCampaignWorkflow(selection.workflowSlug, inputs);
+          execution = await executeCampaignWorkflow(selection.workflowSlug, inputs);
         } catch (err) {
           // A deprecated workflow (410) is replaced once and never asked for again — see
           // retired-workflow.ts. Anything else (or no live successor) is a failed dispatch.
@@ -341,7 +344,19 @@ export async function reRunDueCampaigns(): Promise<number> {
             identity: { orgId: campaign.orgId, userId, runId, brandId: brandIdCsv },
           });
           if (!successor) throw err;
-          await executeCampaignWorkflow(successor, inputs);
+          dispatchedSlug = successor;
+          execution = await executeCampaignWorkflow(successor, inputs);
+        }
+        // The play this run went out under, kept with the run (STRATEGY-ATTRIBUTION-1018). Never awaited.
+        if (execution?.runId) {
+          attributeRunPlay({
+            runId: execution.runId,
+            runKind: "execution",
+            dispatchedBy: "scheduler",
+            campaign,
+            workflowSlug: dispatchedSlug,
+            audienceId: inputs.audienceId ?? null,
+          });
         }
       } catch (err) {
         console.error(`[campaign-service] Failed to re-trigger campaign ${campaign.id}:`, err);
