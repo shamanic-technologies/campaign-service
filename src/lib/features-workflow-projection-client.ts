@@ -166,6 +166,13 @@ export interface LegModelEligibility {
    * body carried no play block: byte-unchanged behaviour.
    */
   play?: ServedPlay | null;
+  /**
+   * The workflows the campaign may run on this leg, in features-service's ORDER (`rank`, 1 = its
+   * first choice), minus the model rule's exclusions (WF-ORDER-EXPLORE-1018). The run takes the
+   * FIRST: which workflow runs is features-service's decision, never re-ranked here. Absent or
+   * empty = features ranks nothing runnable: the pre-existing pick decides.
+   */
+  rankedWorkflows?: string[];
 }
 
 /** features-service's `play` block, carried verbatim; never re-derived here. */
@@ -347,7 +354,9 @@ export async function readLegModelEligibility(
           `features-service excluded it for leg "${legKey}" (model ${verdict.modelAlias ?? "unstated"}, tier ${verdict.modelTier ?? "unstated"})`,
       );
     }
-    return { legKey, ineligible, rows: normalizeProjectionRows(legRows), play };
+    const rankedWorkflows = assignedWorkflowsInRankOrder(legRows, { playApplied: Boolean(input.campaignId) })
+      .filter((slug) => !ineligible.has(slug));
+    return { legKey, ineligible, rows: normalizeProjectionRows(legRows), play, rankedWorkflows };
   } catch (err) {
     // FAIL OPEN, LOUDLY. Falling back to the unfiltered grid is the pre-filter behaviour; falling
     // back to NOTHING would stop a funded campaign over a read that decides only which cells are
@@ -409,7 +418,9 @@ export function restrictToEligibleWorkflows(
   return kept;
 }
 
-// Per-run WORKFLOW selection: GREEDY — pick the workflow with the cheapest
+// FALLBACK ONLY since WF-ORDER-EXPLORE-1018: a run takes features-service's rank 1
+// (`rankedWorkflows`, see resolveSelectionForTrigger); this argmin answers only when features ranks
+// nothing runnable. Per-run WORKFLOW selection: GREEDY — pick the workflow with the cheapest
 // cost-per-outcome, deterministically. No exploration (the audience leg, chosen
 // later at /start-run, keeps Thompson — see selectAudienceFromProjection).
 //
@@ -861,8 +872,14 @@ export async function resolveSelectionForTrigger(args: {
       excludedAudienceIds: excludedAudienceIds ?? undefined,
     });
     const enumeratesAudiences = candidates.some((r) => r.audienceId != null);
+    // WF-ORDER-EXPLORE-1018 (owner: features chooses the workflow per pipe, campaign-service runs it):
+    // the run takes features-service's rank 1 among the workflows the campaign may run, priced or
+    // not. A cost argmin here skipped every unpriced workflow, so a new one never ran and never
+    // earned the evidence to win (Aldhanab, Amansinaya, Chertan, Hamal: 0 runs in 5 days). The
+    // cost pick below only answers when features ranks nothing runnable (behaviour unchanged).
+    const featuresFirst = eligibility.rankedWorkflows?.[0] ?? null;
     return {
-      workflowSlug: cell.workflowSlug ?? unrankedPick(candidates, fallbackSlug),
+      workflowSlug: featuresFirst ?? cell.workflowSlug ?? unrankedPick(candidates, fallbackSlug),
       audienceId: cell.audienceId,
       noServeableAudience: enumeratesAudiences && cell.audienceId == null,
     };
