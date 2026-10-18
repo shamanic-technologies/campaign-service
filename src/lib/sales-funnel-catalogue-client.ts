@@ -66,6 +66,8 @@ export interface PipeFromCatalogue {
 }
 
 export interface PipePlay {
+  /** The pipe the play runs on (its own id for the default play). Absent on older answers. */
+  pipeId?: string;
   strategyId: string;
   strategyName: string;
   default: boolean;
@@ -96,6 +98,7 @@ const PipeResponse = z.object({
   mode: z.enum(["proactive", "reactive"]),
   play: z
     .object({
+      pipeId: z.string().optional(),
       strategyId: z.string(),
       strategyName: z.string(),
       default: z.boolean(),

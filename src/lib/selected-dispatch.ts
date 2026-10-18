@@ -1,5 +1,6 @@
 import { executeCampaignWorkflow } from "./workflows.js";
 import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
+import { attributeRunPlay } from "./run-play-attribution.js";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
@@ -45,6 +46,7 @@ export async function dispatchSelectedRun(
     activeGoalId: string | null;
     brandProfileId: string | null;
     salesFunnelCampaignId?: string | null;
+    salesFunnelId?: string | null;
     /** A unit running only on its funnel's head trigger (lib/sales-funnel-head-trigger.ts): parked, never dispatched here. */
     runsOnTriggerId?: string | null;
   },
@@ -114,8 +116,28 @@ export async function dispatchSelectedRun(
     // carried before, so a non-rotating feature is byte-unchanged.
     audienceId: selection.audienceId ?? campaign.audienceId,
   };
+  const attribute = (workflowSlug: string, runId: string | null) => {
+    // The play this run went out under, kept with the run (STRATEGY-ATTRIBUTION-1018). Never awaited.
+    if (runId) {
+      attributeRunPlay({
+        runId,
+        runKind: "execution",
+        dispatchedBy: "person_start",
+        campaign: {
+          id: campaign.id,
+          salesFunnelId: campaign.salesFunnelId ?? null,
+          salesFunnelCampaignId: campaign.salesFunnelCampaignId ?? null,
+          featureSlug: campaign.featureSlug,
+          legKey: campaign.legKey,
+        },
+        workflowSlug,
+        audienceId: inputs.audienceId ?? null,
+      });
+    }
+  };
   try {
-    await executeCampaignWorkflow(selection.workflowSlug, inputs);
+    const execution = await executeCampaignWorkflow(selection.workflowSlug, inputs);
+    attribute(selection.workflowSlug, execution.runId);
     return selection.workflowSlug;
   } catch (err) {
     // A deprecated workflow (410) is replaced once and never asked for again — see retired-workflow.ts.
@@ -128,7 +150,8 @@ export async function dispatchSelectedRun(
       identity: { ...identity, brandId: brandIdCsv },
     });
     if (!successor) throw err;
-    await executeCampaignWorkflow(successor, inputs);
+    const execution = await executeCampaignWorkflow(successor, inputs);
+    attribute(successor, execution.runId);
     return successor;
   }
 }

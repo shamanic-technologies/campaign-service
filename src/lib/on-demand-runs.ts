@@ -22,6 +22,7 @@ import { createRun } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { isSourceOriginSlug } from "./source-campaigns.js";
+import { attributeRunPlay } from "./run-play-attribution.js";
 
 export class OnDemandRunError extends Error {
   constructor(
@@ -55,9 +56,10 @@ export interface OnDemandRun {
 
 export interface OnDemandRunDeps {
   createRun: typeof createRun;
+  attribute?: typeof attributeRunPlay;
 }
 
-const DEFAULT_DEPS: OnDemandRunDeps = { createRun };
+const DEFAULT_DEPS: OnDemandRunDeps = { createRun, attribute: attributeRunPlay };
 
 /** Open one on-demand run of a unit (see the header). Throws `OnDemandRunError` on a refusal; anything else propagates. */
 export async function openOnDemandRun(req: OnDemandRunRequest, deps: OnDemandRunDeps = DEFAULT_DEPS): Promise<OnDemandRun> {
@@ -97,6 +99,17 @@ export async function openOnDemandRun(req: OnDemandRunRequest, deps: OnDemandRun
     workflowSlug,
     featureSlug: campaign.featureSlug,
     audienceId: req.audienceId,
+  });
+  // The play (lead strategy) this source serves under, kept with its run and the outreach run that asked
+  // (STRATEGY-ATTRIBUTION-1018): the strategy that FOUND the lead. Never awaited.
+  (deps.attribute ?? attributeRunPlay)({
+    runId: run.id,
+    runKind: "on_demand",
+    dispatchedBy: "on_demand",
+    callerRunId: req.callerRunId,
+    campaign,
+    workflowSlug,
+    audienceId: req.audienceId ?? null,
   });
   return { runId: run.id, campaignId: campaign.id, featureSlug: campaign.featureSlug, workflowSlug, brandIds: campaign.brandIds };
 }

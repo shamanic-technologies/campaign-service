@@ -8,6 +8,7 @@ import { isSalesFunnelUnit, orderForSharedPipes, pipeKey, salesFunnelUnitMoney, 
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
+import { attributeRunPlay } from "./run-play-attribution.js";
 import { executeCampaignWorkflow, type WorkflowTriggerInput } from "./workflows.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import {
@@ -541,6 +542,17 @@ export async function runCampaignsInScope(
         if (!successor) throw err;
         workflowSlug = successor;
         execution = await executeCampaignWorkflow(workflowSlug, inputs);
+      }
+      // The play this run went out under, kept with the run (STRATEGY-ATTRIBUTION-1018). Never awaited.
+      if (execution?.runId) {
+        attributeRunPlay({
+          runId: execution.runId,
+          runKind: "execution",
+          dispatchedBy: "step_trigger",
+          campaign,
+          workflowSlug,
+          audienceId: inputs.audienceId ?? null,
+        });
       }
       firedCohorts.add(cohort);
       if (pipe) firedPipes.set(pipe, campaign.id);

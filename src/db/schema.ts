@@ -554,3 +554,49 @@ export const triggerSilenceWatch = pgTable("trigger_silence_watch", {
   watchedSince: timestamp("watched_since", { withTimezone: true }).notNull().defaultNow(),
   lastAlertedAt: timestamp("last_alerted_at", { withTimezone: true }),
 });
+
+// STRATEGY-ATTRIBUTION-1018: the PLAY (pipe x lead strategy, features-service's) each run was dispatched under, one
+// row per run, written ONCE at dispatch and never updated (src/lib/run-play-attribution.ts). Editing a funnel or a
+// play later changes nothing here. `run_id` = the execution run workflow-service answers on `/execute` (lead-service
+// files every serve under it: `leads_campaigns.parent_run_id`), or the on-demand run a source unit opens.
+// No org/brand column on purpose: the campaign id carries both and never changes (brand transfer moves campaigns).
+export const runPlayAttributions = pgTable(
+  "run_play_attributions",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    runId: text("run_id").notNull(),
+    /** `execution` (a DAG run) | `on_demand` (a source unit's run opened for a serve) */
+    runKind: text("run_kind").notNull(),
+    /** `scheduler` | `step_trigger` | `person_start` | `on_demand` */
+    dispatchedBy: text("dispatched_by").notNull(),
+    /** on_demand only: the outreach run that asked for the lead. */
+    callerRunId: text("caller_run_id"),
+    campaignId: text("campaign_id").notNull(),
+    salesFunnelCampaignId: text("sales_funnel_campaign_id"),
+    salesFunnelId: text("sales_funnel_id"),
+    featureSlug: text("feature_slug"),
+    legKey: text("leg_key"),
+    workflowSlug: text("workflow_slug"),
+    audienceId: text("audience_id"),
+    /** `resolved` | `no_play` (the pipe catalogues no strategy) | `not_a_sales_funnel_unit` | `unreadable` */
+    playState: text("play_state").notNull(),
+    /** The play id as the funnel names it: the bare pipe id for the default play, `<pipe id>~<strategy id>` another. */
+    playId: text("play_id"),
+    pipeId: text("pipe_id"),
+    strategyId: text("strategy_id"),
+    strategyName: text("strategy_name"),
+    playIsDefault: boolean("play_is_default"),
+    /** What the strategy ruled out on the pipe at dispatch (features-service's list, verbatim). */
+    excludedWorkflowDynastySlugs: text("excluded_workflow_dynasty_slugs").array(),
+    /** Why the play is not `resolved`, in one sentence. */
+    detail: text("detail"),
+    recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uniq_run_play_attributions_run").on(table.runId),
+    index("idx_run_play_attributions_campaign").on(table.campaignId, table.recordedAt),
+    index("idx_run_play_attributions_strategy").on(table.strategyId, table.recordedAt),
+  ]
+);
+
+export type RunPlayAttribution = typeof runPlayAttributions.$inferSelect;
