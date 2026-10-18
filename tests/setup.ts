@@ -51,6 +51,13 @@ vi.mock("../src/lib/sales-funnel-campaign-precompute.js", () => ({
   notifySalesFunnelCampaignPrecompute: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Every dispatch records the play its run went out under (src/lib/run-play-attribution.ts), fire-and-forget, reading
+// features-service's catalogue. Stubbed so no dispatch test talks to features-service; its own tests restore the actual.
+vi.mock("../src/lib/run-play-attribution.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/run-play-attribution.js")>();
+  return { ...original, attributeRunPlay: vi.fn() };
+});
+
 process.env.NODE_ENV = "test";
 process.env.CAMPAIGN_SERVICE_DATABASE_URL = process.env.CAMPAIGN_SERVICE_DATABASE_URL || "postgresql://test:test@localhost/campaign_test";
 process.env.SERVICE_SECRET_KEY = "test-service-secret";
