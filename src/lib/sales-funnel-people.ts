@@ -98,14 +98,32 @@ export function personIdentity(input: { email: string | null; phone?: string | n
   return { ...(input.email ? { email: input.email } : {}), ...(phone ? { phone } : {}) };
 }
 
+/**
+ * lead-service did not ANSWER (timeout, transport error, 5xx, 408/429): a passing condition, never a verdict
+ * about the person (TRIGGER-TRANSIENT-FILING-1019, prod 2026-10-19: hot_lead 7b63f943 ended skipped on
+ * `The operation was aborted due to timeout`, the same event replayed 10 min later ran). An occurrence held on it
+ * is retried (lib/trigger-person.ts `PERSON_EVENT_RETRY_SKIPS`) for a bounded window, then ends with this name.
+ */
+export const LEAD_SERVICE_UNAVAILABLE = "lead_service_unavailable" as const;
+
+/** An HTTP status lead-service answers when it could not decide (not a refusal). Pure. */
+export function isTransientStatus(status: number): boolean {
+  return status >= 500 || status === 408 || status === 429;
+}
+
 export type ScheduleDueOutcome =
   | { ok: true }
-  | { ok: false; code: "person_not_filed" | "ambiguous_person" | "followup_unavailable" | "person_not_due"; detail: string };
+  | {
+      ok: false;
+      code: "person_not_filed" | "ambiguous_person" | "followup_unavailable" | "person_not_due" | typeof LEAD_SERVICE_UNAVAILABLE;
+      detail: string;
+    };
 
 /**
  * Make ONE named person due NOW on a unit's own follow-up queue at lead-service (`schedule-by-email`).
  * 404 = the person holds no row on this campaign yet (not filed), 409 = the address matches several
- * rows; every other failure is `followup_unavailable`. Never throws: the caller names the skip.
+ * rows; no answer (timeout, transport, 5xx, 408/429) is `lead_service_unavailable` (retried), any other refusal
+ * `followup_unavailable` (final). Never throws: the caller names the skip.
  *
  * A 200 whose answered state carries NO due date = `person_not_due` (PUSHED-TRUTH-1015): lead-service kept the
  * person off the queue (e.g. their thread was handed to the brand's team after a reply), so no run can claim
@@ -150,9 +168,10 @@ export async function scheduleNamedPersonDue(input: {
     const body = (await res.text().catch(() => "")).slice(0, 300);
     if (res.status === 404) return { ok: false, code: "person_not_filed", detail: `lead-service 404 ${body}` };
     if (res.status === 409) return { ok: false, code: "ambiguous_person", detail: `lead-service 409 ${body}` };
+    if (isTransientStatus(res.status)) return { ok: false, code: LEAD_SERVICE_UNAVAILABLE, detail: `lead-service ${res.status} ${body}` };
     return { ok: false, code: "followup_unavailable", detail: `lead-service ${res.status} ${body}` };
   } catch (err) {
-    return { ok: false, code: "followup_unavailable", detail: err instanceof Error ? err.message : String(err) };
+    return { ok: false, code: LEAD_SERVICE_UNAVAILABLE, detail: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -171,7 +190,13 @@ export type FileNamedPersonOutcome =
   | { ok: true; leadId: string; filed: boolean }
   | {
       ok: false;
-      code: "person_not_known" | "person_suppressed" | "ambiguous_person" | "campaign_has_no_brand" | "filing_unavailable";
+      code:
+        | "person_not_known"
+        | "person_suppressed"
+        | "ambiguous_person"
+        | "campaign_has_no_brand"
+        | "filing_unavailable"
+        | typeof LEAD_SERVICE_UNAVAILABLE;
       detail: string;
     };
 
@@ -189,7 +214,8 @@ export interface PersonStatement {
  * FILE one named person under a unit at lead-service (`POST /orgs/campaigns/:id/leads/by-email`): the
  * person becomes a lead of the campaign's brand on that unit, with no purchase and no serve (lead-service
  * refuses an address its brand does not know: `person_not_known`). Idempotent there (201 filed, 200
- * already filed). Never throws: the caller names the outcome.
+ * already filed). No answer (timeout, transport, 5xx, 408/429) = `lead_service_unavailable`. Never throws: the
+ * caller names the outcome.
  */
 export async function fileNamedPerson(input: {
   orgId: string;
@@ -246,9 +272,10 @@ export async function fileNamedPerson(input: {
     if (code === "person_suppressed") return { ok: false, code: "person_suppressed", detail };
     if (code === "ambiguous_lead") return { ok: false, code: "ambiguous_person", detail };
     if (code === "campaign_has_no_brand") return { ok: false, code: "campaign_has_no_brand", detail };
+    if (isTransientStatus(res.status)) return { ok: false, code: LEAD_SERVICE_UNAVAILABLE, detail };
     return { ok: false, code: "filing_unavailable", detail };
   } catch (err) {
-    return { ok: false, code: "filing_unavailable", detail: err instanceof Error ? err.message : String(err) };
+    return { ok: false, code: LEAD_SERVICE_UNAVAILABLE, detail: err instanceof Error ? err.message : String(err) };
   }
 }
 

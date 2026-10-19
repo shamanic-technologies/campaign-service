@@ -148,8 +148,14 @@ export const STEP_TRIGGER_SKIPS = {
    * lead-service's sentence (PUSHED-TRUTH-1015).
    */
   PERSON_NOT_DUE: "person_not_due",
-  /** lead-service could not record the named people's debt (unreachable, non-2xx): nothing dispatched. */
+  /** lead-service REFUSED to record the named people's debt (a 4xx it names no reason for): final, nothing dispatched. */
   FOLLOWUP_UNAVAILABLE: "followup_unavailable",
+  /**
+   * lead-service did not ANSWER filing / making the person due (timeout, transport, 5xx, 408/429): nothing
+   * dispatched, and an event carrying a person is retried for a bounded window (lib/trigger-person.ts
+   * `YOUNG_ONLY_RETRY_SKIPS`), then ends with this name (TRIGGER-TRANSIENT-FILING-1019).
+   */
+  LEAD_SERVICE_UNAVAILABLE: "lead_service_unavailable",
   /**
    * The event names a person by identity (lib/trigger-person.ts) the brand does not know yet at
    * lead-service (their CRM fact has not landed): nobody could be filed. The event is retried shortly.
