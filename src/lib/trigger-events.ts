@@ -17,6 +17,7 @@ import {
   PERSON_EVENT_RETRY_SKIPS,
   PERSON_NOT_KNOWN_RETRY_MS,
   PERSON_NOT_KNOWN_WAIT_MS,
+  YOUNG_ONLY_RETRY_SKIPS,
   storedEventPerson,
   personLabel,
   type EventPerson,
@@ -529,6 +530,14 @@ export async function fireClaimedEvent(
         .where(eq(triggerEvents.id, event.id))
         .returning();
       return back;
+    }
+    // A passing condition outlived its window (lead-service never answered, the person never became known):
+    // the occurrence ends with that name, never silently (TRIGGER-TRANSIENT-FILING-1019).
+    const expired = delivers ? verdict.detail.skipped.filter((sk) => YOUNG_ONLY_RETRY_SKIPS.has(sk.reason)) : [];
+    if (expired.length > 0) {
+      console.error(
+        `[campaign-service] trigger event ${event.id} (${event.triggerId}) gave up after ${PERSON_NOT_KNOWN_WAIT_MS / 60_000} min of retries: ${expired.map((sk) => `${sk.campaignId} ${sk.reason} (${sk.detail})`).join(", ")}`.slice(0, 1000),
+      );
     }
     const [done] = await db
       .update(triggerEvents)

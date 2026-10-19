@@ -347,6 +347,51 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     );
   });
 
+  it("TRIGGER-TRANSIENT-FILING-1019: lead-service times out filing, then answers: the event retries and runs the campaign once", async () => {
+    const campaign = await meetingBooking("ongoing");
+    mockFile.mockResolvedValueOnce({ ok: false, code: "lead_service_unavailable", detail: "The operation was aborted due to timeout" });
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(res.status).toBe(201);
+    expect(res.body.event.status).toBe("pending");
+    expect(res.body.event.detail.retryCampaignIds).toEqual([campaign.id]);
+    expect(res.body.event.detail.skipped.map((x: { reason: string }) => x.reason)).toEqual(["lead_service_unavailable"]);
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    expect(await fireDueTriggerEvents(new Date(new Date(res.body.event.dueAt).getTime() + 1000))).toBe(1);
+    const [event] = await allEvents();
+    expect(event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(mockExecute.mock.calls[0][1].trigger).toMatchObject({ leadId: "lead-jane", item: ITEM });
+  });
+
+  it("TRIGGER-TRANSIENT-FILING-1019: lead-service never answers: retried for the window, then ends skipped `lead_service_unavailable`, loud", async () => {
+    await meetingBooking("ongoing");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockFile.mockResolvedValue({ ok: false, code: "lead_service_unavailable", detail: "The operation was aborted due to timeout" });
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(res.body.event.status).toBe("pending");
+    // Still young: retried again.
+    expect(await fireDueTriggerEvents(new Date(new Date(res.body.event.dueAt).getTime() + 1000))).toBe(0);
+    let [event] = await allEvents();
+    expect(event.status).toBe("pending");
+    // Past the window: ends, named.
+    expect(await fireDueTriggerEvents(new Date(Date.now() + PERSON_NOT_KNOWN_WAIT_MS + 5 * 60_000))).toBe(1);
+    [event] = await allEvents();
+    expect(event).toMatchObject({ status: "done", outcome: "skipped", skipReason: "lead_service_unavailable" });
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(errors.mock.calls.some((c) => String(c[0]).includes("gave up after"))).toBe(true);
+    errors.mockRestore();
+  });
+
+  it("TRIGGER-TRANSIENT-FILING-1019: a 4xx refusal filing the person stays final on the first try", async () => {
+    await meetingBooking("ongoing");
+    mockFile.mockResolvedValueOnce({ ok: false, code: "filing_unavailable", detail: "lead-service 400 bad request" });
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(res.body.event).toMatchObject({ status: "done", outcome: "skipped", skipReason: "followup_unavailable" });
+    expect(mockFile).toHaveBeenCalledTimes(1);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
   it("still unknown after the wait: recorded skipped `person_not_known`", async () => {
     await meetingBooking("ongoing");
     mockFile.mockResolvedValue({ ok: false, code: "person_not_known", detail: "lead-service 404" });

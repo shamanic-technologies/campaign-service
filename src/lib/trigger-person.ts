@@ -1,6 +1,12 @@
 import type { Campaign } from "../db/schema.js";
 import { canonicalPhone } from "./e164-phone.js";
-import { canonicalEmail, fileNamedPerson, scheduleNamedPersonDue, type PersonStatement } from "./sales-funnel-people.js";
+import {
+  canonicalEmail,
+  fileNamedPerson,
+  LEAD_SERVICE_UNAVAILABLE,
+  scheduleNamedPersonDue,
+  type PersonStatement,
+} from "./sales-funnel-people.js";
 
 /**
  * AN EVENT THAT NAMES A PERSON BY WHO THEY ARE (2026-10-12, FORM-TRIGGER-1012).
@@ -85,12 +91,21 @@ export const OWED_UNTIL_ROOM_SKIPS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The skips that make an event naming a person RETRY rather than record: every money / pacing hold
- * (`OWED_UNTIL_ROOM_SKIPS`, no deadline) + the person not known to the brand YET (retried only while the
- * event is young). The person is filed and made due only right before a dispatch, so every such event gets
- * its OWN run carrying its person and item, never a later run that would claim them without what they asked.
+ * The skips retried only while the event is YOUNG (`PERSON_NOT_KNOWN_WAIT_MS` since it fell due, every
+ * `PERSON_NOT_KNOWN_RETRY_MS`), then the occurrence ends with that name (logged loud): the person not known to
+ * the brand YET, and lead-service not answering (timeout, transport, 5xx: TRIGGER-TRANSIENT-FILING-1019; 4
+ * occurrences lost in 7 days to one timeout, a WhatsApp number given among them). A definitive refusal
+ * (`followup_unavailable`, `person_suppressed`...) is never here: final on the first try.
  */
-export const PERSON_EVENT_RETRY_SKIPS: ReadonlySet<string> = new Set([...OWED_UNTIL_ROOM_SKIPS, "person_not_known"]);
+export const YOUNG_ONLY_RETRY_SKIPS: ReadonlySet<string> = new Set(["person_not_known", LEAD_SERVICE_UNAVAILABLE]);
+
+/**
+ * The skips that make an event naming a person RETRY rather than record: every money / pacing hold
+ * (`OWED_UNTIL_ROOM_SKIPS`, no deadline) + the young-only ones (`YOUNG_ONLY_RETRY_SKIPS`). The person is filed
+ * and made due only right before a dispatch, so every such event gets its OWN run carrying its person and item,
+ * never a later run that would claim them without what they asked.
+ */
+export const PERSON_EVENT_RETRY_SKIPS: ReadonlySet<string> = new Set([...OWED_UNTIL_ROOM_SKIPS, ...YOUNG_ONLY_RETRY_SKIPS]);
 
 /** The caller's person, canonical. Pure. */
 export function eventPerson(input: {
@@ -135,7 +150,14 @@ export type EventPersonOwed =
   | { ok: true; leadId: string }
   | {
       ok: false;
-      code: "person_not_known" | "person_suppressed" | "ambiguous_person" | "person_not_filed" | "followup_unavailable" | "person_not_due";
+      code:
+        | "person_not_known"
+        | "person_suppressed"
+        | "ambiguous_person"
+        | "person_not_filed"
+        | "followup_unavailable"
+        | "person_not_due"
+        | typeof LEAD_SERVICE_UNAVAILABLE;
       detail: string;
     };
 
@@ -163,7 +185,12 @@ export async function oweEventPerson(
     timezone: person.timezone ?? null,
   });
   if (!filed.ok) {
-    if (filed.code === "person_not_known" || filed.code === "person_suppressed" || filed.code === "ambiguous_person") {
+    if (
+      filed.code === "person_not_known" ||
+      filed.code === "person_suppressed" ||
+      filed.code === "ambiguous_person" ||
+      filed.code === LEAD_SERVICE_UNAVAILABLE
+    ) {
       return { ok: false, code: filed.code, detail: filed.detail };
     }
     return { ok: false, code: "followup_unavailable", detail: `${filed.code}: ${filed.detail}` };
