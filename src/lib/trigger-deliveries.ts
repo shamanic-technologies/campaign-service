@@ -36,6 +36,9 @@ import { triggerEventDeliveries, triggerEvents, type TriggerEventDelivery } from
  * other campaign served the outcome is `refused`, `skipReason` the code, `lastError` the sentence. Never
  * redelivered. Transient failures (no `delivery`, `success: false`) keep the bounded redelivery above.
  * What the client reads: `deliveryOf` (served `delivery` on every event read).
+ * ONE EXCEPTION, decided after the fact (REPLAY-CHANNEL-DOWN-1023, lib/channel-down-replay.ts): a refusal Jev judges
+ * to mean only "the sender's channel was unavailable" puts the occurrence back `pending` for that campaign once the
+ * channel can be back; it then fires like a fresh one (every person rule applies again).
  *
  * A PERSON THE PIPE DOES NOT ADMIT (REPLY-ANY-LEAD-1015, owner 2026-10-15): who a pipe answers is its strategy's
  * (features-service plays), stated by its workflow on the person's claim at lead-service ("leads only" = pure

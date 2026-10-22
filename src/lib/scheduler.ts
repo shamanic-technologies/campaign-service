@@ -20,6 +20,7 @@ import { reportTurnHolds } from "./turn-hold-event.js";
 import { fireDueTriggerEvents, nextPendingTriggerDueAt } from "./trigger-events.js";
 import { alertSilentTriggers } from "./trigger-silence.js";
 import { alertStuckOccurrences } from "./stuck-trigger-alert.js";
+import { replayChannelDownRefusals } from "./channel-down-replay.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -607,6 +608,11 @@ async function tick(): Promise<void> {
       await reRunDueCampaigns();
       // Planned trigger events that fell due (lib/trigger-events.ts), same On/Off and funding rules
       // as an immediate one; then the hourly check that no coded trigger has gone silent.
+      // A refusal that only meant "the channel was unavailable" is owed again (lib/channel-down-replay.ts); it runs
+      // first so a replay due now fires in this very tick.
+      await replayChannelDownRefusals().catch((err) => {
+        console.error("[campaign-service] Channel-down replay sweep error:", err);
+      });
       await fireDueTriggerEvents().catch((err) => {
         console.error("[campaign-service] Due trigger events error:", err);
       });

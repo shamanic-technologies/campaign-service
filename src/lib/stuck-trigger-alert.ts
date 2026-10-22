@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, triggerEvents, type TriggerEvent } from "../db/schema.js";
+import { waitsOnlyOnChannel } from "./channel-down-replay.js";
 
 /**
  * A PROSPECT WAITING IS LOUD, NEVER A SILENT BACKOFF (HOTFIX ANCESTOR-1015).
@@ -76,7 +77,9 @@ export async function alertStuckOccurrences(now: Date = new Date()): Promise<str
 
   const alerted: string[] = [];
   for (const event of candidates) {
-    if (waitsOnlyOnMoney(event.lastError)) continue;
+    // Waiting for the brand's channel to come back (lib/channel-down-replay.ts): the sender reported the outage
+    // when it refused, and the occurrence is replayed by itself.
+    if (waitsOnlyOnMoney(event.lastError) || waitsOnlyOnChannel(event.lastError)) continue;
     const claimed = await db
       .update(triggerEvents)
       .set({ detail: sql`coalesce(${triggerEvents.detail}, '{}'::jsonb) || jsonb_build_object('stuckAlertedAt', ${now.toISOString()}::text)` })
