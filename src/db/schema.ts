@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, index, uniqueIndex, date, decimal, integer, jsonb, boolean, real } from "drizzle-orm/pg-core";
 
 // Campaigns table
 export const campaigns = pgTable(
@@ -506,12 +506,22 @@ export const triggerEventDeliveries = pgTable(
     /** When `refused`: the sender's refusal code and its human sentence, verbatim (`/end-run` `delivery`). */
     refusalCode: text("refusal_code"),
     refusalReason: text("refusal_reason"),
+    /**
+     * REPLAY-CHANNEL-DOWN-1023 (lib/channel-down-replay.ts): Jev's probability that the refusal means only "the
+     * sender's channel was unavailable" (a logged-out WhatsApp, a disconnected account), judged once per refusal
+     * text, and what was decided: `scheduled` (the occurrence is owed again), `final` (any other refusal) or
+     * `expired` (the channel stayed down past the replay window). Null = not judged / not decided yet.
+     */
+    channelDownP: real("channel_down_p"),
+    channelDownJudgedAt: timestamp("channel_down_judged_at", { withTimezone: true }),
+    replayState: text("replay_state"),
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true }).notNull().defaultNow(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("uniq_trigger_event_deliveries_run").on(table.runId),
     index("idx_trigger_event_deliveries_event").on(table.eventId, table.campaignId),
+    index("idx_trigger_event_deliveries_refused").on(table.endedAt).where(sql`status = 'refused'`),
   ]
 );
 
