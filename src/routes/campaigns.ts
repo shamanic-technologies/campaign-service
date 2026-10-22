@@ -45,6 +45,7 @@ import { SOURCE_LEG_KEY, isSourceOriginSlug } from "../lib/source-campaigns.js";
 import { sameLeg, storedLegKey } from "../lib/leg-identity.js";
 import { legKeyMatches } from "../lib/leg-key-sql.js";
 import { ensureSourcesOnStart } from "../lib/source-campaign-store.js";
+import { pgErrorOf } from "../lib/pg-error.js";
 
 const router = Router();
 
@@ -536,13 +537,14 @@ router.post("/campaigns", requireApiKey, serviceAuth, refuseRetiredAudienceIds, 
     res.status(201).json({ campaign, stoppedCampaigns: stoppedOnCreate.map(stoppedCampaignSummary) });
   } catch (error: any) {
     if (proactiveRefusal(error, res)) return;
-    const constraint = error?.constraint ?? error?.constraint_name;
-    if (error?.code === "23505" && constraint === "uniq_campaigns_org_name") {
+    const pg = pgErrorOf(error);
+    const constraint = pg.constraint ?? pg.constraint_name;
+    if (pg.code === "23505" && constraint === "uniq_campaigns_org_name") {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
     }
     // Two creates raced the same identity. The loser does not get a second campaign for it — the
     // one that won IS this identity's campaign, so hand that one back rather than an error.
-    if (error?.code === "23505" && constraint === "uniq_campaigns_org_brand_offer_sales_funnel_leg_channel") {
+    if (pg.code === "23505" && constraint === "uniq_campaigns_org_brand_offer_sales_funnel_leg_channel") {
       const winner = await db.query.campaigns.findFirst({
         where: and(
           eq(campaigns.orgId, req.orgId!),
@@ -776,10 +778,11 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
     });
   } catch (error: any) {
     if (proactiveRefusal(error, res)) return;
-    const constraint = error?.constraint ?? error?.constraint_name;
+    const pg = pgErrorOf(error);
+    const constraint = pg.constraint ?? pg.constraint_name;
     // Two starts raced the same pair. The loser does not get a second campaign for it — whoever
     // won IS this identity's campaign, so hand that one back rather than an error.
-    if (error?.code === "23505"
+    if (pg.code === "23505"
       && (constraint === "uniq_campaigns_org_name" || constraint === "uniq_campaigns_org_brand_offer_sales_funnel_leg_channel")) {
       const winner = await db.query.campaigns.findFirst({
         where: and(
@@ -958,14 +961,15 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, refuseRetiredAudience
     });
   } catch (error: any) {
     if (proactiveRefusal(error, res)) return;
-    const updateConstraint = error?.constraint ?? error?.constraint_name;
-    if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_name") {
+    const pg = pgErrorOf(error);
+    const updateConstraint = pg.constraint ?? pg.constraint_name;
+    if (pg.code === "23505" && updateConstraint === "uniq_campaigns_org_name") {
       return res.status(409).json({ error: "A campaign with this name already exists in your organization" });
     }
     // Restating the leg or the offer can move a campaign onto an identity another live campaign
     // already holds.
     // That is a real conflict and it says so, rather than surfacing as an internal error.
-    if (error?.code === "23505" && updateConstraint === "uniq_campaigns_org_brand_offer_sales_funnel_leg_channel") {
+    if (pg.code === "23505" && updateConstraint === "uniq_campaigns_org_brand_offer_sales_funnel_leg_channel") {
       return res.status(409).json({
         error: "Another live campaign already runs this (brand, offer, leg, acquisition channel)",
       });
