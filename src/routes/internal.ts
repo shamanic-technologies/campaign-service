@@ -74,6 +74,7 @@ import { LEAD_FOUND_STEP, SOURCE_LEG_KEY, sourceCampaignKey } from "../lib/sourc
 import { readSourcingMap, SourcingMapUnavailableError } from "../lib/sourcing-origins-client.js";
 import { readDispatchCatalogue, sourceRunsOnItsOwn } from "../lib/on-demand-mode.js";
 import { SourceCampaignsMirrorBody, SourceCampaignsQuery } from "../schemas.js";
+import { pgErrorOf } from "../lib/pg-error.js";
 
 const router = Router();
 
@@ -824,12 +825,13 @@ router.post("/internal/transfer-brand", requireApiKey, validateBody(TransferBran
   } catch (error: any) {
     // A campaign NAME is unique per org: the target org already holds a campaign with the same
     // name as one being moved. Nothing moved (one transaction); say which constraint refused it.
-    if (error?.code === "23505") {
-      console.error(`[campaign-service] transfer-brand refused by ${error.constraint_name ?? error.constraint}: ${error.detail}`);
+    const pg = pgErrorOf(error);
+    if (pg.code === "23505") {
+      console.error(`[campaign-service] transfer-brand refused by ${pg.constraint_name ?? pg.constraint}: ${pg.detail}`);
       return res.status(409).json({
         error: "The target org already holds a campaign that collides with one being moved; nothing was moved",
-        constraint: error.constraint_name ?? error.constraint ?? null,
-        detail: error.detail ?? null,
+        constraint: pg.constraint_name ?? pg.constraint ?? null,
+        detail: pg.detail ?? null,
       });
     }
     console.error("[campaign-service] transfer-brand error:", error);

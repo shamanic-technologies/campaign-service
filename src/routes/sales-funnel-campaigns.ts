@@ -34,6 +34,7 @@ import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
 import { answersTrigger } from "../lib/sales-funnel-head-trigger.js";
 import { notifySalesFunnelCampaignPrecompute } from "../lib/sales-funnel-campaign-precompute.js";
 import { deleteSalesFunnelCampaign } from "../lib/sales-funnel-campaign-delete.js";
+import { pgErrorOf } from "../lib/pg-error.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -265,8 +266,9 @@ router.post(
         });
       } catch (error: any) {
         // Two launches raced the same identity: the winner IS this funnel campaign.
-        const constraint = error?.constraint ?? error?.constraint_name;
-        if (error?.code === "23505" && constraint === "uniq_sales_funnel_campaigns_identity") {
+        const pg = pgErrorOf(error);
+        const constraint = pg.constraint ?? pg.constraint_name;
+        if (pg.code === "23505" && constraint === "uniq_sales_funnel_campaigns_identity") {
           const winner = await findIncumbent();
           if (winner) {
             const units = (await unitsOf([winner.id], orgId)).get(winner.id)!;
