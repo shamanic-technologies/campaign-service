@@ -23,10 +23,10 @@
     "@asteasolutions/zod-to-openapi": "^8.4.0",
     "@clerk/backend": "^1.0.0",
     "@distribute/runs-client": "workspace:*",
-    "@sentry/node": "^8.0.0",
+    "@sentry/node": "^10.76.2",
     "cors": "^2.8.5",
     "drizzle-orm": "^0.45.4",
-    "express": "^4.21.0",
+    "express": "^4.22.3",
     "postgres": "^3.4.0",
     "zod": "^4.3.6"
   },
@@ -55,7 +55,11 @@
       "postcss@^8.0.0": "^8.5.18",
       "nanoid@^3.0.0": "^3.3.18",
       "source-map-js@^1.0.0": "^1.2.2",
-      "proxy-addr@^2.0.0": "^2.0.8"
+      "proxy-addr@^2.0.0": "^2.0.8",
+      "qs@<6.16.0": "^6.16.1",
+      "yaml@>=2.0.0 <2.8.3": "^2.8.3",
+      "@esbuild-kit/core-utils>esbuild": "^0.25.12",
+      "@opentelemetry/api": "~1.9.1"
     }
   }
 }
