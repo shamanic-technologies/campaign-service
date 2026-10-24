@@ -44,6 +44,7 @@ import { triggerEvents } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { fireDueTriggerEvents } from "../../src/lib/trigger-events.js";
+import { settleCompositeFires } from "../../src/lib/composite-trigger.js";
 import { detectableTriggers, liveScopesBehind, readDelayParams } from "../../src/lib/delay-trigger-detector.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
@@ -110,7 +111,10 @@ const postEvent = (body: Record<string, unknown>) =>
   request(app).post("/internal/trigger-events").set("x-api-key", API_KEY).set("x-org-id", ORG).send({ brandId: BRAND, offerId: OFFER, ...body });
 const postStep = (step: string, leadId: string) =>
   request(app).post("/internal/campaigns/trigger-for-step").set("x-api-key", API_KEY).set("x-org-id", ORG).send({ brandId: BRAND, offerId: OFFER, step, leadId });
-const leadEvents = () => db.select().from(triggerEvents).where(eq(triggerEvents.triggerId, LEAD_EVENT));
+const leadEvents = async () => {
+  await settleCompositeFires();
+  return db.select().from(triggerEvents).where(eq(triggerEvents.triggerId, LEAD_EVENT));
+};
 const executed = () => mockExecute.mock.calls.map((c) => ({ campaignId: (c[1] as { campaignId: string }).campaignId, trigger: (c[1] as { trigger?: Record<string, unknown> }).trigger }));
 
 describe("Lead event: one trigger for every fact about a person (LEAD-EVENT-TRIGGER-1016)", () => {
@@ -132,6 +136,7 @@ describe("Lead event: one trigger for every fact about a person (LEAD-EVENT-TRIG
     const unit = await leadEventUnit();
 
     const res = await postEvent({ triggerId: REPLY, leadId: "lead-7" });
+    await settleCompositeFires();
 
     expect(res.status).toBe(201);
     // Nobody answers the reply itself here; its Lead event is what runs.
@@ -152,6 +157,46 @@ describe("Lead event: one trigger for every fact about a person (LEAD-EVENT-TRIG
 
     const list = await request(app).get(`/internal/offers/${OFFER}/trigger-events`).query({ brandId: BRAND }).set("x-api-key", API_KEY).set("x-org-id", ORG);
     expect(list.body.events.find((e: { id: string }) => e.id === le.id)).toMatchObject({ triggerId: LEAD_EVENT, sourceTriggerId: REPLY });
+  });
+
+  it("LEAD-EVENT-ASYNC-1024: the fact's caller never waits for the Lead event campaign's run", async () => {
+    const unit = await leadEventUnit();
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    // The Lead event campaign's dispatch hangs (prod: lead-service filing took 30 s).
+    mockExecute.mockImplementation(async () => { await held; return { runId: "wf-run-1" }; });
+
+    const res = await postEvent({ triggerId: "website_visited", leadId: "lead-8" });
+
+    expect(res.status).toBe(201);
+    // Answered while the dispatch is still hanging; the Lead event is already recorded, never lost.
+    const [pendingLe] = await db.select().from(triggerEvents).where(eq(triggerEvents.triggerId, LEAD_EVENT));
+    expect(pendingLe).toMatchObject({ leadId: "lead-8", recordedVia: "composite_trigger" });
+    expect(pendingLe.status).not.toBe("done");
+
+    release();
+    const [le] = await leadEvents();
+    expect(le).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [unit.id], attempts: 1 });
+  });
+
+  it("a Lead event the scheduler tick claimed first is fired once, never twice", async () => {
+    await leadEventUnit();
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    let calls = 0;
+    mockExecute.mockImplementation(async () => { calls += 1; if (calls === 1) await held; return { runId: `wf-run-${calls}` }; });
+
+    // A first fact holds the scope's queue, so the second fact's Lead event waits in it, pending.
+    await postEvent({ triggerId: "website_visited", leadId: "lead-10" });
+    await postEvent({ triggerId: SIGNUP, leadId: "lead-11" });
+    // The tick claims the waiting one first.
+    await fireDueTriggerEvents(new Date());
+    release();
+
+    const rows = await leadEvents();
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.status === "done" && r.attempts === 1)).toBe(true);
+    expect(mockExecute.mock.calls.filter((c) => (c[1] as { trigger?: { leadId?: string } }).trigger?.leadId === "lead-11")).toHaveLength(1);
   });
 
   it("a person the fact names rides the Lead event (person + item kept on the occurrence)", async () => {
@@ -223,6 +268,7 @@ describe("Lead event: one trigger for every fact about a person (LEAD-EVENT-TRIG
     await postEvent({ triggerId: "website_visited", leadId: "lead-6" });
     await postEvent({ triggerId: SIGNUP, leadId: "lead-6" });
     await postEvent({ triggerId: "paid_client", leadId: "lead-6" });
+    await settleCompositeFires();
 
     expect(mockExecute).toHaveBeenCalledTimes(1);
     const rows = await leadEvents();

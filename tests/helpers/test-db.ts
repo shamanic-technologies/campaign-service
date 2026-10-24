@@ -1,10 +1,13 @@
 import { db, sql } from "../../src/db/index.js";
+import { settleCompositeFires } from "../../src/lib/composite-trigger.js";
 import { campaigns, salesFunnelCampaigns, brandPauseTransitions, campaignAudienceExhaustion, campaignAudienceAvailability, campaignStatusTransitions, triggerEvents, triggerEventDeliveries, triggerPollCursors, triggerSilenceWatch, runPlayAttributions } from "../../src/db/schema.js";
 
 /**
  * Clean all test data from the database
  */
 export async function cleanTestData() {
+  // A composite occurrence still firing in the background must not write after the wipe.
+  await settleCompositeFires();
   await db.delete(campaigns);
   await db.delete(salesFunnelCampaigns);
   await db.delete(brandPauseTransitions);
