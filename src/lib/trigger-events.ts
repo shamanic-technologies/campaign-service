@@ -25,6 +25,7 @@ import {
 import { deliveriesByEvent, deliveryOf, eventCarries, recordDeliveries } from "./trigger-deliveries.js";
 import { answersTrigger, doorRefusal, TRIGGER_NOT_CALLABLE } from "./sales-funnel-head-trigger.js";
 import { COMPOSITE_TRIGGER_RECORDED_VIA, eventSourceTriggerId, recordCompositeOccurrences } from "./composite-trigger.js";
+import { eventStanding } from "./trigger-withdrawal.js";
 
 /**
  * THE TRIGGER EVENTS — ONE ROW PER OCCURRENCE, AND WHAT IT DID (owner 2026-10-09).
@@ -454,9 +455,13 @@ export async function fireClaimedEvent(
     if (!type) {
       verdict = skipped(TRIGGER_EVENT_SKIPS.TRIGGER_NOT_DECLARED);
     } else {
-      const guard = event.recordedVia === DELAY_DETECTOR_RECORDED_VIA
-        ? await delayGuard(event, context.leadActivity)
-        : null;
+      // A fact withdrawn by its owner never sends (WITHDRAWN-FACT-CANCELS-1024, lib/trigger-withdrawal.ts).
+      const standing = await eventStanding(event);
+      const guard = !standing.stands
+        ? { reason: standing.reason, detail: standing.detail }
+        : event.recordedVia === DELAY_DETECTOR_RECORDED_VIA
+          ? await delayGuard(event, context.leadActivity)
+          : null;
       if (guard) {
         verdict = skipped(guard.reason, { guardDetail: guard.detail });
       } else {
