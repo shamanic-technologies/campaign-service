@@ -1,3 +1,4 @@
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { triggerEvents, type TriggerEvent } from "../db/schema.js";
 import type { CatalogueTriggerType, ChannelCatalogueRead } from "./channel-operator-client.js";
@@ -19,6 +20,13 @@ import { resolveTriggerType } from "./trigger-aliases.js";
  *  - fired at once through the same dispatch as any occurrence (lib/trigger-events.ts `fireClaimedEvent`): same
  *    guards, caps, funding, person filing, run-in-flight / cohort holds and redelivery. Three facts in a minute for one
  *    person are three occurrences; the second and third wait for the first run (`run_in_flight`), never in parallel.
+ *  - fired IN THE BACKGROUND, never inside the member's request (LEAD-EVENT-ASYNC-1024: crm-service's `account_event`
+ *    report waited 31 s while the Lead event campaign filed the person at lead-service, its client timed out at 30 s and
+ *    every report paid a retry). The row is written `pending` due now BEFORE the member answers (never lost), then a
+ *    per-scope (org, brand, offer) queue claims it (`pending` -> `firing`, atomic: if the scheduler tick's
+ *    `fireDueTriggerEvents` claimed it first, the queue does nothing) and fires it. One queue per scope keeps facts
+ *    reported one after another firing one after another (the `run_in_flight` rule above); a crash leaves the row
+ *    `pending`, fired by the next tick.
  * "Happened" = the member's occurrence is fired (a planned one when it falls due), or recorded `performed`, or rung on
  * the step route; a `delay` condition cancelled by its guard (the person signed up after all) never happened. A
  * composite's own occurrence never feeds another composite. A member is named by its id or by an id merged into it
@@ -64,10 +72,41 @@ export function eventSourceTriggerId(detail: unknown): string | null {
 
 type Fire = (event: TriggerEvent) => Promise<TriggerEvent>;
 
+/** One chain per (org, brand, offer): composite occurrences of one scope fire one after another, in recording order. */
+const scopeQueues = new Map<string, Promise<void>>();
+
+function enqueueFire(row: TriggerEvent, fire: Fire): void {
+  const key = `${row.orgId}|${row.brandId}|${row.offerId}`;
+  const run = async () => {
+    const [claimed] = await db
+      .update(triggerEvents)
+      .set({ status: "firing", claimedAt: new Date(), attempts: sql`${triggerEvents.attempts} + 1` })
+      .where(and(eq(triggerEvents.id, row.id), eq(triggerEvents.status, "pending")))
+      .returning();
+    // Claimed by the scheduler tick in the meantime: it fires it.
+    if (claimed) await fire(claimed);
+  };
+  const next = (scopeQueues.get(key) ?? Promise.resolve())
+    .then(run)
+    .catch((err) => {
+      console.error(`[campaign-service] composite occurrence ${row.id} (${row.triggerId}) not fired in the background, the scheduler tick retries it:`, err);
+    });
+  scopeQueues.set(key, next);
+  void next.then(() => {
+    if (scopeQueues.get(key) === next) scopeQueues.delete(key);
+  });
+}
+
+/** Resolves once every composite occurrence queued so far has fired (tests; never awaited on a request). */
+export async function settleCompositeFires(): Promise<void> {
+  while (scopeQueues.size > 0) await Promise.all([...scopeQueues.values()]);
+}
+
 /**
- * Record (and fire, through `fire`) one occurrence of every composite listing the member occurrence `source` names.
- * NEVER throws: the member has already been dispatched, and a throw in its fire path would put it back and dispatch it
- * twice. Returns the composite occurrences written now (none when they already exist).
+ * Record one occurrence of every composite listing the member occurrence `source` names, and queue its fire (through
+ * `fire`, in the background: the caller never waits for it). NEVER throws: the member has already been dispatched, and
+ * a throw in its fire path would put it back and dispatch it twice. Returns the composite occurrences written now,
+ * `pending` (none when they already exist).
  */
 export async function recordCompositeOccurrences(
   source: TriggerEvent,
@@ -95,9 +134,7 @@ export async function recordCompositeOccurrences(
         recordedVia: COMPOSITE_TRIGGER_RECORDED_VIA,
         occurredAt: source.occurredAt,
         dueAt: now,
-        status: "firing",
-        claimedAt: now,
-        attempts: 1,
+        status: "pending",
         detail: {
           sourceTriggerId: source.triggerId,
           sourceEventId: source.id,
@@ -107,7 +144,8 @@ export async function recordCompositeOccurrences(
         },
       }).onConflictDoNothing().returning();
       if (!row) continue;
-      out.push(await fire(row));
+      out.push(row);
+      enqueueFire(row, fire);
     } catch (err) {
       console.error(
         `[campaign-service] trigger event ${source.id} (${source.triggerId}): its ${composite.id} occurrence could not be recorded:`,
