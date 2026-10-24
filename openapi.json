@@ -2220,6 +2220,106 @@
           "idempotencyKey"
         ]
       },
+      "WithdrawTriggerEventResponse": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string",
+            "enum": [
+              "cancelled",
+              "kept_ran",
+              "already_done",
+              "firing"
+            ]
+          },
+          "composites": {
+            "type": "object",
+            "properties": {
+              "cancelled": {
+                "type": "integer"
+              },
+              "keptRan": {
+                "type": "integer"
+              },
+              "alreadyDone": {
+                "type": "integer"
+              },
+              "firing": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "cancelled",
+              "keptRan",
+              "alreadyDone",
+              "firing"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "event",
+          "composites"
+        ]
+      },
+      "WithdrawTriggerEventBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "SettleWithdrawnResponse": {
+        "type": "object",
+        "properties": {
+          "checked": {
+            "type": "integer"
+          },
+          "cancelled": {
+            "type": "integer"
+          },
+          "keptRan": {
+            "type": "integer"
+          },
+          "byReason": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "unreadable": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "checked",
+          "cancelled",
+          "keptRan",
+          "byReason",
+          "unreadable"
+        ]
+      },
+      "SettleWithdrawnBody": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "brandId"
+        ]
+      },
       "BrandTriggerOffersResponse": {
         "type": "object",
         "properties": {
@@ -6351,6 +6451,174 @@
           },
           "400": {
             "description": "Missing x-org-id or a malformed query (no person named)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/trigger-events/{id}/withdraw": {
+      "post": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Withdraw the fact an occurrence stood for: cancel what has not run",
+        "description": "WITHDRAWN-FACT-CANCELS-1024: an occurrence stands for a fact its caller stated. When the fact's owner withdraws it (crm-service sets aside a mail scanner's visit, `machine_visit`), every occurrence resting on it that has not RUN is cancelled (`done`, `skipped`, `fact_withdrawn`), never sent; one some campaign already ran for keeps `ran` and owes nothing more. The fire path checks the same before dispatching: a withdrawn event, a `lead_event` whose member was withdrawn, or a delay whose anchor fact the person no longer reaches (`anchor_withdrawn`) is skipped. Called by the caller that recorded the event (lead-service). Idempotent. Requires header x-org-id.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawTriggerEventBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What happened to the event and the triggers made of it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawTriggerEventResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing x-org-id or reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/trigger-events/settle-withdrawn": {
+      "post": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Cancel every waiting occurrence of a brand whose fact was withdrawn",
+        "description": "WITHDRAWN-FACT-CANCELS-1024: an occurrence stands for a fact its caller stated. When the fact's owner withdraws it (crm-service sets aside a mail scanner's visit, `machine_visit`), every occurrence resting on it that has not RUN is cancelled (`done`, `skipped`, `fact_withdrawn`), never sent; one some campaign already ran for keeps `ran` and owes nothing more. The fire path checks the same before dispatching: a withdrawn event, a `lead_event` whose member was withdrawn, or a delay whose anchor fact the person no longer reaches (`anchor_withdrawn`) is skipped. Every waiting (`pending`) lead_event / delay occurrence of the brand re-checked at once (staff: clean a paused campaign's owed queue before turning it back on). Idempotent. Requires header x-org-id.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettleWithdrawnBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettleWithdrawnResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing x-org-id or brandId",
             "content": {
               "application/json": {
                 "schema": {

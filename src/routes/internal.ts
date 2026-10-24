@@ -23,7 +23,7 @@ import {
   type RecordedFailure,
 } from "../lib/run-failure-backoff.js";
 import { OpenOnDemandRunBody, TriggerRanCountsQuery } from "../schemas.js";
-import { AnsweringCampaignsBody, BrandTriggerOffersQuery, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventForPersonQuery, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
+import { AnsweringCampaignsBody, BrandTriggerOffersQuery, SettleWithdrawnBody, WithdrawTriggerEventBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventForPersonQuery, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import type { z } from "zod";
 import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
 import { wakeScheduler } from "../lib/scheduler.js";
@@ -76,6 +76,7 @@ import { readDispatchCatalogue, sourceRunsOnItsOwn } from "../lib/on-demand-mode
 import { SourceCampaignsMirrorBody, SourceCampaignsQuery } from "../schemas.js";
 import { pgErrorOf } from "../lib/pg-error.js";
 import { liveOffersAnsweringTrigger } from "../lib/trigger-offers.js";
+import { settleWithdrawnScope, withdrawTriggerEvent } from "../lib/trigger-withdrawal.js";
 
 const router = Router();
 
@@ -1090,6 +1091,39 @@ router.get("/internal/offers/:offerId/trigger-events", requireApiKey, validateQu
     res.json({ events: await serializeTriggerEvents(events) });
   } catch (error) {
     console.error("[campaign-service] trigger-events list error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/trigger-events/:id/withdraw  (+ x-org-id)  {reason}
+ *
+ * The caller that recorded an occurrence withdraws the fact it stood for (lead-service: crm-service withdrew a mail
+ * scanner's "visit"). Everything resting on it that has not run is cancelled, never sent; what already ran is left
+ * alone (lib/trigger-withdrawal.ts). Idempotent.
+ */
+router.post("/internal/trigger-events/:id/withdraw", requireApiKey, serviceAuth, validateBody(WithdrawTriggerEventBody), async (req: AuthenticatedRequest, res) => {
+  try {
+    const answer = await withdrawTriggerEvent({ orgId: req.orgId!, eventId: req.params.id, reason: (req.body as { reason: string }).reason });
+    if (!answer) return res.status(404).json({ error: `no trigger event ${req.params.id} in this org` });
+    res.json(answer);
+  } catch (error) {
+    console.error("[campaign-service] trigger-event withdraw error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/trigger-events/settle-withdrawn  (+ x-org-id)  {brandId}
+ *
+ * Every WAITING occurrence of the brand re-checked: one whose fact was withdrawn (its member withdrawn, or a delay
+ * anchor the person no longer reaches) is cancelled, never sent (lib/trigger-withdrawal.ts). Staff, idempotent.
+ */
+router.post("/internal/trigger-events/settle-withdrawn", requireApiKey, serviceAuth, validateBody(SettleWithdrawnBody), async (req: AuthenticatedRequest, res) => {
+  try {
+    res.json(await settleWithdrawnScope({ orgId: req.orgId!, brandId: (req.body as { brandId: string }).brandId }));
+  } catch (error) {
+    console.error("[campaign-service] settle-withdrawn error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

@@ -915,6 +915,29 @@ export const OfferTriggerEventForPersonQuery = z.object({
   phone: z.string().min(3).optional(),
 }).openapi("OfferTriggerEventForPersonQuery");
 
+export const WithdrawTriggerEventBody = z.object({
+  /** Why the caller withdrew the fact (crm-service's reason, e.g. `machine_visit`). */
+  reason: z.string().min(1).max(200),
+}).openapi("WithdrawTriggerEventBody");
+
+export const WithdrawTriggerEventResponse = z.object({
+  eventId: z.string(),
+  event: z.enum(["cancelled", "kept_ran", "already_done", "firing"]),
+  composites: z.object({ cancelled: z.number().int(), keptRan: z.number().int(), alreadyDone: z.number().int(), firing: z.number().int() }),
+}).openapi("WithdrawTriggerEventResponse");
+
+export const SettleWithdrawnBody = z.object({
+  brandId: z.string().uuid("brandId must be a valid UUID"),
+}).openapi("SettleWithdrawnBody");
+
+export const SettleWithdrawnResponse = z.object({
+  checked: z.number().int(),
+  cancelled: z.number().int(),
+  keptRan: z.number().int(),
+  byReason: z.record(z.string(), z.number().int()),
+  unreadable: z.number().int(),
+}).openapi("SettleWithdrawnResponse");
+
 export const BrandTriggerOffersQuery = z.object({
   triggerId: z.string().min(1),
 }).openapi("BrandTriggerOffersQuery");

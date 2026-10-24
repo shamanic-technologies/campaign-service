@@ -140,7 +140,8 @@ describe("fact not followed: a delay trigger with unlessStep", () => {
 
     expect(await fireDueTriggerEvents(new Date(due.getTime() - MIN))).toBe(0);
 
-    mockEver.mockImplementation(async (p: { email: string; step: string }) => p.step === "paid_client" && p.email === "payer@distribute.you");
+    // Everyone still reaches the anchor (signup); only the payer reached paid_client.
+    mockEver.mockImplementation(async (p: { email: string; step: string }) => p.step === "signup" || (p.step === "paid_client" && p.email === "payer@distribute.you"));
     expect(await fireDueTriggerEvents(new Date(due.getTime() + MIN))).toBe(2);
     const byEmail = new Map((await events()).map((e) => [(e.detail as { person: { email: string } }).person.email, e]));
     expect(byEmail.get("payer@distribute.you")).toMatchObject({ status: "done", outcome: "skipped", skipReason: "step_reached" });
@@ -176,7 +177,7 @@ describe("fact not followed: a delay trigger with unlessStep", () => {
     // Once per person x trigger x offer, as for a pipe trigger.
     expect((await runTriggerDetectorsTick(now))?.delay.planned).toBe(0);
 
-    mockEver.mockResolvedValue(false);
+    mockEver.mockImplementation(async (p: { step: string }) => p.step === "signup");
     expect(await fireDueTriggerEvents(new Date(t0.getTime() + 31 * MIN))).toBe(1);
     const [event] = await events();
     expect(event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [unit.id] });
@@ -211,6 +212,20 @@ describe("fact not followed: a delay trigger with unlessStep", () => {
     const [event] = await events();
     expect(event).toMatchObject({ status: "pending", outcome: null });
     expect(event.lastError).toContain("502");
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("WITHDRAWN-FACT-CANCELS-1024: a person whose anchor fact was withdrawn (a mail scanner's signup) is never sent", async () => {
+    await campaignOn();
+    const now = new Date();
+    const t0 = new Date(now.getTime() - 5 * MIN);
+    mockReachers.mockResolvedValue([{ email: "scanner@distribute.you", name: null, phone: null, reachedAt: t0 }]);
+    await runTriggerDetectorsTick(now);
+    // lead-service no longer counts the anchor step for the person (its fact was withdrawn).
+    mockEver.mockResolvedValue(false);
+    await fireDueTriggerEvents(new Date(t0.getTime() + 31 * MIN));
+    const [event] = await events();
+    expect(event).toMatchObject({ status: "done", outcome: "skipped", skipReason: "anchor_withdrawn" });
     expect(mockExecute).not.toHaveBeenCalled();
   });
 });

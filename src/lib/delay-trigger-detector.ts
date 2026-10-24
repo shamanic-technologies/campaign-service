@@ -94,7 +94,40 @@ export const DELAY_SKIPS = {
   LEAD_UNKNOWN: "lead_unknown",
   /** `unlessStep`: the person reached the step the trigger waits for ("still not Y" is false). */
   STEP_REACHED: "step_reached",
+  /**
+   * The fact the delay counts from was WITHDRAWN by its owner (a mail scanner's "visit" crm-service set aside,
+   * WITHDRAWN-FACT-CANCELS-1024): the person no longer reaches the anchor step, so "X not followed by Y" never began.
+   */
+  ANCHOR_WITHDRAWN: "anchor_withdrawn",
 } as const;
+
+/** Whether an event was withdrawn by the caller that recorded it (`detail.withdrawnAt`, lib/trigger-withdrawal.ts). Pure. */
+export function isWithdrawnEventDetail(detail: unknown): boolean {
+  return !!detail && typeof detail === "object" && !Array.isArray(detail) && typeof (detail as Record<string, unknown>).withdrawnAt === "string";
+}
+
+/**
+ * Does the fact a delay event counts from still hold? Null = it does. A person delay (`unlessStep`) re-asks
+ * lead-service whether the person still reaches the anchor step (a withdrawn fact no longer does); a lead delay
+ * checks its anchor event was not withdrawn. Throws when it cannot be told.
+ */
+export async function delayAnchorWithdrawn(event: TriggerEvent): Promise<DelayGuardVerdict | null> {
+  const own = (event.detail ?? {}) as { unlessStep?: unknown; afterStep?: unknown; anchorEventId?: unknown; person?: { email?: unknown } };
+  const afterStep = typeof own.afterStep === "string" && own.afterStep ? own.afterStep : event.step;
+  if (typeof own.unlessStep === "string" && own.unlessStep) {
+    const email = typeof own.person?.email === "string" ? own.person.email : null;
+    if (!email || !afterStep) throw new Error(`delay event ${event.id} names no person or anchor step`);
+    const stands = await hasEverReachedStep({ orgId: event.orgId, brandId: event.brandId, step: afterStep, email });
+    return stands ? null : { reason: DELAY_SKIPS.ANCHOR_WITHDRAWN, detail: `the person no longer reaches ${afterStep}: its fact was withdrawn` };
+  }
+  if (typeof own.anchorEventId === "string") {
+    const [anchor] = await db.select({ detail: triggerEvents.detail }).from(triggerEvents).where(eq(triggerEvents.id, own.anchorEventId)).limit(1);
+    if (anchor && isWithdrawnEventDetail(anchor.detail)) {
+      return { reason: DELAY_SKIPS.ANCHOR_WITHDRAWN, detail: `anchor event ${own.anchorEventId} was withdrawn` };
+    }
+  }
+  return null;
+}
 
 export const DELAY_MIN_MINUTES = 5;
 
@@ -408,6 +441,8 @@ function anchorOf(event: TriggerEvent): DelayAnchor {
  * Throws when it cannot be told (lead-service unreadable, no lead on the event).
  */
 export async function delayGuard(event: TriggerEvent, cache: LeadActivityCache = new Map()): Promise<DelayGuardVerdict | null> {
+  const withdrawn = await delayAnchorWithdrawn(event);
+  if (withdrawn) return withdrawn;
   const own = (event.detail ?? {}) as { unlessStep?: unknown; person?: { email?: unknown } };
   if (typeof own.unlessStep === "string" && own.unlessStep) {
     const email = typeof own.person?.email === "string" ? own.person.email : null;

@@ -326,4 +326,60 @@ describe("Lead event: one trigger for every fact about a person (LEAD-EVENT-TRIG
     expect((await ask("no_such_trigger")).status).toBe(400);
     expect((await request(app).get(`/internal/brands/${BRAND}/trigger-offers`).query({ triggerId: "website_visited" }).set("x-api-key", API_KEY)).status).toBe(400);
   });
+
+  it("WITHDRAWN-FACT-CANCELS-1024: a withdrawn member cancels its waiting Lead event, never sent; one that ran is left alone", async () => {
+    const unit = await leadEventUnit();
+    // A visit that already ran its Lead event: withdrawing it later leaves that run alone.
+    const ran = await postEvent({ triggerId: "website_visited", leadId: "lead-ran" });
+    const [ranLe] = await leadEvents();
+    expect(ranLe).toMatchObject({ outcome: "ran", ranCampaignIds: [unit.id] });
+
+    // A visit whose Lead event is still owed (held for money / pacing).
+    const held = await postEvent({ triggerId: "website_visited", leadId: "lead-held" });
+    const [owed] = await db.insert(triggerEvents).values({
+      orgId: ORG, brandId: BRAND, offerId: OFFER, triggerId: LEAD_EVENT, step: null, leadId: "lead-held",
+      idempotencyKey: `itest-owed-${held.body.event.id}`, recordedVia: "composite_trigger",
+      occurredAt: new Date(), dueAt: new Date(Date.now() + 60 * 60_000), status: "pending",
+      detail: { sourceTriggerId: "website_visited", sourceEventId: held.body.event.id, retryCampaignIds: [unit.id] },
+    }).returning();
+    mockExecute.mockClear();
+
+    const withdraw = (id: string) =>
+      request(app).post(`/internal/trigger-events/${id}/withdraw`).set("x-api-key", API_KEY).set("x-org-id", ORG).send({ reason: "machine_visit" });
+    const a = await withdraw(held.body.event.id);
+    expect(a.status).toBe(200);
+    expect(a.body.composites).toMatchObject({ cancelled: 1 });
+    const [owedAfter] = await db.select().from(triggerEvents).where(eq(triggerEvents.id, owed.id));
+    expect(owedAfter).toMatchObject({ status: "done", outcome: "skipped", skipReason: "fact_withdrawn" });
+
+    const b = await withdraw(ran.body.event.id);
+    expect(b.body.composites).toMatchObject({ cancelled: 0, alreadyDone: 1 });
+    const [ranAfter] = await db.select().from(triggerEvents).where(eq(triggerEvents.id, ranLe.id));
+    expect(ranAfter).toMatchObject({ outcome: "ran", ranCampaignIds: [unit.id] });
+    // The cancelled owed Lead event never reached a workflow.
+    expect(executed().filter((c) => c.trigger?.eventId === owed.id)).toEqual([]);
+    expect((await withdraw("00000000-0000-4000-8000-00000000dead")).status).toBe(404);
+  });
+
+  it("WITHDRAWN-FACT-CANCELS-1024: the fire path never sends a Lead event whose member was withdrawn", async () => {
+    await leadEventUnit();
+    const member = await postEvent({ triggerId: "website_visited", leadId: "lead-late", dueAt: new Date(Date.now() + 60 * 60_000).toISOString() });
+    expect(member.body.event.status).toBe("pending");
+    await request(app).post(`/internal/trigger-events/${member.body.event.id}/withdraw`).set("x-api-key", API_KEY).set("x-org-id", ORG).send({ reason: "machine_visit" });
+    const [m] = await db.select().from(triggerEvents).where(eq(triggerEvents.id, member.body.event.id));
+    expect(m).toMatchObject({ status: "done", outcome: "skipped", skipReason: "fact_withdrawn" });
+
+    // A Lead event that slipped through (written before the withdrawal) is skipped when it falls due.
+    await db.insert(triggerEvents).values({
+      orgId: ORG, brandId: BRAND, offerId: OFFER, triggerId: LEAD_EVENT, step: null, leadId: "lead-late",
+      idempotencyKey: `itest-late-${member.body.event.id}`, recordedVia: "composite_trigger",
+      occurredAt: new Date(), dueAt: new Date(Date.now() - 1000), status: "pending",
+      detail: { sourceTriggerId: "website_visited", sourceEventId: member.body.event.id },
+    });
+    mockExecute.mockClear();
+    await fireDueTriggerEvents(new Date());
+    const late = (await leadEvents()).find((e) => e.idempotencyKey === `itest-late-${member.body.event.id}`);
+    expect(late).toMatchObject({ status: "done", outcome: "skipped", skipReason: "fact_withdrawn" });
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
 });
