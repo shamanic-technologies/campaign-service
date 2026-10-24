@@ -51,6 +51,8 @@ import {
   OfferTriggerEventsListQuery,
   OfferTriggerEventsListResponse,
   OfferTriggerEventForPersonQuery,
+  BrandTriggerOffersQuery,
+  BrandTriggerOffersResponse,
   OfferTriggerEventForPersonResponse,
   PredecessorCampaignResponse,
   AnsweringCampaignResponse,
@@ -729,6 +731,28 @@ registry.registerPath({
     400: { description: "Missing x-org-id or a malformed query (no person named)", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/trigger-offers",
+  tags: ["Internal"],
+  summary: "The brand's offers an occurrence of a trigger would run",
+  description:
+    "OFFER-FROM-LIVE-CAMPAIGNS-1024: the brand's offers with an ONGOING campaign answering `triggerId`, directly or through a trigger made of it (`lead_event`): the same predicate the detectors watch. lead-service asks it when the person an outcome is about is in no campaign and the brand sells several offers, then rings `POST /internal/trigger-events` once per offer. Empty = nothing live would run it. 400 `unknown_trigger`, 502 catalogue unreadable. Requires header x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ brandId: z.string() }),
+    query: BrandTriggerOffersQuery,
+    headers: z.object({ "x-org-id": z.string() }),
+  },
+  responses: {
+    200: { description: "The offers", content: { "application/json": { schema: BrandTriggerOffersResponse } } },
+    400: { description: "Missing x-org-id, or a trigger features-service does not declare", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+    502: { description: "The channel catalogue could not be read", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 

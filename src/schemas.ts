@@ -915,6 +915,17 @@ export const OfferTriggerEventForPersonQuery = z.object({
   phone: z.string().min(3).optional(),
 }).openapi("OfferTriggerEventForPersonQuery");
 
+export const BrandTriggerOffersQuery = z.object({
+  triggerId: z.string().min(1),
+}).openapi("BrandTriggerOffersQuery");
+
+export const BrandTriggerOffersResponse = z.object({
+  /** The canonical trigger id (an id merged into another resolves to it). */
+  triggerId: z.string(),
+  /** The brand's offers with an ONGOING campaign answering the trigger, directly or through a trigger made of it. Sorted. */
+  offerIds: z.array(z.string()),
+}).openapi("BrandTriggerOffersResponse");
+
 export const OfferTriggerEventForPersonResponse = z.object({
   /** The first event of the trigger about the person on the offer, any door or caller; null = none. */
   event: TriggerEventSchema.nullable(),

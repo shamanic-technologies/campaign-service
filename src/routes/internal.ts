@@ -23,7 +23,7 @@ import {
   type RecordedFailure,
 } from "../lib/run-failure-backoff.js";
 import { OpenOnDemandRunBody, TriggerRanCountsQuery } from "../schemas.js";
-import { AnsweringCampaignsBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventForPersonQuery, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
+import { AnsweringCampaignsBody, BrandTriggerOffersQuery, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventForPersonQuery, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import type { z } from "zod";
 import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
 import { wakeScheduler } from "../lib/scheduler.js";
@@ -75,6 +75,7 @@ import { readSourcingMap, SourcingMapUnavailableError } from "../lib/sourcing-or
 import { readDispatchCatalogue, sourceRunsOnItsOwn } from "../lib/on-demand-mode.js";
 import { SourceCampaignsMirrorBody, SourceCampaignsQuery } from "../schemas.js";
 import { pgErrorOf } from "../lib/pg-error.js";
+import { liveOffersAnsweringTrigger } from "../lib/trigger-offers.js";
 
 const router = Router();
 
@@ -1089,6 +1090,31 @@ router.get("/internal/offers/:offerId/trigger-events", requireApiKey, validateQu
     res.json({ events: await serializeTriggerEvents(events) });
   } catch (error) {
     console.error("[campaign-service] trigger-events list error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /internal/brands/:brandId/trigger-offers?triggerId=  (+ x-org-id)
+ *
+ * The brand's offers an occurrence of the trigger would run: an ONGOING campaign answers it, directly or through a
+ * trigger made of it (`lead_event`). lead-service asks it when the person it rings for is in no campaign and the brand
+ * sells several offers (lib/trigger-offers.ts). A read.
+ */
+router.get("/internal/brands/:brandId/trigger-offers", requireApiKey, validateQuery(BrandTriggerOffersQuery), async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"];
+    if (typeof orgId !== "string" || !orgId) {
+      return res.status(400).json({ error: "x-org-id header is required: a brand belongs to one org" });
+    }
+    const q = req.query as { triggerId: string };
+    res.json(await liveOffersAnsweringTrigger({ orgId, brandId: req.params.brandId, triggerId: q.triggerId }));
+  } catch (error) {
+    if (error instanceof TriggerEventError) {
+      console.warn(`[campaign-service] ${error.status} ${error.reason} on trigger-offers: ${error.message}`);
+      return res.status(error.status).json({ error: error.message, reason: error.reason });
+    }
+    console.error("[campaign-service] trigger-offers error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

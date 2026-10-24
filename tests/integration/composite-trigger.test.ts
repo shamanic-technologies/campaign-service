@@ -260,4 +260,23 @@ describe("Lead event: one trigger for every fact about a person (LEAD-EVENT-TRIG
     ]);
     expect(res.body.triggers.find((t: { triggerId: string }) => t.triggerId === REPLY).bySourceTrigger).toEqual([]);
   });
+
+  it("OFFER-FROM-LIVE-CAMPAIGNS-1024: trigger-offers names the brand's offers whose live campaign answers a member fact", async () => {
+    const other = "4c1d2e3f-0000-4000-8000-0000000001f6";
+    await leadEventUnit();
+    await leadEventUnit({ offerId: other, status: "stopped" });
+    const ask = (triggerId: string, brandId = BRAND) =>
+      request(app).get(`/internal/brands/${brandId}/trigger-offers`).query({ triggerId }).set("x-api-key", API_KEY).set("x-org-id", ORG);
+
+    // A website visit is a member of Lead event: the ongoing Lead event unit's offer runs it; the stopped one does not.
+    const visit = await ask("website_visited");
+    expect(visit.status).toBe(200);
+    expect(visit.body).toEqual({ triggerId: "website_visited", offerIds: [OFFER] });
+    // Our own action is no member: nothing live runs it.
+    expect((await ask("email_sent")).body).toEqual({ triggerId: "email_sent", offerIds: [] });
+    // Another brand of the org: nothing.
+    expect((await ask("website_visited", "11111111-0000-4000-8000-000000000001")).body.offerIds).toEqual([]);
+    expect((await ask("no_such_trigger")).status).toBe(400);
+    expect((await request(app).get(`/internal/brands/${BRAND}/trigger-offers`).query({ triggerId: "website_visited" }).set("x-api-key", API_KEY)).status).toBe(400);
+  });
 });
