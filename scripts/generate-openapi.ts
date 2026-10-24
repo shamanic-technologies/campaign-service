@@ -52,6 +52,10 @@ import {
   OfferTriggerEventsListResponse,
   OfferTriggerEventForPersonQuery,
   BrandTriggerOffersQuery,
+  WithdrawTriggerEventBody,
+  WithdrawTriggerEventResponse,
+  SettleWithdrawnBody,
+  SettleWithdrawnResponse,
   BrandTriggerOffersResponse,
   OfferTriggerEventForPersonResponse,
   PredecessorCampaignResponse,
@@ -729,6 +733,49 @@ registry.registerPath({
   responses: {
     200: { description: "The first event, or null", content: { "application/json": { schema: OfferTriggerEventForPersonResponse } } },
     400: { description: "Missing x-org-id or a malformed query (no person named)", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+const WITHDRAWN_DOC =
+  "WITHDRAWN-FACT-CANCELS-1024: an occurrence stands for a fact its caller stated. When the fact's owner withdraws it (crm-service sets aside a mail scanner's visit, `machine_visit`), every occurrence resting on it that has not RUN is cancelled (`done`, `skipped`, `fact_withdrawn`), never sent; one some campaign already ran for keeps `ran` and owes nothing more. The fire path checks the same before dispatching: a withdrawn event, a `lead_event` whose member was withdrawn, or a delay whose anchor fact the person no longer reaches (`anchor_withdrawn`) is skipped. ";
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/trigger-events/{id}/withdraw",
+  tags: ["Internal"],
+  summary: "Withdraw the fact an occurrence stood for: cancel what has not run",
+  description: WITHDRAWN_DOC + "Called by the caller that recorded the event (lead-service). Idempotent. Requires header x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    params: z.object({ id: z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
+    body: { content: { "application/json": { schema: WithdrawTriggerEventBody } } },
+  },
+  responses: {
+    200: { description: "What happened to the event and the triggers made of it", content: { "application/json": { schema: WithdrawTriggerEventResponse } } },
+    400: { description: "Missing x-org-id or reason", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    404: { description: "No such event in the org", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/trigger-events/settle-withdrawn",
+  tags: ["Internal"],
+  summary: "Cancel every waiting occurrence of a brand whose fact was withdrawn",
+  description: WITHDRAWN_DOC + "Every waiting (`pending`) lead_event / delay occurrence of the brand re-checked at once (staff: clean a paused campaign's owed queue before turning it back on). Idempotent. Requires header x-org-id.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: {
+    headers: z.object({ "x-org-id": z.string() }),
+    body: { content: { "application/json": { schema: SettleWithdrawnBody } } },
+  },
+  responses: {
+    200: { description: "Counts", content: { "application/json": { schema: SettleWithdrawnResponse } } },
+    400: { description: "Missing x-org-id or brandId", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },
