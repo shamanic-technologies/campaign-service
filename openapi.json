@@ -2220,6 +2220,24 @@
           "idempotencyKey"
         ]
       },
+      "BrandTriggerOffersResponse": {
+        "type": "object",
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          },
+          "offerIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "triggerId",
+          "offerIds"
+        ]
+      },
       "OfferSourceCampaignsResponse": {
         "type": "object",
         "properties": {
@@ -6353,6 +6371,99 @@
           },
           "500": {
             "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/trigger-offers": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "The brand's offers an occurrence of a trigger would run",
+        "description": "OFFER-FROM-LIVE-CAMPAIGNS-1024: the brand's offers with an ONGOING campaign answering `triggerId`, directly or through a trigger made of it (`lead_event`): the same predicate the detectors watch. lead-service asks it when the person an outcome is about is in no campaign and the brand sells several offers, then rings `POST /internal/trigger-events` once per offer. Empty = nothing live would run it. 400 `unknown_trigger`, 502 catalogue unreadable. Requires header x-org-id.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "triggerId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The offers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandTriggerOffersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing x-org-id, or a trigger features-service does not declare",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The channel catalogue could not be read",
             "content": {
               "application/json": {
                 "schema": {
