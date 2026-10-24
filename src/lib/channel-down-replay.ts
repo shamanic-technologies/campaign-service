@@ -1,7 +1,9 @@
 import { and, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { triggerEventDeliveries, triggerEvents, type TriggerEventDelivery } from "../db/schema.js";
+import { createRun, updateRun } from "@distribute/runs-client";
+import { campaigns, triggerEventDeliveries, triggerEvents, type TriggerEventDelivery } from "../db/schema.js";
 import { judgeNoul, type NoulQuestion } from "./jev-client.js";
+import { ensureCampaignRunId } from "./trigger-run.js";
 
 /**
  * A CHANNEL OUTAGE DELAYS A MESSAGE, IT NEVER DROPS IT (REPLAY-CHANNEL-DOWN-1023, owner 2026-10-23).
@@ -28,6 +30,12 @@ import { judgeNoul, type NoulQuestion } from "./jev-client.js";
  *     (`expired`, logged loud): the occurrence stays refused.
  * Only a refusal is ever replayed: a transient failure keeps its bounded redelivery, a person not admitted stays
  * final. Jev unreachable = nothing judged, nothing replayed, an error per sweep (never a guess).
+ *
+ * WHOSE WORK (PLATFORM-CALLER-RUN-1024): the judgment decides whether the campaign's message goes out again, so it
+ * is that campaign's production, never support. Each Jev call runs under its OWN run, `campaign-service /
+ * channel-down-judgment`, a child of the refused campaign's anchor run (lib/trigger-run.ts), tagged with the
+ * campaign, sent as `x-run-id`: the judgment's spend lands in the campaign's tree. Never the refused delivery's
+ * run id (workflow-service's). No run = no judgment (retried next sweep).
  */
 
 /** Jev's P(channel down) at or above which a refusal is replayed. */
@@ -144,7 +152,7 @@ export async function judgeRefusals(now: Date = new Date(), limit = JUDGE_LIMIT)
         sql`${triggerEventDeliveries.refusalReason} IS NOT DISTINCT FROM ${d.refusalReason}`,
       ))
       .limit(1);
-    const p = known?.p ?? (await judgeNoul({ refusalCode: code, refusalSentence: reason }, CHANNEL_DOWN_QUESTION));
+    const p = known?.p ?? (await judgeUnderCampaignRun(d.campaignId, { refusalCode: code, refusalSentence: reason }));
     await db
       .update(triggerEventDeliveries)
       .set({ channelDownP: p, channelDownJudgedAt: now, replayState: p >= CHANNEL_DOWN_MIN_P ? null : REPLAY_STATE.FINAL })
@@ -155,6 +163,50 @@ export async function judgeRefusals(now: Date = new Date(), limit = JUDGE_LIMIT)
     judged += 1;
   }
   return judged;
+}
+
+/** One Jev call under a run of the refused campaign's own tree (opened, then closed completed / failed). */
+export async function judgeUnderCampaignRun(campaignId: string, state: Record<string, unknown>): Promise<number> {
+  const [campaign] = await db
+    .select({
+      id: campaigns.id,
+      orgId: campaigns.orgId,
+      anchorRunId: campaigns.anchorRunId,
+      createdByUserId: campaigns.createdByUserId,
+      brandIds: campaigns.brandIds,
+      brandId: campaigns.brandId,
+      featureSlug: campaigns.featureSlug,
+    })
+    .from(campaigns)
+    .where(sql`${campaigns.id}::text = ${campaignId}`)
+    .limit(1);
+  if (!campaign) throw new Error(`campaign ${campaignId} not found: no run to judge its refusal under`);
+  const anchorRunId = await ensureCampaignRunId(campaign);
+  const identity = {
+    orgId: campaign.orgId,
+    userId: campaign.createdByUserId ?? undefined,
+    brandId: campaign.brandIds?.length ? campaign.brandIds.join(",") : (campaign.brandId ?? undefined),
+    campaignId: campaign.id,
+    featureSlug: campaign.featureSlug ?? undefined,
+  };
+  const run = await createRun({
+    ...identity,
+    parentRunId: anchorRunId,
+    serviceName: "campaign-service",
+    taskName: "channel-down-judgment",
+  });
+  try {
+    const p = await judgeNoul(state, CHANNEL_DOWN_QUESTION, { runId: run.id });
+    await updateRun(run.id, "completed", { ...identity, runId: run.id }).catch((e) =>
+      console.error(`[campaign-service] channel-down judgment run ${run.id} could not be marked completed:`, e),
+    );
+    return p;
+  } catch (err) {
+    await updateRun(run.id, "failed", { ...identity, runId: run.id }).catch((e) =>
+      console.error(`[campaign-service] channel-down judgment run ${run.id} could not be marked failed:`, e),
+    );
+    throw err;
+  }
 }
 
 /** 2. Put back every occurrence whose LATEST delivery for a campaign was a channel-down refusal. */

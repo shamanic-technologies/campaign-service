@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 
-const { mockExecute, mockCatalogue, mockListRuns, mockResolveSlug, mockGetStatsBudget, mockFile, mockDue, mockJev } =
+const { mockExecute, mockCatalogue, mockListRuns, mockResolveSlug, mockGetStatsBudget, mockFile, mockDue, mockJev, mockCreateRun, mockUpdateRun } =
   vi.hoisted(() => ({
+    mockCreateRun: vi.fn(),
+    mockUpdateRun: vi.fn(),
     mockGetStatsBudget: vi.fn(),
     mockExecute: vi.fn(),
     mockCatalogue: vi.fn(),
@@ -14,8 +16,8 @@ const { mockExecute, mockCatalogue, mockListRuns, mockResolveSlug, mockGetStatsB
   }));
 
 vi.mock("@distribute/runs-client", () => ({
-  createRun: vi.fn(),
-  updateRun: vi.fn(),
+  createRun: mockCreateRun,
+  updateRun: mockUpdateRun,
   listRuns: mockListRuns,
   getStatsBudget: (p: { featureSlug?: string }) => (p?.featureSlug?.startsWith("sourcing-") ? Promise.resolve({ windows: [] }) : mockGetStatsBudget(p)),
 }));
@@ -63,6 +65,8 @@ const BRAND = "75d7e3e8-0000-4000-8000-000000000042";
 const OFFER = "231bb036-0000-4000-8000-000000000043";
 const USER = "7a3b1c22-0000-4000-8000-000000000044";
 const GIVEN = "whatsapp_number_given";
+const JUDGMENT_RUN = "5e1f0c2a-0000-4000-8000-000000000045";
+const ANCHOR_RUN = "5e1f0c2a-0000-4000-8000-000000000046";
 const LEG = "start_to_signup";
 
 function catalogue() {
@@ -145,6 +149,8 @@ describe("a refusal that only means the channel was unavailable is replayed once
     mockFile.mockResolvedValue({ ok: true, leadId: "lead-jeremy", filed: true });
     mockDue.mockResolvedValue({ ok: true });
     mockJev.mockImplementation(jevSays);
+    mockCreateRun.mockImplementation(async (p: { taskName: string }) => ({ id: p.taskName === "channel-down-judgment" ? JUDGMENT_RUN : ANCHOR_RUN }));
+    mockUpdateRun.mockResolvedValue({});
   });
 
   afterAll(async () => {
@@ -167,6 +173,14 @@ describe("a refusal that only means the channel was unavailable is replayed once
     expect((await deliveries(eventId))[0]).toMatchObject({ replayState: "scheduled" });
     expect(mockJev).toHaveBeenCalledTimes(1);
     expect(mockJev.mock.calls[0][0]).toEqual({ refusalCode: CHANNEL_DOWN.code, refusalSentence: CHANNEL_DOWN.reason });
+    // PLATFORM-CALLER-RUN-1024: the judgment is the campaign's production, under its OWN run in the campaign's
+    // tree (child of the campaign's anchor), never support and never the refused delivery's run.
+    expect(mockJev.mock.calls[0][2]).toEqual({ runId: JUDGMENT_RUN });
+    const judgmentRun = mockCreateRun.mock.calls.map((c) => c[0]).find((p) => p.taskName === "channel-down-judgment");
+    expect(judgmentRun).toMatchObject({ serviceName: "campaign-service", campaignId: campaign.id, orgId: ORG });
+    expect(judgmentRun.parentRunId).toBeTruthy();
+    expect(judgmentRun.parentRunId).not.toBe(JUDGMENT_RUN);
+    expect(mockUpdateRun).toHaveBeenCalledWith(JUDGMENT_RUN, "completed", expect.objectContaining({ runId: JUDGMENT_RUN }));
 
     // Not before its delay.
     expect(await fireDueTriggerEvents(new Date(t0.getTime() + minutes(5)))).toBe(0);
