@@ -290,6 +290,7 @@ describe("Lead event: one trigger for every fact about a person (LEAD-EVENT-TRIG
     await postEvent({ triggerId: REPLY, leadId: "lead-a" });
     await postEvent({ triggerId: REPLY, leadId: "lead-b" });
     await postEvent({ triggerId: SIGNUP, leadId: "lead-c" });
+    await settleCompositeFires();
 
     const res = await request(app)
       .get(`/internal/offers/${OFFER}/trigger-events/summary`)
