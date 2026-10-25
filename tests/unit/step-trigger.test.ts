@@ -273,19 +273,32 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     expect(outcome.skipped[0].reason).toBe(STEP_TRIGGER_SKIPS.COHORT_RUN_IN_FLIGHT);
   });
 
-  it("does not bypass a widened failure backoff: the lead stays due for the next scheduled run", async () => {
-    const nextRunAt = new Date(Date.now() + 20 * 60_000);
-    mockFindMany.mockResolvedValue([campaign({ consecutiveRunFailures: 9, nextRunAt })]);
+  it("does not bypass a widened failure backoff: the event waits for the interval to end", async () => {
+    const lastRunFailureAt = new Date(Date.now() - 60_000);
+    // 9 failures = 30 min interval.
+    mockFindMany.mockResolvedValue([campaign({ consecutiveRunFailures: 9, lastRunFailureAt, nextRunAt: new Date(Date.now() + 20 * 60_000) })]);
 
     const outcome = await triggerCampaignsForStep(request);
 
     expect(outcome.skipped[0].reason).toBe(STEP_TRIGGER_SKIPS.FAILURE_BACKOFF);
-    expect(outcome.skipped[0].detail).toContain(nextRunAt.toISOString());
+    expect(outcome.skipped[0].detail).toContain(new Date(lastRunFailureAt.getTime() + 30 * 60_000).toISOString());
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
+  it("fires the retry once the backoff ended, even while a parked unit's next_run_at sits ahead (REACTIVE-BACKOFF-DEADLOCK-1025)", async () => {
+    mockFindMany.mockResolvedValue([campaign({
+      consecutiveRunFailures: 4,
+      lastRunFailureAt: new Date(Date.now() - 14 * 60 * 60_000),
+      nextRunAt: new Date(Date.now() + 10 * 60_000),
+    })]);
+
+    const outcome = await triggerCampaignsForStep(request);
+
+    expect(outcome.triggered).toHaveLength(1);
+  });
+
   it("still fires a campaign inside its first few failures (base cadence, no backoff yet)", async () => {
-    mockFindMany.mockResolvedValue([campaign({ consecutiveRunFailures: 2, nextRunAt: new Date(Date.now() + 60_000) })]);
+    mockFindMany.mockResolvedValue([campaign({ consecutiveRunFailures: 2, lastRunFailureAt: new Date(), nextRunAt: new Date(Date.now() + 60_000) })]);
 
     const outcome = await triggerCampaignsForStep(request);
 
