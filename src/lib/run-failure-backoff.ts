@@ -112,21 +112,50 @@ export function runHealthOf(row: StreakColumns): RunHealth {
 }
 
 /**
+ * When the widened retry interval that follows the latest failure ends: the last failure plus the
+ * delay its streak earned. Null when there is no widened interval (no streak, still inside the
+ * base cadence, or no recorded failure time).
+ *
+ * Keyed on the FAILURE, never on `next_run_at` (REACTIVE-BACKOFF-DEADLOCK-1025): a unit that never
+ * runs on its own cadence (it answers a trigger, `runs_on_trigger_id`, or waits on lead-service's
+ * owed queue) is PARKED by the scheduler, which pushes `next_run_at` 10 min ahead on every pass
+ * without running it. Read off `next_run_at`, its backoff never ended: prod 2026-10-25, "Lead
+ * Follow-up" 6c54479c sat on 4 failures from 2026-10-24 18:02 and skipped every Lead event
+ * `failure_backoff` for 17 h, a real visitor's event retried 31 times and never served.
+ */
+export function failureBackoffEndsAt(
+  row: Pick<Campaign, "consecutiveRunFailures" | "lastRunFailureAt">,
+): Date | null {
+  const n = row.consecutiveRunFailures ?? 0;
+  if (n <= FAILURES_AT_BASE_CADENCE || !row.lastRunFailureAt) return null;
+  return new Date(row.lastRunFailureAt.getTime() + failureRetryDelayMs(n));
+}
+
+/**
  * Is this campaign waiting out a WIDENED retry interval right now? The step trigger reads it so
- * an event cannot bypass the backoff: a reactive lead is never dropped (it stays due in
- * lead-service's queue and the next scheduled run works it), so skipping costs nothing but the
- * failing run.
+ * an event cannot bypass the backoff. The event is not dropped: it stays pending and is retried
+ * (lib/trigger-events.ts), so once the interval ends the event itself dispatches the retry run,
+ * whether or not the scheduler ever runs this campaign on its own.
  */
 export function isInFailureBackoff(
-  row: Pick<Campaign, "consecutiveRunFailures" | "nextRunAt">,
+  row: Pick<Campaign, "consecutiveRunFailures" | "lastRunFailureAt">,
   now: Date = new Date(),
 ): boolean {
-  return (
-    (row.consecutiveRunFailures ?? 0) > FAILURES_AT_BASE_CADENCE &&
-    !!row.nextRunAt &&
-    row.nextRunAt.getTime() > now.getTime()
-  );
+  const endsAt = failureBackoffEndsAt(row);
+  return !!endsAt && endsAt.getTime() > now.getTime();
 }
+
+/**
+ * A campaign turned ON starts with a clean slate (REACTIVE-BACKOFF-DEADLOCK-1025): a person (or a
+ * funnel start) restarting it is the "try again now" signal, so the streak and its backoff end.
+ * The alert latch (`failureAlertedAt`) is kept: staff hear about a flapping campaign once a day.
+ * Spread into every status write that moves a campaign to `ongoing`.
+ */
+export const FRESH_START_STREAK_FIELDS = {
+  consecutiveRunFailures: 0,
+  failingSince: null,
+  lastRunFailureAt: null,
+} as const;
 
 export interface RecordedFailure {
   consecutiveFailures: number;

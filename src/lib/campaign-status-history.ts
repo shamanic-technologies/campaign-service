@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { FRESH_START_STREAK_FIELDS } from "./run-failure-backoff.js";
 import { db } from "../db/index.js";
 import {
   campaigns,
@@ -156,6 +157,8 @@ export async function setCampaignStatusWithStops(
       .update(campaigns)
       .set({
         ...(write.fields ?? {}),
+        // Turned ON from off: a fresh start, the failure streak and its backoff end.
+        ...(write.toStatus === "ongoing" && write.fromStatus !== "ongoing" ? FRESH_START_STREAK_FIELDS : {}),
         status: write.toStatus,
         stopReason: write.reason,
         updatedAt: new Date(),
@@ -245,7 +248,7 @@ export async function startFollowingSourcesWithHistory(
     .update(campaigns)
     // A source with a workflow (a funnel unit) is due now: the scheduler parks it while it answers on demand, runs it
     // once it runs on its own (lib/on-demand-mode.ts). One with none is never due.
-    .set({ status: "ongoing", stopReason: null, nextRunAt: sql`CASE WHEN ${campaigns.workflowSlug} IS NOT NULL THEN now() ELSE NULL END`, updatedAt: new Date() })
+    .set({ ...FRESH_START_STREAK_FIELDS, status: "ongoing", stopReason: null, nextRunAt: sql`CASE WHEN ${campaigns.workflowSlug} IS NOT NULL THEN now() ELSE NULL END`, updatedAt: new Date() })
     .where(and(eq(campaigns.orgId, orgId), eq(campaigns.status, "stopped"), inArray(campaigns.id, ids)))
     .returning();
   if (started.length === 0) return [];
@@ -577,6 +580,8 @@ export async function setSalesFunnelCampaignStatus(write: {
       const [row] = await tx
         .update(campaigns)
         .set({
+          // Started = a fresh start: the failure streak and its backoff end.
+          ...(write.toStatus === "ongoing" ? FRESH_START_STREAK_FIELDS : {}),
           status: write.toStatus,
           stopReason: write.reason,
           // Due now when it starts (the scheduler's planner decides whether it may spend); nothing

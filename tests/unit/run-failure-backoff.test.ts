@@ -7,6 +7,8 @@ import {
   failureRetryDelayMs,
   formatInterval,
   isInFailureBackoff,
+  failureBackoffEndsAt,
+  FRESH_START_STREAK_FIELDS,
   runHealthOf,
 } from "../../src/lib/run-failure-backoff.js";
 
@@ -77,14 +79,34 @@ describe("runHealthOf — the readable state", () => {
 
 describe("isInFailureBackoff — an event must not bypass a widened interval", () => {
   const now = new Date("2026-10-04T12:00:00Z");
-  const later = new Date(now.getTime() + 10 * 60_000);
+  const ago = (ms: number) => new Date(now.getTime() - ms);
 
-  it("is true only past the base cadence AND while the next run is still in the future", () => {
-    expect(isInFailureBackoff({ consecutiveRunFailures: FAILURES_AT_BASE_CADENCE + 1, nextRunAt: later }, now)).toBe(true);
-    expect(isInFailureBackoff({ consecutiveRunFailures: FAILURES_AT_BASE_CADENCE, nextRunAt: later }, now)).toBe(false);
-    expect(isInFailureBackoff({ consecutiveRunFailures: 20, nextRunAt: new Date(now.getTime() - 1) }, now)).toBe(false);
-    expect(isInFailureBackoff({ consecutiveRunFailures: 20, nextRunAt: null }, now)).toBe(false);
-    expect(isInFailureBackoff({ consecutiveRunFailures: 0, nextRunAt: later }, now)).toBe(false);
+  it("holds only while the interval the LAST FAILURE earned runs, beyond the base cadence", () => {
+    // 4 failures = 2 min interval.
+    expect(isInFailureBackoff({ consecutiveRunFailures: FAILURES_AT_BASE_CADENCE + 1, lastRunFailureAt: ago(60_000) }, now)).toBe(true);
+    expect(isInFailureBackoff({ consecutiveRunFailures: FAILURES_AT_BASE_CADENCE + 1, lastRunFailureAt: ago(3 * 60_000) }, now)).toBe(false);
+    expect(isInFailureBackoff({ consecutiveRunFailures: FAILURES_AT_BASE_CADENCE, lastRunFailureAt: ago(1_000) }, now)).toBe(false);
+    expect(isInFailureBackoff({ consecutiveRunFailures: 20, lastRunFailureAt: ago(29 * 60_000) }, now)).toBe(true);
+    expect(isInFailureBackoff({ consecutiveRunFailures: 20, lastRunFailureAt: ago(31 * 60_000) }, now)).toBe(false);
+    expect(isInFailureBackoff({ consecutiveRunFailures: 20, lastRunFailureAt: null }, now)).toBe(false);
+    expect(isInFailureBackoff({ consecutiveRunFailures: 0, lastRunFailureAt: ago(1_000) }, now)).toBe(false);
+  });
+
+  it("ends even when a parked unit's next_run_at keeps moving ahead (REACTIVE-BACKOFF-DEADLOCK-1025)", () => {
+    // Prod 2026-10-25: 4 failures, last at 18:02 the day before, next_run_at pushed 10 min ahead by
+    // every park. The backoff is long over; the event must dispatch the retry run.
+    const row = {
+      consecutiveRunFailures: 4,
+      lastRunFailureAt: new Date("2026-10-24T18:02:18Z"),
+      nextRunAt: new Date("2026-10-25T08:27:59Z"),
+    };
+    expect(isInFailureBackoff(row, new Date("2026-10-25T08:21:14Z"))).toBe(false);
+    expect(failureBackoffEndsAt(row)!.toISOString()).toBe("2026-10-24T18:04:18.000Z");
+  });
+
+  it("a fresh start clears the streak, keeps the alert latch", () => {
+    expect(FRESH_START_STREAK_FIELDS).toEqual({ consecutiveRunFailures: 0, failingSince: null, lastRunFailureAt: null });
+    expect(Object.keys(FRESH_START_STREAK_FIELDS)).not.toContain("failureAlertedAt");
   });
 });
 
