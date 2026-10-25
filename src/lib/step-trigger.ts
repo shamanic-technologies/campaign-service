@@ -1,4 +1,4 @@
-import { isInFailureBackoff } from "./run-failure-backoff.js";
+import { failureBackoffEndsAt, isInFailureBackoff } from "./run-failure-backoff.js";
 import { and, arrayContains, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, type Campaign } from "../db/schema.js";
@@ -102,7 +102,8 @@ export const STEP_TRIGGER_SKIPS = {
   /**
    * The campaign has failed several runs in a row and is waiting out a widened retry interval
    * (src/lib/run-failure-backoff.ts). An event must not bypass the backoff; the lead is NOT
-   * dropped: it stays due and the next scheduled run works it.
+   * dropped: the event stays pending and its retry dispatches the run once the interval (counted
+   * from the last failure, never from a parked `next_run_at`) ends.
    */
   FAILURE_BACKOFF: "failure_backoff",
   /**
@@ -412,7 +413,7 @@ export async function runCampaignsInScope(
     if (isInFailureBackoff(campaign, now)) {
       skip(
         STEP_TRIGGER_SKIPS.FAILURE_BACKOFF,
-        `${campaign.consecutiveRunFailures} runs in a row failed; the lead stays due and the next scheduled run (${campaign.nextRunAt!.toISOString()}) works it`,
+        `${campaign.consecutiveRunFailures} runs in a row failed; retried once the backoff ends (${failureBackoffEndsAt(campaign)!.toISOString()}), the event stays pending until then`,
       );
       continue;
     }
