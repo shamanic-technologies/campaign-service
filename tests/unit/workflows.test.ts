@@ -107,6 +107,24 @@ describe("Workflow module", () => {
       });
     });
 
+    it("asks workflow-service to REFUSE a second run of the campaign when told, and a 409 reads as a run in flight (LEAD-EVENT-WHATSAPP-1027)", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 409, text: async () => '{"error":"Active workflow execution already exists for this campaign"}' });
+      const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
+      const { isRunInFlightRefusal } = await import("../../src/lib/workflow-refusal.js");
+      const err = await executeCampaignWorkflow("sales-email-cold-outreach", { ...VALID_INPUTS, conflictPolicy: "reject" }).catch((e) => e);
+      expect(isRunInFlightRefusal(err)).toBe(true);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.conflictPolicy).toBe("reject");
+      expect(body.inputs).not.toHaveProperty("conflictPolicy");
+    });
+
+    it("states no conflict policy when none is asked (byte-identical body)", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ runId: "r1" }) });
+      const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
+      await executeCampaignWorkflow("sales-email-cold-outreach", VALID_INPUTS);
+      expect(JSON.parse(mockFetch.mock.calls[0][1].body)).not.toHaveProperty("conflictPolicy");
+    });
+
     it("should throw when required fields are missing", async () => {
       const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
       await expect(

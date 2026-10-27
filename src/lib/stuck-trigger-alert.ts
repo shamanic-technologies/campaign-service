@@ -51,6 +51,15 @@ export function heldBackBy(lastError: string | null): { campaignId: string | nul
   return { campaignId: pairs[0]?.[1] ?? null, reasons: pairs.map((p) => p[2]) };
 }
 
+/**
+ * Since when somebody has been waiting on an occurrence: its fact, or its recording when it was recorded later (a
+ * composite occurrence replayed today for a fact of yesterday waited minutes, not a day: LEAD-EVENT-WHATSAPP-1027,
+ * staff were told « waited since 2026-10-26 » about an occurrence recorded 15 minutes earlier). Pure.
+ */
+export function waitingSince(event: { occurredAt: Date; createdAt: Date }): Date {
+  return event.occurredAt.getTime() >= event.createdAt.getTime() ? event.occurredAt : event.createdAt;
+}
+
 /** Whether an occurrence waits only on the customer's money (never alerted). Pure. */
 export function waitsOnlyOnMoney(lastError: string | null): boolean {
   const { reasons } = heldBackBy(lastError);
@@ -69,7 +78,7 @@ export async function alertStuckOccurrences(now: Date = new Date()): Promise<str
     .where(sql`${triggerEvents.status} <> 'done'
       AND ${triggerEvents.attempts} >= ${STUCK_OCCURRENCE_MIN_ATTEMPTS}
       AND ${triggerEvents.lastError} IS NOT NULL
-      AND ${triggerEvents.occurredAt} <= ${waitingBefore}::timestamptz
+      AND greatest(${triggerEvents.occurredAt}, ${triggerEvents.createdAt}) <= ${waitingBefore}::timestamptz
       AND (${triggerEvents.detail} ? 'person' OR ${triggerEvents.detail} ? 'item')
       AND NOT (coalesce(${triggerEvents.detail}, '{}'::jsonb) ? 'stuckAlertedAt')`)
     .orderBy(triggerEvents.occurredAt)
@@ -129,7 +138,7 @@ async function sendStuckOccurrenceAlert(event: TriggerEvent): Promise<boolean> {
           triggerId: event.triggerId ?? event.step ?? "none",
           campaignId: campaignId ?? event.requestedByCampaignId ?? "none",
           brandId: event.brandId,
-          waitingSince: event.occurredAt.toISOString(),
+          waitingSince: waitingSince(event).toISOString(),
           attempts: String(event.attempts),
           lastError: event.lastError!,
           ...(campaign?.name ? { campaignName: campaign.name } : {}),
@@ -146,7 +155,7 @@ async function sendStuckOccurrenceAlert(event: TriggerEvent): Promise<boolean> {
       return false;
     }
     console.warn(
-      `[campaign-service] Occurrence ${event.id} (trigger ${event.triggerId}) has waited since ${event.occurredAt.toISOString()} ` +
+      `[campaign-service] Occurrence ${event.id} (trigger ${event.triggerId}) has waited since ${waitingSince(event).toISOString()} ` +
       `after ${event.attempts} attempts (${event.lastError}) — staff alerted`,
     );
     return true;

@@ -38,3 +38,11 @@ function successorOf(body: string): string | null {
 export function isRetiredWorkflowRefusal(err: unknown): err is WorkflowExecutionRefusedError {
   return err instanceof WorkflowExecutionRefusedError && err.status === 410;
 }
+
+/**
+ * 409 = workflow-service already holds a run of this campaign (asked with `conflictPolicy: "reject"`): nothing was
+ * dispatched for THIS call, so it is a run in flight, never a run of its own (LEAD-EVENT-WHATSAPP-1027).
+ */
+export function isRunInFlightRefusal(err: unknown): err is WorkflowExecutionRefusedError {
+  return err instanceof WorkflowExecutionRefusedError && err.status === 409;
+}

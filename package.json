@@ -2,6 +2,7 @@
   "name": "campaign-service",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.34.8",
   "type": "module",
   "scripts": {
     "dev": "tsx watch --import ./src/instrument.ts src/index.ts",
@@ -28,7 +29,7 @@
     "drizzle-orm": "^0.45.4",
     "express": "^4.22.3",
     "postgres": "^3.4.0",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

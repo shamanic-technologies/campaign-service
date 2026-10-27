@@ -18,6 +18,7 @@ import { backOffFailedDispatch } from "./run-failure-backoff.js";
 import { sourcesOffHold, SOURCES_OFF_RECHECK_MS } from "./sources-off-hold.js";
 import { reportTurnHolds } from "./turn-hold-event.js";
 import { fireDueTriggerEvents, nextPendingTriggerDueAt } from "./trigger-events.js";
+import { settleUnreportedDeliveries } from "./trigger-deliveries.js";
 import { alertSilentTriggers } from "./trigger-silence.js";
 import { alertStuckOccurrences } from "./stuck-trigger-alert.js";
 import { replayChannelDownRefusals } from "./channel-down-replay.js";
@@ -612,6 +613,11 @@ async function tick(): Promise<void> {
       // first so a replay due now fires in this very tick.
       await replayChannelDownRefusals().catch((err) => {
         console.error("[campaign-service] Channel-down replay sweep error:", err);
+      });
+      // A run that never reported on the occurrence it carried is settled by time (lib/trigger-deliveries.ts), before
+      // the fire so a redelivery due now goes out in this very tick.
+      await settleUnreportedDeliveries().catch((err) => {
+        console.error("[campaign-service] Unreported delivery sweep error:", err);
       });
       await fireDueTriggerEvents().catch((err) => {
         console.error("[campaign-service] Due trigger events error:", err);

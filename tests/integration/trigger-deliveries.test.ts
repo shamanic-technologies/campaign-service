@@ -53,7 +53,15 @@ import { db } from "../../src/db/index.js";
 import { campaigns, triggerEventDeliveries, triggerEvents } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { fireDueTriggerEvents } from "../../src/lib/trigger-events.js";
-import { TRIGGER_DELIVERY_MAX, settleTriggerDelivery } from "../../src/lib/trigger-deliveries.js";
+import {
+  DELIVERY_SETTLE_AFTER_MS,
+  TRIGGER_DELIVERY_MAX,
+  deliveryOf,
+  resetDeliverySettleClock,
+  settleTriggerDelivery,
+  settleUnreportedDeliveries,
+} from "../../src/lib/trigger-deliveries.js";
+import { WorkflowExecutionRefusedError } from "../../src/lib/workflow-refusal.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "b645207b-0000-4000-8000-000000000031";
@@ -428,5 +436,98 @@ describe("an occurrence carrying something is consumed only by a run that did it
     expect(res.body.event.outcome).toBe("ran");
     expect(res.body.event.delivery).toBeNull();
     expect(await deliveries(res.body.event.id)).toHaveLength(0);
+  });
+
+  // LEAD-EVENT-WHATSAPP-1027 (prod 2026-10-27, campaign 6c54479c): two lead_event occurrences fired in the same second
+  // for one campaign; workflow-service reserved ONE run and answered the second execute with that same reservation
+  // (`use_existing`, no run id yet). The second occurrence was recorded ran, no run ever carried it, nobody answered.
+  it("two carrying occurrences dispatched together for ONE campaign: the one workflow-service refuses is never ran, and gets its own run next", async () => {
+    const campaign = await emailSending();
+    let calls = 0;
+    mockExecute.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 2) {
+        throw new WorkflowExecutionRefusedError({
+          workflowSlug: "email-sending-bubup",
+          campaignId: campaign.id,
+          status: 409,
+          body: JSON.stringify({ error: "Active workflow execution already exists for this campaign" }),
+        });
+      }
+      return { runId: nextRun() };
+    });
+    const OTHER = { email: "john.roe@example.com", name: "John Roe" };
+    // Both pass the runs-service check (it lags the dispatch): the race only workflow-service can settle.
+    const [a, b] = await Promise.all([
+      postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM }),
+      postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: OTHER, item: ITEM }),
+    ]);
+    // Every trigger dispatch asks workflow-service to refuse rather than answer another run as its own.
+    for (const call of mockExecute.mock.calls) expect(call[1]).toMatchObject({ conflictPolicy: "reject" });
+
+    const rows = await Promise.all([eventRow(a.body.event.id), eventRow(b.body.event.id)]);
+    const ran = rows.filter((r) => r.outcome === "ran");
+    const held = rows.filter((r) => r.status === "pending");
+    expect(ran).toHaveLength(1);
+    expect(held).toHaveLength(1);
+    const [waiting] = held;
+    expect(waiting.outcome).toBeNull();
+    expect(waiting.ranCampaignIds ?? []).toEqual([]);
+    expect(waiting.lastError).toContain(`${campaign.id} run_in_flight`);
+    expect(await deliveries(waiting.id)).toHaveLength(0);
+    expect(await deliveries(ran[0].id)).toHaveLength(1);
+
+    // The first run ends; the held occurrence gets its OWN run, carrying its own event.
+    const [firstDelivery] = await deliveries(ran[0].id);
+    await settleTriggerDelivery(firstDelivery.runId, { success: true });
+    expect(await fireDueTriggerEvents(new Date(waiting.dueAt.getTime() + 1000))).toBe(1);
+    expect(mockExecute.mock.calls[2][1].trigger).toMatchObject({ eventId: waiting.id });
+    expect(await eventRow(waiting.id)).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+    const [own] = await deliveries(waiting.id);
+    expect(own).toMatchObject({ campaignId: campaign.id, status: "dispatched" });
+    expect(own.runId).not.toBe(firstDelivery.runId);
+  });
+
+  it("a delivery whose run never reported does not hold a new occurrence of the same person: it runs", async () => {
+    const campaign = await emailSending();
+    const first = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect((await deliveries(first.body.event.id))[0].status).toBe("dispatched");
+    // Its run ended without /end-run: runs-service no longer reads it alive.
+    mockListRuns.mockResolvedValue({ runs: [] });
+    const second = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: { subject: "Again", bodyText: "Hi again" } });
+    expect(second.body.event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+    expect(await deliveries(second.body.event.id)).toHaveLength(1);
+  });
+
+  it("a delivery whose run never reported is settled by time: redelivered while recent, timed_out (unconfirmed) when days old", async () => {
+    const campaign = await emailSending();
+    const recent = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const old = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: { email: "old.lead@example.com" }, item: ITEM });
+    const now = new Date();
+    await db.update(triggerEventDeliveries)
+      .set({ dispatchedAt: new Date(now.getTime() - DELIVERY_SETTLE_AFTER_MS - 60_000) })
+      .where(eq(triggerEventDeliveries.eventId, recent.body.event.id));
+    await db.update(triggerEventDeliveries)
+      .set({ dispatchedAt: new Date(now.getTime() - 3 * 24 * 3_600_000) })
+      .where(eq(triggerEventDeliveries.eventId, old.body.event.id));
+
+    resetDeliverySettleClock();
+    const settled = await settleUnreportedDeliveries(now);
+    expect(settled.map((s) => s.settlement.kind).sort()).toEqual(["redelivered", "timed_out"]);
+    // A second look in the same window does nothing.
+    expect(await settleUnreportedDeliveries(now)).toEqual([]);
+
+    expect((await deliveries(recent.body.event.id))[0].status).toBe("failed");
+    const pending = await eventRow(recent.body.event.id);
+    expect(pending).toMatchObject({ status: "pending", ranCampaignIds: [] });
+    expect((pending.detail as Record<string, unknown>).retryCampaignIds).toEqual([campaign.id]);
+
+    expect((await deliveries(old.body.event.id))[0].status).toBe("timed_out");
+    expect(await eventRow(old.body.event.id)).toMatchObject({ status: "done", outcome: "ran" });
+    expect(deliveryOf(await eventRow(old.body.event.id), await deliveries(old.body.event.id))?.state).toBe("unconfirmed");
+
+    // A late /end-run of the timed-out run changes nothing.
+    const [late] = await deliveries(old.body.event.id);
+    expect((await settleTriggerDelivery(late.runId, { success: true })).kind).toBe("not_a_delivery");
   });
 });
