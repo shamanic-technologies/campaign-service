@@ -10,6 +10,7 @@ import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { attributeRunPlay } from "./run-play-attribution.js";
 import { executeCampaignWorkflow, type WorkflowTriggerInput } from "./workflows.js";
+import { isRunInFlightRefusal } from "./workflow-refusal.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import {
   hasLiveRunForBrandCohort,
@@ -532,6 +533,10 @@ export async function runCampaignsInScope(
         brandProfileId: campaign.brandProfileId,
         audienceId: selection.audienceId ?? campaign.audienceId,
         ...(campaignTrigger ? { trigger: campaignTrigger } : {}),
+        // Two occurrences fired together for one campaign both pass the runs-service check above (it lags the
+        // dispatch); workflow-service's reservation is the atomic one. Asked to REFUSE, never to answer the other
+        // run as ours: an occurrence is recorded ran only on a run that carries it (LEAD-EVENT-WHATSAPP-1027).
+        conflictPolicy: "reject" as const,
       };
       let execution;
       try {
@@ -574,6 +579,12 @@ export async function runCampaignsInScope(
         `[campaign-service] Campaign ${campaign.id} triggered on the step a lead reached (org ${req.orgId}, brand ${brandIds[0]}, ${label})`,
       );
     } catch (err) {
+      // workflow-service already holds a run of this campaign (reserved a moment ago by another occurrence):
+      // nothing ran for THIS one, so it waits like any run in flight (owed, retried: lib/trigger-person.ts).
+      if (isRunInFlightRefusal(err)) {
+        skip(STEP_TRIGGER_SKIPS.RUN_IN_FLIGHT, "a run of this campaign was reserved at workflow-service a moment before this one");
+        continue;
+      }
       // One campaign's refused dispatch does not decide the others'. It is REPORTED, never
       // swallowed: a caller reading `triggered: []` must be able to tell an outage from a brand
       // that has no campaign for this leg.
