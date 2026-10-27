@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, lt } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { triggerEventDeliveries, triggerEvents, type TriggerEventDelivery } from "../db/schema.js";
 
@@ -458,4 +458,79 @@ async function settleNotAdmitted(runId: string, reason: string, now: Date, waitM
     `[campaign-service] trigger event ${d.eventId} stayed firing while run ${runId} of campaign ${d.campaignId} reported its person not admitted: outcome not rewritten (delivery ${d.id})`,
   );
   return { kind: "event_busy", eventId: d.eventId, campaignId: d.campaignId };
+}
+
+/**
+ * A DELIVERY WHOSE RUN NEVER REPORTS IS SETTLED BY TIME (LEAD-EVENT-WHATSAPP-1027).
+ *
+ * `/end-run` is the only thing that settles a delivery, and a run can end without it (its DAG died, a deploy
+ * restarted the caller, the flow's error branch never reached the end-run): prod 2026-10-24, three runs of
+ * campaign 94dfb79a completed or failed in runs-service within minutes, their deliveries stayed `dispatched` for
+ * days and their occurrences read "in flight" forever, never redelivered. The run-in-flight HOLDS never read these
+ * rows (they read runs-service inside `RUN_LIVENESS_THRESHOLD_MS`), so nothing waits on them; what was lost is the
+ * occurrence itself.
+ *
+ * So a delivery still `dispatched` `DELIVERY_SETTLE_AFTER_MS` after its dispatch (four times the liveness window,
+ * far past the longest flow) is a run that never said what it did: it settles as a run that did not complete its
+ * work, the bounded redelivery of the module header (same event, the workflow keys its send on it). One older than
+ * `DELIVERY_REDELIVER_WITHIN_MS` is not redelivered (a fact days old is no longer the moment to write): it settles
+ * `timed_out`, the occurrence then reads `unconfirmed`, said in the log. A `/end-run` arriving later finds no
+ * `dispatched` row and changes nothing.
+ */
+export const DELIVERY_SETTLE_AFTER_MS = 60 * 60_000;
+export const DELIVERY_REDELIVER_WITHIN_MS = 24 * 60 * 60_000;
+/** How often the sweep looks, and how many rows per look. */
+export const DELIVERY_SETTLE_RECHECK_MS = 10 * 60_000;
+const DELIVERY_SETTLE_LIMIT = 50;
+
+let lastDeliverySettleAt = 0;
+
+/** Test hook: forget when the sweep last ran. */
+export function resetDeliverySettleClock(): void {
+  lastDeliverySettleAt = 0;
+}
+
+/** Settle every delivery whose run never reported (see above). Returns what each became. */
+export async function settleUnreportedDeliveries(
+  now: Date = new Date(),
+): Promise<Array<{ runId: string; settlement: DeliverySettlement | { kind: "timed_out"; eventId: string; campaignId: string } }>> {
+  if (now.getTime() - lastDeliverySettleAt < DELIVERY_SETTLE_RECHECK_MS) return [];
+  lastDeliverySettleAt = now.getTime();
+
+  const rows = await db
+    .select()
+    .from(triggerEventDeliveries)
+    .where(and(
+      eq(triggerEventDeliveries.status, "dispatched"),
+      lt(triggerEventDeliveries.dispatchedAt, new Date(now.getTime() - DELIVERY_SETTLE_AFTER_MS)),
+    ))
+    .orderBy(asc(triggerEventDeliveries.dispatchedAt))
+    .limit(DELIVERY_SETTLE_LIMIT);
+
+  const out: Array<{ runId: string; settlement: DeliverySettlement | { kind: "timed_out"; eventId: string; campaignId: string } }> = [];
+  for (const d of rows) {
+    const age = now.getTime() - d.dispatchedAt.getTime();
+    if (age > DELIVERY_REDELIVER_WITHIN_MS) {
+      const [settled] = await db
+        .update(triggerEventDeliveries)
+        .set({ status: "timed_out", endedAt: now })
+        .where(and(eq(triggerEventDeliveries.id, d.id), eq(triggerEventDeliveries.status, "dispatched")))
+        .returning({ id: triggerEventDeliveries.id });
+      if (!settled) continue;
+      console.error(
+        `[campaign-service] trigger event ${d.eventId}: run ${d.runId} of campaign ${d.campaignId} never reported (/end-run) since ${d.dispatchedAt.toISOString()}; too old to redeliver, settled timed_out (the occurrence reads unconfirmed)`,
+      );
+      out.push({ runId: d.runId, settlement: { kind: "timed_out", eventId: d.eventId, campaignId: d.campaignId } });
+      continue;
+    }
+    console.warn(
+      `[campaign-service] trigger event ${d.eventId}: run ${d.runId} of campaign ${d.campaignId} never reported (/end-run) since ${d.dispatchedAt.toISOString()}; settled as a run that did not complete its work`,
+    );
+    try {
+      out.push({ runId: d.runId, settlement: await settleTriggerDelivery(d.runId, { success: false }, now) });
+    } catch (err) {
+      console.error(`[campaign-service] delivery ${d.id} (run ${d.runId}) could not be settled:`, err);
+    }
+  }
+  return out;
 }

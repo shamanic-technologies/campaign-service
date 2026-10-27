@@ -34,6 +34,8 @@ async function occurrence(over: Partial<typeof triggerEvents.$inferInsert> = {})
       attempts: 109,
       detail: { person: { email: "staff+prospect@distribute.you", name: "Pat" } },
       ...over,
+      // Recorded when its fact happened, unless the case states otherwise (a backfill records it later).
+      createdAt: over.createdAt ?? over.occurredAt ?? new Date("2026-10-14T20:00:31Z"),
     })
     .returning();
   return row;
@@ -119,6 +121,15 @@ describe("a prospect waiting on an undeliverable occurrence is told to staff (li
     expect(await alertStuckOccurrences(NOW)).toEqual([event.id]);
     expect(JSON.parse(fetchMock.mock.calls[1][1].body).metadata.campaignId).toBe("none");
   });
+  it("an occurrence RECORDED minutes ago for a fact of yesterday has waited minutes, not a day: no alert yet (LEAD-EVENT-WHATSAPP-1027)", async () => {
+    await occurrence({
+      lastError: "6c54479c-2300-4e21-afca-59fa8c4adfe5 cohort_run_in_flight: staff+prospect@distribute.you, retried in 2 min",
+      occurredAt: new Date("2026-10-14T10:00:00Z"),
+      createdAt: new Date(NOW.getTime() - 10 * 60_000),
+      attempts: 5,
+    });
+    expect(await alertStuckOccurrences(NOW)).toEqual([]);
+  });
 });
 
 describe("reading last_error", () => {
@@ -133,4 +144,5 @@ describe("reading last_error", () => {
     expect(waitsOnlyOnMoney("11111111-1111-4111-8111-111111111111 sales_funnel_cap, 22222222-2222-4222-8222-222222222222 failure_backoff")).toBe(false);
     expect(waitsOnlyOnMoney("catalogue unreadable: boom")).toBe(false);
   });
+
 });

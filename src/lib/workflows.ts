@@ -17,6 +17,13 @@ export interface WorkflowExecutionInputs {
    * every other dispatch, and then the body is byte-identical to before.
    */
   trigger?: WorkflowTriggerInput | null;
+  /**
+   * `reject`: a run of this campaign already reserved at workflow-service = 409 (`WorkflowExecutionRefusedError`,
+   * `isRunInFlightRefusal`), never the OTHER run answered as if it were this one. workflow-service's default
+   * (`use_existing`) answers the in-flight run with 200, so a trigger dispatch racing another one was told it ran
+   * while nothing carried its occurrence (LEAD-EVENT-WHATSAPP-1027). Absent = the body is byte-identical to before.
+   */
+  conflictPolicy?: "reject";
 }
 
 export interface WorkflowTriggerInput {
@@ -109,6 +116,7 @@ export async function executeCampaignWorkflow(
         audienceId: inputs.audienceId ?? null,
         ...(inputs.trigger ? { trigger: inputs.trigger } : {}),
       },
+      ...(inputs.conflictPolicy ? { conflictPolicy: inputs.conflictPolicy } : {}),
     }),
   });
 
