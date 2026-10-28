@@ -38,6 +38,8 @@ import {
   EarningHistoryResponse,
   RecurringStatusQuery,
   FailingCampaignsResponse,
+  StuckOccurrencesQuery,
+  StuckOccurrencesResponse,
   RecurringStatusResponse,
   TriggerForStepResponse,
   RecordTriggerEventBody,
@@ -990,6 +992,23 @@ registry.registerPath({
   security: [{ [apiKeyAuth.name]: [] }],
   responses: {
     200: { description: "Failing and retrying campaigns", content: { "application/json": { schema: FailingCampaignsResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/ops/stuck-occurrences",
+  tags: ["Internal"],
+  summary: "Occurrences carrying a person that are blocked right now, plus a daily series (dashboard v2 Monitoring)",
+  description:
+    "Fleet-wide, staff. An occurrence carrying a person or an item, not done, waiting more than `stuckAfterMinutes` and tried 3+ times is STUCK unless it waits only on the customer's money (cap reached, not funded), on the brand's channel coming back, or on its turn behind a busy run in a queue that moved recently (`queued`). `status` is red when anything is stuck. `byDay` (UTC day the person acted) counts answered, answered late, skipped, failed and still waiting, recomputed from the occurrence rows. Sends nothing: red on the Monitoring hub is the alert. Nothing is written.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { query: StuckOccurrencesQuery },
+  responses: {
+    200: { description: "Stuck occurrences and the daily series", content: { "application/json": { schema: StuckOccurrencesResponse } } },
+    400: { description: "Invalid days", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
   },

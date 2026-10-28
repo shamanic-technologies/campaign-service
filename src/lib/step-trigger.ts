@@ -27,6 +27,7 @@ import { fileSalesFunnelCampaignPeople, targetingOfSalesFunnelCampaigns } from "
 import { eventConcernsGithubIssue } from "./github-issue-trigger.js";
 import { oweEventPerson, personLabel, type EventPerson } from "./trigger-person.js";
 import { runsOnTrigger } from "./sales-funnel-head-trigger.js";
+import { executionSubjectOf, reservePersonRun } from "./person-runs.js";
 
 /**
  * A LEAD JUST REACHED A STEP — RUN THE CAMPAIGN THAT WAS BOUGHT TO TAKE THEM OUT OF IT, NOW.
@@ -76,7 +77,8 @@ import { runsOnTrigger } from "./sales-funnel-head-trigger.js";
  * before dispatching, because both are correctness rather than pacing: never two runs of one
  * campaign, and never two runs of one brand COHORT (the outbound channels share a lead population
  * and a set of sending accounts, so a second concurrent run contacts the same people from the same
- * mailboxes). And the campaign must be a SALES FUNNEL unit its funnel's caps fund (`salesFunnelUnitMoney`) —
+ * mailboxes). A run carrying ONE person (`trigger.person`) contacts only them, so its guard is that PERSON instead,
+ * with a per-campaign ceiling (lib/person-runs.ts, REACTIVE-THROUGHPUT-1028). And the campaign must be a SALES FUNNEL unit its funnel's caps fund (`salesFunnelUnitMoney`) —
  * fail-CLOSED, as everywhere else that decides whether to start spending: a reply must never make a
  * defunded campaign spend, and firing a run the gate is about to refuse could only burn it.
  */
@@ -368,8 +370,12 @@ export async function runCampaignsInScope(
   const firedCohorts = new Set<string>();
 
   for (const campaign of responsible) {
-    const skip = (reason: StepTriggerSkipReason, detail: string) =>
+    // The slot a person-carrying run claimed (lib/person-runs.ts): handed back by any skip after the claim.
+    let releaseSlot: (() => void) | null = null;
+    const skip = (reason: StepTriggerSkipReason, detail: string) => {
+      releaseSlot?.();
       outcome.skipped.push({ campaignId: campaign.id, legKey: campaign.legKey, reason, detail });
+    };
 
     // A campaign with no DAG is a channel the CUSTOMER operates: the work happens off-platform and
     // there is nothing here to execute. The absence of a workflow IS the statement.
@@ -452,15 +458,26 @@ export async function runCampaignsInScope(
       }
     }
 
-    if (await hasLiveRunForCampaign(req.orgId, campaign.id, freshnessCutoff)) {
+    const cohort = serializationCohort(campaign.featureSlug);
+    // A run carrying ONE person locks that person, not the campaign (lib/person-runs.ts,
+    // REACTIVE-THROUGHPUT-1028): different people run side by side, the same person never twice at once.
+    if (person) {
+      const cohortIds = live.filter((c) => serializationCohort(c.featureSlug) === cohort).map((c) => c.id);
+      const slot = await reservePersonRun(`${req.orgId}|${brandIds[0]}|${cohort}`, cohortIds, campaign.id, person, now);
+      if (!slot.ok) {
+        skip(STEP_TRIGGER_SKIPS.RUN_IN_FLIGHT, slot.detail);
+        continue;
+      }
+      releaseSlot = slot.release;
+    } else if (await hasLiveRunForCampaign(req.orgId, campaign.id, freshnessCutoff)) {
       skip(STEP_TRIGGER_SKIPS.RUN_IN_FLIGHT, "a run of this campaign is already in flight");
       continue;
     }
 
-    const cohort = serializationCohort(campaign.featureSlug);
     if (
-      firedCohorts.has(cohort) ||
-      (await hasLiveRunForBrandCohort(req.orgId, brandIds[0], cohort, now))
+      !person &&
+      (firedCohorts.has(cohort) ||
+        (await hasLiveRunForBrandCohort(req.orgId, brandIds[0], cohort, now)))
     ) {
       skip(
         STEP_TRIGGER_SKIPS.COHORT_RUN_IN_FLIGHT,
@@ -537,6 +554,9 @@ export async function runCampaignsInScope(
         // dispatch); workflow-service's reservation is the atomic one. Asked to REFUSE, never to answer the other
         // run as ours: an occurrence is recorded ran only on a run that carries it (LEAD-EVENT-WHATSAPP-1027).
         conflictPolicy: "reject" as const,
+        // A run about ONE person is admitted per person at workflow-service, so different people run side by side
+        // (lib/person-runs.ts, REACTIVE-THROUGHPUT-1028).
+        ...(person ? { executionSubject: executionSubjectOf(person) } : {}),
       };
       let execution;
       try {

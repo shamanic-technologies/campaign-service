@@ -11,6 +11,7 @@ import {
   type StepTriggerRequest,
 } from "./step-trigger.js";
 import type { WorkflowTriggerInput } from "./workflows.js";
+import { releasePersonRunReservations } from "./person-runs.js";
 import {
   OWED_EVENT_RECHECK_MS,
   OWED_UNTIL_ROOM_SKIPS,
@@ -486,6 +487,8 @@ export async function fireClaimedEvent(
           } catch (err) {
             console.error(`[campaign-service] trigger event ${event.id}: the runs just dispatched could not be recorded, a failure of them will not redeliver it:`, err);
           }
+          // Their delivery rows now hold the person (lib/person-runs.ts); the in-memory claims go.
+          if (person) releasePersonRunReservations(verdict.detail.triggered.map((t) => t.campaignId), person);
         }
         // The fact happened: every trigger made of it (`lead_event`) records its own occurrence, once, and fires it.
         // Never throws (the member is already dispatched).

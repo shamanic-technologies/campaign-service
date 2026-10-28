@@ -49,6 +49,7 @@ vi.mock("../../src/lib/sales-funnel-people.js", async (importOriginal) => {
 
 import { eq } from "drizzle-orm";
 import app from "../../src/index.js";
+import { RUN_LIVENESS_THRESHOLD_MS } from "../../src/lib/run-liveness.js";
 import { db } from "../../src/db/index.js";
 import { campaigns, triggerEventDeliveries, triggerEvents } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
@@ -488,12 +489,17 @@ describe("an occurrence carrying something is consumed only by a run that did it
     expect(own.runId).not.toBe(firstDelivery.runId);
   });
 
-  it("a delivery whose run never reported does not hold a new occurrence of the same person: it runs", async () => {
+  it("a delivery whose run never reported holds the same person only inside the run liveness window, then lets a new occurrence run", async () => {
     const campaign = await emailSending();
     const first = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
     expect((await deliveries(first.body.event.id))[0].status).toBe("dispatched");
-    // Its run ended without /end-run: runs-service no longer reads it alive.
-    mockListRuns.mockResolvedValue({ runs: [] });
+    // Inside the window the same person waits (never two runs about one person: REACTIVE-THROUGHPUT-1028).
+    const held = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: { subject: "Held", bodyText: "Hi" } });
+    expect(held.body.event).toMatchObject({ status: "pending" });
+    // Its run ended without /end-run long ago: past the liveness window it holds nobody.
+    await db.update(triggerEventDeliveries)
+      .set({ dispatchedAt: new Date(Date.now() - RUN_LIVENESS_THRESHOLD_MS - 60_000) })
+      .where(eq(triggerEventDeliveries.eventId, first.body.event.id));
     const second = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: { subject: "Again", bodyText: "Hi again" } });
     expect(second.body.event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
     expect(await deliveries(second.body.event.id)).toHaveLength(1);

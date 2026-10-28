@@ -132,7 +132,6 @@ vi.mock("../../src/lib/trigger-events.js", () => ({
   nextPendingTriggerDueAt: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("../../src/lib/trigger-silence.js", () => ({ alertSilentTriggers: vi.fn().mockResolvedValue([]) }));
-vi.mock("../../src/lib/stuck-trigger-alert.js", () => ({ alertStuckOccurrences: vi.fn().mockResolvedValue([]) }));
 vi.mock("../../src/lib/trigger-deliveries.js", () => ({ settleUnreportedDeliveries: vi.fn().mockResolvedValue([]) }));
 
 // The catalogue's reading of each claimed campaign's leg decides who dispatches it (lib/on-demand-mode.ts).

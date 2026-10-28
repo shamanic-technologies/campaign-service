@@ -2,6 +2,8 @@ import { Router, type Response } from "express";
 import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
 import { legIsReactive } from "../lib/leg-identity.js";
 import { settleTriggerDelivery } from "../lib/trigger-deliveries.js";
+import { wakeOccurrencesHeldBy } from "../lib/person-runs.js";
+import { readStuckOccurrences } from "../lib/stuck-occurrences.js";
 import { targetingOfSalesFunnelCampaigns } from "../lib/sales-funnel-people-store.js";
 import { eq, and, sql, or, ne, isNotNull, gt, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -22,7 +24,7 @@ import {
   recordRunSuccess,
   type RecordedFailure,
 } from "../lib/run-failure-backoff.js";
-import { OpenOnDemandRunBody, TriggerRanCountsQuery } from "../schemas.js";
+import { OpenOnDemandRunBody, StuckOccurrencesQuery, TriggerRanCountsQuery } from "../schemas.js";
 import { AnsweringCampaignsBody, BrandTriggerOffersQuery, SettleWithdrawnBody, WithdrawTriggerEventBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventForPersonQuery, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import type { z } from "zod";
 import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
@@ -603,9 +605,19 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
     // Fire-and-forget: never delays or fails run finalization.
     if (req.runId) {
       const endedRunId = req.runId;
-      void settleTriggerDelivery(endedRunId, { success, stopCampaign, noWorkAvailable, delivery, personNotAdmitted }).catch((err) => {
-        console.error(`[campaign-service] could not settle the trigger delivery of run ${endedRunId} (campaign ${campaignId}):`, err);
-      });
+      void settleTriggerDelivery(endedRunId, { success, stopCampaign, noWorkAvailable, delivery, personNotAdmitted })
+        .catch((err) => {
+          console.error(`[campaign-service] could not settle the trigger delivery of run ${endedRunId} (campaign ${campaignId}):`, err);
+        })
+        // A slot of the campaign is free: the occurrences it held back go now, not on their retry delay
+        // (lib/person-runs.ts, REACTIVE-THROUGHPUT-1028).
+        .then(() => wakeOccurrencesHeldBy(campaignId))
+        .then((woken) => {
+          if (woken > 0) wakeScheduler();
+        })
+        .catch((err) => {
+          console.error(`[campaign-service] could not wake the occurrences held by campaign ${campaignId}:`, err);
+        });
     }
 
     // The DAG sends stopCampaign=true when THIS run's single served audience returned no leads
@@ -1239,6 +1251,20 @@ router.get("/internal/campaigns/failing", requireApiKey, async (_req, res) => {
     });
   } catch (error) {
     console.error("[campaign-service] failing-campaigns error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /internal/ops/stuck-occurrences?days= — the dashboard v2 Monitoring card (lib/stuck-occurrences.ts,
+ * REACTIVE-THROUGHPUT-1028): red when an occurrence carrying somebody is blocked. Replaces the staff email.
+ */
+router.get("/internal/ops/stuck-occurrences", requireApiKey, validateQuery(StuckOccurrencesQuery), async (req, res) => {
+  try {
+    const { days } = StuckOccurrencesQuery.parse(req.query);
+    res.json(await readStuckOccurrences(days ?? 14));
+  } catch (error) {
+    console.error("[campaign-service] stuck-occurrences read error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
