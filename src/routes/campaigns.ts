@@ -245,6 +245,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, refuseRetiredAudienceIds, 
       notifyFrequency,
       notifyChannel,
       notifyDestination,
+      whatsappSenderPhone,
     } = req.body;
 
     // featureSlug comes exclusively from x-feature-slug header
@@ -426,6 +427,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, refuseRetiredAudienceIds, 
           ...(notifyFrequency !== undefined ? { notifyFrequency } : {}),
           ...(notifyChannel !== undefined ? { notifyChannel } : {}),
           ...(notifyDestination !== undefined ? { notifyDestination } : {}),
+          ...(whatsappSenderPhone !== undefined ? { whatsappSenderPhone } : {}),
         },
       });
       const updated = restarted!;
@@ -496,6 +498,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, refuseRetiredAudienceIds, 
         notifyFrequency,
         notifyChannel,
         notifyDestination,
+        whatsappSenderPhone: whatsappSenderPhone ?? null,
         status: "ongoing",
       })
       .returning();

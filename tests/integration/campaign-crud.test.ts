@@ -389,6 +389,7 @@ describe("Campaign CRUD", () => {
       expect(res.body.campaign).not.toHaveProperty("audienceIds");
       expect(res.body.campaign.servicesOffered).toBeNull();
       expect(res.body.campaign.clickDestinationUrl).toBeNull();
+      expect(res.body.campaign.whatsappSenderPhone).toBeNull();
     });
 
     it("sets own config via update and clears it back to inherit with null", async () => {
@@ -404,6 +405,31 @@ describe("Campaign CRUD", () => {
       }).expect(200);
       expect(clearRes.body.campaign.servicesOffered).toBeNull();
       expect(clearRes.body.campaign.clickDestinationUrl).toBeNull();
+    });
+
+    it("states the WhatsApp line it writes from on create and update, canonical E.164; null clears it (CAMPAIGN-WA-LINE-1028)", async () => {
+      const created = await createCampaign({ ...validBody, name: "WA line", whatsappSenderPhone: "+7 777 687-96-32" }).expect(201);
+      expect(created.body.campaign.whatsappSenderPhone).toBe("+77776879632");
+      const id = created.body.campaign.id;
+      expect((await get(id).expect(200)).body.campaign.whatsappSenderPhone).toBe("+77776879632");
+
+      const moved = await patch(id, { whatsappSenderPhone: "+33680478702" }).expect(200);
+      expect(moved.body.campaign.whatsappSenderPhone).toBe("+33680478702");
+
+      // A name update says nothing about the line: it stays.
+      const renamed = await patch(id, { name: "WA line renamed" }).expect(200);
+      expect(renamed.body.campaign.whatsappSenderPhone).toBe("+33680478702");
+
+      const cleared = await patch(id, { whatsappSenderPhone: null }).expect(200);
+      expect(cleared.body.campaign.whatsappSenderPhone).toBeNull();
+    });
+
+    it("refuses a WhatsApp line that is not an E.164 number, writing nothing", async () => {
+      const created = await createCampaign({ ...validBody, name: "WA bad" }).expect(201);
+      const res = await patch(created.body.campaign.id, { whatsappSenderPhone: "0680478702" }).expect(400);
+      expect(res.body.error).toMatch(/whatsappSenderPhone/);
+      expect((await get(created.body.campaign.id).expect(200)).body.campaign.whatsappSenderPhone).toBeNull();
+      await createCampaign({ ...validBody, name: "WA bad create", whatsappSenderPhone: "Sophie" }).expect(400);
     });
 
     // The per-campaign audience SUBSET is retired (owner 2026-10-14): who a pipe reaches is its lead

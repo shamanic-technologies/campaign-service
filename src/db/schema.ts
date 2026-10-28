@@ -92,6 +92,12 @@ export const campaigns = pgTable(
     // /start-run for the sending runtime.
     clickDestinationUrl: text("click_destination_url"),
 
+    // The brand's linked WhatsApp line this campaign writes from, as STATED by the customer (E.164, the
+    // line's own number; CAMPAIGN-WA-LINE-1028). NULL = crm-service picks the line as before (the one
+    // already talking with the person, else the brand's outreach default). Nothing else about WhatsApp
+    // accounts is stored here: crm-service owns the linked lines. Served on /start-run.
+    whatsappSenderPhone: text("whatsapp_sender_phone"),
+
     // Legacy campaign budget limits. Daily spend control is brand-level via billing-service.
     maxBudgetDailyUsd: decimal("max_budget_daily_usd", { precision: 10, scale: 2 }),
     maxBudgetWeeklyUsd: decimal("max_budget_weekly_usd", { precision: 10, scale: 2 }),

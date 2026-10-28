@@ -46,6 +46,8 @@ export async function insertTestCampaign(
     goal?: string | null;
     servicesOffered?: string[] | null;
     clickDestinationUrl?: string | null;
+    /** The linked WhatsApp line (E.164) it writes from (CAMPAIGN-WA-LINE-1028). */
+    whatsappSenderPhone?: string | null;
     nextRunAt?: Date | null;
     createdByUserId?: string;
     parentRunId?: string;
@@ -86,6 +88,7 @@ export async function insertTestCampaign(
       goal: data.goal ?? null,
       servicesOffered: data.servicesOffered ?? null,
       clickDestinationUrl: data.clickDestinationUrl ?? null,
+      whatsappSenderPhone: data.whatsappSenderPhone ?? null,
       maxBudgetDailyUsd: data.maxBudgetDailyUsd || "10.00",
       maxBudgetWeeklyUsd: data.maxBudgetWeeklyUsd || null,
       maxBudgetMonthlyUsd: data.maxBudgetMonthlyUsd || null,

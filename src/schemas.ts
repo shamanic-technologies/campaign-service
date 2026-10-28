@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isIanaTimezone } from "./lib/iana-timezone.js";
-import { isE164Phone } from "./lib/e164-phone.js";
+import { canonicalPhone, isE164Phone } from "./lib/e164-phone.js";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 
 extendZodWithOpenApi(z);
@@ -93,9 +93,26 @@ export const CampaignSchema = z.object({
   notifyFrequency: z.string().nullable(),
   notifyChannel: z.string().nullable(),
   notifyDestination: z.string().nullable(),
+  // The linked WhatsApp line (E.164) it writes from, as stated by the customer; null = the brand's default choice.
+  whatsappSenderPhone: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 }).openapi("Campaign");
+
+// The brand's linked WhatsApp line a campaign writes from (CAMPAIGN-WA-LINE-1028): the line's own number,
+// E.164 (spaces, dashes, dots, parentheses dropped). Omit = untouched; null = crm-service picks the line
+// (the one already talking with the person, else the brand's outreach default). Served on /start-run.
+const WhatsappSenderPhoneInput = z
+  .string()
+  .transform(canonicalPhone)
+  .refine(isE164Phone, "whatsappSenderPhone must be the linked WhatsApp line's number in E.164 (+ then country code)")
+  .nullable()
+  .optional()
+  .openapi({
+    example: "+33612345678",
+    description:
+      "The linked WhatsApp line (its own number, E.164) this campaign sends its WhatsApp messages from. Omit = untouched; null = the brand's default line choice.",
+  });
 
 // --- Public campaign routes ---
 
@@ -138,6 +155,7 @@ export const CreateCampaignBody = z.object({
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
+  whatsappSenderPhone: WhatsappSenderPhoneInput,
 }).openapi("CreateCampaignBody");
 
 // The two values `campaigns.status` is ever written with. There is no `active` and no
@@ -349,6 +367,7 @@ export const UpdateCampaignBody = z.object({
   notifyFrequency: z.string().optional(),
   notifyChannel: z.string().optional(),
   notifyDestination: z.string().optional(),
+  whatsappSenderPhone: WhatsappSenderPhoneInput,
 }).openapi("UpdateCampaignBody");
 
 // --- Brand pause ---
@@ -463,6 +482,9 @@ export const StartRunResponse = z.object({
   // with nobody due has nothing to do. false = proactive (finds its own people). null = cannot be told
   // (no leg stated, or the catalogue unreadable): the DAG must not assume either.
   reactive: z.boolean().nullable(),
+  // The linked WhatsApp line (E.164) this campaign writes from, as its customer stated it: pass it to
+  // crm-service as the line to send from. null = nothing stated, crm-service picks the line as before.
+  whatsappSenderPhone: z.string().nullable(),
   searchParams: z.record(z.string(), z.unknown()).nullable(),
 }).openapi("StartRunResponse");
 
