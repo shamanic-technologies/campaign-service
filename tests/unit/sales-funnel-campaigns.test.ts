@@ -231,6 +231,7 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
     ok: true,
     legsBySlug: new Map([[COLD, new Set([ENTRY])], ["ai-meeting-booking", new Set([REACTIVE])], ["sourcing-apollo-cold-filters", new Set(["start_to_lead_found"])]]),
     operatorBySlug: new Map(),
+    legs: [{ legKey: REACTIVE, fromStepKey: "conversation", toStepKey: "meeting_booked" }],
   } as unknown as ChannelCatalogueRead;
   const pipes: Record<string, { channelSlug: string; legKey: string; mode: "proactive" | "reactive" }> = {
     [`${COLD}|${ENTRY}`]: { channelSlug: COLD, legKey: ENTRY, mode: "proactive" },
@@ -259,6 +260,8 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.plan.salesFunnelName).toBe("Epiphany");
+    // The funnel's last step is the campaign's target at birth (lib/sales-funnel-target.ts).
+    expect(res.plan.shape).toEqual({ target: "meeting_booked", reason: null, mode: "proactive", triggerId: null });
     expect(res.plan.units.map((u) => [u.featureSlug, u.legKey, u.mode, u.workflowSlug])).toEqual([
       [COLD, ENTRY, "proactive", "aurora-v3"],
       ["ai-meeting-booking", REACTIVE, "reactive", "aurora-v3"],
@@ -281,6 +284,7 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
       ok: true,
       legsBySlug: new Map([[LI, new Set([LI_LEG])]]),
       operatorBySlug: new Map([[LI, "platform"]]),
+      legs: [],
     } as unknown as ChannelCatalogueRead;
     const d = {
       ...deps([`${LI}|${LI_LEG}`]),
@@ -380,6 +384,7 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
       ok: true,
       legsBySlug: new Map([[COLD, new Set([ENTRY, REPLY])]]),
       operatorBySlug: new Map([[COLD, "platform"]]),
+      legs: [],
     } as unknown as ChannelCatalogueRead;
 
     it("each pipe's unit is born on the workflow features-service ranks first on ITS leg", async () => {

@@ -220,6 +220,9 @@ export const StoppedCampaignSchema = z.object({
 
 /** The longest instruction a funnel campaign carries (it rides every run into a writer's prompt). */
 export const MAX_INSTRUCTION_LENGTH = 4000;
+// A funnel campaign's brief (lib/sales-funnel-target.ts): the strategy in plain language a judge reads.
+export const MAX_BRIEF_LENGTH = 8000;
+const TargetStepSchema = z.string().trim().min(1, "target must name a step (omit it to keep the sales funnel's last step)").max(200);
 
 /** The most people one funnel campaign may name (lib/sales-funnel-people.ts). */
 export const MAX_NAMED_PEOPLE = 50;
@@ -259,6 +262,13 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // `github_issue_in_prod` trigger run once this issue is in prod (closed as completed by a merge to the
   // default branch AND served by every deploy target of the repo on the box). Part of its identity.
   githubIssue: GithubIssueRefSchema.optional(),
+  // OPTIONAL (lib/sales-funnel-target.ts): the OUTCOME it targets, a catalogue step key (features-service's
+  // vocabulary, e.g. "positive_reply", "meeting_booked", "paid_client"). Omitted = the funnel's last step.
+  // Unknown step = 400 unknown_target_step.
+  target: TargetStepSchema.optional(),
+  // OPTIONAL: its strategy in plain language ("Cold email only, never write to someone who asked to stop, test for
+  // 30 days"), read by the judge that picks plays. NOT `instruction` (the words the writer's messages follow).
+  brief: z.string().trim().min(1, "brief must not be empty (omit it)").max(MAX_BRIEF_LENGTH).optional(),
 }).strict().openapi("CreateSalesFunnelCampaignBody");
 
 /**
@@ -268,9 +278,14 @@ export const CreateSalesFunnelCampaignBody = z.object({
 export const UpdateSalesFunnelCampaignBody = z.object({
   status: z.enum(["activate", "stop"], { error: 'status must be "activate" or "stop"' }).optional(),
   instruction: z.string().trim().min(1, "instruction must not be empty (null clears it)").max(MAX_INSTRUCTION_LENGTH).nullable().optional(),
-}).strict().refine((b) => b.status !== undefined || b.instruction !== undefined, {
-  message: "state status and/or instruction",
-}).openapi("UpdateSalesFunnelCampaignBody");
+  // The OUTCOME it targets (a catalogue step key). Unknown step = 400 unknown_target_step.
+  target: TargetStepSchema.optional(),
+  // Its strategy in plain language (null clears it). Dated + attributed on every edit (briefUpdatedAt/By).
+  brief: z.string().trim().min(1, "brief must not be empty (null clears it)").max(MAX_BRIEF_LENGTH).nullable().optional(),
+}).strict().refine(
+  (b) => b.status !== undefined || b.instruction !== undefined || b.target !== undefined || b.brief !== undefined,
+  { message: "state status, instruction, target and/or brief" },
+).openapi("UpdateSalesFunnelCampaignBody");
 
 export const SalesFunnelCampaignsQuery = z.object({
   brandId: z.string().optional(),
@@ -325,6 +340,17 @@ export const SalesFunnelCampaignSchema = z.object({
     mergedBy: z.string().optional(),
     served: z.array(z.object({ target: z.string(), sha: z.string(), containsMerge: z.boolean() })).optional(),
   }).nullable(),
+  // The OUTCOME it targets: a catalogue step key (features-service's vocabulary). Born = the funnel's last step.
+  // null only while not backfilled yet.
+  target: z.string().nullable(),
+  // Its strategy in plain language (null = none), and when / by whom it was last edited.
+  brief: z.string().nullable(),
+  briefUpdatedAt: z.string().nullable(),
+  briefUpdatedByUserId: z.string().nullable(),
+  // What it starts from: "proactive" (Start) | "reactive" (a trigger, `triggerId` when the funnel names it).
+  // features-service's statement of the funnel's head; null only while not backfilled yet.
+  mode: z.enum(["proactive", "reactive"]).nullable(),
+  triggerId: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   units: z.array(SalesFunnelUnitSchema),
