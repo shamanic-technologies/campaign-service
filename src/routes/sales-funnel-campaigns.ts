@@ -36,6 +36,7 @@ import { notifySalesFunnelCampaignPrecompute } from "../lib/sales-funnel-campaig
 import { deleteSalesFunnelCampaign } from "../lib/sales-funnel-campaign-delete.js";
 import { pgErrorOf } from "../lib/pg-error.js";
 import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sales-funnel-target.js";
+import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass } from "../lib/sales-funnel-plan.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -71,10 +72,12 @@ async function unitsOf(parentIds: string[], orgId: string): Promise<Map<string, 
  */
 function statedEdits(
   current: SalesFunnelCampaign,
-  stated: { instruction?: string | null; target?: string; brief?: string | null },
+  stated: { instruction?: string | null; target?: string; brief?: string | null; followsPlan?: boolean },
   userId: string | undefined,
 ): Partial<typeof salesFunnelCampaigns.$inferInsert> {
   const edits: Partial<typeof salesFunnelCampaigns.$inferInsert> = {};
+  // The customer's switch (lib/sales-funnel-plan.ts): follow the plan, or keep the funnel it runs now, fixed.
+  if (stated.followsPlan !== undefined && stated.followsPlan !== current.followsPlan) edits.followsPlan = stated.followsPlan;
   if (stated.instruction !== undefined && stated.instruction !== current.instruction) edits.instruction = stated.instruction;
   if (stated.target !== undefined && stated.target !== current.target) edits.target = stated.target;
   if (stated.brief !== undefined && stated.brief !== current.brief) {
@@ -136,7 +139,7 @@ router.post(
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId, salesFunnelId, status, people: namedInput, instruction, githubIssue: issueInput, target, brief } =
+      const { brandId, offerId, salesFunnelId, status, people: namedInput, instruction, githubIssue: issueInput, target, brief, followsPlan } =
         CreateSalesFunnelCampaignBody.parse(req.body);
       // The GitHub issue it waits on (lib/github-issue-trigger.ts): part of its identity too.
       const issueRef = issueInput ? parseGithubIssue(issueInput) : null;
@@ -172,7 +175,9 @@ router.post(
 
       let incumbent = await findIncumbent();
       // Handed back with the instruction, target and brief the caller states now (absent = untouched).
-      if (incumbent) incumbent = await applyEdits(incumbent, statedEdits(incumbent, { instruction, target, brief }, req.userId));
+      if (incumbent) incumbent = await applyEdits(incumbent, statedEdits(incumbent, { instruction, target, brief, followsPlan }, req.userId));
+      // A campaign told to follow its plan (or started while it does) is checked against it at once.
+      if (incumbent?.followsPlan && (followsPlan === true || status === "ongoing")) void runPlanCheckFor(incumbent.id);
       if (incumbent) {
         if (status === "ongoing" && incumbent.status !== "ongoing") {
           const refusal = await paymentStartRefusal(orgId);
@@ -288,6 +293,7 @@ router.post(
           briefUpdatedByUserId: req.userId!,
           mode: plan.shape?.mode ?? null,
           triggerId: plan.shape?.triggerId ?? null,
+          followsPlan: followsPlan ?? false,
           units: plan.units.map((u) => ({
             featureSlug: u.featureSlug,
             legKey: u.legKey,
@@ -321,6 +327,7 @@ router.post(
         `[campaign-service] Sales funnel campaign ${born.salesFunnelCampaign.id} (${plan.salesFunnelName}) born ${status} — org=${orgId} brand=${brandId} offer=${offerId}, units ${born.units.map((u) => u.id).join(", ")}`,
       );
       if (status === "ongoing") wakeScheduler();
+      if (followsPlan && status === "ongoing") void runPlanCheckFor(born.salesFunnelCampaign.id);
       // features-service computes the brand's Campaigns rows now, before anyone reads them. Never awaited.
       void notifySalesFunnelCampaignPrecompute({
         salesFunnelCampaignId: born.salesFunnelCampaign.id,
@@ -406,7 +413,7 @@ router.patch(
   validateBody(UpdateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { status, instruction, target, brief } = UpdateSalesFunnelCampaignBody.parse(req.body);
+      const { status, instruction, target, brief, followsPlan } = UpdateSalesFunnelCampaignBody.parse(req.body);
       const orgId = req.orgId!;
       const existing = await db.query.salesFunnelCampaigns.findFirst({
         where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
@@ -416,12 +423,15 @@ router.patch(
         const check = await checkTargetStep(target);
         if (!check.ok) return res.status(check.status).json(check.body);
       }
-      const edits = statedEdits(existing, { instruction, target, brief }, req.userId);
+      const edits = statedEdits(existing, { instruction, target, brief, followsPlan }, req.userId);
+      // Turned to follow its plan, or started while it does: checked against its plan at once (after the write).
+      const checkPlanNow = (followsPlan === true && !existing.followsPlan) || (status === "activate" && (followsPlan ?? existing.followsPlan));
 
       // Reword (or clear) the instruction its runs carry (read by every run at /start-run, so the next message
       // follows the new words), restate its target, rewrite its brief. Status untouched unless stated too.
       if (status === undefined) {
         const reworded = await applyEdits(existing, edits);
+        if (checkPlanNow) void runPlanCheckFor(reworded.id);
         const units = (await unitsOf([reworded.id], orgId)).get(reworded.id)!;
         return res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(reworded, units) });
       }
@@ -445,6 +455,7 @@ router.patch(
       if (!written) return res.status(404).json({ error: "Sales funnel campaign not found" });
       const parent = await applyEdits(written.salesFunnelCampaign, edits);
       if (status === "activate") wakeScheduler();
+      if (checkPlanNow) void runPlanCheckFor(parent.id);
       res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, written.units) });
     } catch (error) {
       console.error("[campaign-service] Update sales funnel campaign error:", error);
@@ -485,6 +496,68 @@ router.delete("/sales-funnel-campaigns/:id", requireApiKey, serviceAuth, async (
     res.json({ deleted: true, salesFunnelCampaignId: parent.id, unitIds: outcome.unitIds });
   } catch (error) {
     console.error("[campaign-service] Delete sales funnel campaign error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/** GET /sales-funnel-campaigns/:id/plan-changes — every plan change applied to it (lib/sales-funnel-plan.ts), newest first. */
+router.get("/sales-funnel-campaigns/:id/plan-changes", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const parent = await db.query.salesFunnelCampaigns.findFirst({
+      where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, req.orgId!)),
+    });
+    if (!parent) return res.status(404).json({ error: "Sales funnel campaign not found" });
+    res.json({
+      salesFunnelCampaignId: parent.id,
+      followsPlan: parent.followsPlan,
+      salesFunnelId: parent.salesFunnelId,
+      runningSalesFunnelId: parent.runningSalesFunnelId ?? parent.salesFunnelId,
+      planCheck: parent.planCheck ?? null,
+      changes: await readPlanChanges(parent.id),
+    });
+  } catch (error) {
+    console.error("[campaign-service] Plan changes read error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/sales-funnel-campaigns/plan-check {orgId, brandId?, salesFunnelCampaignId?, apply?} — staff.
+ * `apply` false (default) = a DRY RUN for every ongoing funnel campaign of the scope, followed or not: what following
+ * its plan WOULD do (pipes before/after, each unit, the verdict), nothing written. `apply: true` = one plan follower
+ * pass now (every campaign following its plan, fleet-wide).
+ */
+router.post("/internal/sales-funnel-campaigns/plan-check", requireApiKey, async (req, res) => {
+  try {
+    const body = z
+      .object({ orgId: z.string().min(1).optional(), brandId: z.string().optional(), salesFunnelCampaignId: z.string().optional(), apply: z.boolean().optional() })
+      .parse(req.body ?? {});
+    if (body.apply) {
+      const pass = await runPlanFollowerPass();
+      return res.json({ apply: true, pass });
+    }
+    if (!body.orgId) return res.status(400).json({ error: "orgId is required for a dry run" });
+    const campaignsChecked = await dryRunPlans({ orgId: body.orgId, brandId: body.brandId, salesFunnelCampaignId: body.salesFunnelCampaignId });
+    res.json({ apply: false, campaigns: campaignsChecked });
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: error.issues.map((i) => i.message).join("; ") });
+    console.error("[campaign-service] Plan check error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /internal/ops/plan-following?days= — the dashboard v2 Monitoring card of the plan follower: red when a campaign
+ * following its plan cannot follow it (no plan, unreadable, not runnable, outside its caps, apply failed) or the
+ * follower stopped checking. Never an email.
+ */
+router.get("/internal/ops/plan-following", requireApiKey, async (req, res) => {
+  const days = req.query.days === undefined ? 30 : Number(req.query.days);
+  if (!Number.isInteger(days) || days < 1 || days > 90) return res.status(400).json({ error: "days must be an integer from 1 to 90" });
+  try {
+    res.json(await readPlanFollowing(days));
+  } catch (error) {
+    console.error("[campaign-service] Plan following read error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

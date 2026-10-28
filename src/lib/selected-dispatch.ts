@@ -8,6 +8,7 @@ import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./on-demand-mode.js";
 import { answersATrigger, reactiveWake } from "./reactive-wake.js";
+import { PLAN_DRAINING_RECHECK_MS } from "./sales-funnel-plan-constants.js";
 
 /**
  * A RUN A PERSON STARTED GOES THROUGH THE SAME SELECTION AS EVERY OTHER RUN.
@@ -49,6 +50,8 @@ export async function dispatchSelectedRun(
     salesFunnelId?: string | null;
     /** A unit running only on its funnel's head trigger (lib/sales-funnel-head-trigger.ts): parked, never dispatched here. */
     runsOnTriggerId?: string | null;
+    /** 'draining' = its pipe left its funnel campaign's plan: takes no new people (lib/sales-funnel-plan.ts). */
+    planRole?: string | null;
   },
   identity: { orgId: string; userId: string; runId: string },
 ): Promise<string | null> {
@@ -67,6 +70,13 @@ export async function dispatchSelectedRun(
       await db.update(campaigns).set({ nextRunAt: wake.nextRunAt, updatedAt: new Date() }).where(eq(campaigns.id, campaign.id));
       return null;
     }
+  } else if (campaign.planRole === "draining") {
+    // Its pipe left its funnel campaign's plan (lib/sales-funnel-plan.ts): takes no new people, parked.
+    await db
+      .update(campaigns)
+      .set({ nextRunAt: new Date(Date.now() + PLAN_DRAINING_RECHECK_MS), updatedAt: new Date() })
+      .where(eq(campaigns.id, campaign.id));
+    return null;
   }
   const brandIds = campaign.brandIds ?? [];
   const brandIdCsv = brandIds.join(",");

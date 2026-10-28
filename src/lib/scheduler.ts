@@ -16,6 +16,7 @@ import { reportCampaignRecovery } from "./recovery-event.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import { backOffFailedDispatch } from "./run-failure-backoff.js";
 import { sourcesOffHold, SOURCES_OFF_RECHECK_MS } from "./sources-off-hold.js";
+import { PLAN_DRAINING_RECHECK_MS } from "./sales-funnel-plan-constants.js";
 import { reportTurnHolds } from "./turn-hold-event.js";
 import { fireDueTriggerEvents, nextPendingTriggerDueAt } from "./trigger-events.js";
 import { settleUnreportedDeliveries } from "./trigger-deliveries.js";
@@ -133,6 +134,8 @@ export async function reRunDueCampaigns(): Promise<number> {
       salesFunnelId: campaigns.salesFunnelId,
       // A unit running only on its funnel's head trigger is parked like an on-demand one (lib/sales-funnel-head-trigger.ts).
       runsOnTriggerId: campaigns.runsOnTriggerId,
+      // A unit whose pipe left its funnel campaign's plan (lib/sales-funnel-plan.ts): takes no new people.
+      planRole: campaigns.planRole,
     });
 
   if (dueCampaigns.length === 0) return 0;
@@ -154,6 +157,10 @@ export async function reRunDueCampaigns(): Promise<number> {
       // through the trigger path, never here. Nobody owed = parked until the next owed moment, no run.
       const wake = await reactiveWake(campaign, catalogue, now);
       if (!wake.run) parkUntil = wake.nextRunAt;
+    } else if (campaign.planRole === "draining") {
+      // Its pipe left its funnel campaign's plan (lib/sales-funnel-plan.ts): never stopped, takes NO new people. A
+      // proactive run would find new ones, so it is parked; the follow-ups already queued go out on the sender's side.
+      parkUntil = new Date(now.getTime() + PLAN_DRAINING_RECHECK_MS);
     }
     if (!parkUntil) {
       runnable.push(campaign);
