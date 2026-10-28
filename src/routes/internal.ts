@@ -440,6 +440,8 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       // The exact people this campaign acts for ([{email, leadId}]; null = whoever its pipes serve).
       people: targeting?.people ?? null,
       reactive,
+      // The linked WhatsApp line the customer stated for this campaign (null = crm-service's own pick).
+      whatsappSenderPhone: campaign.whatsappSenderPhone ?? null,
       searchParams,
     });
   } catch (error) {

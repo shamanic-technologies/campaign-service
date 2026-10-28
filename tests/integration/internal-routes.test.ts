@@ -422,6 +422,16 @@ describe("Pipeline routes", () => {
       expect(unknown.body.reactive).toBeNull();
     });
 
+    it("serves the WhatsApp line the campaign states, null when it states none (CAMPAIGN-WA-LINE-1028)", async () => {
+      const stated = await insertTestCampaign(orgId, { brandIds, whatsappSenderPhone: "+77776879632" });
+      const withLine = await request(app).post("/start-run").set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": stated.id })).expect(200);
+      expect(withLine.body.whatsappSenderPhone).toBe("+77776879632");
+
+      const plain = await insertTestCampaign(orgId, { brandIds });
+      const without = await request(app).post("/start-run").set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": plain.id })).expect(200);
+      expect(without.body.whatsappSenderPhone).toBeNull();
+    });
+
     it("should return persona/profile attribution for attributed campaigns", async () => {
       // Stored campaign attribution surfaced on /start-run. The renamed audience column
       // is NOT round-tripped here — /start-run returns the per-run freshly-selected

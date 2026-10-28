@@ -176,6 +176,10 @@
             "type": "string",
             "nullable": true
           },
+          "whatsappSenderPhone": {
+            "type": "string",
+            "nullable": true
+          },
           "createdAt": {
             "type": "string"
           },
@@ -221,6 +225,7 @@
           "notifyFrequency",
           "notifyChannel",
           "notifyDestination",
+          "whatsappSenderPhone",
           "createdAt",
           "updatedAt"
         ]
@@ -384,6 +389,12 @@
           },
           "notifyDestination": {
             "type": "string"
+          },
+          "whatsappSenderPhone": {
+            "type": "string",
+            "nullable": true,
+            "example": "+33612345678",
+            "description": "The linked WhatsApp line (its own number, E.164) this campaign sends its WhatsApp messages from. Omit = untouched; null = the brand's default line choice."
           }
         },
         "required": [
@@ -878,6 +889,12 @@
           },
           "notifyDestination": {
             "type": "string"
+          },
+          "whatsappSenderPhone": {
+            "type": "string",
+            "nullable": true,
+            "example": "+33612345678",
+            "description": "The linked WhatsApp line (its own number, E.164) this campaign sends its WhatsApp messages from. Omit = untouched; null = the brand's default line choice."
           }
         }
       },
@@ -1452,6 +1469,10 @@
             "type": "boolean",
             "nullable": true
           },
+          "whatsappSenderPhone": {
+            "type": "string",
+            "nullable": true
+          },
           "searchParams": {
             "type": "object",
             "nullable": true,
@@ -1479,6 +1500,7 @@
           "instruction",
           "people",
           "reactive",
+          "whatsappSenderPhone",
           "searchParams"
         ]
       },

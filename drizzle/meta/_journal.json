@@ -554,6 +554,13 @@
       "when": 1780300000000,
       "tag": "0078_trigger_delivery_channel_down",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1780400000000,
+      "tag": "0079_campaign_whatsapp_sender_phone",
+      "breakpoints": true
     }
   ]
 }
