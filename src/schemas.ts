@@ -1244,6 +1244,43 @@ export const StuckOccurrencesResponse = z.object({
   })),
 }).openapi("StuckOccurrencesResponse");
 
+export const TriggerHealthQuery = z.object({
+  days: z.coerce.number().int().min(1).max(90).optional().describe("Days of daily series to serve (default 14)."),
+});
+
+const TriggerHealthStatusEnum = z.enum(["ok", "red", "unknown"]);
+
+export const TriggerHealthResponse = z.object({
+  generatedAt: z.string(),
+  days: z.number().int(),
+  status: z.enum(["ok", "red"]).describe("red = at least one watched trigger is red right now."),
+  checkedAt: z.string().nullable().describe("When the latest hourly check ran; null = never."),
+  triggers: z.array(z.object({
+    triggerId: z.string(),
+    label: z.string(),
+    firedBy: z.string(),
+    watched: z.boolean().describe("A live campaign answers this trigger now; unwatched types keep their history only."),
+    watchedSince: z.string().nullable(),
+    status: TriggerHealthStatusEnum.nullable().describe("Current verdict; null when not watched."),
+    reason: z.enum(["never_fired", "facts_without_event", "facts_unreadable"]).nullable(),
+    sentence: z.string().nullable().describe("The verdict in one English sentence."),
+    liveCampaigns: z.number().int(),
+    factsWithoutEvent: z.number().int().nullable().describe("People lead-service saw reach the trigger's step with no event reaching us; null = not observable."),
+    missing: z.array(z.object({
+      orgId: z.string(),
+      brandId: z.string(),
+      people: z.number().int(),
+      firstReachedAt: z.string(),
+    })),
+    lastEventAt: z.string().nullable(),
+    byDay: z.array(z.object({
+      day: z.string(),
+      events: z.number().int().describe("Occurrences recorded that UTC day (by when the fact happened)."),
+      status: TriggerHealthStatusEnum.nullable().describe("Stored verdict of that day; null = not checked that day."),
+    })),
+  })),
+}).openapi("TriggerHealthResponse");
+
 // === SOURCE CAMPAIGNS (lib/source-campaigns.ts) ===
 
 export const SourceCampaignsQuery = z.object({

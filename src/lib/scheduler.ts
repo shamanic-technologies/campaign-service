@@ -19,7 +19,7 @@ import { sourcesOffHold, SOURCES_OFF_RECHECK_MS } from "./sources-off-hold.js";
 import { reportTurnHolds } from "./turn-hold-event.js";
 import { fireDueTriggerEvents, nextPendingTriggerDueAt } from "./trigger-events.js";
 import { settleUnreportedDeliveries } from "./trigger-deliveries.js";
-import { alertSilentTriggers } from "./trigger-silence.js";
+import { checkTriggerHealth } from "./trigger-health.js";
 import { replayChannelDownRefusals } from "./channel-down-replay.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
@@ -607,7 +607,7 @@ async function tick(): Promise<void> {
       await claimStuckCampaigns();
       await reRunDueCampaigns();
       // Planned trigger events that fell due (lib/trigger-events.ts), same On/Off and funding rules
-      // as an immediate one; then the hourly check that no coded trigger has gone silent.
+      // as an immediate one; then the hourly trigger health check (lib/trigger-health.ts: red on Monitoring, never an email).
       // A refusal that only meant "the channel was unavailable" is owed again (lib/channel-down-replay.ts); it runs
       // first so a replay due now fires in this very tick.
       await replayChannelDownRefusals().catch((err) => {
@@ -621,8 +621,8 @@ async function tick(): Promise<void> {
       await fireDueTriggerEvents().catch((err) => {
         console.error("[campaign-service] Due trigger events error:", err);
       });
-      await alertSilentTriggers().catch((err) => {
-        console.error("[campaign-service] Trigger silence sweep error:", err);
+      await checkTriggerHealth().catch((err) => {
+        console.error("[campaign-service] Trigger health check error:", err);
       });
     } catch (err) {
       console.error("[campaign-service] Scheduler tick error:", err);

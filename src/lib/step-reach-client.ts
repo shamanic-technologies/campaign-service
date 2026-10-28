@@ -20,6 +20,17 @@ export interface StepReacher {
   reachedAt: Date;
 }
 
+/**
+ * lead-service's named refusal for a step no store of its own sees per person (`step_not_observable`) or does not know
+ * (`unknown_step`): a fact about the step cannot be read there at all, which is never "nobody reached it".
+ */
+export class StepNotObservableError extends Error {
+  constructor(readonly step: string, readonly code: string) {
+    super(`lead-service cannot observe step "${step}" (${code})`);
+    this.name = "StepNotObservableError";
+  }
+}
+
 function leadServiceBase(): { url: string; apiKey: string } {
   const url = process.env.LEAD_SERVICE_URL;
   const apiKey = process.env.LEAD_SERVICE_API_KEY;
@@ -39,7 +50,14 @@ async function readStepReach(
     signal: AbortSignal.timeout(60_000),
   });
   if (!res.ok) {
-    const body = (await res.text().catch(() => "")).slice(0, 200);
+    const text = await res.text().catch(() => "");
+    const body = text.slice(0, 200);
+    if (res.status === 400) {
+      const code = (() => {
+        try { return (JSON.parse(text) as { error?: unknown }).error; } catch { return null; }
+      })();
+      if (code === "step_not_observable" || code === "unknown_step") throw new StepNotObservableError(query.step, code);
+    }
     throw new Error(`lead-service GET step-reached (${query.step}) failed: ${res.status}${body ? ` ${body}` : ""}`);
   }
   return res.json();

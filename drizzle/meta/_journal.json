@@ -561,6 +561,13 @@
       "when": 1780400000000,
       "tag": "0079_campaign_whatsapp_sender_phone",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1780500000000,
+      "tag": "0080_trigger_health_days",
+      "breakpoints": true
     }
   ]
 }
