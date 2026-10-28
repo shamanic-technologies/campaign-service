@@ -4,6 +4,7 @@ import { legIsReactive } from "../lib/leg-identity.js";
 import { settleTriggerDelivery } from "../lib/trigger-deliveries.js";
 import { wakeOccurrencesHeldBy } from "../lib/person-runs.js";
 import { readStuckOccurrences } from "../lib/stuck-occurrences.js";
+import { readTriggerHealth } from "../lib/trigger-health.js";
 import { targetingOfSalesFunnelCampaigns } from "../lib/sales-funnel-people-store.js";
 import { eq, and, sql, or, ne, isNotNull, gt, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -24,7 +25,7 @@ import {
   recordRunSuccess,
   type RecordedFailure,
 } from "../lib/run-failure-backoff.js";
-import { OpenOnDemandRunBody, StuckOccurrencesQuery, TriggerRanCountsQuery } from "../schemas.js";
+import { OpenOnDemandRunBody, StuckOccurrencesQuery, TriggerHealthQuery, TriggerRanCountsQuery } from "../schemas.js";
 import { AnsweringCampaignsBody, BrandTriggerOffersQuery, SettleWithdrawnBody, WithdrawTriggerEventBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventForPersonQuery, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import type { z } from "zod";
 import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
@@ -1265,6 +1266,21 @@ router.get("/internal/ops/stuck-occurrences", requireApiKey, validateQuery(Stuck
     res.json(await readStuckOccurrences(days ?? 14));
   } catch (error) {
     console.error("[campaign-service] stuck-occurrences read error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /internal/ops/trigger-health?days= — the dashboard v2 Monitoring trigger card (lib/trigger-health.ts,
+ * TRIGGER-SILENCE-NO-EMAIL-1028): red when a watched trigger never fired, or its fact happened and no event reached
+ * us. Replaces the `trigger_silent` staff email.
+ */
+router.get("/internal/ops/trigger-health", requireApiKey, validateQuery(TriggerHealthQuery), async (req, res) => {
+  try {
+    const { days } = TriggerHealthQuery.parse(req.query);
+    res.json(await readTriggerHealth(days ?? 14));
+  } catch (error) {
+    console.error("[campaign-service] trigger-health read error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

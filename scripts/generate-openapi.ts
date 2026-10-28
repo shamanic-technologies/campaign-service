@@ -39,6 +39,8 @@ import {
   RecurringStatusQuery,
   FailingCampaignsResponse,
   StuckOccurrencesQuery,
+  TriggerHealthQuery,
+  TriggerHealthResponse,
   StuckOccurrencesResponse,
   RecurringStatusResponse,
   TriggerForStepResponse,
@@ -1008,6 +1010,23 @@ registry.registerPath({
   request: { query: StuckOccurrencesQuery },
   responses: {
     200: { description: "Stuck occurrences and the daily series", content: { "application/json": { schema: StuckOccurrencesResponse } } },
+    400: { description: "Invalid days", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/ops/trigger-health",
+  tags: ["Internal"],
+  summary: "Is each watched trigger working? Current verdict + daily series (dashboard v2 Monitoring)",
+  description:
+    "Fleet-wide, staff. A trigger type is WATCHED while a live campaign answers it. It is red only on positive evidence: `never_fired` (watched 3+ days, not one occurrence ever recorded) or `facts_without_event` (lead-service recorded people reaching the trigger's own step on a brand with a live campaign behind it, over an hour ago and inside the last 3 days, and no occurrence of the trigger reached us on that brand since). A quiet trigger is ok. `unknown` = lead-service unreadable. The verdict is stored per UTC day by an hourly check; `byDay.events` is recomputed from the occurrence rows. Sends nothing: red on the Monitoring hub is the alert.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { query: TriggerHealthQuery },
+  responses: {
+    200: { description: "Trigger verdicts and their daily series", content: { "application/json": { schema: TriggerHealthResponse } } },
     400: { description: "Invalid days", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },

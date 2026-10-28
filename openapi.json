@@ -3522,6 +3522,172 @@
           "stuckOccurrences",
           "byDay"
         ]
+      },
+      "TriggerHealthResponse": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string"
+          },
+          "days": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "red"
+            ],
+            "description": "red = at least one watched trigger is red right now."
+          },
+          "checkedAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "When the latest hourly check ran; null = never."
+          },
+          "triggers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "triggerId": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "firedBy": {
+                  "type": "string"
+                },
+                "watched": {
+                  "type": "boolean",
+                  "description": "A live campaign answers this trigger now; unwatched types keep their history only."
+                },
+                "watchedSince": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "ok",
+                    "red",
+                    "unknown",
+                    null
+                  ],
+                  "description": "Current verdict; null when not watched."
+                },
+                "reason": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "never_fired",
+                    "facts_without_event",
+                    "facts_unreadable",
+                    null
+                  ]
+                },
+                "sentence": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "The verdict in one English sentence."
+                },
+                "liveCampaigns": {
+                  "type": "integer"
+                },
+                "factsWithoutEvent": {
+                  "type": "integer",
+                  "nullable": true,
+                  "description": "People lead-service saw reach the trigger's step with no event reaching us; null = not observable."
+                },
+                "missing": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "orgId": {
+                        "type": "string"
+                      },
+                      "brandId": {
+                        "type": "string"
+                      },
+                      "people": {
+                        "type": "integer"
+                      },
+                      "firstReachedAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "orgId",
+                      "brandId",
+                      "people",
+                      "firstReachedAt"
+                    ]
+                  }
+                },
+                "lastEventAt": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "byDay": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "day": {
+                        "type": "string"
+                      },
+                      "events": {
+                        "type": "integer",
+                        "description": "Occurrences recorded that UTC day (by when the fact happened)."
+                      },
+                      "status": {
+                        "type": "string",
+                        "nullable": true,
+                        "enum": [
+                          "ok",
+                          "red",
+                          "unknown",
+                          null
+                        ],
+                        "description": "Stored verdict of that day; null = not checked that day."
+                      }
+                    },
+                    "required": [
+                      "day",
+                      "events",
+                      "status"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "triggerId",
+                "label",
+                "firedBy",
+                "watched",
+                "watchedSince",
+                "status",
+                "reason",
+                "sentence",
+                "liveCampaigns",
+                "factsWithoutEvent",
+                "missing",
+                "lastEventAt",
+                "byDay"
+              ]
+            }
+          }
+        },
+        "required": [
+          "generatedAt",
+          "days",
+          "status",
+          "checkedAt",
+          "triggers"
+        ]
       }
     },
     "parameters": {}
@@ -7722,6 +7888,76 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StuckOccurrencesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid days",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/ops/trigger-health": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Is each watched trigger working? Current verdict + daily series (dashboard v2 Monitoring)",
+        "description": "Fleet-wide, staff. A trigger type is WATCHED while a live campaign answers it. It is red only on positive evidence: `never_fired` (watched 3+ days, not one occurrence ever recorded) or `facts_without_event` (lead-service recorded people reaching the trigger's own step on a brand with a live campaign behind it, over an hour ago and inside the last 3 days, and no occurrence of the trigger reached us on that brand since). A quiet trigger is ok. `unknown` = lead-service unreadable. The verdict is stored per UTC day by an hourly check; `byDay.events` is recomputed from the occurrence rows. Sends nothing: red on the Monitoring hub is the alert.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 90,
+              "description": "Days of daily series to serve (default 14)."
+            },
+            "required": false,
+            "description": "Days of daily series to serve (default 14).",
+            "name": "days",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trigger verdicts and their daily series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerHealthResponse"
                 }
               }
             }
