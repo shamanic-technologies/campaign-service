@@ -128,7 +128,9 @@ export const campaigns = pgTable(
     // the funnel-level campaign (`sales_funnel_campaigns.id`) that owns this row. A row naming them
     // is a UNIT: it runs like any campaign, but only its funnel campaign is run or paused, and its
     // money is the funnel's. NULL on both = a (leg x channel) campaign of the pre-funnel model,
-    // served and run exactly as before. Written once at birth, never moved.
+    // served and run exactly as before. Written at birth; moved ONLY when its funnel campaign follows its plan
+    // (lib/sales-funnel-plan.ts): then it is the funnel whose pipe and PLAY the unit runs (the plan's), while
+    // the money stays keyed on the funnel CAMPAIGN's own `sales_funnel_id` (billing's caps key).
     salesFunnelId: text("sales_funnel_id"),
     salesFunnelCampaignId: text("sales_funnel_campaign_id"),
 
@@ -137,6 +139,13 @@ export const campaigns = pgTable(
     // does not already answer. Never dispatched by the scheduler (parked like an on-demand unit), fired by that
     // trigger's events. Written once at birth from the funnel read; NULL = every unit before it, unchanged.
     runsOnTriggerId: text("runs_on_trigger_id"),
+
+    // FACTORY-P1-FOLLOW-PLAN (lib/sales-funnel-plan.ts, migration 0082): a unit of a funnel campaign that follows
+    // its plan and whose pipe LEFT the plan: 'draining' = its status is never moved by the plan (follow-ups go on),
+    // it answers the people it already owes (reactive pipes, trigger events) and takes NO new people (the
+    // scheduler and a person's start never dispatch it unless it answers a trigger). NULL = in the plan / a fixed
+    // funnel's unit (every unit before).
+    planRole: text("plan_role"),
 
     // Volume limit (optional, total leads across all runs)
     maxLeads: integer("max_leads"),
@@ -284,6 +293,15 @@ export const salesFunnelCampaigns = pgTable(
     // features-service's statement copied at birth (a funnel id never changes its head). NULL only until backfilled.
     mode: text("mode"),
     triggerId: text("trigger_id"),
+    // FACTORY-P1-FOLLOW-PLAN (migration 0082, lib/sales-funnel-plan.ts): the customer's switch. false = a FIXED
+    // funnel (every campaign before). true = it runs the pipes and plays of the plan features-service serves for it
+    // and follows each plan change. Data, never a per-brand rule.
+    followsPlan: boolean("follows_plan").notNull().default(false),
+    // The funnel it RUNS now when it follows its plan (the last plan applied); NULL = `sales_funnel_id` (never
+    // followed one). `sales_funnel_id` never moves: billing's caps are keyed on it.
+    runningSalesFunnelId: text("running_sales_funnel_id"),
+    // The latest plan check ({state, detail, checkedAt, planComputedAt?}); a state other than ok/applied = red.
+    planCheck: jsonb("plan_check"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -302,6 +320,37 @@ export const salesFunnelCampaigns = pgTable(
 
 export type SalesFunnelCampaign = typeof salesFunnelCampaigns.$inferSelect;
 export type NewSalesFunnelCampaign = typeof salesFunnelCampaigns.$inferInsert;
+
+// Every plan change APPLIED to a funnel campaign that follows its plan (FACTORY-P1-FOLLOW-PLAN, migration 0082):
+// when, from which funnel to which, what each unit did. Append-only: the dashboard's history.
+export const salesFunnelPlanChanges = pgTable(
+  "sales_funnel_plan_changes",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    salesFunnelCampaignId: text("sales_funnel_campaign_id").notNull(),
+    orgId: text("org_id").notNull(),
+    fromSalesFunnelId: text("from_sales_funnel_id").notNull(),
+    toSalesFunnelId: text("to_sales_funnel_id").notNull(),
+    // When features-service computed the plan applied.
+    planComputedAt: timestamp("plan_computed_at", { withTimezone: true }),
+    // [{campaignId, pipeId, action: born|kept|draining}]
+    units: jsonb("units").notNull(),
+    appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_sales_funnel_plan_changes_campaign").on(table.salesFunnelCampaignId, table.appliedAt)],
+);
+
+export type SalesFunnelPlanChange = typeof salesFunnelPlanChanges.$inferSelect;
+
+// The plan follower's day on Monitoring (migration 0082): campaigns following, red, changes applied; rewritten
+// by every pass of the day.
+export const planFollowingDays = pgTable("plan_following_days", {
+  day: date("day").primaryKey(),
+  following: integer("following").notNull(),
+  red: integer("red").notNull(),
+  changesApplied: integer("changes_applied").notNull(),
+  checkedAt: timestamp("checked_at", { withTimezone: true }).notNull(),
+});
 
 // Brand pause transition log — a CLOSED record of the flag era.
 //

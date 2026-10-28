@@ -75,3 +75,11 @@ process.env.BRAND_SERVICE_API_KEY = "test-brand-key";
 
 beforeAll(() => console.log("Test suite starting..."));
 afterAll(() => console.log("Test suite complete."));
+
+// WHICH funnel a unit's caps are keyed on (src/lib/sales-funnel-cap-key.ts, FACTORY-P1-FOLLOW-PLAN) is read from the
+// funnel campaign's row. Tests that mock the database read it as the unit's own funnel (every fixed funnel's answer);
+// the plan tests restore the actual via vi.importActual.
+vi.mock("../src/lib/sales-funnel-cap-key.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/sales-funnel-cap-key.js")>();
+  return { ...original, capSalesFunnelIdOf: vi.fn(async (unitSalesFunnelId: string) => unitSalesFunnelId) };
+});

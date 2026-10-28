@@ -3,6 +3,7 @@ import { serializeGithubIssue, type GithubIssueCheck } from "./github-issue-trig
 import { z } from "zod";
 import { legIdentity, sameLeg } from "./leg-identity.js";
 import { storedPeople } from "./sales-funnel-people.js";
+import { capSalesFunnelIdOf } from "./sales-funnel-cap-key.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS — the rules (owner 2026-10-10, "chat first").
@@ -167,6 +168,15 @@ export async function fetchSalesFunnelCaps(
   },
   nowMs: number = Date.now(),
 ): Promise<CapsRead> {
+  // The caps are keyed on the funnel CAMPAIGN's own funnel (lib/sales-funnel-cap-key.ts): a unit of a campaign that
+  // follows its plan runs another funnel's pipe, its money stays the campaign's.
+  let capFunnelId: string;
+  try {
+    capFunnelId = await capSalesFunnelIdOf(scope.salesFunnelId, scope.salesFunnelCampaignId, nowMs);
+  } catch (err) {
+    return { ok: false, detail: `funnel campaign ${scope.salesFunnelCampaignId} unreadable: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  scope = { ...scope, salesFunnelId: capFunnelId };
   const key = `${scope.orgId}|${scope.brandId}|${scope.offerId}|${scope.salesFunnelId}|${scope.salesFunnelCampaignId ?? ""}`;
   const hit = capsCache.get(key);
   if (hit && nowMs - hit.at < CAPS_READ_TTL_MS) return hit.read;
@@ -531,6 +541,15 @@ export function orderForSharedPipes<
   });
 }
 
+/** The latest plan check of a campaign following its plan (lib/sales-funnel-plan.ts `PlanCheck`). */
+interface PlanCheckView {
+  state: string;
+  detail: string;
+  checkedAt: string;
+  planSalesFunnelId?: string;
+  planComputedAt?: string;
+}
+
 /** The served shape of a funnel campaign (SalesFunnelCampaignSchema). */
 export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Campaign[]) {
   return {
@@ -553,6 +572,9 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
     briefUpdatedByUserId: row.briefUpdatedByUserId ?? null,
     mode: (row.mode ?? null) as "proactive" | "reactive" | null,
     triggerId: row.triggerId ?? null,
+    followsPlan: row.followsPlan,
+    runningSalesFunnelId: row.runningSalesFunnelId ?? row.salesFunnelId,
+    planCheck: (row.planCheck ?? null) as PlanCheckView | null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     units: units.map((u) => ({
@@ -563,6 +585,8 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
       status: u.status,
       workflowSlug: u.workflowSlug,
       name: u.name,
+      salesFunnelId: u.salesFunnelId ?? row.salesFunnelId,
+      planRole: (u.planRole ?? null) as "draining" | null,
     })),
   };
 }

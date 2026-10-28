@@ -660,8 +660,10 @@ describe('No Legacy Patterns - CRITICAL', () => {
       .map(rel)
       .filter((r) => r !== 'lib/startable-pair.ts')
       .sort();
-    // A SALES FUNNEL launch (routes/sales-funnel-campaigns.ts) is a person's start too.
-    expect(startReaders).toEqual(['routes/campaigns.ts', 'routes/sales-funnel-campaigns.ts']);
+    // A SALES FUNNEL launch (routes/sales-funnel-campaigns.ts) is a person's start too. The plan follower
+    // (lib/sales-funnel-plan.ts, FACTORY-P1-FOLLOW-PLAN) resolves its plan's funnel like a launch, ONLY for a campaign
+    // a person switched to follow its plan and started: never on money, never a status move (births in its status).
+    expect(startReaders).toEqual(['lib/sales-funnel-plan.ts', 'routes/campaigns.ts', 'routes/sales-funnel-campaigns.ts']);
   });
 
   it('should NOT take a workflow, a name or a ceiling from the customer starting a funded pair', () => {

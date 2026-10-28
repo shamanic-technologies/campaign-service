@@ -567,6 +567,38 @@
             "type": "string",
             "nullable": true
           },
+          "followsPlan": {
+            "type": "boolean"
+          },
+          "runningSalesFunnelId": {
+            "type": "string"
+          },
+          "planCheck": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "state": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string"
+              },
+              "planSalesFunnelId": {
+                "type": "string"
+              },
+              "planComputedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "detail",
+              "checkedAt"
+            ]
+          },
           "createdAt": {
             "type": "string"
           },
@@ -600,6 +632,9 @@
           "briefUpdatedByUserId",
           "mode",
           "triggerId",
+          "followsPlan",
+          "runningSalesFunnelId",
+          "planCheck",
           "createdAt",
           "updatedAt",
           "units"
@@ -649,6 +684,17 @@
           },
           "name": {
             "type": "string"
+          },
+          "salesFunnelId": {
+            "type": "string"
+          },
+          "planRole": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "draining",
+              null
+            ]
           }
         },
         "required": [
@@ -658,7 +704,9 @@
           "legKey",
           "status",
           "workflowSlug",
-          "name"
+          "name",
+          "salesFunnelId",
+          "planRole"
         ]
       },
       "CreateSalesFunnelCampaignBody": {
@@ -714,6 +762,9 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 8000
+          },
+          "followsPlan": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -839,9 +890,63 @@
             "nullable": true,
             "minLength": 1,
             "maxLength": 8000
+          },
+          "followsPlan": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
+      },
+      "SalesFunnelPlanChange": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "fromSalesFunnelId": {
+            "type": "string"
+          },
+          "toSalesFunnelId": {
+            "type": "string"
+          },
+          "planComputedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "appliedAt": {
+            "type": "string"
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "campaignId": {
+                  "type": "string"
+                },
+                "pipeId": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "campaignId",
+                "pipeId",
+                "action"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "fromSalesFunnelId",
+          "toSalesFunnelId",
+          "planComputedAt",
+          "appliedAt",
+          "units"
+        ]
       },
       "UpdateCampaignBody": {
         "type": "object",
@@ -5200,8 +5305,8 @@
         "tags": [
           "Sales funnel campaigns"
         ],
-        "summary": "Run or pause the whole sales funnel, reword its instruction, restate its target or brief",
-        "description": "Body {status?: activate | stop, instruction?: string | null, target?: string, brief?: string | null} (at least one; 400 otherwise). `target` = the outcome it aims at (a catalogue step key; unknown = 400 `unknown_target_step`, catalogue unreadable = 502 `catalogue_unavailable`). `brief` = its strategy in plain language (null clears; a changed brief stamps `briefUpdatedAt` + `briefUpdatedByUserId` = x-user-id). Neither changes what runs. `instruction` alone rewords (null clears) what every next run of its units carries to the workflow, status untouched. `stop` = cancel: no event dispatches a stopped campaign. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
+        "summary": "Run or pause the whole sales funnel, reword its instruction, restate its target or brief, switch it to follow its plan",
+        "description": "Body {status?: activate | stop, instruction?: string | null, target?: string, brief?: string | null, followsPlan?: boolean} (at least one; 400 otherwise). `followsPlan` true = it runs the pipes and plays of the plan features-service computes for it (its best line to its target) and follows every plan change (checked at once, then every 10 min): new pipes get a unit, pipes leaving the plan stay ON but take no new people (follow-ups go on), a plan whose spending pipes its budget/volume caps do not measure is not applied (red `plan_outside_caps`); false = the funnel it runs now stays fixed. `salesFunnelId` never moves (its caps key); `runningSalesFunnelId` = what it runs. `target` = the outcome it aims at (a catalogue step key; unknown = 400 `unknown_target_step`, catalogue unreadable = 502 `catalogue_unavailable`). `brief` = its strategy in plain language (null clears; a changed brief stamps `briefUpdatedAt` + `briefUpdatedByUserId` = x-user-id). Neither changes what runs. `instruction` alone rewords (null clears) what every next run of its units carries to the workflow, status untouched. `stop` = cancel: no event dispatches a stopped campaign. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
         "security": [
           {
             "apiKeyAuth": []
@@ -5399,6 +5504,263 @@
                     "error",
                     "reason"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sales-funnel-campaigns/{id}/plan-changes": {
+      "get": {
+        "tags": [
+          "Sales funnel campaigns"
+        ],
+        "summary": "Every plan change applied to a funnel campaign that follows its plan (newest first)",
+        "description": "Header x-org-id. FACTORY-P1-FOLLOW-PLAN. Each change: when, from which funnel to which, and what each unit did (born on a new pipe, kept on the plan's play, draining = left the plan, still answering the people it owes, no new people). Also the switch, the running funnel and the latest plan check.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "History",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "salesFunnelCampaignId": {
+                      "type": "string"
+                    },
+                    "followsPlan": {
+                      "type": "boolean"
+                    },
+                    "salesFunnelId": {
+                      "type": "string"
+                    },
+                    "runningSalesFunnelId": {
+                      "type": "string"
+                    },
+                    "planCheck": {
+                      "nullable": true
+                    },
+                    "changes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SalesFunnelPlanChange"
+                      }
+                    }
+                  },
+                  "required": [
+                    "salesFunnelCampaignId",
+                    "followsPlan",
+                    "salesFunnelId",
+                    "runningSalesFunnelId",
+                    "changes"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/sales-funnel-campaigns/plan-check": {
+      "post": {
+        "tags": [
+          "Sales funnel campaigns"
+        ],
+        "summary": "Dry run (what following its plan would do) or one plan follower pass now (staff)",
+        "description": "FACTORY-P1-FOLLOW-PLAN. Body {orgId?, brandId?, salesFunnelCampaignId?, apply?: boolean (default false)}. apply false: for every ONGOING funnel campaign of the scope (orgId required), followed or not, what its plan would change (pipes before/after, each unit's action, the verdict state); nothing written. apply true: one pass over every campaign following its plan, fleet-wide (same as the 10-min loop).",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "orgId": {
+                    "type": "string"
+                  },
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "salesFunnelCampaignId": {
+                    "type": "string"
+                  },
+                  "apply": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dry run per campaign, or the pass counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "apply": {
+                      "type": "boolean"
+                    },
+                    "pass": {
+                      "nullable": true
+                    },
+                    "campaigns": {
+                      "type": "array",
+                      "items": {
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "required": [
+                    "apply"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId missing on a dry run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/ops/plan-following": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "The plan follower on dashboard v2 Monitoring: campaigns following their plan that cannot, plus a daily series",
+        "description": "Staff. `status` red when a campaign following its plan is on no_plan | plan_unreadable | plan_not_ready | plan_not_runnable | plan_outside_caps | apply_failed (it keeps running what it ran), or the follower has not checked for 30 min. `byDay`: campaigns following, red, plan changes applied. Never an email.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "days",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verdict, red list, daily series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "red"
+                      ]
+                    },
+                    "staleReason": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "following": {
+                      "type": "number"
+                    },
+                    "red": {
+                      "type": "array",
+                      "items": {
+                        "nullable": true
+                      }
+                    },
+                    "byDay": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "following": {
+                            "type": "number"
+                          },
+                          "red": {
+                            "type": "number"
+                          },
+                          "changesApplied": {
+                            "type": "number"
+                          },
+                          "checkedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "following",
+                          "red",
+                          "changesApplied",
+                          "checkedAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "staleReason",
+                    "following",
+                    "red",
+                    "byDay"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid days",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
