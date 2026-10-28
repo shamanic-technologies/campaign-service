@@ -17,6 +17,7 @@ import brandsRoutes from "./routes/brands.js";
 import statsRoutes from "./routes/stats.js";
 import internalRoutes from "./routes/internal.js";
 import { startScheduler, wakeScheduler } from "./lib/scheduler.js";
+import { backfillTargetsAtBoot } from "./lib/sales-funnel-target.js";
 import { startTriggerDetectors } from "./lib/trigger-detectors.js";
 import { registerExtendAudienceTemplate } from "./lib/transactional-email.js";
 import { logLegacyOutboundLegKeys } from "./lib/legacy-leg-key-log.js";
@@ -82,6 +83,8 @@ if (process.env.NODE_ENV !== "test") {
         // Register lifecycle email templates AFTER port-bind, fire-and-forget: a slow or
         // down transactional-email-service must never delay boot or fail the deploy.
         void registerExtendAudienceTemplate();
+        // Funnel campaigns born before targets existed get theirs (lib/sales-funnel-target.ts), never awaited.
+        void backfillTargetsAtBoot();
       });
     })
     .catch((err) => {

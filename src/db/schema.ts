@@ -272,6 +272,18 @@ export const salesFunnelCampaigns = pgTable(
     githubIssue: text("github_issue"),
     // The detector's latest verdict on that issue ({state, detail, checkedAt, ...}); a read, decides nothing.
     githubIssueCheck: jsonb("github_issue_check"),
+    // The OUTCOME it targets (migration 0081, lib/sales-funnel-target.ts): a catalogue step key, features-service's
+    // vocabulary, carried verbatim. Born = the funnel's last step; settable by the org. NULL only until backfilled.
+    target: text("target"),
+    // The strategy in plain language a judge reads to pick plays (NOT `instruction`, the writer's words). NULL = none.
+    brief: text("brief"),
+    // When and by whom the brief was last edited (a judge re-judges after it). NULL = never stated.
+    briefUpdatedAt: timestamp("brief_updated_at", { withTimezone: true }),
+    briefUpdatedByUserId: text("brief_updated_by_user_id"),
+    // What the funnel starts from ('proactive' = Start | 'reactive' = a trigger) and its head trigger id,
+    // features-service's statement copied at birth (a funnel id never changes its head). NULL only until backfilled.
+    mode: text("mode"),
+    triggerId: text("trigger_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

@@ -419,6 +419,12 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
   instruction?: string | null;
   /** The GitHub issue it waits on (`owner/repo#n`, lib/github-issue-trigger.ts); null/absent = none. */
   githubIssue?: string | null;
+  /** The outcome it targets, its brief (+ who stated it) and what it starts from (lib/sales-funnel-target.ts). */
+  target?: string | null;
+  brief?: string | null;
+  briefUpdatedByUserId?: string | null;
+  mode?: "proactive" | "reactive" | null;
+  triggerId?: string | null;
   units: SalesFunnelUnitBirth[];
   onUnitStarted?: OnUnitStarted;
 }): Promise<{ salesFunnelCampaign: SalesFunnelCampaign; units: CampaignRow[] }> {
@@ -441,6 +447,12 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
         peopleKey: input.peopleKey ?? "",
         instruction: input.instruction ?? null,
         githubIssue: input.githubIssue ?? null,
+        target: input.target ?? null,
+        brief: input.brief ?? null,
+        briefUpdatedAt: input.brief ? now : null,
+        briefUpdatedByUserId: input.brief ? (input.briefUpdatedByUserId ?? null) : null,
+        mode: input.mode ?? null,
+        triggerId: input.triggerId ?? null,
         createdAt: now,
         updatedAt: now,
       })

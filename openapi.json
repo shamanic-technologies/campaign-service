@@ -538,6 +538,35 @@
               "checkedAt"
             ]
           },
+          "target": {
+            "type": "string",
+            "nullable": true
+          },
+          "brief": {
+            "type": "string",
+            "nullable": true
+          },
+          "briefUpdatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "briefUpdatedByUserId": {
+            "type": "string",
+            "nullable": true
+          },
+          "mode": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "proactive",
+              "reactive",
+              null
+            ]
+          },
+          "triggerId": {
+            "type": "string",
+            "nullable": true
+          },
           "createdAt": {
             "type": "string"
           },
@@ -565,6 +594,12 @@
           "instruction",
           "githubIssue",
           "githubIssueCheck",
+          "target",
+          "brief",
+          "briefUpdatedAt",
+          "briefUpdatedByUserId",
+          "mode",
+          "triggerId",
           "createdAt",
           "updatedAt",
           "units"
@@ -669,6 +704,16 @@
           },
           "githubIssue": {
             "$ref": "#/components/schemas/GithubIssueRef"
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "brief": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
           }
         },
         "required": [
@@ -783,6 +828,17 @@
             "nullable": true,
             "minLength": 1,
             "maxLength": 4000
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "brief": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 8000
           }
         },
         "additionalProperties": false
@@ -4348,7 +4404,7 @@
           "Sales funnel campaigns"
         ],
         "summary": "Launch a sales funnel as one campaign (brand x offer x sales funnel)",
-        "description": "SALES FUNNEL CAMPAIGNS (owner 2026-10-10, chat first). A campaign is brand x offer x SALES FUNNEL (features-service's sales funnel id, `GET /internal/catalogue/sales-funnels` rows[].id, its combinationKey, carried verbatim). It owns one UNIT per pipe of the funnel (`<channel slug>|<leg key>`): an ordinary campaign row stating `salesFunnelId` + `salesFunnelCampaignId`, run independently like every campaign (proactive pipes prospect, reactive pipes answer). Uniqueness is brand x offer x sales funnel x channel x leg: a pipe two funnels share is two units, one per funnel. A sourcing pipe (Start -> Lead found, a lead-source origin) is a SOURCE campaign unit: no workflow, its origin is ON for the offer while the funnel runs. A funnel with no sourcing pipe gets the offer's default lead source on its start, as every outreach start does. RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH /campaigns/{id} {status} on a unit moves its WHOLE funnel campaign (a lead source unit keeps its own On/Off); its identity fields and DELETE are refused with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. MONEY: a unit's money is its funnel's caps at billing (GET /internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps: max budget + max volume, one-off / daily / weekly / monthly), never a per-(offer, leg, channel) ceiling or the brand pot. No max budget stated = every unit held unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`). Either cap `reached` = EVERY pipe of the funnel, reactive included, stops (owner 2026-10-10: always respect the user budget; gate-check `Sales funnel max budget reached` / `Sales funnel max volume reached`, step trigger skip `sales_funnel_cap`). A consumption billing cannot measure holds every pipe (fail-closed, logged). Caps never change a status. Billing is not signalled per unit (no plan money moves). Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had. NAMED PEOPLE + INSTRUCTION (2026-10-11, general to any funnel campaign): optional `people` [{email}] = the exact people it acts for (canonical lowercased; part of its identity: the same funnel naming another person is ANOTHER campaign, the same people again = handed back). A campaign naming people runs only reactive pipes (400 `people_need_reactive_funnel` naming the prospecting pipes, nothing written). When an event its pipe answers fires (trigger-for-step, POST /internal/trigger-events, delay/poll detectors), each named person is made DUE now on that unit's own lead-service follow-up queue (schedule-by-email) once the funnel's money allows a run, then the unit is dispatched; the workflow claims exactly them, once. Skips (trigger event detail): `event_names_another_person` (the event names a lead it does not name), `person_not_filed` (lead-service holds no row for the person on the unit), `ambiguous_person`, `followup_unavailable`. At birth (and on a hand-back while someone is unfiled) each person is FILED as a lead of the brand on every unit with a workflow (lead-service); `people[].leadId` carries lead-service's id and the answer's `filing` [{email, campaignId, outcome: filed|already_filed|person_not_known|ambiguous_person|campaign_has_no_brand|filing_unavailable, leadId}] says what happened (the campaign is born either way; a person not filed is filed again when an event needs them). Campaigns naming people are never rationed against each other on a shared pipe. Optional `instruction` (<= 4000 chars) = free text every run of its units carries to the workflow: /start-run answers it top-level (`instruction`, plus `people`), read at each run, so an edit is used by the next run. A stated instruction on a hand-back rewords it. WAITING ON A GITHUB ISSUE (2026-10-12, general): optional `githubIssue` {repo: \"owner/name\", number} = the issue this campaign waits on (canonical lowercased; part of its identity: the same funnel + people waiting on another issue is ANOTHER campaign, the same issue again = handed back). Its units answering a trigger of kind `github_issue_in_prod` (features-service `/public/channels` triggers[].kind) run ONCE, when that issue is IN PROD: closed as completed by a pull request merged into the repo's default branch (or a closing commit on it), AND every deploy target of the repo on the box serving a commit containing that merge. Open, closed as not planned, merged but not deployed = nothing sent. The campaign's `githubIssueCheck` {state: open | closed_not_completed | closed_without_merge | merged_not_deployed | in_prod | not_served_by_box | github_unreadable | served_unreadable, detail, checkedAt, mergeSha?, mergedBy?, served?} is the detector's latest verdict (every 5 min while ongoing; frozen once fired). The fire is one trigger event (POST-free: written by the detector, `recordedVia` github_issue_detector, read on GET /internal/offers/{offerId}/trigger-events) that dispatches ONLY this campaign's units (named people made due first); the issue rides /execute as `trigger.item` {githubIssue, mergeSha, mergedBy, served}. Any other event reaching a unit waiting on an issue is skipped `event_names_another_issue`. 400 `invalid_github_issue`, 400 `github_issue_needs_github_trigger` (no pipe of the funnel answers such a trigger: it would wait forever; nothing written), 502 `catalogue_unavailable`. Cancel = PATCH {status: stop} (a stopped campaign is not checked). Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. OFFER STEPS GUARD (owner 2026-10-12): a NEW funnel campaign is refused when its offer has STATED the steps its business has (brand-service GET /orgs/brands/{brandId}/offers/{offerId}/steps, `stated: true`) and the funnel goes through a step not in that list (Start, `lead_found` and `paid_client` always count as present; the funnel's steps are the catalogue's `legs[].fromStep/toStep` of its legs): 409 `offer_lacks_steps` with `missingSteps` (step keys, funnel order) + `offerSteps` (the stated list), nothing written; the caller asks the client, adds the step (PUT .../steps/{stepKey}) and retries. An offer that never stated its steps is unchanged. A funnel campaign that already exists is handed back as before (never re-checked). PLAYS (PLAY-SEED-1014): a pipe id the funnel names may be a PLAY (features-service: `<pipe id>~<strategy id>`, or a bare pipe with a default strategy); each unit is born on the channel's newest active workflow its play ALLOWS (never one in the play's `excludedWorkflowDynastySlugs`), so `units[].workflowSlug` never names a workflow the play rules out. A play allowing NO workflow (`allowedActiveWorkflowCount: 0`) refuses the launch, stopped or ongoing, nothing written: 409 `play_allows_no_workflow` + `pipeId` (the play) + `notRunnableReason`/`notRunnableDetail` (features-service's reason verbatim: `judging_pending` = Jev is still judging the strategy's tactics, `judging_failing` = Jev is failing to judge, retried every sweep so it resumes by itself, `no_workflow_follows_strategy` = a workflow following the strategy must be built; null when features-service served none). Retry the launch once the play's `runnable` is true. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | leg_without_channel (a leg of the funnel names no channel: owner 2026-10-11, a human leg is a \"Your team\" channel) | pipe_not_runnable | people_need_reactive_funnel | invalid_github_issue | github_issue_needs_github_trigger | offer_not_found (the offer is not on this brand); 409 no_workflow | play_allows_no_workflow | payment_declined | no_payment_method | offer_lacks_steps; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable | offer_steps_unavailable (the offer's steps could not be read: never created on a guess) | sales_funnel_steps_unknown (a leg of the funnel is not in the channel catalogue).",
+        "description": "SALES FUNNEL CAMPAIGNS (owner 2026-10-10, chat first). A campaign is brand x offer x SALES FUNNEL (features-service's sales funnel id, `GET /internal/catalogue/sales-funnels` rows[].id, its combinationKey, carried verbatim). It owns one UNIT per pipe of the funnel (`<channel slug>|<leg key>`): an ordinary campaign row stating `salesFunnelId` + `salesFunnelCampaignId`, run independently like every campaign (proactive pipes prospect, reactive pipes answer). Uniqueness is brand x offer x sales funnel x channel x leg: a pipe two funnels share is two units, one per funnel. A sourcing pipe (Start -> Lead found, a lead-source origin) is a SOURCE campaign unit: no workflow, its origin is ON for the offer while the funnel runs. A funnel with no sourcing pipe gets the offer's default lead source on its start, as every outreach start does. RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH /campaigns/{id} {status} on a unit moves its WHOLE funnel campaign (a lead source unit keeps its own On/Off); its identity fields and DELETE are refused with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. MONEY: a unit's money is its funnel's caps at billing (GET /internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps: max budget + max volume, one-off / daily / weekly / monthly), never a per-(offer, leg, channel) ceiling or the brand pot. No max budget stated = every unit held unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`). Either cap `reached` = EVERY pipe of the funnel, reactive included, stops (owner 2026-10-10: always respect the user budget; gate-check `Sales funnel max budget reached` / `Sales funnel max volume reached`, step trigger skip `sales_funnel_cap`). A consumption billing cannot measure holds every pipe (fail-closed, logged). Caps never change a status. Billing is not signalled per unit (no plan money moves). TARGET + BRIEF (FACTORY-P1-CAMPAIGN-TARGET-BRIEF, 2026-10-28): every funnel campaign serves `target` (the OUTCOME it aims at: a catalogue step key, features-service's vocabulary carried verbatim, e.g. `positive_reply`, `meeting_booked`, `paid_client`; born = its funnel's last step, existing campaigns backfilled the same way), `brief` (its strategy in plain language, e.g. \"Cold email only, never write to someone who asked to stop, test for 30 days\", read by the judge that picks plays; NOT `instruction`, which the writer's messages follow) + `briefUpdatedAt`/`briefUpdatedByUserId` (every edit dated and attributed), and `mode` (proactive = starts from Start | reactive = starts from a trigger) + `triggerId` (features-service's statement of the funnel's head). Set `target`/`brief` on POST or PATCH; an unknown target = 400 `unknown_target_step`, catalogue unreadable = 502 `catalogue_unavailable`. Stating them changes nothing that runs, sends or spends. Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had. NAMED PEOPLE + INSTRUCTION (2026-10-11, general to any funnel campaign): optional `people` [{email}] = the exact people it acts for (canonical lowercased; part of its identity: the same funnel naming another person is ANOTHER campaign, the same people again = handed back). A campaign naming people runs only reactive pipes (400 `people_need_reactive_funnel` naming the prospecting pipes, nothing written). When an event its pipe answers fires (trigger-for-step, POST /internal/trigger-events, delay/poll detectors), each named person is made DUE now on that unit's own lead-service follow-up queue (schedule-by-email) once the funnel's money allows a run, then the unit is dispatched; the workflow claims exactly them, once. Skips (trigger event detail): `event_names_another_person` (the event names a lead it does not name), `person_not_filed` (lead-service holds no row for the person on the unit), `ambiguous_person`, `followup_unavailable`. At birth (and on a hand-back while someone is unfiled) each person is FILED as a lead of the brand on every unit with a workflow (lead-service); `people[].leadId` carries lead-service's id and the answer's `filing` [{email, campaignId, outcome: filed|already_filed|person_not_known|ambiguous_person|campaign_has_no_brand|filing_unavailable, leadId}] says what happened (the campaign is born either way; a person not filed is filed again when an event needs them). Campaigns naming people are never rationed against each other on a shared pipe. Optional `instruction` (<= 4000 chars) = free text every run of its units carries to the workflow: /start-run answers it top-level (`instruction`, plus `people`), read at each run, so an edit is used by the next run. A stated instruction on a hand-back rewords it. WAITING ON A GITHUB ISSUE (2026-10-12, general): optional `githubIssue` {repo: \"owner/name\", number} = the issue this campaign waits on (canonical lowercased; part of its identity: the same funnel + people waiting on another issue is ANOTHER campaign, the same issue again = handed back). Its units answering a trigger of kind `github_issue_in_prod` (features-service `/public/channels` triggers[].kind) run ONCE, when that issue is IN PROD: closed as completed by a pull request merged into the repo's default branch (or a closing commit on it), AND every deploy target of the repo on the box serving a commit containing that merge. Open, closed as not planned, merged but not deployed = nothing sent. The campaign's `githubIssueCheck` {state: open | closed_not_completed | closed_without_merge | merged_not_deployed | in_prod | not_served_by_box | github_unreadable | served_unreadable, detail, checkedAt, mergeSha?, mergedBy?, served?} is the detector's latest verdict (every 5 min while ongoing; frozen once fired). The fire is one trigger event (POST-free: written by the detector, `recordedVia` github_issue_detector, read on GET /internal/offers/{offerId}/trigger-events) that dispatches ONLY this campaign's units (named people made due first); the issue rides /execute as `trigger.item` {githubIssue, mergeSha, mergedBy, served}. Any other event reaching a unit waiting on an issue is skipped `event_names_another_issue`. 400 `invalid_github_issue`, 400 `github_issue_needs_github_trigger` (no pipe of the funnel answers such a trigger: it would wait forever; nothing written), 502 `catalogue_unavailable`. Cancel = PATCH {status: stop} (a stopped campaign is not checked). Headers: x-org-id, x-user-id, x-run-id (required). `status` is REQUIRED: `stopped` creates the funnel campaign and every unit switched off; `ongoing` launches it (payment hold refusal first, like every start). A funnel campaign that exists is never created again: 200 hands it back (`created: false`), started when `ongoing` was asked and it was stopped (`started: true`), untouched otherwise. OFFER STEPS GUARD (owner 2026-10-12): a NEW funnel campaign is refused when its offer has STATED the steps its business has (brand-service GET /orgs/brands/{brandId}/offers/{offerId}/steps, `stated: true`) and the funnel goes through a step not in that list (Start, `lead_found` and `paid_client` always count as present; the funnel's steps are the catalogue's `legs[].fromStep/toStep` of its legs): 409 `offer_lacks_steps` with `missingSteps` (step keys, funnel order) + `offerSteps` (the stated list), nothing written; the caller asks the client, adds the step (PUT .../steps/{stepKey}) and retries. An offer that never stated its steps is unchanged. A funnel campaign that already exists is handed back as before (never re-checked). PLAYS (PLAY-SEED-1014): a pipe id the funnel names may be a PLAY (features-service: `<pipe id>~<strategy id>`, or a bare pipe with a default strategy); each unit is born on the channel's newest active workflow its play ALLOWS (never one in the play's `excludedWorkflowDynastySlugs`), so `units[].workflowSlug` never names a workflow the play rules out. A play allowing NO workflow (`allowedActiveWorkflowCount: 0`) refuses the launch, stopped or ongoing, nothing written: 409 `play_allows_no_workflow` + `pipeId` (the play) + `notRunnableReason`/`notRunnableDetail` (features-service's reason verbatim: `judging_pending` = Jev is still judging the strategy's tactics, `judging_failing` = Jev is failing to judge, retried every sweep so it resumes by itself, `no_workflow_follows_strategy` = a workflow following the strategy must be built; null when features-service served none). Retry the launch once the play's `runnable` is true. Refusals (`error` customer-facing English, `reason` code): 400 unknown_sales_funnel | no_pipe | leg_without_channel (a leg of the funnel names no channel: owner 2026-10-11, a human leg is a \"Your team\" channel) | pipe_not_runnable | people_need_reactive_funnel | invalid_github_issue | github_issue_needs_github_trigger | offer_not_found (the offer is not on this brand); 409 no_workflow | play_allows_no_workflow | payment_declined | no_payment_method | offer_lacks_steps; 502 catalogue_unavailable | workflow_unavailable | billing_unavailable | offer_steps_unavailable (the offer's steps could not be read: never created on a guess) | sales_funnel_steps_unknown (a leg of the funnel is not in the channel catalogue).",
         "security": [
           {
             "apiKeyAuth": []
@@ -4545,7 +4601,7 @@
           "Sales funnel campaigns"
         ],
         "summary": "List the org's sales funnel campaigns, each with its units",
-        "description": "SALES FUNNEL CAMPAIGNS (owner 2026-10-10, chat first). A campaign is brand x offer x SALES FUNNEL (features-service's sales funnel id, `GET /internal/catalogue/sales-funnels` rows[].id, its combinationKey, carried verbatim). It owns one UNIT per pipe of the funnel (`<channel slug>|<leg key>`): an ordinary campaign row stating `salesFunnelId` + `salesFunnelCampaignId`, run independently like every campaign (proactive pipes prospect, reactive pipes answer). Uniqueness is brand x offer x sales funnel x channel x leg: a pipe two funnels share is two units, one per funnel. A sourcing pipe (Start -> Lead found, a lead-source origin) is a SOURCE campaign unit: no workflow, its origin is ON for the offer while the funnel runs. A funnel with no sourcing pipe gets the offer's default lead source on its start, as every outreach start does. RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH /campaigns/{id} {status} on a unit moves its WHOLE funnel campaign (a lead source unit keeps its own On/Off); its identity fields and DELETE are refused with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. MONEY: a unit's money is its funnel's caps at billing (GET /internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps: max budget + max volume, one-off / daily / weekly / monthly), never a per-(offer, leg, channel) ceiling or the brand pot. No max budget stated = every unit held unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`). Either cap `reached` = EVERY pipe of the funnel, reactive included, stops (owner 2026-10-10: always respect the user budget; gate-check `Sales funnel max budget reached` / `Sales funnel max volume reached`, step trigger skip `sales_funnel_cap`). A consumption billing cannot measure holds every pipe (fail-closed, logged). Caps never change a status. Billing is not signalled per unit (no plan money moves). Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had. Header x-org-id. Filters are exact matches; `personEmail` = the campaigns that NAME this person (case-insensitive), e.g. `?personEmail=marie@x.com&status=ongoing` = that person's pending follow-ups.",
+        "description": "SALES FUNNEL CAMPAIGNS (owner 2026-10-10, chat first). A campaign is brand x offer x SALES FUNNEL (features-service's sales funnel id, `GET /internal/catalogue/sales-funnels` rows[].id, its combinationKey, carried verbatim). It owns one UNIT per pipe of the funnel (`<channel slug>|<leg key>`): an ordinary campaign row stating `salesFunnelId` + `salesFunnelCampaignId`, run independently like every campaign (proactive pipes prospect, reactive pipes answer). Uniqueness is brand x offer x sales funnel x channel x leg: a pipe two funnels share is two units, one per funnel. A sourcing pipe (Start -> Lead found, a lead-source origin) is a SOURCE campaign unit: no workflow, its origin is ON for the offer while the funnel runs. A funnel with no sourcing pipe gets the offer's default lead source on its start, as every outreach start does. RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH /campaigns/{id} {status} on a unit moves its WHOLE funnel campaign (a lead source unit keeps its own On/Off); its identity fields and DELETE are refused with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. MONEY: a unit's money is its funnel's caps at billing (GET /internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps: max budget + max volume, one-off / daily / weekly / monthly), never a per-(offer, leg, channel) ceiling or the brand pot. No max budget stated = every unit held unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`). Either cap `reached` = EVERY pipe of the funnel, reactive included, stops (owner 2026-10-10: always respect the user budget; gate-check `Sales funnel max budget reached` / `Sales funnel max volume reached`, step trigger skip `sales_funnel_cap`). A consumption billing cannot measure holds every pipe (fail-closed, logged). Caps never change a status. Billing is not signalled per unit (no plan money moves). TARGET + BRIEF (FACTORY-P1-CAMPAIGN-TARGET-BRIEF, 2026-10-28): every funnel campaign serves `target` (the OUTCOME it aims at: a catalogue step key, features-service's vocabulary carried verbatim, e.g. `positive_reply`, `meeting_booked`, `paid_client`; born = its funnel's last step, existing campaigns backfilled the same way), `brief` (its strategy in plain language, e.g. \"Cold email only, never write to someone who asked to stop, test for 30 days\", read by the judge that picks plays; NOT `instruction`, which the writer's messages follow) + `briefUpdatedAt`/`briefUpdatedByUserId` (every edit dated and attributed), and `mode` (proactive = starts from Start | reactive = starts from a trigger) + `triggerId` (features-service's statement of the funnel's head). Set `target`/`brief` on POST or PATCH; an unknown target = 400 `unknown_target_step`, catalogue unreadable = 502 `catalogue_unavailable`. Stating them changes nothing that runs, sends or spends. Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had. Header x-org-id. Filters are exact matches; `personEmail` = the campaigns that NAME this person (case-insensitive), e.g. `?personEmail=marie@x.com&status=ongoing` = that person's pending follow-ups.",
         "security": [
           {
             "apiKeyAuth": []
@@ -4611,6 +4667,95 @@
                   },
                   "required": [
                     "salesFunnelCampaigns"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/sales-funnel-campaigns/target-backfill": {
+      "post": {
+        "tags": [
+          "Sales funnel campaigns"
+        ],
+        "summary": "Every funnel campaign missing its target, mode or head trigger gets them from its funnel (staff, dry run by default)",
+        "description": "FACTORY-P1-CAMPAIGN-TARGET-BRIEF. Body {apply?: boolean (default false = dry run)}. Target = the funnel's last step (the catalogue's `toStep` of its last leg), mode/triggerId = the funnel's head (features-service). Never overwrites a stated target. Also runs at boot. Answers the count per target (`byTarget`, `null` = none) and every campaign it could not fill (`failures[]` {salesFunnelCampaignId, salesFunnelId, reason: funnel_retired | catalogue_unavailable | funnel_has_no_legs | last_leg_unpublished}). Idempotent.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "apply": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What was (or would be) filled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "apply": {
+                      "type": "boolean"
+                    },
+                    "scanned": {
+                      "type": "number"
+                    },
+                    "filled": {
+                      "type": "number"
+                    },
+                    "byTarget": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "number"
+                      }
+                    },
+                    "failures": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "salesFunnelCampaignId": {
+                            "type": "string"
+                          },
+                          "salesFunnelId": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "salesFunnelCampaignId",
+                          "salesFunnelId",
+                          "reason"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "apply",
+                    "scanned",
+                    "filled",
+                    "byTarget",
+                    "failures"
                   ]
                 }
               }
@@ -5055,8 +5200,8 @@
         "tags": [
           "Sales funnel campaigns"
         ],
-        "summary": "Run or pause the whole sales funnel, and/or reword its instruction",
-        "description": "Body {status?: activate | stop, instruction?: string | null} (at least one; 400 otherwise). `instruction` alone rewords (null clears) what every next run of its units carries to the workflow, status untouched. `stop` = cancel: no event dispatches a stopped campaign. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
+        "summary": "Run or pause the whole sales funnel, reword its instruction, restate its target or brief",
+        "description": "Body {status?: activate | stop, instruction?: string | null, target?: string, brief?: string | null} (at least one; 400 otherwise). `target` = the outcome it aims at (a catalogue step key; unknown = 400 `unknown_target_step`, catalogue unreadable = 502 `catalogue_unavailable`). `brief` = its strategy in plain language (null clears; a changed brief stamps `briefUpdatedAt` + `briefUpdatedByUserId` = x-user-id). Neither changes what runs. `instruction` alone rewords (null clears) what every next run of its units carries to the workflow, status untouched. `stop` = cancel: no event dispatches a stopped campaign. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
         "security": [
           {
             "apiKeyAuth": []
