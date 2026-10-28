@@ -1,7 +1,7 @@
 import { db, sql } from "../../src/db/index.js";
 import { settleCompositeFires } from "../../src/lib/composite-trigger.js";
 import { resetPersonRunReservations } from "../../src/lib/person-runs.js";
-import { campaigns, salesFunnelCampaigns, brandPauseTransitions, campaignAudienceExhaustion, campaignAudienceAvailability, campaignStatusTransitions, triggerEvents, triggerEventDeliveries, triggerPollCursors, triggerSilenceWatch, triggerHealthDays, runPlayAttributions } from "../../src/db/schema.js";
+import { campaigns, salesFunnelCampaigns, brandPauseTransitions, campaignAudienceExhaustion, campaignAudienceAvailability, campaignStatusTransitions, triggerEvents, triggerEventDeliveries, triggerPollCursors, triggerSilenceWatch, triggerHealthDays, runPlayAttributions, salesFunnelPlanChanges, planFollowingDays } from "../../src/db/schema.js";
 
 /**
  * Clean all test data from the database
@@ -22,6 +22,8 @@ export async function cleanTestData() {
   await db.delete(triggerHealthDays);
   await db.delete(triggerPollCursors);
   await db.delete(runPlayAttributions);
+  await db.delete(salesFunnelPlanChanges);
+  await db.delete(planFollowingDays);
 }
 
 /**

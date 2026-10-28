@@ -5,6 +5,7 @@ import {
   campaigns,
   campaignStatusTransitions,
   salesFunnelCampaigns,
+  salesFunnelPlanChanges,
   type NewCampaignStatusTransition,
   type SalesFunnelCampaign,
 } from "../db/schema.js";
@@ -93,6 +94,11 @@ export const TRANSITION_SOURCES = {
    * the owner's decision, and a funnel start never brings those old source units back.
    */
   LEAD_SOURCING_SWITCH: "lead_sourcing_switch",
+  /**
+   * A funnel campaign that FOLLOWS ITS PLAN applied a plan change (lib/sales-funnel-plan.ts): a unit born on a pipe
+   * the new plan adds. Births only: a plan change never moves an existing unit's status.
+   */
+  SALES_FUNNEL_PLAN: "sales_funnel_plan",
 } as const;
 
 /**
@@ -425,6 +431,8 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
   briefUpdatedByUserId?: string | null;
   mode?: "proactive" | "reactive" | null;
   triggerId?: string | null;
+  /** Follows its plan (lib/sales-funnel-plan.ts); absent = a fixed funnel. */
+  followsPlan?: boolean;
   units: SalesFunnelUnitBirth[];
   onUnitStarted?: OnUnitStarted;
 }): Promise<{ salesFunnelCampaign: SalesFunnelCampaign; units: CampaignRow[] }> {
@@ -453,6 +461,7 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
         briefUpdatedByUserId: input.brief ? (input.briefUpdatedByUserId ?? null) : null,
         mode: input.mode ?? null,
         triggerId: input.triggerId ?? null,
+        followsPlan: input.followsPlan ?? false,
         createdAt: now,
         updatedAt: now,
       })
@@ -477,6 +486,8 @@ export async function insertSalesFunnelUnits(
   parent: SalesFunnelCampaign,
   births: SalesFunnelUnitBirth[],
   source: TransitionSource = TRANSITION_SOURCES.SALES_FUNNEL,
+  /** The funnel whose pipe the units run (a followed plan's, lib/sales-funnel-plan.ts); default the row's. */
+  runningSalesFunnelId: string = parent.runningSalesFunnelId ?? parent.salesFunnelId,
 ): Promise<CampaignRow[]> {
   if (births.length === 0) return [];
   const now = new Date();
@@ -494,7 +505,7 @@ export async function insertSalesFunnelUnits(
       featureSlug: u.featureSlug,
       offerId: parent.offerId,
       legKey: u.legKey,
-      salesFunnelId: parent.salesFunnelId,
+      salesFunnelId: runningSalesFunnelId,
       salesFunnelCampaignId: parent.id,
       runsOnTriggerId: u.runsOnTriggerId ?? null,
       featureInputs: null,
@@ -659,4 +670,93 @@ export function campaignBirthTransition(
     reason: null,
     source,
   };
+}
+
+/** What a plan change does to one existing unit (lib/sales-funnel-plan.ts `planReconciliation`). */
+export interface PlanUnitDecision {
+  unitId: string;
+  pipeId: string;
+  /** kept: its pipe is in the plan (moves to the plan's funnel, so its play is the plan's); draining: its pipe left
+   *  the plan, it stays as it is (ON keeps answering people it owes, takes no new people: lib/sales-funnel-plan.ts). */
+  action: "kept" | "draining";
+  /** The trigger it runs on under the plan's funnel (kept units only). */
+  runsOnTriggerId?: string | null;
+}
+
+/**
+ * Apply ONE plan change to a funnel campaign that follows its plan (FACTORY-P1-FOLLOW-PLAN, lib/sales-funnel-plan.ts),
+ * in ONE transaction: units born on the plan's new pipes (in the funnel campaign's status, birth transition source
+ * `sales_funnel_plan`), in-plan units moved to the plan's funnel (its plays), units out of the plan marked draining,
+ * the funnel campaign's running funnel moved and the change recorded. NO status moves here: a pipe leaving the plan
+ * is never stopped (its follow-ups go on); the funnel campaign's own `sales_funnel_id` and status never move
+ * (billing's caps key; the customer's statement).
+ *
+ * Guarded on the running funnel the caller read: a concurrent change makes this a no-op (`moved`).
+ */
+export async function applySalesFunnelPlanChange(write: {
+  salesFunnelCampaignId: string;
+  orgId: string;
+  fromSalesFunnelId: string;
+  toSalesFunnelId: string;
+  planComputedAt: Date | null;
+  /** Decides on the rows read INSIDE the transaction (pure: lib/sales-funnel-plan.ts). */
+  decide: (parent: SalesFunnelCampaign, units: CampaignRow[]) => { decisions: PlanUnitDecision[]; births: Array<SalesFunnelUnitBirth & { pipeId: string }> };
+  onUnitStarted?: OnUnitStarted;
+}): Promise<
+  | { applied: true; salesFunnelCampaign: SalesFunnelCampaign; units: CampaignRow[]; changeUnits: Array<{ campaignId: string; pipeId: string; action: string }> }
+  | { applied: false; reason: "not_found" | "moved" }
+> {
+  return db.transaction(async (tx) => {
+    const now = new Date();
+    const [locked] = await tx
+      .select()
+      .from(salesFunnelCampaigns)
+      .where(and(eq(salesFunnelCampaigns.id, write.salesFunnelCampaignId), eq(salesFunnelCampaigns.orgId, write.orgId)))
+      .for("update");
+    if (!locked) return { applied: false as const, reason: "not_found" as const };
+    if ((locked.runningSalesFunnelId ?? locked.salesFunnelId) !== write.fromSalesFunnelId || !locked.followsPlan) {
+      return { applied: false as const, reason: "moved" as const };
+    }
+    const before = await tx
+      .select()
+      .from(campaigns)
+      .where(and(eq(campaigns.orgId, write.orgId), eq(campaigns.salesFunnelCampaignId, locked.id)));
+    const { decisions, births } = write.decide(locked, before);
+    const byId = new Map(before.map((u) => [u.id, u]));
+    for (const d of decisions) {
+      const [row] = await tx
+        .update(campaigns)
+        .set(
+          d.action === "kept"
+            ? { salesFunnelId: write.toSalesFunnelId, runsOnTriggerId: d.runsOnTriggerId ?? null, planRole: null, updatedAt: now }
+            : { planRole: "draining", updatedAt: now },
+        )
+        .where(eq(campaigns.id, d.unitId))
+        .returning();
+      byId.set(d.unitId, row);
+    }
+    const [parent] = await tx
+      .update(salesFunnelCampaigns)
+      .set({ runningSalesFunnelId: write.toSalesFunnelId, updatedAt: now })
+      .where(eq(salesFunnelCampaigns.id, locked.id))
+      .returning();
+    const born = await insertSalesFunnelUnits(tx, parent, births, TRANSITION_SOURCES.SALES_FUNNEL_PLAN, write.toSalesFunnelId);
+    if (write.onUnitStarted) {
+      for (const unit of born.filter((u) => u.status === "ongoing")) await write.onUnitStarted(tx, unit);
+    }
+    const changeUnits = [
+      ...decisions.map((d) => ({ campaignId: d.unitId, pipeId: d.pipeId, action: d.action as string })),
+      ...born.map((u, i) => ({ campaignId: u.id, pipeId: births[i].pipeId, action: "born" })),
+    ];
+    await tx.insert(salesFunnelPlanChanges).values({
+      salesFunnelCampaignId: locked.id,
+      orgId: write.orgId,
+      fromSalesFunnelId: write.fromSalesFunnelId,
+      toSalesFunnelId: write.toSalesFunnelId,
+      planComputedAt: write.planComputedAt,
+      units: changeUnits,
+      appliedAt: now,
+    });
+    return { applied: true as const, salesFunnelCampaign: parent, units: [...byId.values(), ...born], changeUnits };
+  });
 }

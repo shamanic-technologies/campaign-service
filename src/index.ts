@@ -19,6 +19,7 @@ import internalRoutes from "./routes/internal.js";
 import { startScheduler, wakeScheduler } from "./lib/scheduler.js";
 import { backfillTargetsAtBoot } from "./lib/sales-funnel-target.js";
 import { startTriggerDetectors } from "./lib/trigger-detectors.js";
+import { startPlanFollower } from "./lib/sales-funnel-plan.js";
 import { registerExtendAudienceTemplate } from "./lib/transactional-email.js";
 import { logLegacyOutboundLegKeys } from "./lib/legacy-leg-key-log.js";
 const app = express();
@@ -78,6 +79,8 @@ if (process.env.NODE_ENV !== "test") {
       // Generic delay/poll trigger detectors (lib/trigger-detectors.ts): in-process, first tick ~60s
       // after boot; a planned event wakes the scheduler, the one door that fires due events.
       startTriggerDetectors(wakeScheduler);
+      // FACTORY-P1-FOLLOW-PLAN: funnel campaigns following their plan (lib/sales-funnel-plan.ts), first pass ~60s after boot.
+      startPlanFollower();
       app.listen(Number(PORT), "::", () => {
         console.log(`[campaign-service] Running on port ${PORT}`);
         // Register lifecycle email templates AFTER port-bind, fire-and-forget: a slow or

@@ -70,6 +70,7 @@ import {
   UpdateSalesFunnelCampaignBody,
   SalesFunnelCampaignsQuery,
   SalesFunnelCampaignSchema,
+  SalesFunnelPlanChangeSchema,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -331,8 +332,8 @@ registry.registerPath({
   method: "patch",
   path: "/sales-funnel-campaigns/{id}",
   tags: ["Sales funnel campaigns"],
-  summary: "Run or pause the whole sales funnel, reword its instruction, restate its target or brief",
-  description: "Body {status?: activate | stop, instruction?: string | null, target?: string, brief?: string | null} (at least one; 400 otherwise). `target` = the outcome it aims at (a catalogue step key; unknown = 400 `unknown_target_step`, catalogue unreadable = 502 `catalogue_unavailable`). `brief` = its strategy in plain language (null clears; a changed brief stamps `briefUpdatedAt` + `briefUpdatedByUserId` = x-user-id). Neither changes what runs. `instruction` alone rewords (null clears) what every next run of its units carries to the workflow, status untouched. `stop` = cancel: no event dispatches a stopped campaign. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
+  summary: "Run or pause the whole sales funnel, reword its instruction, restate its target or brief, switch it to follow its plan",
+  description: "Body {status?: activate | stop, instruction?: string | null, target?: string, brief?: string | null, followsPlan?: boolean} (at least one; 400 otherwise). `followsPlan` true = it runs the pipes and plays of the plan features-service computes for it (its best line to its target) and follows every plan change (checked at once, then every 10 min): new pipes get a unit, pipes leaving the plan stay ON but take no new people (follow-ups go on), a plan whose spending pipes its budget/volume caps do not measure is not applied (red `plan_outside_caps`); false = the funnel it runs now stays fixed. `salesFunnelId` never moves (its caps key); `runningSalesFunnelId` = what it runs. `target` = the outcome it aims at (a catalogue step key; unknown = 400 `unknown_target_step`, catalogue unreadable = 502 `catalogue_unavailable`). `brief` = its strategy in plain language (null clears; a changed brief stamps `briefUpdatedAt` + `briefUpdatedByUserId` = x-user-id). Neither changes what runs. `instruction` alone rewords (null clears) what every next run of its units carries to the workflow, status untouched. `stop` = cancel: no event dispatches a stopped campaign. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { params: z.object({ id: z.string() }), body: { content: { "application/json": { schema: UpdateSalesFunnelCampaignBody } } } },
   responses: {
@@ -340,6 +341,48 @@ registry.registerPath({
     400: { description: "Missing headers", content: { "application/json": { schema: ErrorResponse } } },
     404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
     409: { description: "Payment hold", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), blockedReason: z.string().optional() }) } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/sales-funnel-campaigns/{id}/plan-changes",
+  tags: ["Sales funnel campaigns"],
+  summary: "Every plan change applied to a funnel campaign that follows its plan (newest first)",
+  description: "Header x-org-id. FACTORY-P1-FOLLOW-PLAN. Each change: when, from which funnel to which, and what each unit did (born on a new pipe, kept on the plan's play, draining = left the plan, still answering the people it owes, no new people). Also the switch, the running funnel and the latest plan check.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: "History", content: { "application/json": { schema: z.object({ salesFunnelCampaignId: z.string(), followsPlan: z.boolean(), salesFunnelId: z.string(), runningSalesFunnelId: z.string(), planCheck: z.unknown().nullable(), changes: z.array(SalesFunnelPlanChangeSchema) }) } } },
+    404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/sales-funnel-campaigns/plan-check",
+  tags: ["Sales funnel campaigns"],
+  summary: "Dry run (what following its plan would do) or one plan follower pass now (staff)",
+  description: "FACTORY-P1-FOLLOW-PLAN. Body {orgId?, brandId?, salesFunnelCampaignId?, apply?: boolean (default false)}. apply false: for every ONGOING funnel campaign of the scope (orgId required), followed or not, what its plan would change (pipes before/after, each unit's action, the verdict state); nothing written. apply true: one pass over every campaign following its plan, fleet-wide (same as the 10-min loop).",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: z.object({ orgId: z.string().optional(), brandId: z.string().optional(), salesFunnelCampaignId: z.string().optional(), apply: z.boolean().optional() }) } } } },
+  responses: {
+    200: { description: "Dry run per campaign, or the pass counts", content: { "application/json": { schema: z.object({ apply: z.boolean(), pass: z.unknown().optional(), campaigns: z.array(z.unknown()).optional() }) } } },
+    400: { description: "orgId missing on a dry run", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/ops/plan-following",
+  tags: ["Internal"],
+  summary: "The plan follower on dashboard v2 Monitoring: campaigns following their plan that cannot, plus a daily series",
+  description: "Staff. `status` red when a campaign following its plan is on no_plan | plan_unreadable | plan_not_ready | plan_not_runnable | plan_outside_caps | apply_failed (it keeps running what it ran), or the follower has not checked for 30 min. `byDay`: campaigns following, red, plan changes applied. Never an email.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { query: z.object({ days: z.string().optional() }) },
+  responses: {
+    200: { description: "Verdict, red list, daily series", content: { "application/json": { schema: z.object({ status: z.enum(["ok", "red"]), staleReason: z.string().nullable(), following: z.number(), red: z.array(z.unknown()), byDay: z.array(z.object({ day: z.string(), following: z.number(), red: z.number(), changesApplied: z.number(), checkedAt: z.string() })) }) } } },
+    400: { description: "Invalid days", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 

@@ -269,6 +269,10 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // OPTIONAL: its strategy in plain language ("Cold email only, never write to someone who asked to stop, test for
   // 30 days"), read by the judge that picks plays. NOT `instruction` (the words the writer's messages follow).
   brief: z.string().trim().min(1, "brief must not be empty (omit it)").max(MAX_BRIEF_LENGTH).optional(),
+  // OPTIONAL (lib/sales-funnel-plan.ts, FACTORY-P1-FOLLOW-PLAN): true = it runs the pipes and plays of the plan
+  // features-service computes for it (best line to its target) and follows each plan change; false/omitted = it runs
+  // its fixed sales funnel.
+  followsPlan: z.boolean().optional(),
 }).strict().openapi("CreateSalesFunnelCampaignBody");
 
 /**
@@ -282,9 +286,12 @@ export const UpdateSalesFunnelCampaignBody = z.object({
   target: TargetStepSchema.optional(),
   // Its strategy in plain language (null clears it). Dated + attributed on every edit (briefUpdatedAt/By).
   brief: z.string().trim().min(1, "brief must not be empty (null clears it)").max(MAX_BRIEF_LENGTH).nullable().optional(),
+  // true = follow its plan (the pipes and plays features-service plans for it, adapting to each plan change);
+  // false = keep the funnel it runs now, fixed.
+  followsPlan: z.boolean().optional(),
 }).strict().refine(
-  (b) => b.status !== undefined || b.instruction !== undefined || b.target !== undefined || b.brief !== undefined,
-  { message: "state status, instruction, target and/or brief" },
+  (b) => b.status !== undefined || b.instruction !== undefined || b.target !== undefined || b.brief !== undefined || b.followsPlan !== undefined,
+  { message: "state status, instruction, target, brief and/or followsPlan" },
 ).openapi("UpdateSalesFunnelCampaignBody");
 
 export const SalesFunnelCampaignsQuery = z.object({
@@ -309,6 +316,10 @@ export const SalesFunnelUnitSchema = z.object({
   // operates or another service performs (it never runs a DAG).
   workflowSlug: z.string().nullable(),
   name: z.string(),
+  // The funnel whose pipe and play this unit runs: its funnel campaign's, or the plan's when it follows its plan.
+  salesFunnelId: z.string(),
+  // "draining" = its pipe left the plan: never stopped, answers the people it already owes, takes no new people.
+  planRole: z.enum(["draining"]).nullable(),
 }).openapi("SalesFunnelUnit");
 
 export const SalesFunnelCampaignSchema = z.object({
@@ -351,10 +362,35 @@ export const SalesFunnelCampaignSchema = z.object({
   // features-service's statement of the funnel's head; null only while not backfilled yet.
   mode: z.enum(["proactive", "reactive"]).nullable(),
   triggerId: z.string().nullable(),
+  // FACTORY-P1-FOLLOW-PLAN: true = it runs its plan (features-service's best line to its target) and follows each
+  // plan change; false = a fixed funnel. `salesFunnelId` never moves (its budget and volume caps are keyed on it).
+  followsPlan: z.boolean(),
+  // The funnel it runs now: the last plan applied, else `salesFunnelId`.
+  runningSalesFunnelId: z.string(),
+  // The latest plan check (null = never checked). `state`: following | applied | stopped | no_plan | plan_unreadable |
+  // plan_not_ready | plan_not_runnable | plan_outside_caps | apply_failed (the last six = red on Monitoring).
+  planCheck: z.object({
+    state: z.string(),
+    detail: z.string(),
+    checkedAt: z.string(),
+    planSalesFunnelId: z.string().optional(),
+    planComputedAt: z.string().optional(),
+  }).nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   units: z.array(SalesFunnelUnitSchema),
 }).openapi("SalesFunnelCampaign");
+
+/** One plan change applied to a funnel campaign that follows its plan. */
+export const SalesFunnelPlanChangeSchema = z.object({
+  id: z.string(),
+  fromSalesFunnelId: z.string(),
+  toSalesFunnelId: z.string(),
+  planComputedAt: z.string().nullable(),
+  appliedAt: z.string(),
+  // What each unit did: born (a new pipe), kept (in the plan, now on its play), draining (left the plan).
+  units: z.array(z.object({ campaignId: z.string(), pipeId: z.string(), action: z.string() })),
+}).openapi("SalesFunnelPlanChange");
 
 
 export const UpdateCampaignBody = z.object({

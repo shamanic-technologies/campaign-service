@@ -74,8 +74,10 @@ export async function completeSalesFunnelUnits(opts: { apply: boolean; orgId?: s
 
   const out: UnitCompletion[] = [];
   for (const parent of parents) {
-    const funnel = await fetchSalesFunnel(parent.salesFunnelId);
-    if (!funnel.ok) throw new Error(`sales funnel ${parent.salesFunnelId} unreadable: ${funnel.detail}`);
+    // The funnel it RUNS (a campaign following its plan runs the plan's, lib/sales-funnel-plan.ts).
+    const runningFunnelId = parent.runningSalesFunnelId ?? parent.salesFunnelId;
+    const funnel = await fetchSalesFunnel(runningFunnelId);
+    if (!funnel.ok) throw new Error(`sales funnel ${runningFunnelId} unreadable: ${funnel.detail}`);
     const units = await db
       .select()
       .from(campaigns)
