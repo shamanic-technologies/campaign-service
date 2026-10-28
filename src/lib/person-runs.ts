@@ -127,8 +127,10 @@ export async function reservePersonRun(
   now: Date,
 ): Promise<{ ok: true; release: () => void } | { ok: false; detail: string }> {
   return underCohortLock(cohortKey, async () => {
-    const stored = await personRunsInFlight(cohortIds, now);
+    // Claims FIRST, rows second: a claim is released only after its row is written, so a run is always seen in
+    // one of the two (read the other way round, a run whose row landed and claim went during the read is missed).
     const held = [...reservations.values()].filter((r) => r.cohortKey === cohortKey && now.getTime() - r.at < RESERVATION_TTL_MS);
+    const stored = await personRunsInFlight(cohortIds, now);
     const byPerson = new Map<string, PersonRunInFlight>();
     for (const r of [...stored, ...held]) byPerson.set(`${r.campaignId}|${personKey(r)}`, r);
     const hold = personRunHold(campaignId, person, [...byPerson.values()]);
