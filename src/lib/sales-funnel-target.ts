@@ -225,11 +225,15 @@ export async function backfillTargetsAtBoot(): Promise<void> {
   try {
     const report = await backfillSalesFunnelCampaignTargets({ apply: true });
     if (report.scanned === 0) return;
+    // A row the catalogue cannot answer (retired funnel AND leg) stays without a target: a known state, said once per
+    // boot at info. Only an unreadable catalogue is an anomaly.
+    const unreadable = report.failures.filter((f) => f.reason === "catalogue_unavailable");
     console.log(
-      `[campaign-service] Funnel campaign targets: ${report.filled}/${report.scanned} filled, by target ${JSON.stringify(report.byTarget)}`,
+      `[campaign-service] Funnel campaign targets: ${report.scanned} without target or mode, ${report.failures.length} left without a target ` +
+        `(${report.failures.map((f) => `${f.salesFunnelCampaignId} ${f.reason}`).join(", ") || "none"}); by target ${JSON.stringify(report.byTarget)}`,
     );
-    for (const f of report.failures) {
-      console.error(`[campaign-service] Funnel campaign ${f.salesFunnelCampaignId} has no target: ${f.reason} (${f.salesFunnelId}) ${f.detail ?? ""}`);
+    for (const f of unreadable) {
+      console.error(`[campaign-service] Funnel campaign ${f.salesFunnelCampaignId} has no target: catalogue unreadable (${f.salesFunnelId}) ${f.detail ?? ""}`);
     }
   } catch (err) {
     console.error("[campaign-service] Funnel campaign target backfill failed:", err);
