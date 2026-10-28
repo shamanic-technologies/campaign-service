@@ -561,15 +561,40 @@ export const triggerPollCursors = pgTable(
 
 export type TriggerPollCursor = typeof triggerPollCursors.$inferSelect;
 
-// Which coded trigger types are being watched for SILENCE (src/lib/trigger-silence.ts): a row exists
-// while at least one live reactive campaign depends on the type. `watched_since` bounds the silence
-// so a type is never called silent for days nobody was recording; `last_alerted_at` latches the
-// staff alert to once per 24h.
+// Which coded trigger types are WATCHED (src/lib/trigger-health.ts): a row exists while at least one live campaign
+// answers the type. `watched_since` bounds "never fired" so a type is never called broken for days nobody depended on it.
 export const triggerSilenceWatch = pgTable("trigger_silence_watch", {
   triggerId: text("trigger_id").primaryKey(),
   watchedSince: timestamp("watched_since", { withTimezone: true }).notNull().defaultNow(),
-  lastAlertedAt: timestamp("last_alerted_at", { withTimezone: true }),
 });
+
+// TRIGGER-SILENCE-NO-EMAIL-1028: the stored daily verdict of every watched trigger type (src/lib/trigger-health.ts),
+// one row per (type, UTC day), rewritten by each hourly check of that day (the last check of a day is its verdict).
+// Feeds the dashboard v2 Monitoring chart; nothing is ever emailed.
+export const triggerHealthDays = pgTable(
+  "trigger_health_days",
+  {
+    triggerId: text("trigger_id").notNull(),
+    /** UTC calendar day, YYYY-MM-DD. */
+    day: text("day").notNull(),
+    label: text("label").notNull(),
+    firedBy: text("fired_by").notNull(),
+    /** `ok` | `red` | `unknown` (the producer's facts were unreadable). */
+    status: text("status").notNull(),
+    /** `never_fired` | `facts_without_event` | `facts_unreadable`; null when ok. */
+    reason: text("reason"),
+    sentence: text("sentence").notNull(),
+    liveCampaigns: integer("live_campaigns").notNull(),
+    /** People lead-service saw reach the trigger's step with no event reaching us; null = step not observable. */
+    factsWithoutEvent: integer("facts_without_event"),
+    /** `[{orgId, brandId, people, firstReachedAt}]` per brand where facts landed and no event did. */
+    missing: jsonb("missing"),
+    checkedAt: timestamp("checked_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [uniqueIndex("uniq_trigger_health_days").on(table.triggerId, table.day)]
+);
+
+export type TriggerHealthDay = typeof triggerHealthDays.$inferSelect;
 
 // STRATEGY-ATTRIBUTION-1018: the PLAY (pipe x lead strategy, features-service's) each run was dispatched under, one
 // row per run, written ONCE at dispatch and never updated (src/lib/run-play-attribution.ts). Editing a funnel or a

@@ -42,10 +42,9 @@ vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
 });
 import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
-import { triggerEvents, triggerSilenceWatch } from "../../src/db/schema.js";
+import { triggerEvents } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { fireDueTriggerEvents } from "../../src/lib/trigger-events.js";
-import { alertSilentTriggers, resetTriggerSilenceSweepClock, TRIGGER_SILENT_EVENT } from "../../src/lib/trigger-silence.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "b645207b-0000-4000-8000-000000000011";
@@ -364,78 +363,6 @@ describe("trigger events", () => {
         .query({ brandId: BRAND, triggerId: MEETING, email: "ann@acme.com" })
         .set("x-api-key", API_KEY);
       expect(noOrg.status).toBe(400);
-    });
-  });
-
-  describe("silence alert", () => {
-    const DAY = 24 * 60 * 60_000;
-    let sends: Array<{ url: string; body: Record<string, unknown> }>;
-
-    beforeEach(() => {
-      resetTriggerSilenceSweepClock();
-      process.env.TRANSACTIONAL_EMAIL_SERVICE_URL = "https://email.test.local";
-      process.env.TRANSACTIONAL_EMAIL_SERVICE_API_KEY = "k";
-      sends = [];
-      vi.stubGlobal("fetch", vi.fn(async (url: string, init: { body: string }) => {
-        sends.push({ url, body: JSON.parse(init.body) });
-        return new Response("{}", { status: 200 });
-      }));
-    });
-
-    it("fires when a coded trigger with a live campaign has had no event for 3 days", async () => {
-      await meetingBooking("ongoing");
-      const now = new Date();
-      await db.insert(triggerSilenceWatch).values({ triggerId: REPLY, watchedSince: new Date(now.getTime() - 4 * DAY) });
-
-      const alerted = await alertSilentTriggers(now);
-
-      vi.unstubAllGlobals();
-      expect(alerted.map((a) => a.triggerId)).toEqual([REPLY]);
-      expect(sends).toHaveLength(1);
-      expect(sends[0].url).toBe("https://email.test.local/platform-send");
-      expect(sends[0].body).toMatchObject({
-        eventType: TRIGGER_SILENT_EVENT,
-        metadata: { triggerId: REPLY, triggerLabel: "Positive reply", liveCampaignCount: "1", firedBy: "instantly-service" },
-      });
-
-      // Latched: the next sweep the same day sends nothing.
-      resetTriggerSilenceSweepClock();
-      vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
-      expect(await alertSilentTriggers(new Date(now.getTime() + 60 * 60_000))).toEqual([]);
-      vi.unstubAllGlobals();
-    });
-
-    it("does not fire when the trigger had an event inside the window", async () => {
-      await meetingBooking("ongoing");
-      const now = new Date();
-      await db.insert(triggerSilenceWatch).values({ triggerId: REPLY, watchedSince: new Date(now.getTime() - 10 * DAY) });
-      await db.insert(triggerEvents).values({
-        orgId: ORG, brandId: BRAND, offerId: OFFER, triggerId: REPLY, recordedVia: "trigger_for_step",
-        occurredAt: new Date(now.getTime() - DAY), dueAt: new Date(now.getTime() - DAY), status: "done", outcome: "ran",
-      });
-
-      const alerted = await alertSilentTriggers(now);
-      vi.unstubAllGlobals();
-      expect(alerted).toEqual([]);
-      expect(sends).toHaveLength(0);
-    });
-
-    it("never calls a trigger silent for days nobody was watching it, nor without a live campaign behind it", async () => {
-      const now = new Date();
-      // No live campaign: no watch, no alert.
-      expect(await alertSilentTriggers(now)).toEqual([]);
-      expect(await db.select().from(triggerSilenceWatch)).toEqual([]);
-
-      // A live campaign appears: the watch starts NOW, so 3 silent days are counted from here.
-      await meetingBooking("ongoing");
-      resetTriggerSilenceSweepClock();
-      expect(await alertSilentTriggers(now)).toEqual([]);
-      resetTriggerSilenceSweepClock();
-      expect(await alertSilentTriggers(new Date(now.getTime() + 2 * DAY))).toEqual([]);
-      resetTriggerSilenceSweepClock();
-      const late = await alertSilentTriggers(new Date(now.getTime() + 3 * DAY + 60_000));
-      vi.unstubAllGlobals();
-      expect(late.map((a) => a.triggerId)).toEqual([REPLY]);
     });
   });
 

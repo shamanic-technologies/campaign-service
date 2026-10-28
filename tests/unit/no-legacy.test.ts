@@ -709,4 +709,21 @@ describe('No Legacy Patterns - CRITICAL', () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it('sends NO monitoring email: no trigger_silent, no trigger_occurrence_stuck (TRIGGER-SILENCE-NO-EMAIL-1028)', () => {
+    // Owner rule 2026-10-22, « no email in my inbox please »: a monitoring alert is RED on dashboard v2 Monitoring
+    // (GET /internal/ops/trigger-health, /internal/ops/stuck-occurrences), never a staff email.
+    const violations: { file: string; line: number; code: string }[] = [];
+    for (const file of getAllTsFiles(srcDir)) {
+      fs.readFileSync(file, 'utf-8').split('\n').forEach((line, index) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('*') || trimmed.startsWith('/*') || trimmed.startsWith('//')) return;
+        const code = line.split('//')[0];
+        if (/trigger_silent|trigger_occurrence_stuck|TRIGGER_SILENT_EVENT/.test(code)) {
+          violations.push({ file: path.relative(srcDir, file), line: index + 1, code: trimmed });
+        }
+      });
+    }
+    expect(violations, `Monitoring email back in campaign-service:\n${JSON.stringify(violations, null, 2)}`).toEqual([]);
+  });
 });
