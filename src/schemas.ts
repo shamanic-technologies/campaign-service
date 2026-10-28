@@ -1204,6 +1204,46 @@ export const FailingCampaignsResponse = z.object({
   })),
 }).openapi("FailingCampaignsResponse");
 
+// --- Stuck occurrences (dashboard v2 Monitoring, REACTIVE-THROUGHPUT-1028) ---
+
+export const StuckOccurrencesQuery = z.object({
+  days: z.coerce.number().int().min(1).max(90).optional().describe("Days of daily series to serve (default 14)."),
+});
+
+const StuckPerson = z.object({ name: z.string().nullable(), email: z.string().nullable(), phone: z.string().nullable() });
+
+export const StuckOccurrencesResponse = z.object({
+  generatedAt: z.string(),
+  days: z.number().int(),
+  stuckAfterMinutes: z.number().int(),
+  status: z.enum(["ok", "red"]).describe("red = at least one occurrence carrying somebody is blocked right now."),
+  stuck: z.number().int(),
+  queued: z.number().int().describe("Waiting their turn behind a busy run in a queue that moved recently: not stuck."),
+  stuckByReason: z.array(z.object({ reason: z.string(), count: z.number().int(), oldestWaitingSince: z.string() })),
+  stuckOccurrences: z.array(z.object({
+    occurrenceId: z.string(),
+    orgId: z.string(),
+    brandId: z.string(),
+    offerId: z.string(),
+    triggerId: z.string().nullable(),
+    campaignId: z.string().nullable(),
+    campaignName: z.string().nullable(),
+    person: StuckPerson.nullable(),
+    reasons: z.array(z.string()),
+    lastError: z.string().nullable(),
+    attempts: z.number().int(),
+    waitingSince: z.string(),
+  })),
+  byDay: z.array(z.object({
+    day: z.string(),
+    answered: z.number().int(),
+    answeredLate: z.number().int().describe("Answered more than stuckAfterMinutes after the person acted."),
+    skipped: z.number().int(),
+    failed: z.number().int(),
+    waiting: z.number().int(),
+  })),
+}).openapi("StuckOccurrencesResponse");
+
 // === SOURCE CAMPAIGNS (lib/source-campaigns.ts) ===
 
 export const SourceCampaignsQuery = z.object({

@@ -49,10 +49,11 @@ vi.mock("../../src/lib/sales-funnel-people.js", async (importOriginal) => {
 
 import app from "../../src/index.js";
 import { db } from "../../src/db/index.js";
-import { triggerEvents } from "../../src/db/schema.js";
+import { triggerEventDeliveries, triggerEvents } from "../../src/db/schema.js";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { fireDueTriggerEvents, serializeTriggerEvent } from "../../src/lib/trigger-events.js";
 import { OWED_EVENT_RECHECK_MS, PERSON_NOT_KNOWN_RETRY_MS, PERSON_NOT_KNOWN_WAIT_MS } from "../../src/lib/trigger-person.js";
+import { PERSON_RUNS_PER_CAMPAIGN_MAX } from "../../src/lib/person-runs.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "b645207b-0000-4000-8000-000000000021";
@@ -99,6 +100,24 @@ const ITEM = { formName: "Doc Dinners signup", answers: { "What do you want?": "
 const postEvent = (body: Record<string, unknown>) =>
   request(app).post("/internal/trigger-events").set("x-api-key", API_KEY).set("x-org-id", ORG).send(body);
 const allEvents = () => db.select().from(triggerEvents);
+
+/**
+ * A run about `email` in flight on `campaignId` (REACTIVE-THROUGHPUT-1028: a person-carrying run is held by the
+ * person's own run in flight, read from the delivery rows, never by runs-service). Returns a release function.
+ */
+async function personRunInFlight(campaignId: string, email = "jane.doe@example.com") {
+  const [ev] = await db.insert(triggerEvents).values({
+    orgId: ORG, brandId: BRAND, offerId: OFFER, triggerId: FORM, recordedVia: "api",
+    occurredAt: new Date(Date.now() - 60_000), dueAt: new Date(Date.now() - 60_000), status: "done", outcome: "ran",
+    detail: { person: { email } },
+  }).returning();
+  const runId = crypto.randomUUID();
+  await db.insert(triggerEventDeliveries).values({ eventId: ev.id, campaignId, runId, status: "dispatched" });
+  return async () => {
+    const { eq } = await import("drizzle-orm");
+    await db.update(triggerEventDeliveries).set({ status: "completed", endedAt: new Date() }).where(eq(triggerEventDeliveries.runId, runId));
+  };
+}
 
 describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
   beforeEach(async () => {
@@ -265,15 +284,16 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
 
   it("a run of the campaign in flight: nobody is made due, the event retries, and its OWN run carries the person", async () => {
     const campaign = await meetingBooking("ongoing");
-    mockListRuns.mockResolvedValueOnce({ runs: [{ id: "run-live", status: "running" }] });
+    const release = await personRunInFlight(campaign.id);
     const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
     expect(res.body.event.status).toBe("pending");
     expect(mockFile).not.toHaveBeenCalled();
     expect(mockDue).not.toHaveBeenCalled();
     expect(mockExecute).not.toHaveBeenCalled();
 
+    await release();
     expect(await fireDueTriggerEvents(new Date(new Date(res.body.event.dueAt).getTime() + 1000))).toBe(1);
-    const [event] = await allEvents();
+    const [event] = (await allEvents()).filter((e) => e.id === res.body.event.id);
     expect(event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
     expect(mockDue).toHaveBeenCalledTimes(1);
     expect(mockExecute.mock.calls[0][1].trigger).toMatchObject({ leadId: "lead-jane", item: ITEM, person: { email: "jane.doe@example.com" } });
@@ -304,15 +324,15 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     const { eq } = await import("drizzle-orm");
     await db.update(campaigns).set({ workflowSlug: null }).where(eq(campaigns.id, yourTeam.id));
     const ai = await meetingBooking("ongoing");
-    mockListRuns.mockImplementation(async (p: { campaignId?: string }) => ({ runs: p.campaignId === ai.id ? [{ id: "run-live" }] : [] }));
+    const release = await personRunInFlight(ai.id);
     const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
     expect(res.body.event.status).toBe("pending");
     expect(res.body.event.detail.retryCampaignIds).toEqual([ai.id]);
     expect(res.body.event.detail.skipped.map((x: { reason: string }) => x.reason).sort()).toEqual(["no_workflow", "run_in_flight"]);
 
-    mockListRuns.mockResolvedValue({ runs: [] });
+    await release();
     expect(await fireDueTriggerEvents(new Date(new Date(res.body.event.dueAt).getTime() + 1000))).toBe(1);
-    const [event] = await allEvents();
+    const [event] = (await allEvents()).filter((e) => e.id === res.body.event.id);
     expect(event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [ai.id] });
     expect(mockExecute).toHaveBeenCalledTimes(1);
     expect((event.detail as Record<string, unknown>).retryCampaignIds).toBeUndefined();
@@ -325,7 +345,10 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
       workflowSlug: "other-v1", createdByUserId: USER, parentRunId: "9f0d1c22-0000-4000-8000-000000000030", offerId: OFFER, legKey: LEG,
       salesFunnelCampaignId: crypto.randomUUID(), salesFunnelId: "sf-form",
     });
-    mockListRuns.mockImplementation(async (p: { campaignId?: string }) => ({ runs: p.campaignId === second.id ? [{ id: "run-live" }] : [] }));
+    // The second campaign already carries its ceiling of runs about other people.
+    const releases = await Promise.all(
+      Array.from({ length: PERSON_RUNS_PER_CAMPAIGN_MAX }, (_, i) => personRunInFlight(second.id, `other${i}@example.com`)),
+    );
     mockFile.mockImplementation(async (p: { campaignId: string }) => ({ ok: true, leadId: `lead-${p.campaignId}`, filed: true }));
     const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
     expect(res.body.event.status).toBe("pending");
@@ -333,11 +356,11 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     expect(mockExecute).toHaveBeenCalledTimes(1);
     expect(mockExecute.mock.calls[0][1].campaignId).toBe(first.id);
 
-    mockListRuns.mockResolvedValue({ runs: [] });
+    await releases[0]();
     expect(await fireDueTriggerEvents(new Date(new Date(res.body.event.dueAt).getTime() + 1000))).toBe(1);
     expect(mockExecute).toHaveBeenCalledTimes(2);
     expect(mockExecute.mock.calls[1][1].campaignId).toBe(second.id);
-    const [event] = await allEvents();
+    const [event] = (await allEvents()).filter((e) => e.id === res.body.event.id);
     expect(event.status).toBe("done");
     expect(event.outcome).toBe("ran");
     expect([...(event.ranCampaignIds ?? [])].sort()).toEqual([first.id, second.id].sort());
@@ -409,15 +432,17 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     expect(res.body.event.status).toBe("pending");
     expect(mockFile).not.toHaveBeenCalled();
 
-    // At its date a run of the unit is in flight: held, not given up although it was RECORDED 3 days earlier.
-    mockListRuns.mockResolvedValueOnce({ runs: [{ id: "run-live", status: "running" }] });
-    expect(await fireDueTriggerEvents(new Date(dueAt.getTime() + 1000))).toBe(0);
-    let [event] = await allEvents();
+    // At its date a run about the same person is in flight: held, not given up although it was RECORDED 3 days earlier.
+    const release = await personRunInFlight(campaign.id);
+    const at = new Date(dueAt.getTime() + 1000);
+    expect(await fireDueTriggerEvents(at)).toBe(0);
+    let [event] = (await allEvents()).filter((e) => e.id === res.body.event.id);
     expect(event.status).toBe("pending");
     expect(event.dueAt.getTime() - dueAt.getTime()).toBeLessThanOrEqual(PERSON_NOT_KNOWN_RETRY_MS + 1000);
 
+    await release();
     expect(await fireDueTriggerEvents(new Date(event.dueAt.getTime() + 1000))).toBe(1);
-    [event] = await allEvents();
+    [event] = (await allEvents()).filter((e) => e.id === res.body.event.id);
     expect(event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
     expect(mockDue).toHaveBeenCalledWith(expect.objectContaining({ campaignId: campaign.id, email: "jane.doe@example.com" }));
     expect(mockExecute).toHaveBeenCalledTimes(1);

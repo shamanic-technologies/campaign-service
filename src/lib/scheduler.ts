@@ -20,7 +20,6 @@ import { reportTurnHolds } from "./turn-hold-event.js";
 import { fireDueTriggerEvents, nextPendingTriggerDueAt } from "./trigger-events.js";
 import { settleUnreportedDeliveries } from "./trigger-deliveries.js";
 import { alertSilentTriggers } from "./trigger-silence.js";
-import { alertStuckOccurrences } from "./stuck-trigger-alert.js";
 import { replayChannelDownRefusals } from "./channel-down-replay.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
@@ -624,10 +623,6 @@ async function tick(): Promise<void> {
       });
       await alertSilentTriggers().catch((err) => {
         console.error("[campaign-service] Trigger silence sweep error:", err);
-      });
-      // A person (or what they sent) waiting on an occurrence that cannot be delivered is told to staff.
-      await alertStuckOccurrences().catch((err) => {
-        console.error("[campaign-service] Stuck occurrence sweep error:", err);
       });
     } catch (err) {
       console.error("[campaign-service] Scheduler tick error:", err);
