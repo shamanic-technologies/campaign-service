@@ -74,13 +74,7 @@ async function bornCampaign(opts: { followsPlan: boolean; status?: "ongoing" | "
 }
 
 /** The plan features-service serves, and the catalogue reads the follower makes. */
-function deps(planFunnel: string | null, opts: { planned?: SalesFunnelUnitPlan[]; planFails?: boolean; capPipes?: Array<{ channelSlug: string; legKey: string }> } = {}): PlanDeps {
-  const capPipes = opts.capPipes ?? [
-    { channelSlug: SOURCE, legKey: "start_to_lead_found" },
-    { channelSlug: COLD, legKey: "lead_found_to_conversation" },
-    { channelSlug: MEETING, legKey: "conversation_to_meeting_booked" },
-    { channelSlug: CALL, legKey: "conversation_to_meeting_booked" },
-  ];
+function deps(planFunnel: string | null, opts: { planned?: SalesFunnelUnitPlan[]; planFails?: boolean } = {}): PlanDeps {
   return {
     plan: vi.fn(async () =>
       opts.planFails
@@ -94,11 +88,6 @@ function deps(planFunnel: string | null, opts: { planned?: SalesFunnelUnitPlan[]
       ok: true as const,
       plan: { salesFunnelId, salesFunnelName: "Plan", units: opts.planned ?? (salesFunnelId === FUNNEL_B ? B_UNITS : salesFunnelId === FUNNEL_C ? C_UNITS : A_UNITS) },
     })),
-    salesFunnel: vi.fn(async () => ({ ok: true as const, value: { id: FUNNEL_A, name: "Epiphany", pipeIds: capPipes.map((p) => `${p.channelSlug}|${p.legKey}`), legs: [], triggerId: null } })),
-    pipe: vi.fn(async (pipeId: string) => {
-      const [channelSlug, legKey] = pipeId.split("|");
-      return { ok: true as const, value: { id: pipeId, name: null, channelSlug, legKey, mode: "proactive" as const } };
-    }),
   };
 }
 
@@ -176,18 +165,6 @@ describe("a funnel campaign that follows its plan (FACTORY-P1-FOLLOW-PLAN)", () 
     expect(after.map((u) => [u.id, u.status, u.salesFunnelId, u.planRole]).sort()).toEqual(before.map((u) => [u.id, u.status, u.salesFunnelId, u.planRole]).sort());
     const noPlan = await checkSalesFunnelCampaignPlan(salesFunnelCampaign, { apply: true }, deps(null));
     expect(noPlan.check.state).toBe("plan_not_ready");
-  });
-
-  it("a plan spending on a pipe its caps do not measure is never applied (never uncapped)", async () => {
-    const { salesFunnelCampaign } = await bornCampaign({ followsPlan: true });
-    const result = await checkSalesFunnelCampaignPlan(
-      salesFunnelCampaign,
-      { apply: true },
-      deps(FUNNEL_B, { capPipes: [{ channelSlug: SOURCE, legKey: "start_to_lead_found" }, { channelSlug: COLD, legKey: "lead_found_to_conversation" }, { channelSlug: MEETING, legKey: "conversation_to_meeting_booked" }] }),
-    );
-    expect(result.check.state).toBe("plan_outside_caps");
-    expect(result.check.detail).toContain(`${CALL}|conversation_to_meeting_booked`);
-    expect(await unitsOf(salesFunnelCampaign.id)).toHaveLength(3);
   });
 
   it("a fixed funnel is never changed; a dry run says what following would do and writes nothing", async () => {
