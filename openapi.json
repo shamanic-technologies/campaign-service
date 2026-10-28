@@ -3340,6 +3340,188 @@
           "retryIntervalMs",
           "alertedAt"
         ]
+      },
+      "StuckOccurrencesResponse": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string"
+          },
+          "days": {
+            "type": "integer"
+          },
+          "stuckAfterMinutes": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "red"
+            ],
+            "description": "red = at least one occurrence carrying somebody is blocked right now."
+          },
+          "stuck": {
+            "type": "integer"
+          },
+          "queued": {
+            "type": "integer",
+            "description": "Waiting their turn behind a busy run in a queue that moved recently: not stuck."
+          },
+          "stuckByReason": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "oldestWaitingSince": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "count",
+                "oldestWaitingSince"
+              ]
+            }
+          },
+          "stuckOccurrences": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "occurrenceId": {
+                  "type": "string"
+                },
+                "orgId": {
+                  "type": "string"
+                },
+                "brandId": {
+                  "type": "string"
+                },
+                "offerId": {
+                  "type": "string"
+                },
+                "triggerId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "campaignId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "campaignName": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "person": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "email": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "phone": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "email",
+                    "phone"
+                  ]
+                },
+                "reasons": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "lastError": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "attempts": {
+                  "type": "integer"
+                },
+                "waitingSince": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "occurrenceId",
+                "orgId",
+                "brandId",
+                "offerId",
+                "triggerId",
+                "campaignId",
+                "campaignName",
+                "person",
+                "reasons",
+                "lastError",
+                "attempts",
+                "waitingSince"
+              ]
+            }
+          },
+          "byDay": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": {
+                  "type": "string"
+                },
+                "answered": {
+                  "type": "integer"
+                },
+                "answeredLate": {
+                  "type": "integer",
+                  "description": "Answered more than stuckAfterMinutes after the person acted."
+                },
+                "skipped": {
+                  "type": "integer"
+                },
+                "failed": {
+                  "type": "integer"
+                },
+                "waiting": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "day",
+                "answered",
+                "answeredLate",
+                "skipped",
+                "failed",
+                "waiting"
+              ]
+            }
+          }
+        },
+        "required": [
+          "generatedAt",
+          "days",
+          "stuckAfterMinutes",
+          "status",
+          "stuck",
+          "queued",
+          "stuckByReason",
+          "stuckOccurrences",
+          "byDay"
+        ]
       }
     },
     "parameters": {}
@@ -7480,6 +7662,76 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FailingCampaignsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/ops/stuck-occurrences": {
+      "get": {
+        "tags": [
+          "Internal"
+        ],
+        "summary": "Occurrences carrying a person that are blocked right now, plus a daily series (dashboard v2 Monitoring)",
+        "description": "Fleet-wide, staff. An occurrence carrying a person or an item, not done, waiting more than `stuckAfterMinutes` and tried 3+ times is STUCK unless it waits only on the customer's money (cap reached, not funded), on the brand's channel coming back, or on its turn behind a busy run in a queue that moved recently (`queued`). `status` is red when anything is stuck. `byDay` (UTC day the person acted) counts answered, answered late, skipped, failed and still waiting, recomputed from the occurrence rows. Sends nothing: red on the Monitoring hub is the alert. Nothing is written.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 90,
+              "description": "Days of daily series to serve (default 14)."
+            },
+            "required": false,
+            "description": "Days of daily series to serve (default 14).",
+            "name": "days",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stuck occurrences and the daily series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StuckOccurrencesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid days",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

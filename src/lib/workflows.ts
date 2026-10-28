@@ -24,6 +24,12 @@ export interface WorkflowExecutionInputs {
    * while nothing carried its occurrence (LEAD-EVENT-WHATSAPP-1027). Absent = the body is byte-identical to before.
    */
   conflictPolicy?: "reject";
+  /**
+   * The PERSON this execution is about (REACTIVE-THROUGHPUT-1028, workflow-service v0.48.189 `executionSubject`):
+   * workflow-service then admits one active execution per (campaign, subject) instead of per campaign, so runs
+   * about different people go side by side; how many at once is ours (lib/person-runs.ts). Absent = campaign-wide.
+   */
+  executionSubject?: string;
 }
 
 export interface WorkflowTriggerInput {
@@ -117,6 +123,7 @@ export async function executeCampaignWorkflow(
         ...(inputs.trigger ? { trigger: inputs.trigger } : {}),
       },
       ...(inputs.conflictPolicy ? { conflictPolicy: inputs.conflictPolicy } : {}),
+      ...(inputs.executionSubject ? { executionSubject: inputs.executionSubject } : {}),
     }),
   });
 
