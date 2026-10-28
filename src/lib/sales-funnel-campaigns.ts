@@ -547,6 +547,12 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
     instruction: row.instruction ?? null,
     githubIssue: serializeGithubIssue(row.githubIssue),
     githubIssueCheck: (row.githubIssueCheck ?? null) as GithubIssueCheck | null,
+    target: row.target ?? null,
+    brief: row.brief ?? null,
+    briefUpdatedAt: row.briefUpdatedAt ? row.briefUpdatedAt.toISOString() : null,
+    briefUpdatedByUserId: row.briefUpdatedByUserId ?? null,
+    mode: (row.mode ?? null) as "proactive" | "reactive" | null,
+    triggerId: row.triggerId ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     units: units.map((u) => ({

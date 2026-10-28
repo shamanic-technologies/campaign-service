@@ -1,4 +1,5 @@
 import { publishedSpelling, storedLegKey } from "./leg-identity.js";
+import { salesFunnelShapeOf, type SalesFunnelShape } from "./sales-funnel-target.js";
 import type { IdentityHeaders } from "@distribute/runs-client";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
@@ -211,6 +212,11 @@ export interface SalesFunnelPlan {
   salesFunnelId: string;
   salesFunnelName: string;
   units: SalesFunnelUnitPlan[];
+  /**
+   * What the funnel starts from and the step it ends at (lib/sales-funnel-target.ts), stated on the funnel campaign
+   * at birth. Optional so a hand-built plan (tests) may omit it: absent = left to the boot backfill.
+   */
+  shape?: SalesFunnelShape;
 }
 
 /** A refusal to launch a funnel, rendered VERBATIM by the caller (an agent or the dashboard). */
@@ -422,7 +428,10 @@ export async function resolveSalesFunnelPlan(
     });
   }
 
-  return { ok: true, plan: { salesFunnelId: read.value.id, salesFunnelName: read.value.name, units } };
+  return {
+    ok: true,
+    plan: { salesFunnelId: read.value.id, salesFunnelName: read.value.name, units, shape: salesFunnelShapeOf(read.value, catalogue.legs) },
+  };
 }
 
 /**

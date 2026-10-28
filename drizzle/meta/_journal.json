@@ -568,6 +568,13 @@
       "when": 1780500000000,
       "tag": "0080_trigger_health_days",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1780600000000,
+      "tag": "0081_sales_funnel_campaign_target_brief",
+      "breakpoints": true
     }
   ]
 }

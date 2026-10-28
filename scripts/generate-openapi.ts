@@ -197,6 +197,7 @@ const SALES_FUNNEL_CAMPAIGNS_DOC =
   + "RUN / PAUSE ONLY AT THE FUNNEL: the funnel campaign and every unit move together in one transaction (transition source `sales_funnel`); PATCH /campaigns/{id} {status} on a unit moves its WHOLE funnel campaign (a lead source unit keeps its own On/Off); its identity fields and DELETE are refused with 409 reason `sales_funnel_unit` (+ `salesFunnelCampaignId`). Stopping stops new first touches; follow-ups of people already contacted still go out. A payment hold or org teardown that stops the units stops the funnel campaign too, with the same stopReason. "
   + "SHARED REACTIVE PIPE: an event (step reached, trigger event, delay/poll detector) runs at most ONE campaign per pipe, the oldest live one that can run; the others are skipped `pipe_handled_by_another_campaign`. A unit's predecessor (whose people it answers) is resolved inside its own funnel campaign first. "
   + "MONEY: a unit's money is its funnel's caps at billing (GET /internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps: max budget + max volume, one-off / daily / weekly / monthly), never a per-(offer, leg, channel) ceiling or the brand pot. No max budget stated = every unit held unfunded (`campaign-hold` reason `unfunded`, gate-check `Sales funnel not funded`). Either cap `reached` = EVERY pipe of the funnel, reactive included, stops (owner 2026-10-10: always respect the user budget; gate-check `Sales funnel max budget reached` / `Sales funnel max volume reached`, step trigger skip `sales_funnel_cap`). A consumption billing cannot measure holds every pipe (fail-closed, logged). Caps never change a status. Billing is not signalled per unit (no plan money moves). "
+  + "TARGET + BRIEF (FACTORY-P1-CAMPAIGN-TARGET-BRIEF, 2026-10-28): every funnel campaign serves `target` (the OUTCOME it aims at: a catalogue step key, features-service's vocabulary carried verbatim, e.g. `positive_reply`, `meeting_booked`, `paid_client`; born = its funnel's last step, existing campaigns backfilled the same way), `brief` (its strategy in plain language, e.g. \"Cold email only, never write to someone who asked to stop, test for 30 days\", read by the judge that picks plays; NOT `instruction`, which the writer's messages follow) + `briefUpdatedAt`/`briefUpdatedByUserId` (every edit dated and attributed), and `mode` (proactive = starts from Start | reactive = starts from a trigger) + `triggerId` (features-service's statement of the funnel's head). Set `target`/`brief` on POST or PATCH; an unknown target = 400 `unknown_target_step`, catalogue unreadable = 502 `catalogue_unavailable`. Stating them changes nothing that runs, sends or spends. "
   + "Pre-funnel (leg x channel) campaigns are untouched and keep every route and shape they had.";
 
 registry.registerPath({
@@ -213,6 +214,19 @@ registry.registerPath({
     400: { description: "Refused", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string().optional() }) } } },
     409: { description: "Refused", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string(), blockedReason: z.string().optional() }) } } },
     502: { description: "A sibling could not be read — try again", content: { "application/json": { schema: z.object({ error: z.string(), reason: z.string() }) } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/sales-funnel-campaigns/target-backfill",
+  tags: ["Sales funnel campaigns"],
+  summary: "Every funnel campaign missing its target, mode or head trigger gets them from its funnel (staff, dry run by default)",
+  description: "FACTORY-P1-CAMPAIGN-TARGET-BRIEF. Body {apply?: boolean (default false = dry run)}. Target = the funnel's last step (the catalogue's `toStep` of its last leg), mode/triggerId = the funnel's head (features-service). Never overwrites a stated target. Also runs at boot. Answers the count per target (`byTarget`, `null` = none) and every campaign it could not fill (`failures[]` {salesFunnelCampaignId, salesFunnelId, reason: funnel_retired | catalogue_unavailable | funnel_has_no_legs | last_leg_unpublished}). Idempotent.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: z.object({ apply: z.boolean().optional() }) } } } },
+  responses: {
+    200: { description: "What was (or would be) filled", content: { "application/json": { schema: z.object({ apply: z.boolean(), scanned: z.number(), filled: z.number(), byTarget: z.record(z.string(), z.number()), failures: z.array(z.object({ salesFunnelCampaignId: z.string(), salesFunnelId: z.string(), reason: z.string(), detail: z.string().optional() })) }) } } },
   },
 });
 
@@ -317,8 +331,8 @@ registry.registerPath({
   method: "patch",
   path: "/sales-funnel-campaigns/{id}",
   tags: ["Sales funnel campaigns"],
-  summary: "Run or pause the whole sales funnel, and/or reword its instruction",
-  description: "Body {status?: activate | stop, instruction?: string | null} (at least one; 400 otherwise). `instruction` alone rewords (null clears) what every next run of its units carries to the workflow, status untouched. `stop` = cancel: no event dispatches a stopped campaign. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
+  summary: "Run or pause the whole sales funnel, reword its instruction, restate its target or brief",
+  description: "Body {status?: activate | stop, instruction?: string | null, target?: string, brief?: string | null} (at least one; 400 otherwise). `target` = the outcome it aims at (a catalogue step key; unknown = 400 `unknown_target_step`, catalogue unreadable = 502 `catalogue_unavailable`). `brief` = its strategy in plain language (null clears; a changed brief stamps `briefUpdatedAt` + `briefUpdatedByUserId` = x-user-id). Neither changes what runs. `instruction` alone rewords (null clears) what every next run of its units carries to the workflow, status untouched. `stop` = cancel: no event dispatches a stopped campaign. Every unit moves with the funnel in one transaction (transition source `sales_funnel`, stopReason `manual` on stop). activate requires x-user-id + x-run-id and meets the payment hold (409 payment_declined | no_payment_method, 502 billing_unavailable). Units become due at once; the scheduler decides, on the funnel's money, whether they may spend.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { params: z.object({ id: z.string() }), body: { content: { "application/json": { schema: UpdateSalesFunnelCampaignBody } } } },
   responses: {
