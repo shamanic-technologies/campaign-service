@@ -5,7 +5,6 @@ import { campaigns, planFollowingDays, salesFunnelCampaigns, salesFunnelPlanChan
 import { applySalesFunnelPlanChange, type PlanUnitDecision, type SalesFunnelUnitBirth } from "./campaign-status-history.js";
 import { acquisitionChannelForFeature, derivedCampaignName } from "./campaign-identity.js";
 import { sameLeg } from "./leg-identity.js";
-import { fetchPipe, fetchSalesFunnel } from "./sales-funnel-catalogue-client.js";
 import { ensureSourcesOnStart } from "./source-campaign-store.js";
 import { resolveSalesFunnelPlan, type SalesFunnelUnitPlan } from "./startable-pair.js";
 
@@ -29,9 +28,9 @@ import { resolveSalesFunnelPlan, type SalesFunnelUnitPlan } from "./startable-pa
  *     successor keeps the replies it earned): `plan_role = 'draining'`. It answers the people it already owes (a
  *     reactive pipe, a trigger event) and takes NO new people: the scheduler and a person's start never dispatch a
  *     draining unit that answers no trigger (lib/scheduler.ts, lib/selected-dispatch.ts).
- *   - CAPS GUARD (until billing counts every unit): billing measures a cap on the units whose pipe its funnel lists.
- *     A plan whose SPENDING pipes (a workflow runs them) are not all on the campaign's own funnel (`sales_funnel_id`)
- *     would spend outside the cap: not applied, red `plan_outside_caps`, the campaign keeps running what it ran.
+ *   - CAPS: billing (v0.83.67, FACTORY-P1-FOLLOW-PLAN-BILLING) counts EVERY unit of a funnel campaign held to a cap,
+ *     whatever pipe the plan put it on, once each, and serves those pipes' modes (`pipes[].outsideFunnel`). A unit's
+ *     caps read keys on the campaign's own `sales_funnel_id`, so a plan change is never uncapped nor double-capped.
  *   - No plan, an unreadable or failed plan, a plan we cannot run: nothing changes, loud log, red on Monitoring
  *     (`GET /internal/ops/plan-following`). Never stops, never runs uncapped. Never an email.
  *   - Every change applied is recorded (`sales_funnel_plan_changes`: when, from which funnel to which, each unit).
@@ -52,7 +51,6 @@ export type PlanCheckState =
   | "plan_unreadable"
   | "plan_not_ready"
   | "plan_not_runnable"
-  | "plan_outside_caps"
   | "apply_failed";
 
 /** States that are a problem a person must see (red on Monitoring). */
@@ -61,7 +59,6 @@ export const RED_PLAN_STATES: ReadonlySet<PlanCheckState> = new Set([
   "plan_unreadable",
   "plan_not_ready",
   "plan_not_runnable",
-  "plan_outside_caps",
   "apply_failed",
 ]);
 
@@ -160,20 +157,6 @@ export function planReconciliation(
   return { decisions, births };
 }
 
-/**
- * PURE: the planned pipes that SPEND (a workflow runs them) and that the campaign's own funnel (its caps' funnel) does
- * not list. Non-empty = the plan would spend outside the cap billing measures: not applied.
- */
-export function spendingPipesOutsideCaps(
-  planned: readonly SalesFunnelUnitPlan[],
-  capFunnelPipes: ReadonlyArray<{ channelSlug: string; legKey: string }>,
-): string[] {
-  return planned
-    .filter((p) => p.workflowSlug !== null)
-    .filter((p) => !capFunnelPipes.some((c) => c.channelSlug === p.featureSlug && sameLeg(p.featureSlug, c.legKey, p.legKey)))
-    .map((p) => p.pipeId);
-}
-
 // ── One campaign ─────────────────────────────────────────────────────────────────────────────────────
 
 export interface PlanCheckResult {
@@ -193,25 +176,11 @@ export interface PlanCheckResult {
 export interface PlanDeps {
   plan?: typeof fetchFactoryPlan;
   resolve?: typeof resolveSalesFunnelPlan;
-  salesFunnel?: typeof fetchSalesFunnel;
-  pipe?: typeof fetchPipe;
 }
 
 const pipeOf = (u: Pick<Campaign, "featureSlug" | "legKey">) => `${u.featureSlug}|${u.legKey}`;
 const runningPipes = (units: readonly Campaign[]) =>
   units.filter((u) => u.status === "ongoing" && u.planRole !== "draining").map(pipeOf).sort();
-
-async function capFunnelPipes(salesFunnelId: string, deps: PlanDeps): Promise<{ ok: true; pipes: Array<{ channelSlug: string; legKey: string }> } | { ok: false; detail: string }> {
-  const funnel = await (deps.salesFunnel ?? fetchSalesFunnel)(salesFunnelId);
-  if (!funnel.ok) return { ok: false, detail: `the campaign's own funnel ${salesFunnelId} is unreadable: ${funnel.detail}` };
-  const pipes: Array<{ channelSlug: string; legKey: string }> = [];
-  for (const id of funnel.value.pipeIds) {
-    const pipe = await (deps.pipe ?? fetchPipe)(id);
-    if (!pipe.ok) return { ok: false, detail: `pipe ${id} of the campaign's own funnel is unreadable: ${pipe.detail}` };
-    pipes.push({ channelSlug: pipe.value.channelSlug, legKey: pipe.value.legKey });
-  }
-  return { ok: true, pipes };
-}
 
 /**
  * Check ONE funnel campaign against its plan and, when `apply` and the campaign follows its plan, apply a changed
@@ -276,16 +245,6 @@ export async function checkSalesFunnelCampaignPlan(
   ];
   const pipesAfter = planned.map((p) => `${p.featureSlug}|${p.legKey}`).sort();
 
-  const caps = await capFunnelPipes(row.salesFunnelId, deps);
-  if (!caps.ok) return done("plan_unreadable", caps.detail, { plan: planMeta, pipesAfter, units: preview });
-  const outside = spendingPipesOutsideCaps(planned, caps.pipes);
-  if (outside.length > 0) {
-    return done(
-      "plan_outside_caps",
-      `Its plan ${shadow.funnelId} runs ${outside.join(", ")}, which its budget and volume caps do not measure yet (they count the pipes of ${row.salesFunnelId}). Not applied, so it never spends uncapped.`,
-      { plan: planMeta, pipesAfter, units: preview },
-    );
-  }
   if (!opts.apply || !row.followsPlan) {
     return done("following", `Dry run: it would move from ${running} to ${shadow.funnelId}.`, { plan: planMeta, pipesAfter, units: preview });
   }

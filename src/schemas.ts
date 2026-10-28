@@ -368,7 +368,7 @@ export const SalesFunnelCampaignSchema = z.object({
   // The funnel it runs now: the last plan applied, else `salesFunnelId`.
   runningSalesFunnelId: z.string(),
   // The latest plan check (null = never checked). `state`: following | applied | stopped | no_plan | plan_unreadable |
-  // plan_not_ready | plan_not_runnable | plan_outside_caps | apply_failed (the last six = red on Monitoring).
+  // plan_not_ready | plan_not_runnable | apply_failed (the last five = red on Monitoring).
   planCheck: z.object({
     state: z.string(),
     detail: z.string(),
