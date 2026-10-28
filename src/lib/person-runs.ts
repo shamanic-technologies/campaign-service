@@ -25,9 +25,10 @@ import type { EventPerson } from "./trigger-person.js";
  * reports holds its person at most that long. A run carrying nobody (the scheduler, a person's start, a campaign
  * naming its own people) keeps the campaign + cohort guard, byte-identical.
  *
- * Why 4: every DAG runs on the box's Windmill worker pool, which is 2 workers for the whole fleet
- * (`NUM_WORKERS=2`, 2026-10-28). 4 in flight keeps both workers busy on a burst with two runs queued behind them,
- * while a 160-person burst never parks more than 2 extra jobs in front of every other campaign's run. Each
+ * Why 4: every DAG runs on the box's Windmill worker pool, 3 jobs at once for the whole fleet (2 worker containers
+ * + the server's worker, owner 2026-10-28; `NUM_WORKERS>1` is ignored for non-native workers, the pool grows by
+ * containers). 4 in flight keeps every worker busy on a burst with one run queued behind them, while a 160-person
+ * burst never parks more than 1 extra job in front of every other campaign's run. Each
  * follow-up run also makes one LLM call through chat-service; 4 concurrent calls are far below its provider rate
  * limits. Raise it with the worker pool, never past what Windmill can run inside the liveness window.
  */
