@@ -166,9 +166,14 @@ export function resetPersonRunReservations(): void {
  * every click was answered hours late anyway. Newest first answers what just happened within a run's time whatever
  * the backlog; an older fact about the same person is then folded into that answer (`personAnsweredAfterFact`).
  * Generic: no trigger, channel or brand is ranked above another.
+ *
+ * A hold set after a FAILED run (`<campaignId> failure_backoff`) is woken the same way: a run that ends is the moment
+ * the backoff may have cleared (a success resets it), and a woken occurrence still in a backoff is simply held again
+ * until the backoff's own end (lib/trigger-events.ts `heldBackDueAt`). Before, those waited 10 min each.
  */
 export async function wakeOccurrencesHeldBy(campaignId: string, now: Date = new Date()): Promise<number> {
   const held = `${campaignId} run_in_flight`;
+  const backedOff = `${campaignId} failure_backoff`;
   const woken = await db
     .update(triggerEvents)
     .set({ dueAt: now })
@@ -176,7 +181,7 @@ export async function wakeOccurrencesHeldBy(campaignId: string, now: Date = new 
       SELECT id FROM trigger_events
       WHERE status = 'pending'
         AND due_at > ${now.toISOString()}::timestamptz
-        AND position(${held} in coalesce(last_error, '')) > 0
+        AND (position(${held} in coalesce(last_error, '')) > 0 OR position(${backedOff} in coalesce(last_error, '')) > 0)
       ORDER BY greatest(occurred_at, created_at) DESC
       LIMIT ${PERSON_RUNS_PER_CAMPAIGN_MAX}
     )`)
