@@ -103,6 +103,12 @@ export type ChannelCatalogueRead =
        * Absent / not served = empty: byte-identical.
        */
       triggerAliases?: ReadonlyMap<string, string>;
+      /**
+       * channel slug -> the channel's NAME as features-service publishes it ("AI Meeting Booking"). Read so a judge can
+       * be asked whether a brief names that channel (lib/sales-funnel-plan-brief.ts). A channel publishing no name is
+       * absent. Optional so a hand-built read (tests) may omit it.
+       */
+      nameBySlug?: ReadonlyMap<string, string>;
     }
   | { ok: false; detail: string };
 
@@ -173,6 +179,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
     const data = await res.json() as {
       channels?: Array<{
         slug?: unknown;
+        name?: unknown;
         operatedBy?: unknown;
         stepTransitions?: Array<{ legKey?: unknown; reactive?: unknown; mode?: unknown; triggerId?: unknown }>;
       }>;
@@ -211,8 +218,10 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
     const legsBySlug = new Map<string, ReadonlySet<string>>();
     const reactiveBySlug = new Map<string, ReadonlyMap<string, boolean>>();
     const triggerTransitions: CatalogueTriggerTransition[] = [];
+    const nameBySlug = new Map<string, string>();
     for (const channel of data.channels) {
       if (typeof channel?.slug !== "string" || channel.slug.length === 0) continue;
+      if (typeof channel.name === "string" && channel.name.trim().length > 0) nameBySlug.set(channel.slug, channel.name.trim());
       // Which legs this channel performs. A channel that publishes none states an EMPTY set,
       // which is a truthful answer ("this channel performs no leg") and
       // not the same thing as a slug the catalogue never names.
@@ -289,7 +298,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       }
     }
 
-    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug, triggers, triggerTransitions, triggerAliases };
+    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug, triggers, triggerTransitions, triggerAliases, nameBySlug };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

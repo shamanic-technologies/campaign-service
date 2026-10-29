@@ -916,6 +916,9 @@
           "appliedAt": {
             "type": "string"
           },
+          "reason": {
+            "type": "string"
+          },
           "units": {
             "type": "array",
             "items": {
@@ -945,6 +948,7 @@
           "toSalesFunnelId",
           "planComputedAt",
           "appliedAt",
+          "reason",
           "units"
         ]
       },

@@ -36,7 +36,7 @@ import { notifySalesFunnelCampaignPrecompute } from "../lib/sales-funnel-campaig
 import { deleteSalesFunnelCampaign } from "../lib/sales-funnel-campaign-delete.js";
 import { pgErrorOf } from "../lib/pg-error.js";
 import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sales-funnel-target.js";
-import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass } from "../lib/sales-funnel-plan.js";
+import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass, runSwitchOffFor } from "../lib/sales-funnel-plan.js";
 
 /**
  * SALES FUNNEL CAMPAIGNS (owner 2026-10-10, lib/sales-funnel-campaigns.ts).
@@ -175,7 +175,13 @@ router.post(
 
       let incumbent = await findIncumbent();
       // Handed back with the instruction, target and brief the caller states now (absent = untouched).
+      const wasFollowing = incumbent?.followsPlan ?? false;
       if (incumbent) incumbent = await applyEdits(incumbent, statedEdits(incumbent, { instruction, target, brief, followsPlan }, req.userId));
+      // Told to stop following its plan: back on its own funnel at once (lib/sales-funnel-plan.ts `switchOffPlan`).
+      if (incumbent && wasFollowing && followsPlan === false) {
+        await runSwitchOffFor(incumbent.id);
+        incumbent = (await findIncumbent()) ?? incumbent;
+      }
       // A campaign told to follow its plan (or started while it does) is checked against it at once.
       if (incumbent?.followsPlan && (followsPlan === true || status === "ongoing")) void runPlanCheckFor(incumbent.id);
       if (incumbent) {
@@ -426,11 +432,18 @@ router.patch(
       const edits = statedEdits(existing, { instruction, target, brief, followsPlan }, req.userId);
       // Turned to follow its plan, or started while it does: checked against its plan at once (after the write).
       const checkPlanNow = (followsPlan === true && !existing.followsPlan) || (status === "activate" && (followsPlan ?? existing.followsPlan));
+      // Turned OFF: back on its own funnel at once, before answering (lib/sales-funnel-plan.ts `switchOffPlan`).
+      const switchedOff = followsPlan === false && existing.followsPlan;
+      const backHome = async (row: SalesFunnelCampaign): Promise<SalesFunnelCampaign> => {
+        if (!switchedOff) return row;
+        await runSwitchOffFor(row.id);
+        return (await db.query.salesFunnelCampaigns.findFirst({ where: eq(salesFunnelCampaigns.id, row.id) })) ?? row;
+      };
 
       // Reword (or clear) the instruction its runs carry (read by every run at /start-run, so the next message
       // follows the new words), restate its target, rewrite its brief. Status untouched unless stated too.
       if (status === undefined) {
-        const reworded = await applyEdits(existing, edits);
+        const reworded = await backHome(await applyEdits(existing, edits));
         if (checkPlanNow) void runPlanCheckFor(reworded.id);
         const units = (await unitsOf([reworded.id], orgId)).get(reworded.id)!;
         return res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(reworded, units) });
@@ -453,10 +466,11 @@ router.patch(
         ...(status === "activate" ? { onUnitStarted: ensureUnitSources } : {}),
       });
       if (!written) return res.status(404).json({ error: "Sales funnel campaign not found" });
-      const parent = await applyEdits(written.salesFunnelCampaign, edits);
+      const parent = await backHome(await applyEdits(written.salesFunnelCampaign, edits));
       if (status === "activate") wakeScheduler();
       if (checkPlanNow) void runPlanCheckFor(parent.id);
-      res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, written.units) });
+      const units = switchedOff ? (await unitsOf([parent.id], orgId)).get(parent.id)! : written.units;
+      res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, units) });
     } catch (error) {
       console.error("[campaign-service] Update sales funnel campaign error:", error);
       res.status(500).json({ error: "Internal server error" });

@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { campaigns, planFollowingDays, salesFunnelCampaigns, salesFunnelPlanChanges, type Campaign, type SalesFunnelCampaign } from "../db/schema.js";
@@ -6,6 +6,7 @@ import { applySalesFunnelPlanChange, type PlanUnitDecision, type SalesFunnelUnit
 import { acquisitionChannelForFeature, derivedCampaignName } from "./campaign-identity.js";
 import { sameLeg } from "./leg-identity.js";
 import { ensureSourcesOnStart } from "./source-campaign-store.js";
+import { briefNamedUnits, type BriefGuardDeps } from "./sales-funnel-plan-brief.js";
 import { resolveSalesFunnelPlan, type SalesFunnelUnitPlan } from "./startable-pair.js";
 
 /**
@@ -34,6 +35,12 @@ import { resolveSalesFunnelPlan, type SalesFunnelUnitPlan } from "./startable-pa
  *   - No plan, an unreadable or failed plan, a plan we cannot run: nothing changes, loud log, red on Monitoring
  *     (`GET /internal/ops/plan-following`). Never stops, never runs uncapped. Never an email.
  *   - Every change applied is recorded (`sales_funnel_plan_changes`: when, from which funnel to which, each unit).
+ *   - A channel the BRIEF names is never drained by a plan (lib/sales-funnel-plan-brief.ts): kept running, red
+ *     `plan_contradicts_brief` with the plan's id (until a plan keeps it).
+ *   - SWITCHED OFF (PLAN-SWITCH-OFF-1029): the campaign goes back to its OWN funnel (`sales_funnel_id`) through the same
+ *     reconciliation: its funnel's units run again (out of draining, back on its funnel), units the plan bore that its
+ *     funnel does not name drain (never stopped: they owe follow-ups), `running_sales_funnel_id` = its funnel, a
+ *     history row `reason: 'switched_off'`. At once on the switch, retried by every pass until it is home.
  *
  * Cadence: an in-process pass (first ~60 s after boot, then every 10 min, single flight) over every ONGOING funnel
  * campaign following its plan, plus one at once when the switch is turned on or the campaign started.
@@ -47,6 +54,9 @@ export type PlanCheckState =
   | "following"
   | "applied"
   | "stopped"
+  | "switched_off"
+  | "plan_contradicts_brief"
+  | "restore_failed"
   | "no_plan"
   | "plan_unreadable"
   | "plan_not_ready"
@@ -60,6 +70,8 @@ export const RED_PLAN_STATES: ReadonlySet<PlanCheckState> = new Set([
   "plan_not_ready",
   "plan_not_runnable",
   "apply_failed",
+  "plan_contradicts_brief",
+  "restore_failed",
 ]);
 
 export interface PlanCheck {
@@ -173,7 +185,7 @@ export interface PlanCheckResult {
   units: Array<{ campaignId: string | null; pipeId: string; action: string }> | null;
 }
 
-export interface PlanDeps {
+export interface PlanDeps extends BriefGuardDeps {
   plan?: typeof fetchFactoryPlan;
   resolve?: typeof resolveSalesFunnelPlan;
 }
@@ -229,6 +241,11 @@ export async function checkSalesFunnelCampaignPlan(
     );
   }
   if (shadow.funnelId === running) {
+    // A unit kept because the brief names it stays red while the plan still leaves it out.
+    const prev = row.planCheck as PlanCheck | null;
+    if (row.followsPlan && prev?.state === "plan_contradicts_brief" && prev.planSalesFunnelId === shadow.funnelId) {
+      return done("plan_contradicts_brief", prev.detail, { plan: planMeta, pipesAfter: base.pipesBefore });
+    }
     return done("following", `It runs its plan ${running}.`, { plan: planMeta, pipesAfter: base.pipesBefore });
   }
 
@@ -249,6 +266,17 @@ export async function checkSalesFunnelCampaignPlan(
     return done("following", `Dry run: it would move from ${running} to ${shadow.funnelId}.`, { plan: planMeta, pipesAfter, units: preview });
   }
 
+  // The backstop: a running unit the plan would drain whose channel the brief names is kept running.
+  const drainIds = new Set(decisions.filter((d) => d.action === "draining").map((d) => d.unitId));
+  const guard = await briefNamedUnits(row, units.filter((u) => drainIds.has(u.id)), deps);
+  if (!guard.ok) {
+    return done("apply_failed", `Its plan ${shadow.funnelId} was not applied: ${guard.detail}`, { plan: planMeta, pipesAfter, units: preview });
+  }
+  const keptByBrief = new Set(guard.keep.map((k) => k.unitId));
+  const contradiction = guard.keep.length
+    ? `Its plan ${shadow.funnelId} leaves out ${[...new Set(guard.keep.map((k) => k.channelName))].join(", ")}, which its brief names: kept running.`
+    : null;
+
   try {
     const applied = await applySalesFunnelPlanChange({
       salesFunnelCampaignId: row.id,
@@ -257,7 +285,11 @@ export async function checkSalesFunnelCampaignPlan(
       toSalesFunnelId: shadow.funnelId,
       planComputedAt: new Date(read.plan.computedAt),
       decide: (parent, fresh) => {
-        const d = planReconciliation(fresh, planned);
+        const r = planReconciliation(fresh, planned);
+        const d = {
+          ...r,
+          decisions: r.decisions.map((x) => (x.action === "draining" && keptByBrief.has(x.unitId) ? { ...x, action: "kept_by_brief" as const } : x)),
+        };
         const idTag = parent.id.slice(0, 8);
         const unitBirths: Array<SalesFunnelUnitBirth & { pipeId: string }> = d.births.map((b) => ({
           pipeId: b.pipeId,
@@ -278,9 +310,109 @@ export async function checkSalesFunnelCampaignPlan(
     console.log(
       `[campaign-service] Funnel campaign ${row.id} follows its plan: ${running} -> ${shadow.funnelId} (${applied.changeUnits.map((u) => `${u.pipeId} ${u.action}`).join(", ")})`,
     );
+    if (contradiction) {
+      return done("plan_contradicts_brief", contradiction, { plan: planMeta, pipesAfter, units: applied.changeUnits });
+    }
     return done("applied", `It moved from ${running} to ${shadow.funnelId}.`, { plan: planMeta, pipesAfter, units: applied.changeUnits });
   } catch (err) {
     return done("apply_failed", `Its plan ${shadow.funnelId} could not be applied: ${err instanceof Error ? err.message : String(err)}`, { plan: planMeta, pipesAfter, units: preview });
+  }
+}
+
+// ── Switched off: back to its own funnel ─────────────────────────────────────────────────────────────
+
+/** Is a campaign that no longer follows its plan still carrying the plan's behaviour? */
+export function awayFromOwnFunnel(
+  row: Pick<SalesFunnelCampaign, "salesFunnelId" | "runningSalesFunnelId">,
+  units: ReadonlyArray<Pick<Campaign, "salesFunnelId" | "planRole">>,
+): boolean {
+  const own = row.salesFunnelId;
+  if ((row.runningSalesFunnelId ?? own) !== own) return true;
+  // A unit of its funnel draining, or a running unit on another funnel (a plan's play).
+  return units.some((u) => (u.planRole === "draining" ? (u.salesFunnelId ?? own) === own : (u.salesFunnelId ?? own) !== own));
+}
+
+/**
+ * The switch is OFF: put the campaign back on its OWN funnel (`sales_funnel_id`) with the plan's reconciliation, its
+ * funnel as the plan. Its funnel's units run again (kept: out of draining, back on its funnel and trigger), a unit a
+ * plan bore that its funnel does not name drains (never stopped), the running funnel returns home, recorded with
+ * `reason: 'switched_off'`. Already home = nothing written. Never throws: a failure is red `restore_failed`, retried
+ * by the next pass.
+ */
+export async function switchOffPlan(row: SalesFunnelCampaign, deps: PlanDeps = {}, now: Date = new Date()): Promise<PlanCheckResult | null> {
+  const own = row.salesFunnelId;
+  const running = row.runningSalesFunnelId ?? own;
+  const units = await db
+    .select()
+    .from(campaigns)
+    .where(and(eq(campaigns.orgId, row.orgId), eq(campaigns.salesFunnelCampaignId, row.id)))
+    .orderBy(asc(campaigns.createdAt));
+  if (row.followsPlan || !awayFromOwnFunnel(row, units)) return null;
+  const base = { salesFunnelCampaignId: row.id, orgId: row.orgId, brandId: row.brandId, runningSalesFunnelId: running, pipesBefore: runningPipes(units) };
+  const fail = (detail: string): PlanCheckResult => {
+    console.error(`[campaign-service] Funnel campaign ${row.id} switched off but not back on its funnel ${own}: ${detail}`);
+    return { ...base, pipesAfter: null, units: null, check: { state: "restore_failed", detail, checkedAt: now.toISOString() } };
+  };
+  const userId = row.createdByUserId;
+  const runId = units.find((u) => u.anchorRunId)?.anchorRunId ?? row.parentRunId;
+  if (!userId || !runId) return fail("The campaign states no creator or run to read its funnel under.");
+  try {
+    const resolved = await (deps.resolve ?? resolveSalesFunnelPlan)(own, { orgId: row.orgId, userId, runId, brandId: row.brandId, offerId: row.offerId });
+    if (!resolved.ok) return fail(`Its funnel ${own} could not be read: ${resolved.refusal.code}: ${resolved.refusal.message}`);
+    const planned = resolved.plan.units;
+    const applied = await applySalesFunnelPlanChange({
+      salesFunnelCampaignId: row.id,
+      orgId: row.orgId,
+      fromSalesFunnelId: running,
+      toSalesFunnelId: own,
+      planComputedAt: null,
+      reason: "switched_off",
+      decide: (parent, fresh) => {
+        const d = planReconciliation(fresh, planned);
+        const idTag = parent.id.slice(0, 8);
+        return {
+          decisions: d.decisions,
+          births: d.births.map((b) => ({
+            pipeId: b.pipeId,
+            featureSlug: b.featureSlug,
+            legKey: b.legKey,
+            workflowSlug: b.workflowSlug,
+            runsOnTriggerId: b.runsOnTriggerId,
+            acquisitionChannel: acquisitionChannelForFeature(b.featureSlug)!,
+            name: `${parent.salesFunnelName} ${idTag} - ${derivedCampaignName(b.featureSlug, parent.brandId, parent.offerId, b.legKey)}`,
+          })),
+        };
+      },
+      onUnitStarted: async (tx, unit) => {
+        await ensureSourcesOnStart(tx, unit);
+      },
+    });
+    if (!applied.applied) return null;
+    console.log(
+      `[campaign-service] Funnel campaign ${row.id} switched off: ${running} -> its funnel ${own} (${applied.changeUnits.map((u) => `${u.pipeId} ${u.action}`).join(", ")})`,
+    );
+    return {
+      ...base,
+      pipesAfter: planned.map((p) => `${p.featureSlug}|${p.legKey}`).sort(),
+      units: applied.changeUnits,
+      check: { state: "switched_off", detail: `Switched off: back to its funnel ${own}.`, checkedAt: now.toISOString() },
+    };
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** Switch-off restore of one campaign now (the PATCH), storing its verdict. Never throws. */
+export async function runSwitchOffFor(salesFunnelCampaignId: string, deps: PlanDeps = {}): Promise<PlanCheckResult | null> {
+  try {
+    const row = await db.query.salesFunnelCampaigns.findFirst({ where: eq(salesFunnelCampaigns.id, salesFunnelCampaignId) });
+    if (!row || row.followsPlan) return null;
+    const result = await switchOffPlan(row, deps);
+    if (result) await storeCheck(row.id, result.check);
+    return result;
+  } catch (err) {
+    console.error(`[campaign-service] Switch-off of funnel campaign ${salesFunnelCampaignId} failed:`, err);
+    return null;
   }
 }
 
@@ -325,6 +457,23 @@ export async function runPlanFollowerPass(now: Date = new Date(), deps: PlanDeps
     }
     const day = now.toISOString().slice(0, 10);
     const [existing] = await db.select().from(planFollowingDays).where(eq(planFollowingDays.day, day));
+    // Switched off but still on a plan's funnel (the PATCH's restore failed): retried here until home.
+    const away = await db
+      .select()
+      .from(salesFunnelCampaigns)
+      .where(
+        and(
+          eq(salesFunnelCampaigns.followsPlan, false),
+          isNotNull(salesFunnelCampaigns.runningSalesFunnelId),
+          ne(salesFunnelCampaigns.runningSalesFunnelId, salesFunnelCampaigns.salesFunnelId),
+        ),
+      );
+    for (const row of away) {
+      const result = await switchOffPlan(row, deps, now);
+      if (!result) continue;
+      await storeCheck(row.id, result.check);
+      if (RED_PLAN_STATES.has(result.check.state)) red += 1;
+    }
     const changesApplied = (existing?.changesApplied ?? 0) + applied;
     await db
       .insert(planFollowingDays)
@@ -369,6 +518,7 @@ export async function readPlanChanges(salesFunnelCampaignId: string) {
     toSalesFunnelId: r.toSalesFunnelId,
     planComputedAt: r.planComputedAt ? r.planComputedAt.toISOString() : null,
     appliedAt: r.appliedAt.toISOString(),
+    reason: r.reason,
     units: r.units as Array<{ campaignId: string; pipeId: string; action: string }>,
   }));
 }
@@ -379,9 +529,19 @@ export async function readPlanChanges(salesFunnelCampaignId: string) {
  */
 export async function readPlanFollowing(days: number, now: Date = new Date()) {
   const since = new Date(now.getTime() - (days - 1) * 86_400_000).toISOString().slice(0, 10);
-  const following = await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.followsPlan, true));
-  const red = following
-    .filter((r) => r.status === "ongoing" && r.planCheck && RED_PLAN_STATES.has((r.planCheck as PlanCheck).state))
+  const watched = await db
+    .select()
+    .from(salesFunnelCampaigns)
+    .where(
+      or(
+        eq(salesFunnelCampaigns.followsPlan, true),
+        and(isNotNull(salesFunnelCampaigns.runningSalesFunnelId), ne(salesFunnelCampaigns.runningSalesFunnelId, salesFunnelCampaigns.salesFunnelId)),
+      ),
+    );
+  const following = watched.filter((r) => r.followsPlan);
+  // Red: a campaign following its plan on a red state, or one switched off that is not back on its funnel yet.
+  const red = watched
+    .filter((r) => (r.followsPlan ? r.status === "ongoing" : true) && r.planCheck && RED_PLAN_STATES.has((r.planCheck as PlanCheck).state))
     .map((r) => ({
       salesFunnelCampaignId: r.id,
       orgId: r.orgId,

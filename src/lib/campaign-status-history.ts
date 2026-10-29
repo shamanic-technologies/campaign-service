@@ -677,8 +677,10 @@ export interface PlanUnitDecision {
   unitId: string;
   pipeId: string;
   /** kept: its pipe is in the plan (moves to the plan's funnel, so its play is the plan's); draining: its pipe left
-   *  the plan, it stays as it is (ON keeps answering people it owes, takes no new people: lib/sales-funnel-plan.ts). */
-  action: "kept" | "draining";
+   *  the plan, it stays as it is (ON keeps answering people it owes, takes no new people: lib/sales-funnel-plan.ts);
+   *  kept_by_brief: its pipe left the plan but the campaign's brief names its channel, so it is left untouched, running
+   *  (lib/sales-funnel-plan-brief.ts), only recorded. */
+  action: "kept" | "draining" | "kept_by_brief";
   /** The trigger it runs on under the plan's funnel (kept units only). */
   runsOnTriggerId?: string | null;
 }
@@ -699,6 +701,12 @@ export async function applySalesFunnelPlanChange(write: {
   fromSalesFunnelId: string;
   toSalesFunnelId: string;
   planComputedAt: Date | null;
+  /**
+   * Why it moves (PLAN-SWITCH-OFF-1029). 'plan' (default): a plan applied, only while the campaign follows its plan.
+   * 'switched_off': the switch was turned off, the campaign goes back to its OWN funnel (`toSalesFunnelId` =
+   * `sales_funnel_id`), only while it no longer follows its plan. Same reconciliation, recorded with its reason.
+   */
+  reason?: "plan" | "switched_off";
   /** Decides on the rows read INSIDE the transaction (pure: lib/sales-funnel-plan.ts). */
   decide: (parent: SalesFunnelCampaign, units: CampaignRow[]) => { decisions: PlanUnitDecision[]; births: Array<SalesFunnelUnitBirth & { pipeId: string }> };
   onUnitStarted?: OnUnitStarted;
@@ -714,7 +722,9 @@ export async function applySalesFunnelPlanChange(write: {
       .where(and(eq(salesFunnelCampaigns.id, write.salesFunnelCampaignId), eq(salesFunnelCampaigns.orgId, write.orgId)))
       .for("update");
     if (!locked) return { applied: false as const, reason: "not_found" as const };
-    if ((locked.runningSalesFunnelId ?? locked.salesFunnelId) !== write.fromSalesFunnelId || !locked.followsPlan) {
+    const reason = write.reason ?? "plan";
+    const switchMatches = reason === "plan" ? locked.followsPlan : !locked.followsPlan;
+    if ((locked.runningSalesFunnelId ?? locked.salesFunnelId) !== write.fromSalesFunnelId || !switchMatches) {
       return { applied: false as const, reason: "moved" as const };
     }
     const before = await tx
@@ -724,6 +734,7 @@ export async function applySalesFunnelPlanChange(write: {
     const { decisions, births } = write.decide(locked, before);
     const byId = new Map(before.map((u) => [u.id, u]));
     for (const d of decisions) {
+      if (d.action === "kept_by_brief") continue;
       const [row] = await tx
         .update(campaigns)
         .set(
@@ -755,6 +766,7 @@ export async function applySalesFunnelPlanChange(write: {
       toSalesFunnelId: write.toSalesFunnelId,
       planComputedAt: write.planComputedAt,
       units: changeUnits,
+      reason,
       appliedAt: now,
     });
     return { applied: true as const, salesFunnelCampaign: parent, units: [...byId.values(), ...born], changeUnits };
