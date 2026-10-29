@@ -26,3 +26,20 @@
  * correct, it simply has nobody to answer this minute.
  */
 export const NO_WORK_RECHECK_MS = 10 * 60_000; // 10 min
+
+/**
+ * An idle run never pushes back a turn already scheduled SOONER (OLIVE-OWED-STARVED-1029).
+ *
+ * "Nothing to do" is the run's statement about ITS OWN work. An occurrence run (a trigger fired for one person) that
+ * refuses its person says nothing about the campaign's queue, yet each one rewrote `nextRunAt` to now + 10 min,
+ * overwriting the earlier turn a previous idle run had set. On a reactive campaign whose trigger fires every minute
+ * (Lead event: every prospect fact reaches the client check-in pipe, which refuses them all), the turn that reads
+ * who is OWED moved ten minutes away every minute and never came while the day was busy: prod 2026-10-29, a client
+ * owed a WhatsApp check-in at 13:28 was still unclaimed at 13:56 (lead-service answered owedNow=true), idle turns ran
+ * only at night. Keep the earlier of the two; a turn already due (in the past) is the one that just ran.
+ */
+export function idleNextRunAt(now: Date, current: Date | null | undefined): Date {
+  const idle = new Date(now.getTime() + NO_WORK_RECHECK_MS);
+  if (current && current.getTime() > now.getTime() && current.getTime() < idle.getTime()) return current;
+  return idle;
+}

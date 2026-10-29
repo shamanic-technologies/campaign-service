@@ -35,7 +35,7 @@ import { fetchBrandRuntimeContext } from "../lib/brand-runtime-client.js";
 import { markAudienceExhausted, resolveAudienceExhaustion, getFreshExhaustedAudienceIds, hasExhaustedAudience, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../lib/audience-exhaustion.js";
 import { recordAudienceAvailability } from "../lib/campaign-audience-availability.js";
 import { stopOrgCampaignsWithHistory, TRANSITION_SOURCES } from "../lib/campaign-status-history.js";
-import { NO_WORK_RECHECK_MS } from "../lib/idle-run.js";
+import { NO_WORK_RECHECK_MS, idleNextRunAt } from "../lib/idle-run.js";
 import { transferBrand } from "../lib/brand-transfer.js";
 import { maybeSendExtendAudienceEmail } from "../lib/transactional-email.js";
 import { serveableAudienceIdsForCampaign } from "../lib/serveable-audience.js";
@@ -774,7 +774,16 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
           : idle
             ? NO_WORK_RECHECK_MS
             : RERUN_GRACE_MS;
-      const nextRunAt = new Date(Date.now() + delayMs);
+      let nextRunAt = new Date(Date.now() + delayMs);
+      if (idle && !waitingForAudience) {
+        // An idle run keeps a turn already scheduled sooner (lib/idle-run.ts `idleNextRunAt`, OLIVE-OWED-STARVED-1029).
+        const current = await db.query.campaigns.findFirst({
+          where: and(eq(campaigns.id, campaignId), eq(campaigns.orgId, orgId)),
+          columns: { nextRunAt: true },
+        });
+        nextRunAt = idleNextRunAt(new Date(), current?.nextRunAt ?? null);
+      }
+      const scheduledDelayMs = nextRunAt.getTime() - Date.now();
 
       if (req.runId) {
         traceEvent(req.runId, {
@@ -807,7 +816,7 @@ router.post("/end-run", requireApiKey, requirePipelineHeaders, trackingHeaders, 
       } else if (idle) {
         // Expected business state, not a fault, and it fires on the idle cadence rather than once
         // per run — which is the whole point of this branch.
-        console.log(`[campaign-service] Run had nothing to do for campaign ${campaignId} — waiting ${delayMs}ms instead of the run cadence (nextRunAt=${nextRunAt.toISOString()}); an interested prospect still triggers it immediately`);
+        console.log(`[campaign-service] Run had nothing to do for campaign ${campaignId} — waiting ${scheduledDelayMs}ms instead of the run cadence (nextRunAt=${nextRunAt.toISOString()}); an interested prospect still triggers it immediately`);
       } else {
         console.log(`[campaign-service] Set nextRunAt=${nextRunAt.toISOString()} for campaign ${campaignId} (status=${status})`);
       }
