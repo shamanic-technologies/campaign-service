@@ -139,6 +139,25 @@ export async function resolveUnitPlay(
   }
 }
 
+/**
+ * RATION-PER-PLAY-1029: the key on which campaigns sharing a reactive pipe are rationed to one dispatch per event
+ * (lib/sales-funnel-campaigns.ts rule 1) is the PLAY each unit runs, read from the catalogue like the attribution
+ * above: `play:<play id>` (the default play is the bare pipe id). A unit whose play cannot be read gets no key, so
+ * its caller rations it on the pipe as before (fail closed: never two answers because a read failed).
+ */
+export async function playRationKeys(units: readonly AttributedCampaign[], deps?: PlayCatalogueDeps): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const u of units) {
+    const play = await resolveUnitPlay(u, deps);
+    if ((play.state === "resolved" || play.state === "no_play") && play.playId) {
+      out.set(u.id, `play:${play.playId}`);
+    } else {
+      console.error(`[campaign-service] campaign ${u.id}: its play could not be read (${play.state}: ${play.detail}); rationed on its pipe`);
+    }
+  }
+  return out;
+}
+
 export interface RunPlayRecord {
   runId: string;
   runKind: RunKind;

@@ -55,7 +55,8 @@ vi.mock("../src/lib/sales-funnel-campaign-precompute.js", () => ({
 // features-service's catalogue. Stubbed so no dispatch test talks to features-service; its own tests restore the actual.
 vi.mock("../src/lib/run-play-attribution.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/run-play-attribution.js")>();
-  return { ...original, attributeRunPlay: vi.fn() };
+  // No play read in dispatch tests: every unit is rationed on its pipe unless a test states plays (RATION-PER-PLAY-1029).
+  return { ...original, attributeRunPlay: vi.fn(), playRationKeys: vi.fn(async () => new Map<string, string>()) };
 });
 
 process.env.NODE_ENV = "test";
