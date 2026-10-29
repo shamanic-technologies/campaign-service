@@ -8,7 +8,7 @@ import { isSalesFunnelUnit, orderForSharedPipes, pipeKey, salesFunnelUnitMoney, 
 import { ensureCampaignRunId } from "./trigger-run.js";
 import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
-import { attributeRunPlay } from "./run-play-attribution.js";
+import { attributeRunPlay, playRationKeys } from "./run-play-attribution.js";
 import { executeCampaignWorkflow, type WorkflowTriggerInput } from "./workflows.js";
 import { isRunInFlightRefusal } from "./workflow-refusal.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
@@ -352,8 +352,14 @@ export async function runCampaignsInScope(
   const targeting = unitParentIds.length > 0 ? await targetingOfSalesFunnelCampaigns(unitParentIds) : new Map();
   const personal = matched.filter((c) => unitPeople(c, targeting));
   const pooled = matched.filter((c) => !unitPeople(c, targeting));
-  const responsible = [...orderForSharedPipes(pooled), ...personal];
-  const sharedPipes = sharedSalesFunnelPipes(pooled);
+  // Rationed per PLAY, not per pipe (RATION-PER-PLAY-1029): two plays on one pipe answer disjoint people.
+  const onSharedPipe = sharedSalesFunnelPipes(pooled);
+  const playKeys = onSharedPipe.size > 0
+    ? await playRationKeys(pooled.filter((c) => isSalesFunnelUnit(c) && onSharedPipe.has(pipeKey(c))))
+    : new Map<string, string>();
+  const rationKey = (c: Campaign) => playKeys.get(c.id) ?? pipeKey(c);
+  const responsible = [...orderForSharedPipes(pooled, rationKey), ...personal];
+  const sharedPipes = sharedSalesFunnelPipes(pooled, rationKey);
   const firedPipes = new Map<string, string>();
 
   let offCampaignIds: string[] = [];
@@ -415,7 +421,7 @@ export async function runCampaignsInScope(
       continue;
     }
 
-    const pipe = !people && sharedPipes.has(pipeKey(campaign)) ? pipeKey(campaign) : null;
+    const pipe = !people && sharedPipes.has(rationKey(campaign)) ? rationKey(campaign) : null;
     const answeredBy = pipe ? firedPipes.get(pipe) : undefined;
     if (answeredBy) {
       skip(
