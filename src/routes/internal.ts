@@ -5,6 +5,7 @@ import { settleTriggerDelivery } from "../lib/trigger-deliveries.js";
 import { wakeOccurrencesHeldBy } from "../lib/person-runs.js";
 import { readStuckOccurrences } from "../lib/stuck-occurrences.js";
 import { readTriggerHealth } from "../lib/trigger-health.js";
+import { readUnsentAnswers } from "../lib/unsent-answers.js";
 import { targetingOfSalesFunnelCampaigns } from "../lib/sales-funnel-people-store.js";
 import { eq, and, sql, or, ne, isNotNull, gt, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -25,7 +26,7 @@ import {
   recordRunSuccess,
   type RecordedFailure,
 } from "../lib/run-failure-backoff.js";
-import { OpenOnDemandRunBody, StuckOccurrencesQuery, TriggerHealthQuery, TriggerRanCountsQuery } from "../schemas.js";
+import { OpenOnDemandRunBody, StuckOccurrencesQuery, TriggerHealthQuery, TriggerRanCountsQuery, UnsentAnswersQuery } from "../schemas.js";
 import { AnsweringCampaignsBody, BrandTriggerOffersQuery, SettleWithdrawnBody, WithdrawTriggerEventBody, EarningHistoryBody, EarningHistoryQuery, EndRunBody, OfferTriggerEventForPersonQuery, OfferTriggerEventsListQuery, OfferTriggerEventsSummaryQuery, RecordTriggerEventBody, RecurringStatusQuery, TransferBrandBody, TriggerForStepBody } from "../schemas.js";
 import type { z } from "zod";
 import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
@@ -1266,6 +1267,20 @@ router.get("/internal/ops/stuck-occurrences", requireApiKey, validateQuery(Stuck
     res.json(await readStuckOccurrences(days ?? 14));
   } catch (error) {
     console.error("[campaign-service] stuck-occurrences read error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /internal/ops/unsent-answers?days= — the dashboard v2 Monitoring card (lib/unsent-answers.ts,
+ * ONE-AI-REFUSED-ANSWERS-1029): red when an answer owed to a person who acted was refused by the sender or given up.
+ */
+router.get("/internal/ops/unsent-answers", requireApiKey, validateQuery(UnsentAnswersQuery), async (req, res) => {
+  try {
+    const { days } = UnsentAnswersQuery.parse(req.query);
+    res.json(await readUnsentAnswers(days ?? 14));
+  } catch (error) {
+    console.error("[campaign-service] unsent-answers read error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

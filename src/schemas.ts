@@ -1312,6 +1312,44 @@ export const StuckOccurrencesResponse = z.object({
   })),
 }).openapi("StuckOccurrencesResponse");
 
+// --- Unsent answers (dashboard v2 Monitoring, ONE-AI-REFUSED-ANSWERS-1029) ---
+
+export const UnsentAnswersQuery = z.object({
+  days: z.coerce.number().int().min(1).max(90).optional().describe("Days of daily series to serve (default 14)."),
+});
+
+export const UnsentAnswersResponse = z.object({
+  generatedAt: z.string(),
+  days: z.number().int(),
+  status: z.enum(["ok", "red"]).describe("red = an answer owed to a person who acted was refused by the sender (other than: the brand's team already answered) or given up after failed runs, in the last redWindowHours."),
+  redWindowHours: z.number().int(),
+  brokenLast24h: z.number().int(),
+  unsent: z.array(z.object({
+    occurrenceId: z.string(),
+    orgId: z.string(),
+    brandId: z.string(),
+    offerId: z.string(),
+    triggerId: z.string().nullable(),
+    campaignId: z.string(),
+    campaignName: z.string().nullable(),
+    person: StuckPerson.nullable(),
+    state: z.enum(["refused", "failed"]).describe("refused = the run wrote it, the sender refused it; failed = every run failed or never reported, no longer redelivered."),
+    refusalCode: z.string().nullable(),
+    refusalReason: z.string().nullable(),
+    runs: z.number().int(),
+    at: z.string(),
+  })).describe("Most recent first, at most 100, over the whole window."),
+  byDay: z.array(z.object({
+    day: z.string(),
+    answered: z.number().int(),
+    answeredByTeam: z.number().int().describe("Refused because the brand's team already answered by hand (human_in_conversation): normal."),
+    replaying: z.number().int().describe("Refused because the brand's channel was down, being replayed: normal."),
+    refused: z.number().int().describe("Broken (red)."),
+    failed: z.number().int().describe("Broken (red)."),
+    refusedByCode: z.array(z.object({ code: z.string(), count: z.number().int() })),
+  })).describe("Every UTC day of the window, oldest first, by the day the last run for the answer ended."),
+}).openapi("UnsentAnswersResponse");
+
 export const TriggerHealthQuery = z.object({
   days: z.coerce.number().int().min(1).max(90).optional().describe("Days of daily series to serve (default 14)."),
 });

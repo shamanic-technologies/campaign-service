@@ -39,6 +39,8 @@ import {
   RecurringStatusQuery,
   FailingCampaignsResponse,
   StuckOccurrencesQuery,
+  UnsentAnswersQuery,
+  UnsentAnswersResponse,
   TriggerHealthQuery,
   TriggerHealthResponse,
   StuckOccurrencesResponse,
@@ -1067,6 +1069,23 @@ registry.registerPath({
   request: { query: StuckOccurrencesQuery },
   responses: {
     200: { description: "Stuck occurrences and the daily series", content: { "application/json": { schema: StuckOccurrencesResponse } } },
+    400: { description: "Invalid days", content: { "application/json": { schema: ErrorResponse } } },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/ops/unsent-answers",
+  tags: ["Internal"],
+  summary: "Answers owed to a person who acted that never left, plus a daily series (dashboard v2 Monitoring)",
+  description:
+    "Fleet-wide, staff, every trigger and campaign the same way. Per occurrence carrying a person or an item (the person who acted), what they finally got across every campaign that ran for it: `answered` (a run completed, including a decision to write later or nothing), `answeredByTeam` (the sender refused because the brand's team already answered by hand, `human_in_conversation`: normal), `replaying` (refused only because the brand's channel was down, being replayed: normal), `refused` (any other sender refusal: RED, the person got no answer) or `failed` (runs failed or never reported, nobody completed, and nothing redelivers it any more: RED). One campaign failing while another answers the same person is `answered`. A person the pipe's strategy does not answer, a run in flight, a redelivery still pending (see stuck-occurrences) or a campaign a person turned off are not counted. `status` is red when a broken answer ended in the last `redWindowHours`. Sends nothing: red on the Monitoring hub is the alert. Nothing is written.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { query: UnsentAnswersQuery },
+  responses: {
+    200: { description: "Unsent answers and the daily series", content: { "application/json": { schema: UnsentAnswersResponse } } },
     400: { description: "Invalid days", content: { "application/json": { schema: ErrorResponse } } },
     401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
     500: { description: "Internal error", content: { "application/json": { schema: ErrorResponse } } },
