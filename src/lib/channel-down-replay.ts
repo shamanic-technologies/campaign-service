@@ -165,8 +165,16 @@ export async function judgeRefusals(now: Date = new Date(), limit = JUDGE_LIMIT)
   return judged;
 }
 
-/** One Jev call under a run of the refused campaign's own tree (opened, then closed completed / failed). */
-export async function judgeUnderCampaignRun(campaignId: string, state: Record<string, unknown>): Promise<number> {
+/**
+ * One Jev call under a run of the campaign's own tree (opened, then closed completed / failed). The channel-down
+ * question by default; another judgment of that campaign's production names its own question + task
+ * (lib/sales-funnel-plan-brief.ts).
+ */
+export async function judgeUnderCampaignRun(
+  campaignId: string,
+  state: Record<string, unknown>,
+  ask: { question: NoulQuestion; taskName: string } = { question: CHANNEL_DOWN_QUESTION, taskName: "channel-down-judgment" },
+): Promise<number> {
   const [campaign] = await db
     .select({
       id: campaigns.id,
@@ -193,17 +201,17 @@ export async function judgeUnderCampaignRun(campaignId: string, state: Record<st
     ...identity,
     parentRunId: anchorRunId,
     serviceName: "campaign-service",
-    taskName: "channel-down-judgment",
+    taskName: ask.taskName,
   });
   try {
-    const p = await judgeNoul(state, CHANNEL_DOWN_QUESTION, { runId: run.id });
+    const p = await judgeNoul(state, ask.question, { runId: run.id });
     await updateRun(run.id, "completed", { ...identity, runId: run.id }).catch((e) =>
-      console.error(`[campaign-service] channel-down judgment run ${run.id} could not be marked completed:`, e),
+      console.error(`[campaign-service] ${ask.taskName} run ${run.id} could not be marked completed:`, e),
     );
     return p;
   } catch (err) {
     await updateRun(run.id, "failed", { ...identity, runId: run.id }).catch((e) =>
-      console.error(`[campaign-service] channel-down judgment run ${run.id} could not be marked failed:`, e),
+      console.error(`[campaign-service] ${ask.taskName} run ${run.id} could not be marked failed:`, e),
     );
     throw err;
   }

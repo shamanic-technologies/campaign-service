@@ -335,6 +335,10 @@ export const salesFunnelPlanChanges = pgTable(
     planComputedAt: timestamp("plan_computed_at", { withTimezone: true }),
     // [{campaignId, pipeId, action: born|kept|draining}]
     units: jsonb("units").notNull(),
+    // Why it moved (migration 0083, PLAN-SWITCH-OFF-1029): 'plan' (a plan applied) | 'switched_off' (the switch turned
+    // off: back to its own funnel) | 'switched_off_by_hand' (the same restore, written by hand) | 'kept_by_brief_by_hand' (a unit the brief names, taken
+    // out of draining by hand before the brief guard existed).
+    reason: text("reason").notNull().default("plan"),
     appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("idx_sales_funnel_plan_changes_campaign").on(table.salesFunnelCampaignId, table.appliedAt)],
