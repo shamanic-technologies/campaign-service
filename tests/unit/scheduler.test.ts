@@ -153,6 +153,13 @@ vi.mock("../../src/lib/on-demand-mode.js", async (importOriginal) => ({
   readDispatchCatalogue: mockFetchChannelCatalogue,
 }));
 
+// A reactive pipe's owed turn (lib/reactive-wake.ts): only the client check-in unit below answers a trigger here.
+const OWED_UNIT = "check-in-unit-1";
+vi.mock("../../src/lib/reactive-wake.js", () => ({
+  answersATrigger: (c: { featureSlug?: string | null }) => c.featureSlug === "ai-follow-up-email-reactive",
+  reactiveWake: vi.fn(async () => ({ run: true })),
+}));
+
 import {
   reRunDueCampaigns,
   claimStuckCampaigns,
@@ -624,6 +631,30 @@ describe("Scheduler - reRunDueCampaigns", () => {
     expect(guardCall.serviceName).toBeUndefined();
     expect(guardCall.taskName).toBeUndefined();
     expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("fires a reactive campaign's OWED turn even while its occurrence runs are in flight (OLIVE-OWED-TURN-1029)", async () => {
+    mockDbReturning.mockResolvedValue([
+      {
+        id: OWED_UNIT,
+        orgId: "org-ext-1",
+        workflowSlug: "cold-whatsapp-outreach-denebola",
+        brandIds: ["brand-123"],
+        createdByUserId: "user-1",
+        parentRunId: "anchor-run-1",
+        featureSlug: "ai-follow-up-email-reactive",
+      },
+    ]);
+    // A person-carrying occurrence run of the same campaign is running: it must not hold the owed turn back.
+    mockListRuns.mockResolvedValue({
+      runs: [{ id: "occurrence-run", status: "running", startedAt: new Date().toISOString() }],
+      limit: 50,
+      offset: 0,
+    });
+
+    await reRunDueCampaigns();
+
+    expect(mockExecuteCampaignWorkflow).toHaveBeenCalledTimes(1);
   });
 
   it("should detect a live run owned by another service (e.g. lead-service)", async () => {
