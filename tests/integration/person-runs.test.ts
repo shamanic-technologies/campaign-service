@@ -52,7 +52,8 @@ import { db } from "../../src/db/index.js";
 import { triggerEventDeliveries, triggerEvents } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
-import { fireDueTriggerEvents } from "../../src/lib/trigger-events.js";
+import { fireDueTriggerEvents, heldBackDueAt } from "../../src/lib/trigger-events.js";
+import { campaigns } from "../../src/db/schema.js";
 import { settleGateRefusedDelivery, settleTriggerDelivery } from "../../src/lib/trigger-deliveries.js";
 import { PERSON_RUNS_PER_CAMPAIGN_MAX, personRunsInFlight, wakeOccurrencesHeldBy } from "../../src/lib/person-runs.js";
 import { blockedByAnotherRun } from "../../src/lib/gate-check.js";
@@ -282,6 +283,61 @@ describe("the DAG's gate lets person runs run side by side (lib/gate-check.ts bl
     expect(await blockedByAnotherRun([marker(person)], crypto.randomUUID())).toBe(true);
     expect(await blockedByAnotherRun([], crypto.randomUUID())).toBe(false);
   }, 15_000);
+});
+
+describe("a hold after a failed run never parks the queue for 10 min (ONE-AI-CONVERSES-1029-QUEUE)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await cleanTestData();
+    mockCatalogue.mockResolvedValue(catalogue());
+    mockFunding.mockResolvedValue({ funded: true, ceilingCents: 5000 });
+    mockListRuns.mockResolvedValue({ runs: [] });
+    mockResolveSlug.mockResolvedValue({ workflowSlug: "ai-meeting-booking-v1", audienceId: null });
+    mockFile.mockImplementation(async (p: { email?: string }) => ({ ok: true, leadId: `lead-${p.email}`, filed: true }));
+    mockDue.mockResolvedValue({ ok: true });
+    mockExecute.mockImplementation(async () => ({ runId: crypto.randomUUID() }));
+  });
+
+  it("an OLD occurrence held by a failure backoff is re-checked when the backoff ends, not 10 min later", async () => {
+    const campaign = await meetingBooking("ongoing");
+    const failedAt = new Date();
+    await db.update(campaigns).set({ consecutiveRunFailures: 5, lastRunFailureAt: failedAt }).where(eq(campaigns.id, campaign.id));
+    const twoHoursAgo = new Date(Date.now() - 2 * 3600_000).toISOString();
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person: { email: "old@example.com" }, occurredAt: twoHoursAgo, dueAt: twoHoursAgo });
+    expect(res.body.event.status).toBe("pending");
+    const [event] = await db.select().from(triggerEvents).where(eq(triggerEvents.id, res.body.event.id));
+    expect(event.lastError).toContain(`${campaign.id} failure_backoff`);
+    const skipped = (event.detail as { skipped: Array<{ retryAt?: string }> }).skipped[0];
+    const end = Date.parse(skipped.retryAt!);
+    expect(end).toBeGreaterThan(failedAt.getTime());
+    expect(event.dueAt.getTime()).toBeLessThanOrEqual(end + 2000);
+    expect(event.dueAt.getTime() - Date.now()).toBeLessThan(10 * 60_000 - 60_000);
+  });
+
+  it("a run ending wakes the occurrences a failure backoff held, newest first", async () => {
+    const campaign = await meetingBooking("ongoing");
+    await db.update(campaigns).set({ consecutiveRunFailures: 5, lastRunFailureAt: new Date() }).where(eq(campaigns.id, campaign.id));
+    const held = await postEvent2("backoff@example.com");
+    expect(held.body.event.status).toBe("pending");
+    // The backoff clears (a run succeeded): the next run's end wakes it at once.
+    await db.update(campaigns).set({ consecutiveRunFailures: 0 }).where(eq(campaigns.id, campaign.id));
+    expect(await wakeOccurrencesHeldBy(campaign.id)).toBe(1);
+    await fireDueTriggerEvents(new Date());
+    const [event] = await db.select().from(triggerEvents).where(eq(triggerEvents.id, held.body.event.id));
+    expect(event).toMatchObject({ status: "done", outcome: "ran" });
+  });
+});
+
+describe("heldBackDueAt", () => {
+  const now = new Date("2026-10-29T16:00:00Z");
+  it("keeps the fixed delay when no hold states its end", () => {
+    expect(heldBackDueAt([{}], now, 600_000).toISOString()).toBe("2026-10-29T16:10:00.000Z");
+  });
+  it("re-checks at the earliest stated end, never sooner than 5 s, never later than the fixed delay", () => {
+    expect(heldBackDueAt([{ retryAt: "2026-10-29T16:02:00Z" }, {}], now, 600_000).toISOString()).toBe("2026-10-29T16:02:01.000Z");
+    expect(heldBackDueAt([{ retryAt: "2026-10-29T15:00:00Z" }], now, 600_000).toISOString()).toBe("2026-10-29T16:00:05.000Z");
+    expect(heldBackDueAt([{ retryAt: "2026-10-29T17:00:00Z" }], now, 600_000).toISOString()).toBe("2026-10-29T16:10:00.000Z");
+  });
 });
 
 afterAll(async () => {

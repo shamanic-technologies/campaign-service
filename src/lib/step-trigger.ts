@@ -204,6 +204,8 @@ export interface StepTriggerOutcome {
     legKey: string | null;
     reason: StepTriggerSkipReason;
     detail: string;
+    /** When the hold is known to end (a failure backoff): the occurrence is re-checked then, not on a fixed delay. */
+    retryAt?: string;
   }>;
 }
 
@@ -378,9 +380,9 @@ export async function runCampaignsInScope(
   for (const campaign of responsible) {
     // The slot a person-carrying run claimed (lib/person-runs.ts): handed back by any skip after the claim.
     let releaseSlot: (() => void) | null = null;
-    const skip = (reason: StepTriggerSkipReason, detail: string) => {
+    const skip = (reason: StepTriggerSkipReason, detail: string, retryAt?: Date) => {
       releaseSlot?.();
-      outcome.skipped.push({ campaignId: campaign.id, legKey: campaign.legKey, reason, detail });
+      outcome.skipped.push({ campaignId: campaign.id, legKey: campaign.legKey, reason, detail, ...(retryAt ? { retryAt: retryAt.toISOString() } : {}) });
     };
 
     // A campaign with no DAG is a channel the CUSTOMER operates: the work happens off-platform and
@@ -427,6 +429,7 @@ export async function runCampaignsInScope(
       skip(
         STEP_TRIGGER_SKIPS.FAILURE_BACKOFF,
         `${campaign.consecutiveRunFailures} runs in a row failed; retried once the backoff ends (${failureBackoffEndsAt(campaign)!.toISOString()}), the event stays pending until then`,
+        failureBackoffEndsAt(campaign)!,
       );
       continue;
     }

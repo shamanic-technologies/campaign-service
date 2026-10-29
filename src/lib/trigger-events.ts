@@ -521,11 +521,12 @@ export async function fireClaimedEvent(
       : [];
     if (heldBack.length > 0) {
       const retryMs = young ? PERSON_NOT_KNOWN_RETRY_MS : OWED_EVENT_RECHECK_MS;
+      const dueAt = heldBackDueAt(heldBack, now, retryMs);
       const [back] = await db
         .update(triggerEvents)
         .set({
           status: "pending",
-          dueAt: new Date(now.getTime() + retryMs),
+          dueAt,
           claimedAt: null,
           detail: {
             ...verdict.detail,
@@ -533,7 +534,7 @@ export async function fireClaimedEvent(
             priorRanCampaignIds: ranCampaignIds,
             fellDueAt: new Date(fellDueAt).toISOString(),
           },
-          lastError: `${heldBack.map((sk) => `${sk.campaignId} ${sk.reason}`).join(", ")}${person ? `: ${personLabel(person)}` : ""}, retried in ${retryMs / 60_000} min`.slice(0, 500),
+          lastError: `${heldBack.map((sk) => `${sk.campaignId} ${sk.reason}`).join(", ")}${person ? `: ${personLabel(person)}` : ""}, retried in ${Math.max(1, Math.round((dueAt.getTime() - now.getTime()) / 60_000))} min`.slice(0, 500),
         })
         .where(eq(triggerEvents.id, event.id))
         .returning();
@@ -576,6 +577,26 @@ export async function fireClaimedEvent(
       .returning();
     return back;
   }
+}
+
+/**
+ * When an occurrence held back is tried again: the earliest moment one of its holds can clear. A hold that states its
+ * end (a failure backoff's `retryAt`, ONE-AI-CONVERSES-1029-QUEUE) is re-checked right then, never parked on the
+ * 10-min owed cadence: prod 2026-10-29 one failed run of the Lead event campaign held every occurrence it met
+ * through a 60-s backoff, then parked them 10 min each, and the drain fell to 5-10 a minute. Other holds keep
+ * `retryMs`. Pure.
+ */
+export function heldBackDueAt(
+  heldBack: ReadonlyArray<{ retryAt?: string }>,
+  now: Date,
+  retryMs: number,
+): Date {
+  let at = now.getTime() + retryMs;
+  for (const sk of heldBack) {
+    const end = sk.retryAt ? Date.parse(sk.retryAt) : NaN;
+    if (Number.isFinite(end)) at = Math.min(at, Math.max(end + 1000, now.getTime() + 5_000));
+  }
+  return new Date(at);
 }
 
 /** One entry per campaign: the lead its run carried. Pure. */
