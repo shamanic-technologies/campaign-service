@@ -37,6 +37,12 @@ import { capSalesFunnelIdOf } from "./sales-funnel-cap-key.js";
  *        per pipe: the OLDEST live one of the (brand, offer, channel, leg) that can run now
  *        (`orderForSharedPipes`); the others are skipped `pipe_handled_by_another_campaign`, naming
  *        the one that ran. A lead an event carries is therefore worked once.
+ *        "Share" means the same PLAY (pipe x strategy, features-service's catalogue), not only the same
+ *        channel + leg (RATION-PER-PLAY-1029, owner 2026-10-29: every person who writes to us gets ONE
+ *        answer, our team included): two plays on one pipe answer DISJOINT people (leads only, current
+ *        clients, the brand's team), each refusing the others' at lead-service, so rationing them made the
+ *        oldest play's refusal (`not_a_lead`) the event's only dispatch and nobody answered a team member.
+ *        A unit whose play the catalogue cannot state is rationed on its pipe, as before.
  *     2. A scheduled (time-based) run of a reactive unit claims people from its PREDECESSOR's queue,
  *        and a unit's predecessor is resolved INSIDE its own funnel campaign first
  *        (lib/predecessor-campaign.ts), so two funnels' reactive units drain two different queues
@@ -496,10 +502,12 @@ export function pipeKey(c: { featureSlug: string | null; legKey: string | null }
  */
 export function sharedSalesFunnelPipes<C extends Pick<Campaign, "featureSlug" | "legKey" | "salesFunnelCampaignId">>(
   responsible: C[],
+  /** What two campaigns must share to be rationed: the PLAY a unit runs (RATION-PER-PLAY-1029), else the pipe. */
+  keyOf: (c: C) => string = pipeKey,
 ): Set<string> {
   const groups = new Map<string, C[]>();
   for (const c of responsible) {
-    const key = pipeKey(c);
+    const key = keyOf(c);
     groups.set(key, [...(groups.get(key) ?? []), c]);
   }
   return new Set(
@@ -517,22 +525,22 @@ export function sharedSalesFunnelPipes<C extends Pick<Campaign, "featureSlug" | 
  */
 export function orderForSharedPipes<
   C extends Pick<Campaign, "id" | "featureSlug" | "legKey" | "createdAt" | "salesFunnelCampaignId">,
->(responsible: C[]): C[] {
-  const shared = sharedSalesFunnelPipes(responsible);
+>(responsible: C[], keyOf: (c: C) => string = pipeKey): C[] {
+  const shared = sharedSalesFunnelPipes(responsible, keyOf);
   if (shared.size === 0) return responsible;
   const queues = new Map<string, C[]>();
   for (const key of shared) {
     queues.set(
       key,
       responsible
-        .filter((c) => pipeKey(c) === key)
+        .filter((c) => keyOf(c) === key)
         .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id)),
     );
   }
   // Each shared pipe keeps the positions its campaigns held; only who sits in them changes.
   const taken = new Map<string, number>();
   return responsible.map((c) => {
-    const key = pipeKey(c);
+    const key = keyOf(c);
     const queue = queues.get(key);
     if (!queue) return c;
     const i = taken.get(key) ?? 0;

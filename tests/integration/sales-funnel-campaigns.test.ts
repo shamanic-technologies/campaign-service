@@ -48,6 +48,7 @@ import { stopOrgCampaignsWithHistory, TRANSITION_SOURCES } from "../../src/lib/c
 import { resolvePredecessorCampaign } from "../../src/lib/predecessor-campaign.js";
 import { runCampaignsInScope, STEP_TRIGGER_SKIPS } from "../../src/lib/step-trigger.js";
 import { sameLeg } from "../../src/lib/leg-identity.js";
+import { playRationKeys } from "../../src/lib/run-play-attribution.js";
 import type { ChannelCatalogueRead } from "../../src/lib/channel-operator-client.js";
 import { notifySalesFunnelCampaignPrecompute } from "../../src/lib/sales-funnel-campaign-precompute.js";
 
@@ -375,6 +376,23 @@ describe("sales funnel campaigns (brand x offer x sales funnel, one unit per pip
         expect.objectContaining({ campaignId: ids.bReactive, reason: STEP_TRIGGER_SKIPS.PIPE_HANDLED_BY_ANOTHER_CAMPAIGN }),
       ]);
       expect(mockExecute).toHaveBeenCalledTimes(1);
+    });
+
+    it("two funnels on DIFFERENT plays of a shared pipe both answer the event (RATION-PER-PLAY-1029)", async () => {
+      const ids = await twoFunnels();
+      mockFunnelMoney.mockResolvedValue({ run: true });
+      vi.mocked(playRationKeys).mockImplementationOnce(async (units) =>
+        new Map(units.map((u) => [u.id, u.id === ids.aReactive ? "play:p" : "play:p~brand-s-team"])),
+      );
+      const out = await runCampaignsInScope(
+        { orgId: ORG, brandId: BRAND, offerId: OFFER },
+        (c) => sameLeg(c.featureSlug, REACTIVE, c.legKey),
+        "test event",
+      );
+      // The oldest runs now; the other play is never "handled by another campaign": it waits only for the cohort's
+      // run in flight (one run per person/cohort at a time), so the event stays owed to it and it answers next.
+      expect(out.triggered.map((t) => t.campaignId)).toEqual([ids.aReactive]);
+      expect(out.skipped).toEqual([expect.objectContaining({ campaignId: ids.bReactive, reason: STEP_TRIGGER_SKIPS.COHORT_RUN_IN_FLIGHT })]);
     });
 
     it("holds every unit while billing cannot answer for the funnel's caps (fail-closed)", async () => {

@@ -50,6 +50,25 @@ describe("one dispatch per pipe two sales funnels share", () => {
   });
 });
 
+describe("rationed per PLAY, not per pipe (RATION-PER-PLAY-1029)", () => {
+  // Leads only, current clients, the brand's team: three plays on the Lead event pipe answer disjoint people.
+  const plays: Record<string, string> = { leads: "play:p", clients: "play:p~current-clients", team: "play:p~brand-s-team", twin: "play:p" };
+  const keyOf = (c: { id: string }) => plays[c.id];
+  it("three plays on one pipe are three answers; two units on ONE play are still one", () => {
+    const list = [
+      row({ id: "team", createdAt: "2026-10-29T00:00:00Z", unit: "F3" }),
+      row({ id: "leads", createdAt: "2026-10-16T00:00:00Z", unit: "F1" }),
+      row({ id: "clients", createdAt: "2026-10-24T00:00:00Z", unit: "F2" }),
+    ];
+    expect(sharedSalesFunnelPipes(list, keyOf).size).toBe(0);
+    expect(orderForSharedPipes(list, keyOf)).toBe(list);
+    expect(sharedSalesFunnelPipes(list).size).toBe(1);
+    const withTwin = [...list, row({ id: "twin", createdAt: "2026-10-01T00:00:00Z", unit: "F4" })];
+    expect([...sharedSalesFunnelPipes(withTwin, keyOf)]).toEqual(["play:p"]);
+    expect(orderForSharedPipes(withTwin, keyOf).map((c) => c.id)).toEqual(["team", "twin", "clients", "leads"]);
+  });
+});
+
 describe("a sales funnel unit's money is its funnel's caps", () => {
   const unit = {
     id: "u1", orgId: "org", brandId: "brand", offerId: "offer", featureSlug: COLD, legKey: ENTRY,

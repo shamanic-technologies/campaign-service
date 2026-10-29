@@ -91,6 +91,23 @@ describe("resolveUnitPlay", () => {
   });
 });
 
+describe("playRationKeys (RATION-PER-PLAY-1029)", () => {
+  beforeEach(() => clearPlayCatalogueCache());
+  it("keys each unit on its play (a non-default strategy apart from the default); an unreadable one gets no key", async () => {
+    const { playRationKeys } = await vi.importActual<typeof import("../../src/lib/run-play-attribution.js")>("../../src/lib/run-play-attribution.js");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const source = unit("lead-sourcing", "start_to_lead_found");
+    const outreach = unit("sales-cold-email-outreach", "lead_found_to_conversation");
+    const gone = unit("sales-cold-email-outreach", "lead_found_to_conversation", "gone");
+    const keys = await playRationKeys([source, outreach, gone], catalogue());
+    expect(keys.get(source.id)).toBe(`play:${SOURCE_PLAY}`);
+    expect(keys.get(outreach.id)).toBe(`play:${OUTREACH_PLAY}`);
+    expect(keys.has(gone.id)).toBe(false);
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("rationed on its pipe"));
+    errors.mockRestore();
+  });
+});
+
 describe("recordRunPlay", () => {
   beforeEach(async () => {
     clearPlayCatalogueCache();
