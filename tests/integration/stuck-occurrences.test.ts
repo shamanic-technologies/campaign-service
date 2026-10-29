@@ -66,11 +66,30 @@ describe("stuck occurrences are red on the Monitoring hub, never an email (lib/s
 
   it("a person queued behind runs that keep finishing is NOT stuck: green, counted as queued", async () => {
     const c = await campaign();
-    await occurrence({ lastError: `${c.id} run_in_flight: Pat <staff+prospect@distribute.you>, retried in 2 min` });
+    await occurrence({ occurredAt: ago(45), lastError: `${c.id} run_in_flight: Pat <staff+prospect@distribute.you>, retried in 2 min` });
     await db.insert(triggerEventDeliveries).values({ eventId: crypto.randomUUID(), campaignId: c.id, runId: crypto.randomUUID(), status: "completed", dispatchedAt: ago(3), endedAt: ago(2) });
     const read = await readStuckOccurrences(7, NOW);
-    expect(read).toMatchObject({ status: "ok", stuck: 0, queued: 1, stuckOccurrences: [] });
+    expect(read).toMatchObject({ status: "ok", stuck: 0, queued: 1, stuckOccurrences: [], oldestWaitingMinutes: 45 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a queue that moves but leaves a person waiting over an hour IS stuck: red (ONE-AI-CONVERSES-1029-QUEUE)", async () => {
+    const c = await campaign();
+    const ev = await occurrence({ occurredAt: ago(6 * 60), lastError: `${c.id} run_in_flight: 4 runs of this campaign are already answering other people` });
+    await db.insert(triggerEventDeliveries).values({ eventId: crypto.randomUUID(), campaignId: c.id, runId: crypto.randomUUID(), status: "completed", dispatchedAt: ago(3), endedAt: ago(2) });
+    const read = await readStuckOccurrences(7, NOW);
+    expect(read).toMatchObject({ status: "red", stuck: 1, queued: 0, queuedTooLongMinutes: 60, oldestWaitingMinutes: 360 });
+    expect(read.stuckOccurrences[0]).toMatchObject({ occurrenceId: ev.id, reasons: ["run_in_flight"] });
+  });
+
+  it("the daily series serves how long the people answered waited (p50, p90, max minutes)", async () => {
+    await occurrence({ status: "done", outcome: "ran", occurredAt: ago(100), processedAt: ago(99) });
+    await occurrence({ status: "done", outcome: "ran", occurredAt: ago(100), processedAt: ago(98) });
+    await occurrence({ status: "done", outcome: "ran", occurredAt: ago(100), processedAt: ago(40) });
+    const { byDay } = await readStuckOccurrences(7, NOW);
+    const day = byDay.find((d) => d.answered === 3)!;
+    expect(day.waitMinutes).toEqual({ p50: 2, p90: 48.4, max: 60 });
+    expect(byDay.filter((d) => d.answered === 0).every((d) => d.waitMinutes.p50 === null)).toBe(true);
   });
 
   it("a run in flight with no run moving for the campaign IS stuck: red, named with its person and campaign", async () => {

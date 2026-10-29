@@ -27,7 +27,7 @@ import { fileSalesFunnelCampaignPeople, targetingOfSalesFunnelCampaigns } from "
 import { eventConcernsGithubIssue } from "./github-issue-trigger.js";
 import { oweEventPerson, personLabel, type EventPerson } from "./trigger-person.js";
 import { runsOnTrigger } from "./sales-funnel-head-trigger.js";
-import { executionSubjectOf, reservePersonRun } from "./person-runs.js";
+import { executionSubjectOf, personAnsweredAfterFact, reservePersonRun } from "./person-runs.js";
 
 /**
  * A LEAD JUST REACHED A STEP — RUN THE CAMPAIGN THAT WAS BOUGHT TO TAKE THEM OUT OF IT, NOW.
@@ -171,6 +171,12 @@ export const STEP_TRIGGER_SKIPS = {
    * Final: never retried, nobody contacted.
    */
   PERSON_SUPPRESSED: "person_suppressed",
+  /**
+   * A run of this campaign about the same person, dispatched AFTER this occurrence's fact, already did its work: it
+   * read the person's whole timeline, this fact included (lib/person-runs.ts `personAnsweredAfterFact`,
+   * ONE-AI-CONVERSES-1029-QUEUE). Final for that campaign, nobody answered twice, no slot spent.
+   */
+  ANSWERED_AFTER_FACT: "answered_after_fact",
 } as const;
 
 export type StepTriggerSkipReason = (typeof STEP_TRIGGER_SKIPS)[keyof typeof STEP_TRIGGER_SKIPS];
@@ -462,6 +468,14 @@ export async function runCampaignsInScope(
     // A run carrying ONE person locks that person, not the campaign (lib/person-runs.ts,
     // REACTIVE-THROUGHPUT-1028): different people run side by side, the same person never twice at once.
     if (person) {
+      const answered = trigger?.eventId ? await personAnsweredAfterFact(campaign.id, person, trigger.eventId) : null;
+      if (answered) {
+        skip(
+          STEP_TRIGGER_SKIPS.ANSWERED_AFTER_FACT,
+          `run ${answered.runId} of this campaign answered ${personLabel(person)} at ${answered.dispatchedAt.toISOString()}, after this fact, reading their whole timeline`,
+        );
+        continue;
+      }
       const cohortIds = live.filter((c) => serializationCohort(c.featureSlug) === cohort).map((c) => c.id);
       const slot = await reservePersonRun(`${req.orgId}|${brandIds[0]}|${cohort}`, cohortIds, campaign.id, person, now);
       if (!slot.ok) {

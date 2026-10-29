@@ -1064,7 +1064,7 @@ registry.registerPath({
   tags: ["Internal"],
   summary: "Occurrences carrying a person that are blocked right now, plus a daily series (dashboard v2 Monitoring)",
   description:
-    "Fleet-wide, staff. An occurrence carrying a person or an item, not done, waiting more than `stuckAfterMinutes` and tried 3+ times is STUCK unless it waits only on the customer's money (cap reached, not funded), on the brand's channel coming back, or on its turn behind a busy run in a queue that moved recently (`queued`). `status` is red when anything is stuck. `byDay` (UTC day the person acted) counts answered, answered late, skipped, failed and still waiting, recomputed from the occurrence rows. Sends nothing: red on the Monitoring hub is the alert. Nothing is written.",
+    "Fleet-wide, staff. An occurrence carrying a person or an item, not done, waiting more than `stuckAfterMinutes` and tried 3+ times is STUCK unless it waits only on the customer's money (cap reached, not funded), on the brand's channel coming back, or on its turn behind a busy run in a queue that moved recently for less than `queuedTooLongMinutes` (`queued`). `status` is red when anything is stuck. `byDay` (UTC day the person acted) counts answered, answered late, skipped, failed and still waiting, and how long the answered waited (`waitMinutes` p50/p90/max), recomputed from the occurrence rows; `oldestWaitingMinutes` is the longest wait right now. Sends nothing: red on the Monitoring hub is the alert. Nothing is written.",
   security: [{ [apiKeyAuth.name]: [] }],
   request: { query: StuckOccurrencesQuery },
   responses: {
