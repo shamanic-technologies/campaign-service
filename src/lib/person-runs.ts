@@ -158,8 +158,14 @@ export function resetPersonRunReservations(): void {
 
 /**
  * A run of `campaignId` just ended: a slot is free, so the occurrences it held back (`<campaignId> run_in_flight`)
- * fall due NOW, oldest waiting first, instead of on their 2-10 min retry. Without it the burst drains at the retry
- * cadence, not at the speed runs finish. Returns how many were made due.
+ * fall due NOW, instead of on their 2-10 min retry. Without it the burst drains at the retry cadence, not at the
+ * speed runs finish. Returns how many were made due.
+ *
+ * NEWEST FACT FIRST (ONE-AI-CONVERSES-1029-QUEUE, prod 2026-10-29): oldest-first put a person who had just written
+ * to us behind 388 newsletter clicks from the morning, so the answer that matters most (now) came hours late, and
+ * every click was answered hours late anyway. Newest first answers what just happened within a run's time whatever
+ * the backlog; an older fact about the same person is then folded into that answer (`personAnsweredAfterFact`).
+ * Generic: no trigger, channel or brand is ranked above another.
  */
 export async function wakeOccurrencesHeldBy(campaignId: string, now: Date = new Date()): Promise<number> {
   const held = `${campaignId} run_in_flight`;
@@ -171,9 +177,81 @@ export async function wakeOccurrencesHeldBy(campaignId: string, now: Date = new 
       WHERE status = 'pending'
         AND due_at > ${now.toISOString()}::timestamptz
         AND position(${held} in coalesce(last_error, '')) > 0
-      ORDER BY greatest(occurred_at, created_at)
+      ORDER BY greatest(occurred_at, created_at) DESC
       LIMIT ${PERSON_RUNS_PER_CAMPAIGN_MAX}
     )`)
     .returning({ id: triggerEvents.id });
   return woken.length;
 }
+
+/**
+ * A PERSON'S PENDING FACTS COLLAPSE INTO ONE ANSWER (ONE-AI-CONVERSES-1029-QUEUE).
+ *
+ * A run about a person reads that person's whole timeline when it runs, so a run of `campaignId` about them that
+ * was DISPATCHED AFTER this occurrence's fact was recorded and fell due (`greatest(occurred_at, created_at, first
+ * due date)`: a follow-up planned for a later date is never folded into a run before that date) and did its work
+ * (`completed`, or `not_admitted`: the pipe's strategy already judged that person) has already seen this fact.
+ * Running again for it would spend a slot to answer the same person twice (prod 2026-10-29: a newsletter click
+ * arrives as 3 occurrences in the same second, 884 pending for 607 people). Returns that run, or null.
+ * Any trigger, any campaign: the key is only (campaign, person, time).
+ */
+export async function personAnsweredAfterFact(
+  campaignId: string,
+  person: EventPerson,
+  eventId: string,
+): Promise<{ runId: string; dispatchedAt: Date } | null> {
+  const samePersonSql = person.email
+    ? sql`e.detail->'person'->>'email' = ${person.email}`
+    : person.phone
+      ? sql`(e.detail->'person'->>'email') IS NULL AND e.detail->'person'->>'phone' = ${person.phone}`
+      : null;
+  if (!samePersonSql) return null;
+  const rows = (await db.execute(sql`
+    SELECT d.run_id, d.dispatched_at
+    FROM trigger_event_deliveries d
+    JOIN trigger_events e ON e.id = d.event_id
+    JOIN trigger_events me ON me.id = ${eventId}
+    WHERE d.campaign_id = ${campaignId}
+      AND d.event_id <> ${eventId}
+      AND d.status IN ('completed', 'not_admitted')
+      AND d.dispatched_at >= greatest(me.occurred_at, me.created_at, coalesce((me.detail->>'fellDueAt')::timestamptz, me.due_at))
+      AND ${samePersonSql}
+    ORDER BY d.dispatched_at
+    LIMIT 1`)) as unknown as Array<{ run_id: string; dispatched_at: Date | string }>;
+  const row = rows[0];
+  return row ? { runId: row.run_id, dispatchedAt: new Date(row.dispatched_at) } : null;
+}
+
+/**
+ * Which of these runs were dispatched for an occurrence carrying ONE person (a delivery row whose occurrence has a
+ * `person`). Their exclusivity is the person lock above, taken at dispatch: the DAG's gate must not refuse them as
+ * "a run is already in progress" because ANOTHER person's run is (lib/gate-check.ts block 2).
+ */
+export async function personCarryingRunIds(runIds: readonly string[]): Promise<Set<string>> {
+  if (runIds.length === 0) return new Set();
+  const rows = await db
+    .select({ runId: triggerEventDeliveries.runId })
+    .from(triggerEventDeliveries)
+    .innerJoin(triggerEvents, eq(triggerEvents.id, triggerEventDeliveries.eventId))
+    .where(and(inArray(triggerEventDeliveries.runId, [...runIds]), sql`${triggerEvents.detail} ? 'person'`));
+  return new Set(rows.map((r) => r.runId));
+}
+
+/**
+ * Whether `runId` is a person-carrying run, waiting briefly for its delivery row: the DAG's gate often reaches us
+ * BEFORE the dispatch that started it has written that row (prod 2026-10-29: median +0.16 s, up to 2.6 s early).
+ * Asked only when the gate would otherwise refuse, so a run nothing contends with never waits.
+ */
+export async function isPersonCarryingRun(
+  runId: string,
+  tries: number = PERSON_RUN_ROW_TRIES,
+  waitMs: number = PERSON_RUN_ROW_WAIT_MS,
+): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    if ((await personCarryingRunIds([runId])).has(runId)) return true;
+    if (i < tries - 1) await new Promise((r) => setTimeout(r, waitMs));
+  }
+  return false;
+}
+export const PERSON_RUN_ROW_TRIES = 8;
+export const PERSON_RUN_ROW_WAIT_MS = 500;

@@ -18,7 +18,9 @@ import { waitsOnlyOnChannel } from "./channel-down-replay.js";
  *   - held only by the CUSTOMER's money (`MONEY_HOLDS`): their choice, owed until room returns;
  *   - waiting for the brand's channel to come back (lib/channel-down-replay.ts): replayed by itself;
  *   - waiting its turn in a MOVING queue: every hold is a run in flight, and the campaign holding it dispatched or
- *     finished a run inside `MOVING_QUEUE_WINDOW_MS` (lib/person-runs.ts drains it as runs end).
+ *     finished a run inside `MOVING_QUEUE_WINDOW_MS` (lib/person-runs.ts drains it as runs end), for less than
+ *     `QUEUED_TOO_LONG_MS`. A queue that moves but leaves a person waiting longer IS broken (ONE-AI-CONVERSES-1029-
+ *     QUEUE, prod 2026-10-29: a person who wrote to us waited hours in a queue that "moved"): stuck, red.
  * Everything else (a failure backoff, a refused dispatch, an unreadable read, a run in flight with no run moving)
  * is a defect somebody must look at.
  *
@@ -29,6 +31,8 @@ import { waitsOnlyOnChannel } from "./channel-down-replay.js";
 export const STUCK_OCCURRENCE_AFTER_MS = 30 * 60_000;
 /** Tried at least this often (a first `run_in_flight` retry two minutes later is normal pacing). */
 export const STUCK_OCCURRENCE_MIN_ATTEMPTS = 3;
+/** Waiting its turn longer than this, even in a queue that moves, is broken: the queue is too slow. */
+export const QUEUED_TOO_LONG_MS = 60 * 60_000;
 /** A campaign that dispatched or finished a run this recently is draining its queue. */
 export const MOVING_QUEUE_WINDOW_MS = 15 * 60_000;
 const STUCK_LIST_LIMIT = 100;
@@ -99,7 +103,23 @@ export interface StuckOccurrences {
     skipped: number;
     failed: number;
     waiting: number;
+    /**
+     * How long the people answered that day waited, fact to answer (minutes, one decimal); null = nobody answered.
+     * The chart's figure: p90 above `stuckAfterMinutes` is a slow day.
+     */
+    waitMinutes: { p50: number | null; p90: number | null; max: number | null };
   }[];
+  /** How long the person waiting longest (not on money nor a channel outage, tried 3+ times) has waited now; null = nobody waits past `stuckAfterMinutes`. */
+  oldestWaitingMinutes: number | null;
+  /** Waiting longer than this in a queue that moves is stuck (red). */
+  queuedTooLongMinutes: number;
+}
+
+/** Seconds (postgres numeric/float, maybe text) to minutes with one decimal. Pure. */
+export function minutesOf(seconds: number | string | null | undefined): number | null {
+  if (seconds === null || seconds === undefined) return null;
+  const n = Number(seconds);
+  return Number.isFinite(n) ? Math.round(n / 6) / 10 : null;
 }
 
 const rows = async <T>(q: ReturnType<typeof sql>) => (await db.execute(q)) as unknown as T[];
@@ -143,14 +163,20 @@ export async function readStuckOccurrences(days: number, now: Date = new Date())
   );
 
   let queued = 0;
+  const queuedTooLongBefore = now.getTime() - QUEUED_TOO_LONG_MS;
   const stuck = candidates.filter((c) => {
     if (waitsOnlyOnMoney(c.last_error) || waitsOnlyOnChannel(c.last_error)) return false;
-    if (waitsInMovingQueue(c.last_error, moving)) {
+    if (waitsInMovingQueue(c.last_error, moving) && new Date(c.waiting_since).getTime() > queuedTooLongBefore) {
       queued += 1;
       return false;
     }
     return true;
   });
+
+  const waitingTimes = candidates
+    .filter((c) => !waitsOnlyOnMoney(c.last_error) && !waitsOnlyOnChannel(c.last_error))
+    .map((c) => new Date(c.waiting_since).getTime());
+  const oldestWaiting = waitingTimes.length > 0 ? Math.min(...waitingTimes) : null;
 
   const stuckCampaignIds = [...new Set(stuck.flatMap((c) => heldBackBy(c.last_error).campaignId ?? []))];
   const names = new Map(
@@ -171,14 +197,23 @@ export async function readStuckOccurrences(days: number, now: Date = new Date())
     }
   }
 
-  const days_ = await rows<{ day: string; answered: number; answered_late: number; skipped: number; failed: number; waiting: number }>(sql`
+  const days_ = await rows<{
+    day: string; answered: number; answered_late: number; skipped: number; failed: number; waiting: number;
+    wait_p50_s: number | string | null; wait_p90_s: number | string | null; wait_max_s: number | string | null;
+  }>(sql`
     SELECT to_char(date_trunc('day', greatest(occurred_at, created_at) AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
            count(*) FILTER (WHERE status = 'done' AND outcome = 'ran')::int AS answered,
            count(*) FILTER (WHERE status = 'done' AND outcome = 'ran'
              AND processed_at - greatest(occurred_at, created_at) > make_interval(secs => ${lateSeconds}))::int AS answered_late,
            count(*) FILTER (WHERE status = 'done' AND outcome = 'skipped')::int AS skipped,
            count(*) FILTER (WHERE status = 'done' AND outcome NOT IN ('ran', 'skipped'))::int AS failed,
-           count(*) FILTER (WHERE status <> 'done')::int AS waiting
+           count(*) FILTER (WHERE status <> 'done')::int AS waiting,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM processed_at - greatest(occurred_at, created_at)))
+             FILTER (WHERE status = 'done' AND outcome = 'ran') AS wait_p50_s,
+           percentile_cont(0.9) WITHIN GROUP (ORDER BY extract(epoch FROM processed_at - greatest(occurred_at, created_at)))
+             FILTER (WHERE status = 'done' AND outcome = 'ran') AS wait_p90_s,
+           max(extract(epoch FROM processed_at - greatest(occurred_at, created_at)))
+             FILTER (WHERE status = 'done' AND outcome = 'ran') AS wait_max_s
     FROM trigger_events
     WHERE greatest(occurred_at, created_at) >= ${since}::timestamptz
       AND greatest(occurred_at, created_at) <= ${now.toISOString()}::timestamptz
@@ -190,6 +225,7 @@ export async function readStuckOccurrences(days: number, now: Date = new Date())
     generatedAt: now.toISOString(),
     days,
     stuckAfterMinutes: STUCK_OCCURRENCE_AFTER_MS / 60_000,
+    queuedTooLongMinutes: QUEUED_TOO_LONG_MS / 60_000,
     status: stuck.length > 0 ? "red" : "ok",
     stuck: stuck.length,
     queued,
@@ -220,6 +256,12 @@ export async function readStuckOccurrences(days: number, now: Date = new Date())
       skipped: d.skipped,
       failed: d.failed,
       waiting: d.waiting,
+      waitMinutes: {
+        p50: minutesOf(d.wait_p50_s),
+        p90: minutesOf(d.wait_p90_s),
+        max: minutesOf(d.wait_max_s),
+      },
     })),
+    oldestWaitingMinutes: oldestWaiting === null ? null : Math.round((now.getTime() - oldestWaiting) / 60_000),
   };
 }

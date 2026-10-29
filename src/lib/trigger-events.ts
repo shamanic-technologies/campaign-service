@@ -629,7 +629,10 @@ export async function fireDueTriggerEvents(now: Date = new Date()): Promise<numb
       SELECT id FROM trigger_events
       WHERE (status = 'pending' AND due_at <= ${now.toISOString()}::timestamptz)
          OR (status = 'firing' AND claimed_at < ${staleBefore.toISOString()}::timestamptz)
-      ORDER BY due_at
+      -- Newest fact first among the due ones (ONE-AI-CONVERSES-1029-QUEUE): a backlog of older facts never makes
+      -- what a person just did wait behind it; an older fact about the same person is folded into that answer
+      -- (lib/person-runs.ts personAnsweredAfterFact). Any trigger, no rank per type.
+      ORDER BY greatest(occurred_at, created_at) DESC
       LIMIT ${TRIGGER_EVENT_BATCH}
       FOR UPDATE SKIP LOCKED
     )`)
@@ -655,6 +658,9 @@ export async function fireDueTriggerEvents(now: Date = new Date()): Promise<numb
 
   let fired = 0;
   const leadActivity: LeadActivityCache = new Map();
+  // UPDATE ... RETURNING comes back in no particular order: fire newest fact first, as claimed.
+  const factAt = (e: (typeof claimed)[number]) => Math.max(e.occurredAt.getTime(), e.createdAt.getTime());
+  claimed.sort((a, b) => factAt(b) - factAt(a));
   for (const event of claimed) {
     const done = await fireClaimedEvent(event, catalogue, now, { leadActivity });
     if (done.status === "done") fired += 1;

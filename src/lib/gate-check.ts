@@ -2,6 +2,7 @@ import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type 
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { salesFunnelUnitMoney, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
+import { isPersonCarryingRun, personCarryingRunIds } from "./person-runs.js";
 
 // THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
 // hours here against fifteen minutes there, and that gap is a full stop: the sweep re-fires a
@@ -115,8 +116,13 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
     }
   }
 
-  // 2. Running run check — only 1 run at a time per campaign
-  if (runningRuns.some((r: Run) => r.status === "running")) {
+  // 2. Running run check — only 1 run at a time per campaign, EXCEPT between runs that each carry ONE person
+  // (lib/person-runs.ts): their exclusivity is that person, locked at dispatch, up to PERSON_RUNS_PER_CAMPAIGN_MAX
+  // at once. Prod 2026-10-29 (ONE-AI-CONVERSES-1029-QUEUE): this block refused ~11 Lead event runs an hour per
+  // campaign because another person's run was in flight; the refused DAG ended without /end-run, so each refusal
+  // also held one of the 4 slots for the 15-min liveness window, and the queue drained at ~1 run at a time while
+  // a person who had written to us waited hours.
+  if (await blockedByAnotherRun(runningRuns, campaign.runId)) {
     return { allowed: false, reason: "A run is already in progress" };
   }
 
@@ -416,4 +422,25 @@ export function nextMonthStart(): Date {
   d.setDate(1);
   d.setHours(0, 0, 0, 0);
   return d;
+}
+
+/**
+ * Whether a running row of the campaign blocks this run (block 2). Rows of runs that carry ONE person never block a
+ * run that itself carries one person; anything else (a population run on either side, an unreadable lookup) blocks
+ * exactly as before.
+ */
+export async function blockedByAnotherRun(runningRuns: readonly Run[], runId: string | undefined): Promise<boolean> {
+  const live = runningRuns.filter((r) => r.status === "running");
+  if (live.length === 0) return false;
+  if (!runId) return true;
+  try {
+    const parents = [...new Set(live.map((r) => r.parentRunId).filter((id): id is string => !!id && id !== runId))];
+    const personRuns = await personCarryingRunIds(parents);
+    const others = live.filter((r) => !(r.parentRunId && r.parentRunId !== runId && personRuns.has(r.parentRunId)));
+    if (others.length > 0) return true;
+    return !(await isPersonCarryingRun(runId));
+  } catch (err) {
+    console.error(`[campaign-service] gate-check could not read which running runs carry one person (run ${runId}); one run at a time applies:`, err);
+    return true;
+  }
 }

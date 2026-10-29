@@ -572,7 +572,7 @@ export const triggerEventDeliveries = pgTable(
     campaignId: text("campaign_id").notNull(),
     /** The run workflow-service opened on `/execute`: the `x-run-id` its `/end-run` carries. */
     runId: text("run_id").notNull(),
-    /** `dispatched` | `completed` | `failed` | `not_admitted` (REPLY-ANY-LEAD-1015) | `refused` (the sender refused what the run carried: final, PUSHED-TRUTH-1015) | `timed_out` (the run never reported, too old to redeliver: LEAD-EVENT-WHATSAPP-1027) */
+    /** `dispatched` | `completed` | `failed` | `not_admitted` (REPLY-ANY-LEAD-1015) | `refused` (the sender refused what the run carried: final, PUSHED-TRUTH-1015) | `timed_out` (the run never reported, too old to redeliver: LEAD-EVENT-WHATSAPP-1027) | `gate_refused` (the DAG's gate refused the run: slot handed back, occurrence owed again, ONE-AI-CONVERSES-1029-QUEUE) */
     status: text("status").notNull(),
     /** When `refused`: the sender's refusal code and its human sentence, verbatim (`/end-run` `delivery`). */
     refusalCode: text("refusal_code"),

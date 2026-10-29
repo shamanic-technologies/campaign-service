@@ -53,8 +53,9 @@ import { triggerEventDeliveries, triggerEvents } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { cleanTestData, closeDb, insertTestCampaign } from "../helpers/test-db.js";
 import { fireDueTriggerEvents } from "../../src/lib/trigger-events.js";
-import { settleTriggerDelivery } from "../../src/lib/trigger-deliveries.js";
-import { PERSON_RUNS_PER_CAMPAIGN_MAX, wakeOccurrencesHeldBy } from "../../src/lib/person-runs.js";
+import { settleGateRefusedDelivery, settleTriggerDelivery } from "../../src/lib/trigger-deliveries.js";
+import { PERSON_RUNS_PER_CAMPAIGN_MAX, personRunsInFlight, wakeOccurrencesHeldBy } from "../../src/lib/person-runs.js";
+import { blockedByAnotherRun } from "../../src/lib/gate-check.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "b645207b-0000-4000-8000-000000000021";
@@ -126,11 +127,6 @@ describe("a burst of occurrences about different people runs side by side (lib/p
     });
   });
 
-  afterAll(async () => {
-    await cleanTestData();
-    await closeDb();
-  });
-
   it("50 people at once: exactly the ceiling dispatches, the rest wait their turn (owed), no deadlock", async () => {
     const campaign = await meetingBooking("ongoing");
     const answers = await Promise.all(Array.from({ length: 50 }, (_, i) => postEvent2(`burst${i}@example.com`)));
@@ -152,7 +148,7 @@ describe("a burst of occurrences about different people runs side by side (lib/p
     expect(concurrentSamePerson).toBe(false);
   });
 
-  it("two occurrences about the SAME person never run at once; the second runs once the first ended", async () => {
+  it("two occurrences about the SAME person never run at once; the second is folded into the first's answer (ONE-AI-CONVERSES-1029-QUEUE)", async () => {
     await meetingBooking("ongoing");
     const [a, b] = await Promise.all([postEvent2("same@example.com"), postEvent2("same@example.com")]);
     expect(mockExecute).toHaveBeenCalledTimes(1);
@@ -163,8 +159,78 @@ describe("a burst of occurrences about different people runs side by side (lib/p
     await settleTriggerDelivery(delivery.runId, { success: true });
     const held = a.body.event.status === "pending" ? a : b;
     await db.update(triggerEvents).set({ dueAt: new Date(Date.now() - 1000) }).where(eq(triggerEvents.id, held.body.event.id));
-    expect(await fireDueTriggerEvents(new Date())).toBe(1);
+    await fireDueTriggerEvents(new Date());
+    // The run dispatched AFTER this fact read the person's whole timeline: no second run, no slot spent.
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    const [after] = await db.select().from(triggerEvents).where(eq(triggerEvents.id, held.body.event.id));
+    expect(after).toMatchObject({ status: "done", outcome: "skipped", skipReason: "answered_after_fact" });
+  });
+
+  it("a fact recorded AFTER the person's last run still gets its own run", async () => {
+    await meetingBooking("ongoing");
+    await postEvent2("again@example.com");
+    const [delivery] = await db.select().from(triggerEventDeliveries);
+    await settleTriggerDelivery(delivery.runId, { success: true });
+    await new Promise((r) => setTimeout(r, 5));
+    const later = await postEvent2("again@example.com");
+    expect(later.body.event).toMatchObject({ status: "done", outcome: "ran" });
     expect(mockExecute).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failed run never folds an older fact: it is still answered", async () => {
+    await meetingBooking("ongoing");
+    const [a, b] = await Promise.all([postEvent2("fail@example.com"), postEvent2("fail@example.com")]);
+    const [delivery] = await db.select().from(triggerEventDeliveries);
+    await settleTriggerDelivery(delivery.runId, { success: false });
+    const held = a.body.event.status === "pending" ? a : b;
+    await db.update(triggerEvents).set({ dueAt: new Date(Date.now() - 1000) }).where(eq(triggerEvents.id, held.body.event.id));
+    await fireDueTriggerEvents(new Date());
+    expect(mockExecute.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a freed slot goes to the NEWEST fact, not the oldest backlog (ONE-AI-CONVERSES-1029-QUEUE)", async () => {
+    const campaign = await meetingBooking("ongoing");
+    for (let i = 0; i < PERSON_RUNS_PER_CAMPAIGN_MAX + 6; i++) {
+      await postEvent2(`queue${i}@example.com`);
+      await new Promise((r) => setTimeout(r, 3));
+    }
+    expect(mockExecute).toHaveBeenCalledTimes(PERSON_RUNS_PER_CAMPAIGN_MAX);
+    const newest = `queue${PERSON_RUNS_PER_CAMPAIGN_MAX + 5}@example.com`;
+    const [delivery] = await db.select().from(triggerEventDeliveries);
+    await settleTriggerDelivery(delivery.runId, { success: true });
+    expect(await wakeOccurrencesHeldBy(campaign.id)).toBe(PERSON_RUNS_PER_CAMPAIGN_MAX);
+    const woken = (await db.select().from(triggerEvents)).filter((e) => e.status === "pending" && e.dueAt.getTime() <= Date.now());
+    const wokenPeople = woken.map((e) => (e.detail as { person: { email: string } }).person.email).sort();
+    expect(wokenPeople).toEqual([6, 7, 8, 9].map((i) => `queue${i}@example.com`));
+    expect(await fireDueTriggerEvents(new Date())).toBe(1);
+    expect(mockExecute.mock.calls.at(-1)![1].trigger.person.email).toBe(newest);
+  });
+
+  it("a run refused at its gate hands its slot back at once and its occurrence is owed again", async () => {
+    const campaign = await meetingBooking("ongoing");
+    const answer = await postEvent2("gate@example.com");
+    expect(answer.body.event).toMatchObject({ status: "done", outcome: "ran" });
+    const [delivery] = await db.select().from(triggerEventDeliveries);
+    expect(await personRunsInFlight([campaign.id], new Date())).toHaveLength(1);
+
+    const settled = await settleGateRefusedDelivery(delivery.runId, "A run is already in progress", new Date(), 1);
+    expect(settled).toMatchObject({ kind: "requeued", eventId: answer.body.event.id });
+    expect(await personRunsInFlight([campaign.id], new Date())).toHaveLength(0);
+    const [event] = await db.select().from(triggerEvents).where(eq(triggerEvents.id, answer.body.event.id));
+    expect(event.status).toBe("pending");
+    expect(event.lastError).toContain(`${campaign.id} run_in_flight`);
+    expect((event.detail as { retryCampaignIds: string[] }).retryCampaignIds).toEqual([campaign.id]);
+    const [row] = await db.select().from(triggerEventDeliveries);
+    expect(row.status).toBe("gate_refused");
+
+    // Not a failed run: the next attempt runs it (not superseded, not counted toward the redelivery ceiling).
+    await db.update(triggerEvents).set({ dueAt: new Date(Date.now() - 1000) }).where(eq(triggerEvents.id, event.id));
+    await fireDueTriggerEvents(new Date());
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+  });
+
+  it("a gate refusal for a run carrying nothing settles nothing", async () => {
+    expect(await settleGateRefusedDelivery(crypto.randomUUID(), "Campaign is not ongoing", new Date(), 1)).toEqual({ kind: "not_a_delivery" });
   });
 
   it("a person waiting does not block a different person on the same campaign", async () => {
@@ -176,4 +242,49 @@ describe("a burst of occurrences about different people runs side by side (lib/p
     // workflow-service admits each run per PERSON (executionSubject), never campaign-wide.
     expect(mockExecute.mock.calls.map((c) => c[1].executionSubject)).toEqual(["email:first@example.com", "email:second@example.com"]);
   });
+});
+
+describe("the DAG's gate lets person runs run side by side (lib/gate-check.ts block 2, ONE-AI-CONVERSES-1029-QUEUE)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await cleanTestData();
+  });
+
+  const personDelivery = async (campaignId: string, email: string | null) => {
+    const [event] = await db.insert(triggerEvents).values({
+      orgId: ORG, brandId: BRAND, offerId: OFFER, triggerId: FORM, recordedVia: "api",
+      occurredAt: new Date(), dueAt: new Date(), status: "done", outcome: "ran",
+      detail: email ? { person: { email } } : { item: { x: 1 } },
+    }).returning();
+    const runId = crypto.randomUUID();
+    await db.insert(triggerEventDeliveries).values({ eventId: event.id, campaignId, runId, status: "dispatched" });
+    return runId;
+  };
+  const marker = (parentRunId: string | null) => ({
+    id: crypto.randomUUID(), parentRunId, organizationId: ORG, userId: null, brandId: BRAND, campaignId: null,
+    serviceName: "campaign-service", taskName: "c", status: "running", startedAt: new Date().toISOString(),
+    completedAt: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  });
+
+  it("another person's run in flight never refuses a person run", async () => {
+    const campaign = await meetingBooking("ongoing");
+    const other = await personDelivery(campaign.id, "other@example.com");
+    const mine = await personDelivery(campaign.id, "me@example.com");
+    expect(await blockedByAnotherRun([marker(other)], mine)).toBe(false);
+  });
+
+  it("a population run in flight still refuses it, and person runs still refuse a population run", async () => {
+    const campaign = await meetingBooking("ongoing");
+    const person = await personDelivery(campaign.id, "me@example.com");
+    const item = await personDelivery(campaign.id, null);
+    expect(await blockedByAnotherRun([marker(crypto.randomUUID())], person)).toBe(true);
+    expect(await blockedByAnotherRun([marker(item)], person)).toBe(true);
+    expect(await blockedByAnotherRun([marker(person)], crypto.randomUUID())).toBe(true);
+    expect(await blockedByAnotherRun([], crypto.randomUUID())).toBe(false);
+  }, 15_000);
+});
+
+afterAll(async () => {
+  await cleanTestData();
+  await closeDb();
 });

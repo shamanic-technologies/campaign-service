@@ -1286,7 +1286,7 @@ export const StuckOccurrencesResponse = z.object({
   stuckAfterMinutes: z.number().int(),
   status: z.enum(["ok", "red"]).describe("red = at least one occurrence carrying somebody is blocked right now."),
   stuck: z.number().int(),
-  queued: z.number().int().describe("Waiting their turn behind a busy run in a queue that moved recently: not stuck."),
+  queued: z.number().int().describe("Waiting their turn behind a busy run in a queue that moved recently, for less than queuedTooLongMinutes: not stuck."),
   stuckByReason: z.array(z.object({ reason: z.string(), count: z.number().int(), oldestWaitingSince: z.string() })),
   stuckOccurrences: z.array(z.object({
     occurrenceId: z.string(),
@@ -1309,7 +1309,14 @@ export const StuckOccurrencesResponse = z.object({
     skipped: z.number().int(),
     failed: z.number().int(),
     waiting: z.number().int(),
+    waitMinutes: z.object({
+      p50: z.number().nullable(),
+      p90: z.number().nullable(),
+      max: z.number().nullable(),
+    }).describe("How long the people answered that day waited, from their fact to the answer (minutes, one decimal). null = nobody answered that day."),
   })),
+  oldestWaitingMinutes: z.number().int().nullable().describe("How long the person waiting longest has waited now (not on money nor a channel outage, tried 3+ times). null = nobody waits past stuckAfterMinutes."),
+  queuedTooLongMinutes: z.number().int().describe("Waiting longer than this, even in a queue that moves, is stuck (red)."),
 }).openapi("StuckOccurrencesResponse");
 
 // --- Unsent answers (dashboard v2 Monitoring, ONE-AI-REFUSED-ANSWERS-1029) ---
