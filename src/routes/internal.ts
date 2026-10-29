@@ -1,7 +1,7 @@
 import { Router, type Response } from "express";
 import { fetchChannelCatalogue } from "../lib/channel-operator-client.js";
 import { legIsReactive } from "../lib/leg-identity.js";
-import { settleTriggerDelivery } from "../lib/trigger-deliveries.js";
+import { settleGateRefusedDelivery, settleTriggerDelivery } from "../lib/trigger-deliveries.js";
 import { wakeOccurrencesHeldBy } from "../lib/person-runs.js";
 import { readStuckOccurrences } from "../lib/stuck-occurrences.js";
 import { readTriggerHealth } from "../lib/trigger-health.js";
@@ -208,6 +208,14 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       await db.update(campaigns)
         .set({ nextRunAt, updatedAt: new Date() })
         .where(eq(campaigns.id, campaignId));
+      // The refused DAG ends without /end-run: a run dispatched for an occurrence hands its slot back NOW and the
+      // occurrence is owed again (lib/trigger-deliveries.ts settleGateRefusedDelivery, ONE-AI-CONVERSES-1029-QUEUE).
+      if (req.runId) {
+        const refusedRunId = req.runId;
+        void settleGateRefusedDelivery(refusedRunId, result.reason ?? "refused").catch((err) => {
+          console.error(`[campaign-service] could not hand back the slot of run ${refusedRunId} refused at the gate (campaign ${campaignId}):`, err);
+        });
+      }
     }
 
     res.json({

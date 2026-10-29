@@ -248,6 +248,75 @@ export async function settleTriggerDelivery(
   return { kind: "event_busy", eventId: d.eventId, campaignId: d.campaignId };
 }
 
+/**
+ * A RUN REFUSED AT ITS GATE NEVER HOLDS A SLOT (ONE-AI-CONVERSES-1029-QUEUE).
+ *
+ * The DAG's first node is campaign-service's `/gate-check`; a refusal there ends the DAG cleanly WITHOUT `/end-run`,
+ * so its delivery stayed `dispatched`, counted as a person run in flight (lib/person-runs.ts) for the whole liveness
+ * window (15 min), then settled `failed` an hour later by the sweep. Prod 2026-10-29: ~11 such refusals an hour per
+ * Lead event campaign held about 3 of its 4 slots at any time. Now the gate settles the delivery itself:
+ * `gate_refused` (not a failed run: never counted toward `TRIGGER_DELIVERY_MAX`) and the occurrence goes back
+ * `pending` for THAT campaign, held `<campaignId> run_in_flight` (owed, woken by the next `/end-run`), due within
+ * `GATE_REFUSED_RETRY_MS`. The gate can reach us BEFORE the dispatch wrote the row (prod: up to 2.6 s early), so a
+ * missing row is looked for again `GATE_REFUSED_ROW_TRIES` times. A run carrying nothing has no row: nothing to do.
+ */
+export const GATE_REFUSED_RETRY_MS = 2 * 60_000;
+export const GATE_REFUSED_ROW_TRIES = 6;
+export async function settleGateRefusedDelivery(
+  runId: string,
+  reason: string,
+  now: Date = new Date(),
+  waitMs: number = FIRING_WAIT_MS,
+): Promise<{ kind: "not_a_delivery" } | { kind: "requeued" | "event_busy"; eventId: string; campaignId: string }> {
+  let d: TriggerEventDelivery | undefined;
+  for (let i = 0; i < GATE_REFUSED_ROW_TRIES && !d; i++) {
+    if (i > 0) await sleep(waitMs);
+    [d] = await db
+      .update(triggerEventDeliveries)
+      .set({ status: "gate_refused", endedAt: new Date() })
+      .where(and(eq(triggerEventDeliveries.runId, runId), eq(triggerEventDeliveries.status, "dispatched")))
+      .returning();
+  }
+  if (!d) return { kind: "not_a_delivery" };
+  const delivery = d;
+  const dueAt = new Date(now.getTime() + GATE_REFUSED_RETRY_MS);
+  for (let attempt = 1; attempt <= FIRING_TRIES; attempt++) {
+    const applied = await db.transaction(async (tx) => {
+      const [event] = await tx.select().from(triggerEvents).where(eq(triggerEvents.id, delivery.eventId)).for("update");
+      if (!event) return "missing" as const;
+      if (event.status === "firing") return "busy" as const;
+      const own = event.detail && typeof event.detail === "object" && !Array.isArray(event.detail)
+        ? (event.detail as Record<string, unknown>)
+        : {};
+      const pending = event.status === "pending";
+      const others = (ids: string[]) => ids.filter((id) => id !== delivery.campaignId);
+      const ran = others(event.ranCampaignIds ?? []);
+      const priorRan = others(strings(own.priorRanCampaignIds));
+      const retry = [...new Set([...(pending ? strings(own.retryCampaignIds) : []), delivery.campaignId])];
+      const why = `${delivery.campaignId} run_in_flight: its run ${runId} was refused at the gate (${reason}), retried by ${dueAt.toISOString()}`;
+      await tx
+        .update(triggerEvents)
+        .set({
+          status: "pending",
+          dueAt: pending && event.dueAt.getTime() < dueAt.getTime() ? event.dueAt : dueAt,
+          claimedAt: null,
+          outcome: null,
+          skipReason: null,
+          ranCampaignIds: ran,
+          detail: { ...own, retryCampaignIds: retry, priorRanCampaignIds: pending ? priorRan : ran },
+          lastError: clip(why, 500),
+        })
+        .where(eq(triggerEvents.id, delivery.eventId));
+      return "applied" as const;
+    });
+    if (applied === "missing") return { kind: "not_a_delivery" };
+    if (applied === "applied") return { kind: "requeued", eventId: delivery.eventId, campaignId: delivery.campaignId };
+    if (attempt < FIRING_TRIES) await sleep(waitMs);
+  }
+  console.error(`[campaign-service] trigger event ${delivery.eventId} stayed firing while run ${runId} of campaign ${delivery.campaignId} was refused at its gate: NOT requeued (delivery ${delivery.id})`);
+  return { kind: "event_busy", eventId: delivery.eventId, campaignId: delivery.campaignId };
+}
+
 /** Keep a stored text within its column budget. */
 const clip = (v: string, max: number) => (v.length > max ? v.slice(0, max) : v);
 
