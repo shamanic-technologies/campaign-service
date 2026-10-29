@@ -148,6 +148,12 @@ export async function reRunDueCampaigns(): Promise<number> {
   if (!catalogue.ok) console.warn(`[campaign-service] scheduler: catalogue unreadable (${catalogue.detail}); source campaigns parked as on demand this tick`);
   const parkedUntil = new Date(now.getTime() + ON_DEMAND_RECHECK_MS);
   const runnable: typeof dueCampaigns = [];
+  // Reactive campaigns waking because someone is OWED (lib/reactive-wake.ts). Such a turn claims ONE owed person
+  // through lead-service's atomic claim, exactly like a person-carrying occurrence run, so it takes the same path:
+  // no campaign / brand-cohort in-flight guard (OLIVE-OWED-TURN-1029). Prod 2026-10-29: the client check-in pipe's
+  // occurrence runs were in flight almost every second of the day, so its owed turn was deferred 60 s at a time and
+  // a client owed a WhatsApp check-in since 13:28 was still unclaimed at 14:40.
+  const owedTurns = new Set<string>();
   for (const campaign of dueCampaigns) {
     let parkUntil: Date | null = null;
     if (answersOnDemand(campaign, catalogue)) {
@@ -157,6 +163,7 @@ export async function reRunDueCampaigns(): Promise<number> {
       // through the trigger path, never here. Nobody owed = parked until the next owed moment, no run.
       const wake = await reactiveWake(campaign, catalogue, now);
       if (!wake.run) parkUntil = wake.nextRunAt;
+      else owedTurns.add(campaign.id);
     } else if (campaign.planRole === "draining") {
       // Its pipe left its funnel campaign's plan (lib/sales-funnel-plan.ts): never stopped, takes NO new people. A
       // proactive run would find new ones, so it is parked; the follow-ups already queued go out on the sender's side.
@@ -178,7 +185,7 @@ export async function reRunDueCampaigns(): Promise<number> {
   // holds each brand cohort to ONE run in flight, and hands the turn to the funded campaign with
   // the lowest spent-today/ceiling ratio. Campaigns absent from the map fire
   // as they always have — every non-sales campaign is untouched.
-  const turnDefers = await planBrandTurns(runnable, now);
+  const turnDefers = await planBrandTurns(runnable.filter((c) => !owedTurns.has(c.id)), now);
 
   for (const campaign of runnable) {
     try {
@@ -209,7 +216,7 @@ export async function reRunDueCampaigns(): Promise<number> {
       // so the genuinely-long lead-service buffer/next fill is seen. Without this, /end-run's
       // immediate re-trigger fires a second flow mid-fill → lead-service 409 storm.
       const freshnessCutoff = new Date(now.getTime() - STUCK_RUN_FRESHNESS_THRESHOLD_MS);
-      const alive = await hasLiveRunForCampaign(campaign.orgId, campaign.id, freshnessCutoff);
+      const alive = !owedTurns.has(campaign.id) && (await hasLiveRunForCampaign(campaign.orgId, campaign.id, freshnessCutoff));
       if (alive) {
         const rescheduledAt = new Date(now.getTime() + 60_000);
         await db
