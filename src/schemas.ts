@@ -367,8 +367,10 @@ export const SalesFunnelCampaignSchema = z.object({
   followsPlan: z.boolean(),
   // The funnel it runs now: the last plan applied, else `salesFunnelId`.
   runningSalesFunnelId: z.string(),
-  // The latest plan check (null = never checked). `state`: following | applied | stopped | no_plan | plan_unreadable |
-  // plan_not_ready | plan_not_runnable | apply_failed (the last five = red on Monitoring).
+  // The latest plan check (null = never checked). `state`: following | applied | stopped | switched_off | no_plan |
+  // plan_unreadable | plan_not_ready | plan_not_runnable | apply_failed | plan_contradicts_brief (a channel its brief
+  // names was kept running though the plan leaves it out) | restore_failed (switched off, not back on its funnel yet).
+  // Red on Monitoring: from no_plan on.
   planCheck: z.object({
     state: z.string(),
     detail: z.string(),
@@ -388,7 +390,11 @@ export const SalesFunnelPlanChangeSchema = z.object({
   toSalesFunnelId: z.string(),
   planComputedAt: z.string().nullable(),
   appliedAt: z.string(),
-  // What each unit did: born (a new pipe), kept (in the plan, now on its play), draining (left the plan).
+  // Why it moved: plan (a plan applied) | switched_off (the switch turned off: back to its own funnel) |
+  // switched_off_by_hand (the same restore, written by hand) | kept_by_brief_by_hand (a brief-named unit undrained by hand).
+  reason: z.string(),
+  // What each unit did: born (a new pipe), kept (in the plan, now on its play), draining (left the plan),
+  // kept_by_brief (left the plan, kept running: the brief names its channel).
   units: z.array(z.object({ campaignId: z.string(), pipeId: z.string(), action: z.string() })),
 }).openapi("SalesFunnelPlanChange");
 
