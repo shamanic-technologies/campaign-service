@@ -35,6 +35,7 @@ import { answersTrigger } from "../lib/sales-funnel-head-trigger.js";
 import { notifySalesFunnelCampaignPrecompute } from "../lib/sales-funnel-campaign-precompute.js";
 import { deleteSalesFunnelCampaign } from "../lib/sales-funnel-campaign-delete.js";
 import { pgErrorOf } from "../lib/pg-error.js";
+import { SALES_FUNNEL_CAMPAIGN_FIELD_LABELS, describeChanges, reportCampaignAction } from "../lib/account-activity.js";
 import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sales-funnel-target.js";
 import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass, runSwitchOffFor } from "../lib/sales-funnel-plan.js";
 
@@ -96,6 +97,25 @@ async function applyEdits(row: SalesFunnelCampaign, edits: Partial<typeof salesF
     .where(and(eq(salesFunnelCampaigns.id, row.id), eq(salesFunnelCampaigns.orgId, row.orgId)))
     .returning();
   return written;
+}
+
+/**
+ * The client's ONE activity report for this request on a funnel campaign (lib/account-activity.ts): its status
+ * move if any, else its edits. Never awaited.
+ */
+function reportSalesFunnelCampaignAction(
+  req: AuthenticatedRequest,
+  before: SalesFunnelCampaign | null,
+  after: SalesFunnelCampaign,
+  moved: boolean,
+): void {
+  reportCampaignAction(
+    { orgId: req.orgId!, userId: req.userId, email: (req.headers["x-email"] as string | undefined) ?? null },
+    { id: after.id, name: after.salesFunnelName, brandId: after.brandId },
+    before === null ? { fromStatus: null, toStatus: after.status } : moved ? { fromStatus: before.status, toStatus: after.status } : null,
+    before === null ? [] : describeChanges(before, after, SALES_FUNNEL_CAMPAIGN_FIELD_LABELS),
+    after.updatedAt,
+  );
 }
 
 function missingPersonHeaders(req: AuthenticatedRequest): string[] {
@@ -174,6 +194,7 @@ router.post(
         });
 
       let incumbent = await findIncumbent();
+      const incumbentBefore = incumbent ?? null;
       // Handed back with the instruction, target and brief the caller states now (absent = untouched).
       const wasFollowing = incumbent?.followsPlan ?? false;
       if (incumbent) incumbent = await applyEdits(incumbent, statedEdits(incumbent, { instruction, target, brief, followsPlan }, req.userId));
@@ -196,6 +217,7 @@ router.post(
             onUnitStarted: ensureUnitSources,
           });
           wakeScheduler();
+          reportSalesFunnelCampaignAction(req, incumbentBefore, started!.salesFunnelCampaign, true);
           const named = await fileNamedPeopleOf(started!.salesFunnelCampaign, started!.units, req);
           return res.status(200).json({
             salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, started!.units),
@@ -205,6 +227,7 @@ router.post(
           });
         }
         const units = (await unitsOf([incumbent.id], orgId)).get(incumbent.id)!;
+        reportSalesFunnelCampaignAction(req, incumbentBefore, incumbent, false);
         const named = await fileNamedPeopleOf(incumbent, units, req);
         return res.status(200).json({
           salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, units),
@@ -333,6 +356,7 @@ router.post(
         `[campaign-service] Sales funnel campaign ${born.salesFunnelCampaign.id} (${plan.salesFunnelName}) born ${status} — org=${orgId} brand=${brandId} offer=${offerId}, units ${born.units.map((u) => u.id).join(", ")}`,
       );
       if (status === "ongoing") wakeScheduler();
+      reportSalesFunnelCampaignAction(req, null, born.salesFunnelCampaign, true);
       if (followsPlan && status === "ongoing") void runPlanCheckFor(born.salesFunnelCampaign.id);
       // features-service computes the brand's Campaigns rows now, before anyone reads them. Never awaited.
       void notifySalesFunnelCampaignPrecompute({
@@ -444,6 +468,7 @@ router.patch(
       // follows the new words), restate its target, rewrite its brief. Status untouched unless stated too.
       if (status === undefined) {
         const reworded = await backHome(await applyEdits(existing, edits));
+        reportSalesFunnelCampaignAction(req, existing, reworded, false);
         if (checkPlanNow) void runPlanCheckFor(reworded.id);
         const units = (await unitsOf([reworded.id], orgId)).get(reworded.id)!;
         return res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(reworded, units) });
@@ -467,6 +492,7 @@ router.patch(
       });
       if (!written) return res.status(404).json({ error: "Sales funnel campaign not found" });
       const parent = await backHome(await applyEdits(written.salesFunnelCampaign, edits));
+      reportSalesFunnelCampaignAction(req, existing, parent, true);
       if (status === "activate") wakeScheduler();
       if (checkPlanNow) void runPlanCheckFor(parent.id);
       const units = switchedOff ? (await unitsOf([parent.id], orgId)).get(parent.id)! : written.units;

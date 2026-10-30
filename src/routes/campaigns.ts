@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, and, desc, inArray, isNull, or, sql } from "drizzle-orm";
 import { arrayContains } from "drizzle-orm/sql/expressions/conditions";
 import { db } from "../db/index.js";
-import { campaigns, campaignStatusTransitions } from "../db/schema.js";
+import { campaigns, campaignStatusTransitions, salesFunnelCampaigns } from "../db/schema.js";
 import { serviceAuth, requireApiKey, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { refuseRetiredAudienceIds } from "../lib/retired-audience-ids.js";
@@ -46,6 +46,7 @@ import { sameLeg, storedLegKey } from "../lib/leg-identity.js";
 import { legKeyMatches } from "../lib/leg-key-sql.js";
 import { ensureSourcesOnStart } from "../lib/source-campaign-store.js";
 import { pgErrorOf } from "../lib/pg-error.js";
+import { CAMPAIGN_FIELD_LABELS, describeChanges, reportCampaignAction, type ActivityActor } from "../lib/account-activity.js";
 
 const router = Router();
 
@@ -78,6 +79,11 @@ function salesFunnelUnitRefusal(
 }
 
 /** The person whose request this is, for the transition ledger and billing's signal. */
+/** Who acted, for the client activity report to crm-service (lib/account-activity.ts). */
+function activityActor(req: AuthenticatedRequest): ActivityActor {
+  return { orgId: req.orgId!, userId: req.userId, email: (req.headers["x-email"] as string | undefined) ?? null };
+}
+
 function personActor(req: AuthenticatedRequest): StatusActor {
   return { userId: req.userId, runId: req.runId, email: (req.headers["x-email"] as string | undefined) ?? null };
 }
@@ -431,6 +437,13 @@ router.post("/campaigns", requireApiKey, serviceAuth, refuseRetiredAudienceIds, 
         },
       });
       const updated = restarted!;
+      reportCampaignAction(
+        activityActor(req),
+        updated,
+        { fromStatus: incumbent.status, toStatus: updated.status },
+        describeChanges(incumbent, updated, CAMPAIGN_FIELD_LABELS),
+        updated.updatedAt,
+      );
 
       if (req.runId) {
         traceEvent(req.runId, {
@@ -533,6 +546,7 @@ router.post("/campaigns", requireApiKey, serviceAuth, refuseRetiredAudienceIds, 
 
     // A person created it ongoing: billing hears it like a restart (fire-and-forget).
     signalCampaignBirth(campaign, personActor(req));
+    reportCampaignAction(activityActor(req), campaign, { fromStatus: null, toStatus: campaign.status }, [], campaign.updatedAt);
 
     // New ongoing campaign → wake the scheduler so it resumes monitoring from idle.
     wakeScheduler();
@@ -730,6 +744,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
         fields: { ...learned, workflowSlug, nextRunAt: new Date() },
       });
       const campaign = restarted.campaign!;
+      reportCampaignAction(activityActor(req), campaign, { fromStatus: incumbent.status, toStatus: campaign.status }, [], campaign.updatedAt);
 
       dispatchFirstRun(campaign, req);
       wakeScheduler();
@@ -773,6 +788,7 @@ router.post("/campaigns/start-funded-pair", requireApiKey, serviceAuth, validate
     });
 
     signalCampaignBirth(campaign, personActor(req));
+    reportCampaignAction(activityActor(req), campaign, { fromStatus: null, toStatus: campaign.status }, [], campaign.updatedAt);
     signalDisplacedStops(stoppedOnBirth, personActor(req));
     dispatchFirstRun(campaign, req);
     wakeScheduler();
@@ -892,6 +908,9 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, refuseRetiredAudience
     // working. A lead SOURCE unit keeps its own On/Off (one origin), on the ordinary path below.
     if (existing.salesFunnelCampaignId && req.body.status && !isSourceOriginSlug(existing.featureSlug)) {
       const { status: _status, ...otherFields } = req.body as Record<string, unknown>;
+      const salesFunnelCampaignBefore = await db.query.salesFunnelCampaigns.findFirst({
+        where: and(eq(salesFunnelCampaigns.id, existing.salesFunnelCampaignId), eq(salesFunnelCampaigns.orgId, req.orgId!)),
+      });
       if (Object.keys(otherFields).length > 0) {
         await db.update(campaigns).set({ ...otherFields, updatedAt: new Date() }).where(eq(campaigns.id, id));
       }
@@ -905,6 +924,14 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, refuseRetiredAudience
       if (!moved) return res.status(404).json({ error: "Campaign not found" });
       if (req.body.status === "activate") wakeScheduler();
       const unit = moved.units.find((u) => u.id === id) ?? existing;
+      // The client moved the FUNNEL campaign: one report, on the funnel, with the unit's edits.
+      reportCampaignAction(
+        activityActor(req),
+        { id: moved.salesFunnelCampaign.id, name: moved.salesFunnelCampaign.salesFunnelName, brandId: moved.salesFunnelCampaign.brandId },
+        { fromStatus: salesFunnelCampaignBefore?.status ?? existing.status, toStatus: moved.salesFunnelCampaign.status },
+        describeChanges(existing, unit, CAMPAIGN_FIELD_LABELS),
+        moved.salesFunnelCampaign.updatedAt,
+      );
       return res.json({ campaign: unit, salesFunnelCampaignId: existing.salesFunnelCampaignId });
     }
 
@@ -941,6 +968,14 @@ router.patch("/campaigns/:id", requireApiKey, serviceAuth, refuseRetiredAudience
         .where(eq(campaigns.id, id))
         .returning();
     }
+
+    reportCampaignAction(
+      activityActor(req),
+      updated,
+      requestedStatus ? { fromStatus: existing.status, toStatus: updated.status } : null,
+      describeChanges(existing, updated, CAMPAIGN_FIELD_LABELS),
+      updated.updatedAt,
+    );
 
     // Trigger workflow on activation
     if (req.body.status === "activate") {
