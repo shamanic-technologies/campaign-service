@@ -581,6 +581,7 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
     mode: (row.mode ?? null) as "proactive" | "reactive" | null,
     triggerId: row.triggerId ?? null,
     followsPlan: row.followsPlan,
+    engineOutcomes: row.engineOutcomes ?? [],
     runningSalesFunnelId: row.runningSalesFunnelId ?? row.salesFunnelId,
     planCheck: (row.planCheck ?? null) as PlanCheckView | null,
     createdAt: row.createdAt.toISOString(),
