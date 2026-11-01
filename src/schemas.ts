@@ -916,7 +916,7 @@ export const TriggerEventSchema = z.object({
     refusals: z.array(z.object({ campaignId: z.string(), code: z.string(), reason: z.string() })),
   }).nullable().openapi({
     description:
-      "What happened to the item/person the occurrence carries. `delivered`: a run did its work (a pushed email was accepted by the sender). `refused`: the sender refused it, final, never retried (`refusals[]`: the sender's code and sentence). `owed`: not done yet (due later, or waiting for a retry after a temporary failure). `in_flight`: a run carrying it is running. `failed`: every retry failed for a temporary reason, given up (`lastError`). `skipped`: no run carried it (`skipReason`). `unconfirmed`: recorded ran, no run reported back. null when the occurrence carries nothing.",
+      "What happened to the item/person the occurrence carries. `delivered`: a run did its work (a pushed email was accepted by the sender). `refused`: the sender refused it, final, never retried (`refusals[]`: the sender's code and sentence). `owed`: not done yet (due later, or waiting for a retry after a temporary failure). `in_flight`: a run carrying it is running. `failed`: every retry failed for a temporary reason, given up (`lastError`). `skipped`: no run carried it (`skipReason`). `unconfirmed`: recorded ran, no run reported back. null when the occurrence carries nothing (an occurrence a campaign naming its people answers is tracked for that campaign).",
   }),
   performedByCaller: z.boolean(),
   processedAt: z.string().nullable(),

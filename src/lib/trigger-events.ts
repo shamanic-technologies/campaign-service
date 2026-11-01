@@ -23,7 +23,7 @@ import {
   personLabel,
   type EventPerson,
 } from "./trigger-person.js";
-import { deliveriesByEvent, deliveryOf, eventCarries, recordDeliveries } from "./trigger-deliveries.js";
+import { deliveriesByEvent, deliveryOf, eventCarries, eventCarriesItself, recordDeliveries } from "./trigger-deliveries.js";
 import { answersTrigger, doorRefusal, TRIGGER_NOT_CALLABLE } from "./sales-funnel-head-trigger.js";
 import { COMPOSITE_TRIGGER_RECORDED_VIA, eventSourceTriggerId, recordCompositeOccurrences } from "./composite-trigger.js";
 import { eventStanding } from "./trigger-withdrawal.js";
@@ -131,6 +131,8 @@ export class TriggerEventError extends Error {
 type ScopeAnswer = Pick<StepTriggerOutcome, "triggered" | "skipped"> & {
   offCampaignIds: string[];
   legKeys: string[];
+  /** Campaigns naming their people the occurrence concerns: their runs carry it (WF-SILENT-FOLLOWUP-1101). */
+  peopleCampaignIds?: string[];
 };
 
 export interface EventVerdict {
@@ -183,6 +185,8 @@ export async function fireTrigger(
   person?: EventPerson | null,
   /** A retry of a person event: only these campaigns (the ones held back last time) are asked again. */
   onlyCampaignIds?: readonly string[] | null,
+  /** The recorded occurrence being fired: a campaign naming its people answers it for them. */
+  occurrence?: WorkflowTriggerInput,
 ): Promise<ScopeAnswer> {
   const transitions = (catalogue.triggerTransitions ?? []).filter((t) => t.triggerId === triggerId);
   const legKeys = [...new Set(transitions.map((t) => t.legKey))];
@@ -197,6 +201,7 @@ export async function fireTrigger(
     trigger,
     eventLeadId,
     person,
+    occurrence,
   );
   return { ...run, legKeys };
 }
@@ -444,13 +449,17 @@ export async function fireClaimedEvent(
     const carries = person !== null || (own !== null && "item" in own);
     // An occurrence carrying a person or an item is owed until a run that carried it did its work
     // (lib/trigger-deliveries.ts): each run dispatched for it is recorded, and `/end-run` redelivers it.
+    // So is one a campaign naming its people answers (WF-SILENT-FOLLOWUP-1101), for THAT campaign only.
     const delivers = eventCarries(own);
+    const carriesItself = eventCarriesItself(own);
     // A retried (held back) or redelivered event re-asks ONLY the campaigns named; the ones that already
     // ran are kept and never dispatched twice.
     const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
     const retryCampaignIds = delivers && Array.isArray(own?.retryCampaignIds) ? strings(own?.retryCampaignIds) : null;
     const priorRanCampaignIds = delivers ? strings(own?.priorRanCampaignIds) : [];
     const sourceTriggerId = event.recordedVia === COMPOSITE_TRIGGER_RECORDED_VIA ? eventSourceTriggerId(own) : null;
+    // Campaigns naming their people this occurrence concerns, kept across attempts (lib/trigger-deliveries.ts).
+    let peopleCampaignIds = strings(own?.peopleCampaignIds);
     // An occurrence recorded under a since-merged id fires as the one trigger of its fact.
     const type = event.triggerId ? resolveTriggerType(catalogue, event.triggerId) : null;
     if (!type) {
@@ -477,13 +486,21 @@ export async function fireClaimedEvent(
             ...(sourceTriggerId ? { sourceTriggerId } : {}),
           }
           : undefined;
-        verdict = eventVerdict(
-          await fireTrigger(event, type.id, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId, person, retryCampaignIds),
-        );
-        if (delivers && verdict.detail.triggered.length > 0) {
+        const occurrence: WorkflowTriggerInput = {
+          eventId: event.id,
+          triggerId: type.id,
+          leadId: event.leadId,
+          item,
+          ...(sourceTriggerId ? { sourceTriggerId } : {}),
+        };
+        const answer = await fireTrigger(event, type.id, catalogue, trigger, event.leadId, onlySalesFunnelCampaignId, person, retryCampaignIds, occurrence);
+        verdict = eventVerdict(answer);
+        peopleCampaignIds = [...new Set([...peopleCampaignIds, ...(answer.peopleCampaignIds ?? [])])];
+        const carried = verdict.detail.triggered.filter((t) => carriesItself || peopleCampaignIds.includes(t.campaignId));
+        if (carried.length > 0) {
           // Already dispatched: a failure to record must never put the event back (it would dispatch twice).
           try {
-            await recordDeliveries(event.id, verdict.detail.triggered);
+            await recordDeliveries(event.id, carried);
           } catch (err) {
             console.error(`[campaign-service] trigger event ${event.id}: the runs just dispatched could not be recorded, a failure of them will not redeliver it:`, err);
           }
@@ -505,6 +522,10 @@ export async function fireClaimedEvent(
       verdict = { ...verdict, detail: { ...rest, ...verdict.detail } as EventVerdict["detail"] };
     }
     if (ranLeads.length > 0) verdict = { ...verdict, detail: { ...verdict.detail, ranLeads } as EventVerdict["detail"] };
+    if (peopleCampaignIds.length > 0) verdict = { ...verdict, detail: { ...verdict.detail, peopleCampaignIds } as EventVerdict["detail"] };
+    // Owed (held back, retried, redelivered) for every campaign when the occurrence carries something itself; else
+    // only for the campaigns naming their people it concerns.
+    const owedTo = (campaignId: string) => carriesItself || peopleCampaignIds.includes(campaignId);
     // ANY campaign held back for a passing reason: the event tries again for those campaigns only, so each
     // gets its own run carrying the person and item. Money / pacing (cap reached, unfunded, a run in flight,
     // a failure backoff: `OWED_UNTIL_ROOM_SKIPS`) is owed with NO deadline, every 2 min while the event is
@@ -516,9 +537,8 @@ export async function fireClaimedEvent(
     const fellDueAt = Number.isFinite(storedFellDueAt) ? storedFellDueAt : event.dueAt.getTime();
     const youngSince = Math.max(event.occurredAt.getTime(), fellDueAt, Number.isFinite(redeliveredAt) ? redeliveredAt : 0);
     const young = now.getTime() - youngSince < PERSON_NOT_KNOWN_WAIT_MS;
-    const heldBack = delivers
-      ? verdict.detail.skipped.filter((sk) => OWED_UNTIL_ROOM_SKIPS.has(sk.reason) || (young && PERSON_EVENT_RETRY_SKIPS.has(sk.reason)))
-      : [];
+    const heldBack = verdict.detail.skipped.filter((sk) =>
+      owedTo(sk.campaignId) && (OWED_UNTIL_ROOM_SKIPS.has(sk.reason) || (young && PERSON_EVENT_RETRY_SKIPS.has(sk.reason))));
     if (heldBack.length > 0) {
       const retryMs = young ? PERSON_NOT_KNOWN_RETRY_MS : OWED_EVENT_RECHECK_MS;
       const dueAt = heldBackDueAt(heldBack, now, retryMs);
@@ -542,7 +562,7 @@ export async function fireClaimedEvent(
     }
     // A passing condition outlived its window (lead-service never answered, the person never became known):
     // the occurrence ends with that name, never silently (TRIGGER-TRANSIENT-FILING-1019).
-    const expired = delivers ? verdict.detail.skipped.filter((sk) => YOUNG_ONLY_RETRY_SKIPS.has(sk.reason)) : [];
+    const expired = verdict.detail.skipped.filter((sk) => owedTo(sk.campaignId) && YOUNG_ONLY_RETRY_SKIPS.has(sk.reason));
     if (expired.length > 0) {
       console.error(
         `[campaign-service] trigger event ${event.id} (${event.triggerId}) gave up after ${PERSON_NOT_KNOWN_WAIT_MS / 60_000} min of retries: ${expired.map((sk) => `${sk.campaignId} ${sk.reason} (${sk.detail})`).join(", ")}`.slice(0, 1000),

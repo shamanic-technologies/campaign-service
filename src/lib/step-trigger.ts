@@ -319,8 +319,16 @@ export async function runCampaignsInScope(
    * it reaches, then riding `/execute` as `trigger.person` with the lead id lead-service filed them as.
    */
   person?: EventPerson | null,
-): Promise<Pick<StepTriggerOutcome, "triggered" | "skipped"> & { offCampaignIds: string[] }> {
+  /**
+   * The recorded occurrence this dispatch answers, when there is one (lib/trigger-events.ts). A campaign naming
+   * its people answers it for exactly them: its run carries it as `trigger` (see `peopleCampaignIds`).
+   */
+  occurrence?: WorkflowTriggerInput,
+): Promise<Pick<StepTriggerOutcome, "triggered" | "skipped"> & { offCampaignIds: string[]; peopleCampaignIds: string[] }> {
   const outcome: Pick<StepTriggerOutcome, "triggered" | "skipped"> = { triggered: [], skipped: [] };
+  // Campaigns naming their people the occurrence concerns (WF-SILENT-FOLLOWUP-1101): each run dispatched for them
+  // carries the occurrence and the named person, so it is tracked and settled like any carrying occurrence.
+  const peopleCampaignIds: string[] = [];
 
   // Read the brand's live campaigns and select in memory. The population is a handful of rows per
   // brand, and a campaign is identified by (offer, leg, channel).
@@ -414,6 +422,9 @@ export async function runCampaignsInScope(
       skip(STEP_TRIGGER_SKIPS.EVENT_NAMES_ANOTHER_PERSON, `the event names lead ${namedLeadId}, not one of the people this campaign names`);
       continue;
     }
+    // The occurrence is about this campaign's own people: what becomes of it is what its run says.
+    const answersFor = people && !person ? trigger ?? occurrence : undefined;
+    if (answersFor) peopleCampaignIds.push(campaign.id);
 
     const waitsOn = campaign.salesFunnelCampaignId ? targeting.get(campaign.salesFunnelCampaignId)?.githubIssue ?? null : null;
     if (!eventConcernsGithubIssue(waitsOn, trigger?.item)) {
@@ -513,6 +524,16 @@ export async function runCampaignsInScope(
     // once nothing holds the dispatch back, so the run carrying their item is the one that claims them
     // (a held event is retried as a whole: lib/trigger-events.ts).
     let campaignTrigger = trigger;
+    // A campaign naming its people: its run answers THIS occurrence for the named person it concerns (the lead the
+    // event names, else its only person), never as an anonymous cadence run (WF-SILENT-FOLLOWUP-1101).
+    if (answersFor && people) {
+      const named = namedPersonOfEvent(people, namedLeadId);
+      campaignTrigger = {
+        ...answersFor,
+        leadId: named?.leadId ?? answersFor.leadId ?? null,
+        ...(named ? { person: { email: named.email } } : {}),
+      };
+    }
     if (person) {
       // The occurrence is the org naming this person for its own brand: lead-service's evidence.
       const statedBy = trigger ? { triggerEventId: trigger.eventId, triggerId: trigger.triggerId } : null;
@@ -640,7 +661,16 @@ export async function runCampaignsInScope(
     }
   }
 
-  return { ...outcome, offCampaignIds };
+  return { ...outcome, offCampaignIds, peopleCampaignIds };
+}
+
+/**
+ * The named person an occurrence concerns: the one filed as the lead it names, else the campaign's only person;
+ * null when it names nobody and the campaign names several (its run claims whoever is due). Pure.
+ */
+export function namedPersonOfEvent(people: readonly NamedPerson[], eventLeadId: string | null | undefined): NamedPerson | null {
+  if (eventLeadId) return people.find((p) => p.leadId === eventLeadId) ?? null;
+  return people.length === 1 ? people[0] : null;
 }
 
 /**

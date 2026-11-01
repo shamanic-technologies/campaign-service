@@ -64,10 +64,23 @@ const FIRING_WAIT_MS = 3_000;
 const FIRING_TRIES = 5;
 
 /** Does the event's own detail carry something a run must deliver (a person or an item)? Pure. */
-export function eventCarries(detail: unknown): boolean {
+export function eventCarriesItself(detail: unknown): boolean {
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) return false;
   const own = detail as Record<string, unknown>;
   return (own.person !== undefined && own.person !== null) || (own.item !== undefined && own.item !== null);
+}
+
+/**
+ * Is the occurrence owed until a run says what became of it? When it carries a person or an item, and when a
+ * campaign NAMING ITS PEOPLE answered it (`detail.peopleCampaignIds`, WF-SILENT-FOLLOWUP-1101: prod 2026-11-01
+ * event eda9cb51, a Copilot follow-up naming only a lead, read done / ran with no delivery while its run claimed
+ * nobody and sent nothing). For the latter only those campaigns' runs carry it and are recorded. Pure.
+ */
+export function eventCarries(detail: unknown): boolean {
+  if (eventCarriesItself(detail)) return true;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return false;
+  const people = (detail as Record<string, unknown>).peopleCampaignIds;
+  return Array.isArray(people) && people.length > 0;
 }
 
 /** The delay before the next delivery, after `failedRuns` failed runs (>= 1). Pure. */
