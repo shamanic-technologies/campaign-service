@@ -149,7 +149,7 @@ export async function readStuckOccurrences(days: number, now: Date = new Date())
       AND attempts >= ${STUCK_OCCURRENCE_MIN_ATTEMPTS}
       AND last_error IS NOT NULL
       AND greatest(occurred_at, created_at) <= ${waitingBefore}::timestamptz
-      AND (detail ? 'person' OR detail ? 'item')
+      AND (detail ? 'person' OR detail ? 'item' OR detail ? 'peopleCampaignIds')
     ORDER BY greatest(occurred_at, created_at)`);
 
   const holders = [...new Set(candidates.flatMap((c) => heldBackBy(c.last_error).campaignIds))];
@@ -217,7 +217,7 @@ export async function readStuckOccurrences(days: number, now: Date = new Date())
     FROM trigger_events
     WHERE greatest(occurred_at, created_at) >= ${since}::timestamptz
       AND greatest(occurred_at, created_at) <= ${now.toISOString()}::timestamptz
-      AND (detail ? 'person' OR detail ? 'item')
+      AND (detail ? 'person' OR detail ? 'item' OR detail ? 'peopleCampaignIds')
     GROUP BY 1
     ORDER BY 1`);
 
