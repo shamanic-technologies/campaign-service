@@ -158,7 +158,7 @@ export async function readUnsentAnswers(days: number, now: Date = new Date()): P
     FROM last l
     JOIN agg a ON a.event_id = l.event_id AND a.campaign_id = l.campaign_id
     JOIN trigger_events e ON e.id = l.event_id
-    WHERE (e.detail ? 'person' OR e.detail ? 'item')`);
+    WHERE (e.detail ? 'person' OR e.detail ? 'item' OR e.detail ? 'peopleCampaignIds')`);
 
   const iso = (v: Date | string) => new Date(v).toISOString();
   const byEvent = new Map<string, typeof pairs>();
