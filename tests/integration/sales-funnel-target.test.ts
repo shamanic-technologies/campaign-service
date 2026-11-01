@@ -145,6 +145,17 @@ describe("funnel campaign target + brief (FACTORY-P1-CAMPAIGN-TARGET-BRIEF)", ()
     expect(cleared.body.salesFunnelCampaign).toMatchObject({ brief: null, briefUpdatedByUserId: "user_target", instruction: "Be short." });
   });
 
+  it("ENGINE-PER-OUTCOME-SWITCH: born with no result handed to the Engine; PATCH hands results over, [] takes them back", async () => {
+    const born = (await launch({}).expect(201)).body.salesFunnelCampaign;
+    expect(born.engineOutcomes).toEqual([]);
+    const on = await patch(born.id, { engineOutcomes: ["lead_found", "lead_found"] }).expect(200);
+    expect(on.body.salesFunnelCampaign).toMatchObject({ engineOutcomes: ["lead_found"], status: "stopped", followsPlan: false });
+    const read = await withPerson(request(app).get(`/sales-funnel-campaigns/${born.id}`)).expect(200);
+    expect(read.body.salesFunnelCampaign.engineOutcomes).toEqual(["lead_found"]);
+    const off = await patch(born.id, { engineOutcomes: [] }).expect(200);
+    expect(off.body.salesFunnelCampaign.engineOutcomes).toEqual([]);
+  });
+
   it("PATCH restates the target, refuses an unknown one, and GET reads both back", async () => {
     const born = (await launch({}).expect(201)).body.salesFunnelCampaign;
     await patch(born.id, { target: "meeting_booked", brief: "Meetings only." }).expect(200);
