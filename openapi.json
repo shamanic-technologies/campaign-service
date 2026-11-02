@@ -570,12 +570,6 @@
           "followsPlan": {
             "type": "boolean"
           },
-          "engineOutcomes": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
           "runningSalesFunnelId": {
             "type": "string"
           },
@@ -639,7 +633,6 @@
           "mode",
           "triggerId",
           "followsPlan",
-          "engineOutcomes",
           "runningSalesFunnelId",
           "planCheck",
           "createdAt",
@@ -900,15 +893,6 @@
           },
           "followsPlan": {
             "type": "boolean"
-          },
-          "engineOutcomes": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 100
-            },
-            "maxItems": 50
           }
         },
         "additionalProperties": false

@@ -289,12 +289,9 @@ export const UpdateSalesFunnelCampaignBody = z.object({
   // true = follow its plan (the pipes and plays features-service plans for it, adapting to each plan change);
   // false = keep the funnel it runs now, fixed.
   followsPlan: z.boolean().optional(),
-  // The results (catalogue step keys) whose workflow pick it hands to features-service's Engine; [] = none. Replaces
-  // the whole list. ENGINE-PER-OUTCOME-SWITCH.
-  engineOutcomes: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
 }).strict().refine(
-  (b) => b.status !== undefined || b.instruction !== undefined || b.target !== undefined || b.brief !== undefined || b.followsPlan !== undefined || b.engineOutcomes !== undefined,
-  { message: "state status, instruction, target, brief, followsPlan and/or engineOutcomes" },
+  (b) => b.status !== undefined || b.instruction !== undefined || b.target !== undefined || b.brief !== undefined || b.followsPlan !== undefined,
+  { message: "state status, instruction, target, brief and/or followsPlan" },
 ).openapi("UpdateSalesFunnelCampaignBody");
 
 export const SalesFunnelCampaignsQuery = z.object({
@@ -368,8 +365,6 @@ export const SalesFunnelCampaignSchema = z.object({
   // FACTORY-P1-FOLLOW-PLAN: true = it runs its plan (features-service's best line to its target) and follows each
   // plan change; false = a fixed funnel. `salesFunnelId` never moves (its budget and volume caps are keyed on it).
   followsPlan: z.boolean(),
-  // ENGINE-PER-OUTCOME-SWITCH: the results whose workflow pick it hands to features-service's Engine ([] = none).
-  engineOutcomes: z.array(z.string()),
   // The funnel it runs now: the last plan applied, else `salesFunnelId`.
   runningSalesFunnelId: z.string(),
   // The latest plan check (null = never checked). `state`: following | applied | stopped | switched_off | no_plan |

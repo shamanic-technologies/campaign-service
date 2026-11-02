@@ -297,9 +297,6 @@ export const salesFunnelCampaigns = pgTable(
     // funnel (every campaign before). true = it runs the pipes and plays of the plan features-service serves for it
     // and follows each plan change. Data, never a per-brand rule.
     followsPlan: boolean("follows_plan").notNull().default(false),
-    // ENGINE-PER-OUTCOME-SWITCH (migration 0084): the results (catalogue step keys) whose workflow pick this campaign
-    // hands to features-service's Engine, one result at a time. [] = the service path everywhere. Data, never a rule.
-    engineOutcomes: text("engine_outcomes").array().notNull().default(sql`'{}'::text[]`),
     // The funnel it RUNS now when it follows its plan (the last plan applied); NULL = `sales_funnel_id` (never
     // followed one). `sales_funnel_id` never moves: billing's caps are keyed on it.
     runningSalesFunnelId: text("running_sales_funnel_id"),
