@@ -206,6 +206,8 @@ export interface StepTriggerOutcome {
     detail: string;
     /** When the hold is known to end (a failure backoff): the occurrence is re-checked then, not on a fixed delay. */
     retryAt?: string;
+    /** The campaign whose run in flight holds this one back (a person's slot): its run's end wakes the occurrence. */
+    heldByCampaignId?: string;
   }>;
 }
 
@@ -394,9 +396,16 @@ export async function runCampaignsInScope(
   for (const campaign of responsible) {
     // The slot a person-carrying run claimed (lib/person-runs.ts): handed back by any skip after the claim.
     let releaseSlot: (() => void) | null = null;
-    const skip = (reason: StepTriggerSkipReason, detail: string, retryAt?: Date) => {
+    const skip = (reason: StepTriggerSkipReason, detail: string, retryAt?: Date, heldByCampaignId?: string) => {
       releaseSlot?.();
-      outcome.skipped.push({ campaignId: campaign.id, legKey: campaign.legKey, reason, detail, ...(retryAt ? { retryAt: retryAt.toISOString() } : {}) });
+      outcome.skipped.push({
+        campaignId: campaign.id,
+        legKey: campaign.legKey,
+        reason,
+        detail,
+        ...(retryAt ? { retryAt: retryAt.toISOString() } : {}),
+        ...(heldByCampaignId ? { heldByCampaignId } : {}),
+      });
     };
 
     // A campaign with no DAG is a channel the CUSTOMER operates: the work happens off-platform and
@@ -499,7 +508,7 @@ export async function runCampaignsInScope(
       const cohortIds = live.filter((c) => serializationCohort(c.featureSlug) === cohort).map((c) => c.id);
       const slot = await reservePersonRun(`${req.orgId}|${brandIds[0]}|${cohort}`, cohortIds, campaign.id, person, now);
       if (!slot.ok) {
-        skip(STEP_TRIGGER_SKIPS.RUN_IN_FLIGHT, slot.detail);
+        skip(STEP_TRIGGER_SKIPS.RUN_IN_FLIGHT, slot.detail, undefined, slot.heldByCampaignId);
         continue;
       }
       releaseSlot = slot.release;
