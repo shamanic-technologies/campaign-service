@@ -596,6 +596,13 @@
       "when": 1780886400000,
       "tag": "0084_sales_funnel_campaign_engine_outcomes",
       "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1780986400000,
+      "tag": "0085_retire_sales_funnel_campaign_engine_outcomes",
+      "breakpoints": true
     }
   ]
 }

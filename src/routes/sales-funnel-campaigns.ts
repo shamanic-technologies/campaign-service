@@ -7,6 +7,7 @@ import { db } from "../db/index.js";
 import { campaigns, salesFunnelCampaigns, type SalesFunnelCampaign } from "../db/schema.js";
 import { serviceAuth, requireApiKey, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
+import { refuseRetiredEngineOutcomes } from "../lib/retired-engine-outcomes.js";
 import {
   CreateSalesFunnelCampaignBody,
   SalesFunnelCampaignsQuery,
@@ -73,17 +74,12 @@ async function unitsOf(parentIds: string[], orgId: string): Promise<Map<string, 
  */
 function statedEdits(
   current: SalesFunnelCampaign,
-  stated: { instruction?: string | null; target?: string; brief?: string | null; followsPlan?: boolean; engineOutcomes?: string[] },
+  stated: { instruction?: string | null; target?: string; brief?: string | null; followsPlan?: boolean },
   userId: string | undefined,
 ): Partial<typeof salesFunnelCampaigns.$inferInsert> {
   const edits: Partial<typeof salesFunnelCampaigns.$inferInsert> = {};
   // The customer's switch (lib/sales-funnel-plan.ts): follow the plan, or keep the funnel it runs now, fixed.
   if (stated.followsPlan !== undefined && stated.followsPlan !== current.followsPlan) edits.followsPlan = stated.followsPlan;
-  // ENGINE-PER-OUTCOME-SWITCH: the results handed to the Engine (the whole list, deduplicated, sorted).
-  if (stated.engineOutcomes !== undefined) {
-    const next = [...new Set(stated.engineOutcomes)].sort();
-    if (next.join(",") !== [...(current.engineOutcomes ?? [])].sort().join(",")) edits.engineOutcomes = next;
-  }
   if (stated.instruction !== undefined && stated.instruction !== current.instruction) edits.instruction = stated.instruction;
   if (stated.target !== undefined && stated.target !== current.target) edits.target = stated.target;
   if (stated.brief !== undefined && stated.brief !== current.brief) {
@@ -161,6 +157,7 @@ router.post(
   "/sales-funnel-campaigns",
   requireApiKey,
   serviceAuth,
+  refuseRetiredEngineOutcomes,
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
@@ -445,10 +442,11 @@ router.patch(
   "/sales-funnel-campaigns/:id",
   requireApiKey,
   serviceAuth,
+  refuseRetiredEngineOutcomes,
   validateBody(UpdateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { status, instruction, target, brief, followsPlan, engineOutcomes } = UpdateSalesFunnelCampaignBody.parse(req.body);
+      const { status, instruction, target, brief, followsPlan } = UpdateSalesFunnelCampaignBody.parse(req.body);
       const orgId = req.orgId!;
       const existing = await db.query.salesFunnelCampaigns.findFirst({
         where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
@@ -458,7 +456,7 @@ router.patch(
         const check = await checkTargetStep(target);
         if (!check.ok) return res.status(check.status).json(check.body);
       }
-      const edits = statedEdits(existing, { instruction, target, brief, followsPlan, engineOutcomes }, req.userId);
+      const edits = statedEdits(existing, { instruction, target, brief, followsPlan }, req.userId);
       // Turned to follow its plan, or started while it does: checked against its plan at once (after the write).
       const checkPlanNow = (followsPlan === true && !existing.followsPlan) || (status === "activate" && (followsPlan ?? existing.followsPlan));
       // Turned OFF: back on its own funnel at once, before answering (lib/sales-funnel-plan.ts `switchOffPlan`).
