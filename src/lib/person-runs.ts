@@ -74,19 +74,25 @@ export function samePerson(run: Pick<PersonRunInFlight, "email" | "phone">, pers
 }
 
 /**
- * Why a person-carrying run of `campaignId` must wait, or null when it may go now. Pure over the runs in flight on
- * the campaign's cohort (its own campaign included).
+ * Why a person-carrying run of `campaignId` must wait, or null when it may go now. `heldByCampaignId` = the campaign
+ * whose run holds the slot: the end of THAT run is when this one may go (`wakeOccurrencesHeldBy`). Pure over the
+ * runs in flight on the campaign's cohort (its own campaign included).
  */
 export function personRunHold(
   campaignId: string,
   person: EventPerson,
   inFlight: readonly PersonRunInFlight[],
-): string | null {
+): { detail: string; heldByCampaignId: string } | null {
   const same = inFlight.find((r) => samePerson(r, person));
-  if (same) return `a run about this person is already in flight (campaign ${same.campaignId})`;
+  if (same) {
+    return { detail: `a run about this person is already in flight (campaign ${same.campaignId})`, heldByCampaignId: same.campaignId };
+  }
   const own = inFlight.filter((r) => r.campaignId === campaignId).length;
   if (own >= PERSON_RUNS_PER_CAMPAIGN_MAX) {
-    return `${own} runs of this campaign are already answering other people (at most ${PERSON_RUNS_PER_CAMPAIGN_MAX} at once)`;
+    return {
+      detail: `${own} runs of this campaign are already answering other people (at most ${PERSON_RUNS_PER_CAMPAIGN_MAX} at once)`,
+      heldByCampaignId: campaignId,
+    };
   }
   return null;
 }
@@ -126,7 +132,7 @@ export async function reservePersonRun(
   campaignId: string,
   person: EventPerson,
   now: Date,
-): Promise<{ ok: true; release: () => void } | { ok: false; detail: string }> {
+): Promise<{ ok: true; release: () => void } | { ok: false; detail: string; heldByCampaignId: string }> {
   return underCohortLock(cohortKey, async () => {
     // Claims FIRST, rows second: a claim is released only after its row is written, so a run is always seen in
     // one of the two (read the other way round, a run whose row landed and claim went during the read is missed).
@@ -135,7 +141,7 @@ export async function reservePersonRun(
     const byPerson = new Map<string, PersonRunInFlight>();
     for (const r of [...stored, ...held]) byPerson.set(`${r.campaignId}|${personKey(r)}`, r);
     const hold = personRunHold(campaignId, person, [...byPerson.values()]);
-    if (hold) return { ok: false as const, detail: hold };
+    if (hold) return { ok: false as const, ...hold };
     const key = `${cohortKey}|${campaignId}|${personKey({ email: person.email, phone: person.phone ?? null })}|${crypto.randomUUID()}`;
     reservations.set(key, { campaignId, email: person.email, phone: person.phone ?? null, cohortKey, at: now.getTime() });
     for (const [k, r] of reservations) if (now.getTime() - r.at >= RESERVATION_TTL_MS) reservations.delete(k);
@@ -161,6 +167,12 @@ export function resetPersonRunReservations(): void {
  * fall due NOW, instead of on their 2-10 min retry. Without it the burst drains at the retry cadence, not at the
  * speed runs finish. Returns how many were made due.
  *
+ * Held back = held on this campaign's own slots, OR held on ANOTHER campaign because this campaign's run was about the
+ * same person (the skip's `heldByCampaignId`, LEAD-EVENT-LATENCY-1101). Prod 2026-11-01: one WhatsApp message is
+ * answered by 4 campaigns of the brand's cohort, one at a time per person; the 3 that refuse the person ran first and
+ * the one that answers waited for each to end, but only the 2-min retry moved it (the hold named the WAITING
+ * campaign, so the blocker's end woke nothing): ~5 min per answer instead of the ~10 s each run takes.
+ *
  * NEWEST FACT FIRST (ONE-AI-CONVERSES-1029-QUEUE, prod 2026-10-29): oldest-first put a person who had just written
  * to us behind 388 newsletter clicks from the morning, so the answer that matters most (now) came hours late, and
  * every click was answered hours late anyway. Newest first answers what just happened within a run's time whatever
@@ -181,7 +193,11 @@ export async function wakeOccurrencesHeldBy(campaignId: string, now: Date = new 
       SELECT id FROM trigger_events
       WHERE status = 'pending'
         AND due_at > ${now.toISOString()}::timestamptz
-        AND (position(${held} in coalesce(last_error, '')) > 0 OR position(${backedOff} in coalesce(last_error, '')) > 0)
+        AND (
+          position(${held} in coalesce(last_error, '')) > 0
+          OR position(${backedOff} in coalesce(last_error, '')) > 0
+          OR coalesce(detail->'skipped', '[]'::jsonb) @> ${JSON.stringify([{ heldByCampaignId: campaignId }])}::jsonb
+        )
       ORDER BY greatest(occurred_at, created_at) DESC
       LIMIT ${PERSON_RUNS_PER_CAMPAIGN_MAX}
     )`)

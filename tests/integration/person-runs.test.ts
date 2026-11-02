@@ -245,6 +245,73 @@ describe("a burst of occurrences about different people runs side by side (lib/p
   });
 });
 
+describe("a person held behind ANOTHER campaign's run is woken when that run ends (LEAD-EVENT-LATENCY-1101)", () => {
+  // Prod 2026-11-01: one WhatsApp message reached 4 campaigns of the brand's cohort. Same person = one run at a time,
+  // so 3 waited; the hold named the WAITING campaign, the blocker's end woke nothing, and each waited the 2-min retry.
+  const LEG2 = "form_submitted_to_paid_client";
+  const twoLegs = () => {
+    const c = catalogue();
+    return {
+      ...c,
+      stepKeys: new Set([...c.stepKeys, "paid_client"]),
+      legs: [...c.legs, { legKey: LEG2, fromStepKey: FORM, toStepKey: "paid_client" }],
+      triggerTransitions: [...c.triggerTransitions, { featureSlug: "ai-meeting-booking", legKey: LEG2, triggerId: FORM }],
+    };
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await cleanTestData();
+    mockCatalogue.mockResolvedValue(twoLegs());
+    mockFunding.mockResolvedValue({ funded: true, ceilingCents: 5000 });
+    mockListRuns.mockResolvedValue({ runs: [] });
+    mockResolveSlug.mockResolvedValue({ workflowSlug: "ai-meeting-booking-v1", audienceId: null });
+    mockFile.mockImplementation(async (p: { email?: string }) => ({ ok: true, leadId: `lead-${p.email}`, filed: true }));
+    mockDue.mockResolvedValue({ ok: true });
+    mockExecute.mockImplementation(async () => ({ runId: crypto.randomUUID() }));
+  });
+
+  it("the blocker's run ends: the waiting campaign's occurrence falls due at once, not on the 2-min retry", async () => {
+    const first = await meetingBooking("ongoing");
+    const second = await insertTestCampaign(ORG, {
+      brandIds: [BRAND], brandId: BRAND, status: "ongoing", featureSlug: "ai-meeting-booking",
+      workflowSlug: "ai-meeting-booking-v1", createdByUserId: USER, parentRunId: "9f0d1c22-0000-4000-8000-000000000031",
+      offerId: OFFER, legKey: LEG2, salesFunnelCampaignId: crypto.randomUUID(), salesFunnelId: "sf-paid",
+    });
+    const res = await postEvent2("talking@example.com");
+    expect(res.body.event.status).toBe("pending");
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    const ranFirst = mockExecute.mock.calls[0][1].campaignId as string;
+    const waiting = ranFirst === first.id ? second.id : first.id;
+    const [held] = await db.select().from(triggerEvents).where(eq(triggerEvents.id, res.body.event.id));
+    const skip = (held.detail as { skipped: Array<{ campaignId: string; reason: string; heldByCampaignId?: string }> }).skipped;
+    expect(skip).toEqual([expect.objectContaining({ campaignId: waiting, reason: "run_in_flight", heldByCampaignId: ranFirst })]);
+    expect(held.dueAt.getTime()).toBeGreaterThan(Date.now() + 60_000);
+
+    // The blocker's run ends: its end wakes the occurrence it held on the other campaign, and the person is answered.
+    const [delivery] = await db.select().from(triggerEventDeliveries);
+    await settleTriggerDelivery(delivery.runId, { success: true, personNotAdmitted: { reason: "not_a_lead" } });
+    expect(await wakeOccurrencesHeldBy(ranFirst)).toBe(1);
+    expect(await fireDueTriggerEvents(new Date())).toBe(1);
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+    expect(mockExecute.mock.calls[1][1].campaignId).toBe(waiting);
+    const [after] = await db.select().from(triggerEvents).where(eq(triggerEvents.id, res.body.event.id));
+    expect(after).toMatchObject({ status: "done", outcome: "ran" });
+  });
+
+  it("a run of an unrelated campaign ending wakes nothing", async () => {
+    await meetingBooking("ongoing");
+    await insertTestCampaign(ORG, {
+      brandIds: [BRAND], brandId: BRAND, status: "ongoing", featureSlug: "ai-meeting-booking",
+      workflowSlug: "ai-meeting-booking-v1", createdByUserId: USER, parentRunId: "9f0d1c22-0000-4000-8000-000000000032",
+      offerId: OFFER, legKey: LEG2, salesFunnelCampaignId: crypto.randomUUID(), salesFunnelId: "sf-paid",
+    });
+    const res = await postEvent2("talking2@example.com");
+    expect(res.body.event.status).toBe("pending");
+    expect(await wakeOccurrencesHeldBy(crypto.randomUUID())).toBe(0);
+  });
+});
+
 describe("the DAG's gate lets person runs run side by side (lib/gate-check.ts block 2, ONE-AI-CONVERSES-1029-QUEUE)", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
