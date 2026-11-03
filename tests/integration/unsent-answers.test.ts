@@ -222,6 +222,53 @@ describe("an answer we owed and never sent is red on the Monitoring hub (lib/uns
     expect(read).toMatchObject({ status: "ok", unsent: [] });
   });
 
+  describe("asks crm-service whether the brand wrote to the person after their fact (any channel, anyone)", () => {
+    beforeEach(() => {
+      process.env.CRM_SERVICE_URL = "http://crm.test";
+      process.env.CRM_SERVICE_API_KEY = "crm-key";
+    });
+    afterAll(() => {
+      delete process.env.CRM_SERVICE_URL;
+      delete process.env.CRM_SERVICE_API_KEY;
+    });
+    const crmAnswers = (people: unknown[]) => fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ people }), { status: 200 }));
+
+    it("our AI line answered on WhatsApp outside any campaign (Senthil): not red; the brand's team typing by hand = answeredByTeam", async () => {
+      const c = await campaign();
+      const ai = await occurrence({ triggerId: "hot_lead", outcome: "failed", skipReason: "run_failed", detail: { item: { kind: "hot_lead", relationKey: "rel:p1:pro", humanId: "h-senthil", emails: [], phones: [] } } });
+      await delivery(ai.id, c.id, { status: "failed" });
+      const team = await occurrence({ outcome: "failed", skipReason: "run_failed", detail: { person: { email: "staff+team@distribute.you", phone: "+33600000002" } } });
+      await delivery(team.id, c.id, { status: "failed" });
+      crmAnswers([
+        { ref: ai.id, status: "sent", firstSent: { at: ago(30).toISOString(), sentBy: "automation" } },
+        { ref: team.id, status: "sent", firstSent: { at: ago(30).toISOString(), sentBy: "person" } },
+      ]);
+      const read = await readUnsentAnswers(7, NOW);
+      expect(read).toMatchObject({ status: "ok", unsent: [] });
+      expect(read.byDay.at(-1)).toMatchObject({ answered: 1, answeredByTeam: 1, failed: 0 });
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("http://crm.test/internal/people/sent-after");
+      const body = JSON.parse(init.body);
+      expect(body).toMatchObject({ orgId: ORG, brandId: BRAND });
+      expect(body.people).toEqual(expect.arrayContaining([
+        { ref: ai.id, after: ago(60).toISOString(), relationKey: "rel:p1:pro", humanId: "h-senthil" },
+        { ref: team.id, after: ago(60).toISOString(), email: "staff+team@distribute.you", phone: "+33600000002" },
+      ]));
+    });
+
+    it("crm says nothing sent, or cannot be read: the person stays red", async () => {
+      const c = await campaign();
+      const ev = await occurrence({ outcome: "failed", skipReason: "run_failed", detail: { person: { email: "staff+none@distribute.you" } } });
+      await delivery(ev.id, c.id, { status: "failed" });
+      crmAnswers([{ ref: ev.id, status: "nothing_sent", firstSent: null }]);
+      expect((await readUnsentAnswers(7, NOW)).unsent.map((u) => u.occurrenceId)).toEqual([ev.id]);
+      fetchMock.mockResolvedValueOnce(new Response("boom", { status: 502 }));
+      expect((await readUnsentAnswers(7, NOW)).status).toBe("red");
+      crmAnswers([{ ref: ev.id, status: "unreadable", firstSent: null }]);
+      expect((await readUnsentAnswers(7, NOW)).status).toBe("red");
+    });
+  });
+
   it("serves the staff read on /internal/ops/unsent-answers", async () => {
     const c = await campaign();
     const ev = await occurrence();

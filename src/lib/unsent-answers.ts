@@ -2,6 +2,7 @@ import { inArray, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { REPLAY_STATE } from "./channel-down-replay.js";
+import { fetchSentAfter, type SentAfterAsk } from "./crm-sent-after-client.js";
 
 /**
  * AN ANSWER WE OWED A PERSON AND NEVER SENT TURNS THE MONITORING HUB RED (ONE-AI-REFUSED-ANSWERS-1029).
@@ -42,6 +43,10 @@ import { REPLAY_STATE } from "./channel-down-replay.js";
  * campaign folded it (`answered_after_fact`: a later run of it read their whole timeline, Tari), or a run of ANY
  * campaign of the brand completed for the same person (same email, phone, or human the item names) dispatched after
  * the fact. Checked before any refusal / failure verdict; a person with no answer anywhere keeps their verdict.
+ * Then, for what is still red, crm-service (it holds the conversation, lib/crm-sent-after-client.ts) is asked whether
+ * the brand wrote to that person after the fact on ANY channel, by anyone (Sophie on WhatsApp answered Senthil outside
+ * any campaign): written by a human of the brand = `answeredByTeam`, else `answered`. crm unreadable / the person
+ * unknown to it = the verdict stays (logged): an outage never turns a real red green.
  *
  * Read-only, recomputed from the dated delivery rows (the daily series needs nothing stored). Day = UTC day of the
  * last delivery's end (when we learned the answer did not leave).
@@ -156,6 +161,9 @@ export async function readUnsentAnswers(days: number, now: Date = new Date()): P
     event_status: string;
     skip_reason: string | null;
     folded: boolean;
+    fact_at: Date | string;
+    item_relation_key: string | null;
+    item_human_id: string | null;
     person: { name?: string | null; email?: string | null; phone?: string | null } | null;
   }>(sql`
     WITH last AS (
@@ -177,6 +185,9 @@ export async function readUnsentAnswers(days: number, now: Date = new Date()): P
            e.status AS event_status, e.skip_reason,
            (e.skip_reason = ${ANSWERED_AFTER_FACT}
              OR coalesce(e.detail->'skipped', '[]'::jsonb) @> ${JSON.stringify([{ reason: ANSWERED_AFTER_FACT }])}::jsonb) AS folded,
+           greatest(e.occurred_at, e.created_at) AS fact_at,
+           e.detail->'item'->>'relationKey' AS item_relation_key,
+           e.detail->'item'->>'humanId' AS item_human_id,
            e.detail->'person' AS person
     FROM last l
     JOIN agg a ON a.event_id = l.event_id AND a.campaign_id = l.campaign_id
@@ -210,6 +221,8 @@ export async function readUnsentAnswers(days: number, now: Date = new Date()): P
       };
     })
     .filter((c) => c.state !== null);
+
+  await settleByConversation(classified.filter((c) => c.state === "refused" || c.state === "failed"));
 
   const broken = classified
     .filter((c) => c.state === "refused" || c.state === "failed")
@@ -299,4 +312,42 @@ export async function answeredLaterByOwnRuns(eventIds: string[]): Promise<Set<st
           AND o.detail->'item'->>'humanId' = e.detail->'item'->>'humanId')
       )`);
   return new Set(found.map((r) => r.event_id));
+}
+
+/**
+ * Ask crm-service, per (org, brand), whether the brand wrote to each still-red person after their fact, and move the
+ * ones it did (see header). Mutates `state`. Never throws: crm unreadable keeps every verdict, said in the log.
+ */
+async function settleByConversation(
+  red: Array<{
+    p: { event_id: string; org_id: string; brand_id: string; fact_at: Date | string; item_relation_key: string | null; item_human_id: string | null; person: { email?: string | null; phone?: string | null } | null };
+    state: AnswerState;
+  }>,
+): Promise<void> {
+  const byScope = new Map<string, typeof red>();
+  for (const c of red) {
+    const k = `${c.p.org_id}|${c.p.brand_id}`;
+    byScope.set(k, [...(byScope.get(k) ?? []), c]);
+  }
+  for (const [scope, list] of byScope) {
+    const [orgId, brandId] = scope.split("|");
+    const asks: SentAfterAsk[] = [];
+    for (const c of list) {
+      const ask: SentAfterAsk = { ref: c.p.event_id, after: new Date(c.p.fact_at).toISOString() };
+      if (c.p.person?.email) ask.email = c.p.person.email;
+      if (c.p.person?.phone) ask.phone = c.p.person.phone;
+      if (c.p.item_relation_key) ask.relationKey = c.p.item_relation_key;
+      if (c.p.item_human_id) ask.humanId = c.p.item_human_id;
+      if (ask.email || ask.phone || ask.relationKey || ask.humanId) asks.push(ask);
+    }
+    try {
+      const verdicts = new Map((await fetchSentAfter(orgId, brandId, asks)).map((v) => [v.ref, v]));
+      for (const c of list) {
+        const v = verdicts.get(c.p.event_id);
+        if (v?.status === "sent") c.state = v.sentBy === "person" ? "answeredByTeam" : "answered";
+      }
+    } catch (err) {
+      console.error(`[campaign-service] unsent-answers: crm-service sent-after unreadable for brand ${brandId}, ${asks.length} red answers keep their verdict:`, err);
+    }
+  }
 }
