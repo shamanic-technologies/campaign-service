@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isIanaTimezone } from "./lib/iana-timezone.js";
 import { canonicalPhone, isE164Phone } from "./lib/e164-phone.js";
+import { TARGET_STEP_DESCRIPTION } from "./lib/target-step-vocabulary.js";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 
 extendZodWithOpenApi(z);
@@ -222,7 +223,9 @@ export const StoppedCampaignSchema = z.object({
 export const MAX_INSTRUCTION_LENGTH = 4000;
 // A funnel campaign's brief (lib/sales-funnel-target.ts): the strategy in plain language a judge reads.
 export const MAX_BRIEF_LENGTH = 8000;
-const TargetStepSchema = z.string().trim().min(1, "target must name a step (omit it to keep the sales funnel's last step)").max(200);
+// What `target` accepts is a LIVE vocabulary (lib/target-step-vocabulary.ts): the doc names the read validation makes.
+export const TargetStepSchema = z.string().trim().min(1, "target must name a step (omit it to keep the sales funnel's last step)").max(200)
+  .openapi({ description: TARGET_STEP_DESCRIPTION, example: "paid_client" });
 
 /** The most people one funnel campaign may name (lib/sales-funnel-people.ts). */
 export const MAX_NAMED_PEOPLE = 50;
@@ -263,7 +266,7 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // default branch AND served by every deploy target of the repo on the box). Part of its identity.
   githubIssue: GithubIssueRefSchema.optional(),
   // OPTIONAL (lib/sales-funnel-target.ts): the OUTCOME it targets, a catalogue step key (features-service's
-  // vocabulary, e.g. "positive_reply", "meeting_booked", "paid_client"). Omitted = the funnel's last step.
+  // vocabulary, e.g. "meeting_booked", "paid_client"). Omitted = the funnel's last step.
   // Unknown step = 400 unknown_target_step.
   target: TargetStepSchema.optional(),
   // OPTIONAL: its strategy in plain language ("Cold email only, never write to someone who asked to stop, test for
