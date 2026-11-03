@@ -119,6 +119,90 @@ describe("a declined card stops its org's campaigns, and nothing starts them unt
     );
   });
 
+  // INSTANT-STOP-ON-DECLINE-1103 (prod 2026-11-03, Beyond Logic): billing said "cannot charge" and
+  // ~317 first emails still went out before the next sweep. A run asks billing at its own gate.
+  it("a run's gate stops every campaign of an org billing just blocked, without waiting for the sweep, and the run goes no further", async () => {
+    const brand = crypto.randomUUID();
+    const running = await insertTestCampaign(DECLINED_ORG, { brandIds: [brand], nextRunAt: new Date() });
+    const sibling = await insertTestCampaign(DECLINED_ORG, { brandIds: [brand], nextRunAt: new Date() });
+    const healthy = await insertTestCampaign(HEALTHY_ORG, { nextRunAt: new Date() });
+
+    // The sweep has JUST run while billing still said "can charge": its next pass is a full interval away.
+    billingSays({});
+    const t0 = Date.now();
+    await holdPaymentDeclinedOrgs(t0);
+    expect(await holdPaymentDeclinedOrgs(t0 + 1_000)).toBe(0);
+
+    // The first charge is refused: billing now says charge_blocked. The next run of the org asks at its gate.
+    billingSays({ [DECLINED_ORG]: true });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const gate = await request(app)
+      .post("/gate-check")
+      .set({
+        "x-api-key": API_KEY,
+        "x-org-id": DECLINED_ORG,
+        "x-campaign-id": running.id,
+        "x-user-id": crypto.randomUUID(),
+        "x-run-id": crypto.randomUUID(),
+        "x-workflow-slug": "sales-email-cold-outreach",
+        "x-feature-slug": "sales-cold-email-outreach",
+        "x-brand-id": brand,
+      })
+      .expect(200);
+    expect(gate.body).toMatchObject({ allowed: false, reason: "Billing cannot charge this org (card_declined)" });
+
+    const byId = new Map((await db.query.campaigns.findMany()).map((c) => [c.id, c]));
+    // EVERY live campaign of the org stops, not only the one whose run asked: no other run goes out either.
+    expect(byId.get(running.id)).toMatchObject({ status: "stopped", stopReason: "payment_declined" });
+    expect(byId.get(sibling.id)).toMatchObject({ status: "stopped", stopReason: "payment_declined", nextRunAt: null });
+    expect(byId.get(healthy.id)).toMatchObject({ status: "ongoing" });
+    // Stopped for payment, never torn down: the sender keeps the follow-ups of leads already emailed
+    // and cuts only first emails still queued (owner rule 2026-10-06).
+    const transitions = await db.select().from(campaignStatusTransitions).where(eq(campaignStatusTransitions.campaignId, sibling.id));
+    expect(transitions).toEqual([
+      expect.objectContaining({ fromStatus: "ongoing", toStatus: "stopped", reason: "payment_declined", source: "payment_hold" }),
+    ]);
+
+    // A second run racing in finds the org already stopped: refused, no second transition.
+    await request(app)
+      .post("/gate-check")
+      .set({
+        "x-api-key": API_KEY,
+        "x-org-id": DECLINED_ORG,
+        "x-campaign-id": sibling.id,
+        "x-user-id": crypto.randomUUID(),
+        "x-run-id": crypto.randomUUID(),
+        "x-workflow-slug": "sales-email-cold-outreach",
+        "x-feature-slug": "sales-cold-email-outreach",
+        "x-brand-id": brand,
+      })
+      .expect(200)
+      .then((r) => expect(r.body.allowed).toBe(false));
+    expect(await db.select().from(campaignStatusTransitions).where(eq(campaignStatusTransitions.campaignId, sibling.id))).toHaveLength(1);
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("a run's gate lets the run through when billing cannot be read, and stops nothing", async () => {
+    const c = await insertTestCampaign(DECLINED_ORG, { nextRunAt: new Date() });
+    vi.mocked(readPaymentHold).mockResolvedValue({ ok: false, detail: "billing responded 502" });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const gate = await request(app)
+      .post("/gate-check")
+      .set({
+        "x-api-key": API_KEY,
+        "x-org-id": DECLINED_ORG,
+        "x-campaign-id": c.id,
+        "x-user-id": crypto.randomUUID(),
+        "x-run-id": crypto.randomUUID(),
+        "x-workflow-slug": "sales-email-cold-outreach",
+        "x-feature-slug": "sales-cold-email-outreach",
+      })
+      .expect(200);
+    // Whatever the later blocks answer, the payment block did not stop it.
+    expect(gate.body.reason ?? "").not.toMatch(/Billing cannot charge/);
+    expect((await db.query.campaigns.findFirst({ where: eq(campaigns.id, c.id) }))?.status).toBe("ongoing");
+  });
+
   it("runs on its own cadence and is idempotent", async () => {
     await insertTestCampaign(DECLINED_ORG);
     billingSays({ [DECLINED_ORG]: true });

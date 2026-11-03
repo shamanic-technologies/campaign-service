@@ -6,11 +6,17 @@ import { paymentStopReason, readPaymentHold } from "./payment-hold.js";
 
 /**
  * How often the scheduler asks billing whether an org with live campaigns can still be charged.
- * This IS the latency between a declined card and its campaigns stopping. The sweep runs BEFORE
- * the tick dispatches anything, so a due campaign of a just-declined org is stopped rather than
- * fired whenever the two land on the same tick.
+ * This bounds the latency between billing saying "cannot charge" and the campaigns of an org that
+ * launches NO run in the meantime stopping. The sweep runs BEFORE the tick dispatches anything, so
+ * a due campaign of a just-declined org is stopped rather than fired whenever the two land on the
+ * same tick. Every run ALSO asks at its own gate (`gate-check.ts` block 0b), so an org that keeps
+ * sending is stopped by its very next run, never by this clock.
+ *
+ * One minute since INSTANT-STOP-ON-DECLINE-1103 (was ten): prod 2026-11-03, Beyond Logic's first
+ * emails kept going between billing's verdict and the next sweep. 14 orgs with a live campaign on
+ * that day = 14 billing reads a minute.
  */
-export const PAYMENT_HOLD_RECHECK_MS = 10 * 60_000;
+export const PAYMENT_HOLD_RECHECK_MS = 60_000;
 
 let lastSweepAt = 0;
 
@@ -50,26 +56,35 @@ export async function holdPaymentDeclinedOrgs(now: number = Date.now()): Promise
         continue;
       }
       if (!read.held) continue;
-
-      const ids = await db.transaction((tx) =>
-        stopOrgCampaignsWithHistory(
-          tx,
-          orgId,
-          paymentStopReason(read.blockedReason),
-          and(eq(campaigns.orgId, orgId), eq(campaigns.status, "ongoing")),
-          TRANSITION_SOURCES.PAYMENT_HOLD,
-        ),
-      );
-      stopped += ids.length;
-      if (ids.length > 0) {
-        console.warn(
-          `[campaign-service] Payment hold: billing cannot charge org ${orgId} (${read.blockedReason}) — ` +
-          `stopped ${ids.length} campaign(s): ${ids.map((c) => c.id).join(", ")}`,
-        );
-      }
+      stopped += (await stopHeldOrg(orgId, read.blockedReason)).length;
     } catch (err) {
       console.error(`[campaign-service] Payment hold failed for org ${orgId}:`, err);
     }
   }
   return stopped;
+}
+
+/**
+ * Stop every ongoing campaign of an org billing says it cannot charge — the ONE stop both the sweep
+ * and a run's gate (`gate-check.ts` block 0b) make. Idempotent: scoped to `ongoing`, so a second
+ * caller finds nothing and writes no second transition. What was ALREADY sent keeps its follow-ups
+ * (owner 2026-10-06): instantly-service cuts only the never-sent sequences of a stopped campaign.
+ */
+export async function stopHeldOrg(orgId: string, blockedReason: string): Promise<{ id: string }[]> {
+  const ids = await db.transaction((tx) =>
+    stopOrgCampaignsWithHistory(
+      tx,
+      orgId,
+      paymentStopReason(blockedReason),
+      and(eq(campaigns.orgId, orgId), eq(campaigns.status, "ongoing")),
+      TRANSITION_SOURCES.PAYMENT_HOLD,
+    ),
+  );
+  if (ids.length > 0) {
+    console.warn(
+      `[campaign-service] Payment hold: billing cannot charge org ${orgId} (${blockedReason}) — ` +
+      `stopped ${ids.length} campaign(s): ${ids.map((c) => c.id).join(", ")}`,
+    );
+  }
+  return ids;
 }
