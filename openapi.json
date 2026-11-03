@@ -3738,7 +3738,7 @@
               "ok",
               "red"
             ],
-            "description": "red = an answer owed to a person who acted was refused by the sender (other than: the brand's team already answered) or given up after failed runs, in the last redWindowHours."
+            "description": "red = an answer owed to a person who acted was refused by the sender (other than: the brand's team already answered) or given up after failed runs, in the last redWindowHours, and nobody answered that person after their message (any campaign, run or channel)."
           },
           "redWindowHours": {
             "type": "integer"
@@ -3865,6 +3865,10 @@
                   "type": "integer",
                   "description": "Broken (red)."
                 },
+                "nothingToDo": {
+                  "type": "integer",
+                  "description": "Every run carrying the person ended well but found nothing to do (the pipe owed them nothing): not a failure, normal colours."
+                },
                 "refusedByCode": {
                   "type": "array",
                   "items": {
@@ -3891,6 +3895,7 @@
                 "replaying",
                 "refused",
                 "failed",
+                "nothingToDo",
                 "refusedByCode"
               ]
             },

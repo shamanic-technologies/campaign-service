@@ -56,6 +56,9 @@ export const TRIGGER_DELIVERY_RETRY_DELAYS_MS = [2, 10, 30, 60, 120].map((m) => 
 /** Outcome + skip reason of an occurrence whose every campaign gave up. */
 export const TRIGGER_EVENT_FAILED = { OUTCOME: "failed", REASON: "run_failed" } as const;
 
+/** Skip reason of an occurrence given up after runs that all ended well with nothing to do (UNSENT-ANSWERED-ELSEWHERE-1103). */
+export const TRIGGER_EVENT_NOTHING_TO_DO = "no_work" as const;
+
 /** Skip reason of an occurrence whose person no campaign's pipe admitted (and nobody else served it). */
 export const PERSON_NOT_ADMITTED = "person_not_admitted" as const;
 
@@ -101,6 +104,22 @@ export interface RunEnd {
   delivery?: RunDelivery;
   /** The run's pipe does not admit the occurrence's person (REPLY-ANY-LEAD-1015). */
   personNotAdmitted?: { reason: string };
+}
+
+/**
+ * Delivery statuses of runs that did NOT complete the work of the occurrence they carried, each counted toward
+ * `TRIGGER_DELIVERY_MAX` and redelivered the same way. `failed` = the run failed; `no_work` = the run ENDED WELL
+ * but reported nothing to do (`noWorkAvailable`) or no lead (`stopCampaign`): not a failure of the sender, kept
+ * apart so a read never names it one (UNSENT-ANSWERED-ELSEWHERE-1103, prod 2026-11-03: six "nothing to do" runs
+ * for Senthil read "every run failed" on Monitoring).
+ */
+export const UNFINISHED_DELIVERY_STATUSES = ["failed", "no_work"] as const;
+
+/** The status a non-refused, non-not-admitted run settles its delivery at. Pure. */
+export function settledStatus(end: RunEnd): "completed" | "no_work" | "failed" {
+  if (runDelivered(end)) return "completed";
+  // Not delivered while the run succeeded = it said nothing to do / no lead (a stated refusal settles elsewhere).
+  return end.success === true ? "no_work" : "failed";
 }
 
 /** Did a run do the work of the occurrence it carried? A stated `delivered` is the run's own word. Pure. */
@@ -154,24 +173,30 @@ export async function settleTriggerDelivery(
 ): Promise<DeliverySettlement> {
   if (end.delivery?.state === "refused") return settleRefusedDelivery(runId, end.delivery, now, waitMs);
   if (end.success === true && end.personNotAdmitted) return settleNotAdmitted(runId, end.personNotAdmitted.reason, now, waitMs);
-  const delivered = runDelivered(end);
+  const status = settledStatus(end);
+  const delivered = status === "completed";
   const [d] = await db
     .update(triggerEventDeliveries)
-    .set({ status: delivered ? "completed" : "failed", endedAt: now })
+    .set({ status, endedAt: now })
     .where(and(eq(triggerEventDeliveries.runId, runId), eq(triggerEventDeliveries.status, "dispatched")))
     .returning();
   if (!d) return { kind: "not_a_delivery" };
   if (delivered) return { kind: "completed", eventId: d.eventId, campaignId: d.campaignId };
 
   const failedRuns = await db
-    .select({ runId: triggerEventDeliveries.runId })
+    .select({ runId: triggerEventDeliveries.runId, status: triggerEventDeliveries.status })
     .from(triggerEventDeliveries)
     .where(and(
       eq(triggerEventDeliveries.eventId, d.eventId),
       eq(triggerEventDeliveries.campaignId, d.campaignId),
-      eq(triggerEventDeliveries.status, "failed"),
+      inArray(triggerEventDeliveries.status, [...UNFINISHED_DELIVERY_STATUSES]),
     ));
   const giveUp = failedRuns.length >= TRIGGER_DELIVERY_MAX;
+  // Every run ended well and found nothing to do: the occurrence ends skipped, never "failed".
+  const nothingToDo = failedRuns.every((r) => r.status === "no_work");
+  const gaveUpOutcome = nothingToDo
+    ? { OUTCOME: "skipped", REASON: TRIGGER_EVENT_NOTHING_TO_DO }
+    : TRIGGER_EVENT_FAILED;
   const dueAt = new Date(now.getTime() + redeliveryDelayMs(failedRuns.length));
 
   for (let attempt = 1; attempt <= FIRING_TRIES; attempt++) {
@@ -198,7 +223,9 @@ export async function settleTriggerDelivery(
           ...(Array.isArray(own.failedDeliveries) ? own.failedDeliveries : []),
           { campaignId: d.campaignId, runIds: failedRuns.map((r) => r.runId), gaveUpAt: now.toISOString() },
         ];
-        const why = `campaign ${d.campaignId}: all ${failedRuns.length} runs failed (last ${runId}), not redelivered again`;
+        const why = nothingToDo
+          ? `campaign ${d.campaignId}: all ${failedRuns.length} runs found nothing to do (last ${runId}), not redelivered again`
+          : `campaign ${d.campaignId}: all ${failedRuns.length} runs failed (last ${runId}), not redelivered again`;
         await tx
           .update(triggerEvents)
           .set(pending
@@ -208,8 +235,8 @@ export async function settleTriggerDelivery(
                 lastError: why.slice(0, 500),
               }
             : {
-                outcome: ran.length > 0 ? "ran" : TRIGGER_EVENT_FAILED.OUTCOME,
-                skipReason: ran.length > 0 ? null : TRIGGER_EVENT_FAILED.REASON,
+                outcome: ran.length > 0 ? "ran" : gaveUpOutcome.OUTCOME,
+                skipReason: ran.length > 0 ? null : gaveUpOutcome.REASON,
                 ranCampaignIds: ran,
                 detail: { ...own, failedDeliveries },
                 lastError: why.slice(0, 500),
@@ -244,7 +271,7 @@ export async function settleTriggerDelivery(
     if (applied === "applied") {
       if (giveUp) {
         console.error(
-          `[campaign-service] trigger event ${d.eventId}: campaign ${d.campaignId} failed all ${failedRuns.length} runs for it (last ${runId}); the occurrence is given up for that campaign (${TRIGGER_EVENT_FAILED.REASON})`,
+          `[campaign-service] trigger event ${d.eventId}: campaign ${d.campaignId} ${nothingToDo ? "found nothing to do in" : "failed"} all ${failedRuns.length} runs for it (last ${runId}); the occurrence is given up for that campaign (${gaveUpOutcome.REASON})`,
         );
         return { kind: "gave_up", eventId: d.eventId, campaignId: d.campaignId, failedRuns: failedRuns.length };
       }
