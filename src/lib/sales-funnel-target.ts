@@ -9,7 +9,7 @@ import { fetchSalesFunnel, type SalesFunnelFromCatalogue } from "./sales-funnel-
  *
  * A campaign is defined by the OUTCOME it targets, not by a frozen sales funnel:
  *   - `target`: the final step it aims at (a catalogue step key, features-service's vocabulary, carried verbatim:
- *     `positive_reply`, `meeting_booked`, `paid_client`...). Born = the LAST step of the funnel it runs (the last
+ *     `meeting_booked`, `paid_client`...; the accepted set = lib/target-step-vocabulary.ts). Born = the LAST step of the funnel it runs (the last
  *     leg's `toStep` as the catalogue publishes it, never parsed off a leg key or a funnel id); settable by the org.
  *   - `brief`: the strategy in plain language ("Cold email only, never write to someone who asked to stop"). Read
  *     later by a judge (Jev) choosing the play per pipe. NOT `instruction` (that one is what the writer's message
@@ -73,7 +73,7 @@ export function shapeFromUnits(
 
 export type TargetCheck =
   | { ok: true }
-  | { ok: false; status: 400 | 502; body: { error: string; reason: "unknown_target_step" | "catalogue_unavailable"; target?: string } };
+  | { ok: false; status: 400 | 502; body: { error: string; reason: "unknown_target_step" | "catalogue_unavailable"; target?: string; acceptedTargets?: string[] } };
 
 /** A stated target must be a step the catalogue publishes (features-service's vocabulary), else a named 400. */
 export async function checkTargetStep(
@@ -93,7 +93,13 @@ export async function checkTargetStep(
     return {
       ok: false,
       status: 400,
-      body: { error: `"${target}" is not an outcome we know. Pick one of the steps of the catalogue.`, reason: "unknown_target_step", target },
+      body: {
+        error: `"${target}" is not an outcome we know. Pick one of the steps of the catalogue (acceptedTargets).`,
+        reason: "unknown_target_step",
+        target,
+        // The keys this very check read: the list cannot drift from what is accepted.
+        acceptedTargets: [...catalogue.stepKeys].sort(),
+      },
     };
   }
   return { ok: true };
