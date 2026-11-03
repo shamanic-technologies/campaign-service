@@ -3,6 +3,8 @@ import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
 import { salesFunnelUnitMoney, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
 import { isPersonCarryingRun, personCarryingRunIds } from "./person-runs.js";
+import { readPaymentHold } from "./payment-hold.js";
+import { stopHeldOrg } from "./payment-hold-sweep.js";
 
 // THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
 // hours here against fifteen minutes there, and that gap is a full stop: the sweep re-fires a
@@ -76,6 +78,21 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // Campaign must be ongoing
   if (campaign.status !== "ongoing") {
     return { allowed: false, reason: "Campaign is not ongoing" };
+  }
+
+  // 0b. Billing cannot charge this org (INSTANT-STOP-ON-DECLINE-1103). The scheduler's payment-hold
+  // sweep runs on its own clock; a run must not go out between billing's verdict and that tick
+  // (prod 2026-11-03: ~317 first emails, $9.06, in the 34 min after Beyond Logic's card was
+  // refused). So every run asks billing itself, and a held org's campaigns are ALL stopped here,
+  // the same stop the sweep makes (`stopHeldOrg`, idempotent), before anything is served or sent.
+  // Fail-SOFT like the sweep: an unreadable answer lets the run through (billing's own authorize
+  // stays the hard gate on spend) and warns.
+  const hold = await readPaymentHold(campaign.orgId);
+  if (!hold.ok) {
+    console.warn(`[campaign-service] gate-check: payment state unreadable for org ${campaign.orgId} (${hold.detail}) — run allowed`);
+  } else if (hold.held) {
+    await stopHeldOrg(campaign.orgId, hold.blockedReason);
+    return { allowed: false, reason: `Billing cannot charge this org (${hold.blockedReason})` };
   }
 
   const identity: IdentityHeaders = {
