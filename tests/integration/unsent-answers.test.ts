@@ -33,6 +33,7 @@ async function occurrence(over: Partial<typeof triggerEvents.$inferInsert> = {})
       attempts: 1,
       detail: { person: { email: "staff+prospect@distribute.you", name: "Pat" } },
       ...over,
+      createdAt: over.createdAt ?? over.occurredAt ?? ago(60),
     })
     .returning();
   return row;
@@ -150,6 +151,77 @@ describe("an answer we owed and never sent is red on the Monitoring hub (lib/uns
     expect(read.byDay.filter((d) => d.refused > 0).map((d) => d.day)).toEqual([ago(3 * 1440).toISOString().slice(0, 10)]);
   });
 
+  it("a person a LATER run of the same campaign answered (answered_after_fact) is NOT red, whatever the failed run says (Tari)", async () => {
+    const c = await campaign();
+    const ev = await occurrence({ outcome: "skipped", skipReason: "answered_after_fact", detail: {
+      person: { email: "staff+tari@distribute.you", name: "Tari" },
+      skipped: [{ campaignId: c.id, reason: "answered_after_fact", detail: "run x of this campaign answered them" }],
+    } });
+    await delivery(ev.id, c.id, { status: "failed", dispatchedAt: ago(50), endedAt: ago(49) });
+    await delivery(ev.id, c.id, { status: "failed", dispatchedAt: ago(45), endedAt: ago(44) });
+    const read = await readUnsentAnswers(7, NOW);
+    expect(read).toMatchObject({ status: "ok", brokenLast24h: 0, unsent: [] });
+    expect(read.byDay.at(-1)).toMatchObject({ answered: 1, failed: 0 });
+  });
+
+  it("a person ANOTHER campaign / occurrence answered after their message (another channel or line) is NOT red", async () => {
+    const c = await campaign();
+    const other = await insertTestCampaign(ORG, { name: "AI line", brandIds: [BRAND], createdByUserId: USER, featureSlug: "ai-follow-up-email", workflowSlug: "ai-follow-up-email-algenib-v26" });
+    // By email.
+    const byEmail = await occurrence({ triggerId: "hot_lead", outcome: "failed", skipReason: "run_failed", occurredAt: ago(60), detail: { person: { email: "Staff+Sam@distribute.you" } } });
+    await delivery(byEmail.id, c.id, { status: "failed" });
+    const answer1 = await occurrence({ occurredAt: ago(40), detail: { person: { email: "staff+sam@distribute.you", phone: "+33600000001" } } });
+    await delivery(answer1.id, other.id, { dispatchedAt: ago(35), endedAt: ago(34) });
+    // By the human an item names (no email, no phone: a WhatsApp-only hot lead).
+    const byHuman = await occurrence({ triggerId: "hot_lead", outcome: "failed", skipReason: "run_failed", occurredAt: ago(60), detail: { item: { kind: "hot_lead", humanId: "h-1103", emails: [], phones: [] } } });
+    await delivery(byHuman.id, c.id, { status: "failed" });
+    const answer2 = await occurrence({ occurredAt: ago(40), detail: { item: { humanId: "h-1103" } } });
+    await delivery(answer2.id, other.id, { dispatchedAt: ago(35), endedAt: ago(34) });
+    const read = await readUnsentAnswers(7, NOW);
+    expect(read).toMatchObject({ status: "ok", unsent: [] });
+  });
+
+  it("an answer to the person sent BEFORE their message does not count: still red", async () => {
+    const c = await campaign();
+    const ev = await occurrence({ outcome: "failed", skipReason: "run_failed", occurredAt: ago(30), detail: { person: { email: "staff+late@distribute.you" } } });
+    await delivery(ev.id, c.id, { status: "failed", dispatchedAt: ago(20), endedAt: ago(19) });
+    const earlier = await occurrence({ occurredAt: ago(120), detail: { person: { email: "staff+late@distribute.you" } } });
+    await delivery(earlier.id, c.id, { dispatchedAt: ago(110), endedAt: ago(109) });
+    // Another person answered later does not count either.
+    const someoneElse = await occurrence({ occurredAt: ago(15), detail: { person: { email: "staff+else@distribute.you" } } });
+    await delivery(someoneElse.id, c.id, { dispatchedAt: ago(10), endedAt: ago(9) });
+    const read = await readUnsentAnswers(7, NOW);
+    expect(read.status).toBe("red");
+    expect(read.unsent.map((u) => [u.occurrenceId, u.state])).toEqual([[ev.id, "failed"]]);
+  });
+
+  it("runs that all ended NOTHING TO DO are not 'every run failed': counted nothingToDo, not red", async () => {
+    const c = await campaign();
+    const ev = await occurrence({ triggerId: "hot_lead", outcome: "skipped", skipReason: "no_work", detail: { item: { kind: "hot_lead", humanId: "h-nothing" } } });
+    for (const m of [50, 40, 30]) await delivery(ev.id, c.id, { status: "no_work", dispatchedAt: ago(m), endedAt: ago(m - 1) });
+    const read = await readUnsentAnswers(7, NOW);
+    expect(read).toMatchObject({ status: "ok", brokenLast24h: 0, unsent: [] });
+    expect(read.byDay.at(-1)).toMatchObject({ nothingToDo: 1, failed: 0 });
+  });
+
+  it("a truly unanswered person (runs failed, nobody answered after) stays red", async () => {
+    const c = await campaign();
+    const ev = await occurrence({ outcome: "failed", skipReason: "run_failed", detail: { person: { email: "staff+nobody@distribute.you" } } });
+    await delivery(ev.id, c.id, { status: "failed", dispatchedAt: ago(50), endedAt: ago(49) });
+    await delivery(ev.id, c.id, { status: "no_work", dispatchedAt: ago(40), endedAt: ago(39) });
+    const read = await readUnsentAnswers(7, NOW);
+    expect(read).toMatchObject({ status: "red", brokenLast24h: 1 });
+    expect(read.unsent.map((u) => [u.occurrenceId, u.state])).toEqual([[ev.id, "failed"]]);
+  });
+
+  it("a fact its caller WITHDREW (our own bot taken for a lead) owes nobody: not counted", async () => {
+    const c = await campaign();
+    const ev = await occurrence({ triggerId: "hot_lead", outcome: "failed", skipReason: "run_failed", detail: { item: { kind: "hot_lead", humanId: "bot" }, withdrawnAt: ago(5).toISOString(), withdrawnReason: "own_bot" } });
+    await delivery(ev.id, c.id, { status: "failed" });
+    const read = await readUnsentAnswers(7, NOW);
+    expect(read).toMatchObject({ status: "ok", unsent: [] });
+  });
+
   it("serves the staff read on /internal/ops/unsent-answers", async () => {
     const c = await campaign();
     const ev = await occurrence();
@@ -175,5 +247,9 @@ describe("answerState", () => {
     expect(answerState([d({ status: "timed_out" })], done).state).toBe("failed");
     expect(answerState([d({ status: "failed" })], { done: true, skipReason: "campaign_off" }).state).toBeNull();
     expect(answerState([d({ status: "not_admitted" })], done).state).toBeNull();
+    expect(answerState([d({ status: "no_work" })], done).state).toBe("nothingToDo");
+    expect(answerState([d({ status: "no_work" }), d({ campaignId: "b", status: "failed" })], done).state).toBe("failed");
+    expect(answerState([d({ status: "failed" })], { ...done, answeredAfterFact: true }).state).toBe("answered");
+    expect(answerState([d({ replayState: null })], { ...done, answeredAfterFact: true }).state).toBe("answered");
   });
 });

@@ -211,6 +211,46 @@ describe("an occurrence carrying something is consumed only by a run that did it
     const [d] = await deliveries(res.body.event.id);
     expect((await settleTriggerDelivery(d.runId, { success: true, stopCampaign: false, noWorkAvailable: true })).kind).toBe("redelivered");
     expect((await eventRow(res.body.event.id)).status).toBe("pending");
+    // Recorded as what it was (UNSENT-ANSWERED-ELSEWHERE-1103), never a failed run.
+    expect((await deliveries(res.body.event.id))[0].status).toBe("no_work");
+  });
+
+  it(`after ${TRIGGER_DELIVERY_MAX} runs that all found NOTHING TO DO the occurrence ends skipped no_work, never failed`, async () => {
+    const campaign = await emailSending();
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const eventId = res.body.event.id as string;
+    for (let i = 1; i <= TRIGGER_DELIVERY_MAX; i++) {
+      const live = (await deliveries(eventId)).find((d) => d.status === "dispatched")!;
+      const settled = await settleTriggerDelivery(live.runId, { success: true, stopCampaign: false, noWorkAvailable: true });
+      if (i < TRIGGER_DELIVERY_MAX) {
+        expect(settled.kind).toBe("redelivered");
+        await db.update(campaigns).set({ consecutiveRunFailures: 0 }).where(eq(campaigns.id, campaign.id));
+        const pending = await eventRow(eventId);
+        expect(await fireDueTriggerEvents(new Date(pending.dueAt.getTime() + 1000))).toBe(1);
+      } else {
+        expect(settled.kind).toBe("gave_up");
+      }
+    }
+    const event = await eventRow(eventId);
+    expect(event).toMatchObject({ status: "done", outcome: "skipped", skipReason: "no_work", ranCampaignIds: [] });
+    expect(event.lastError).toContain(`all ${TRIGGER_DELIVERY_MAX} runs found nothing to do`);
+    expect((await deliveries(eventId)).every((d) => d.status === "no_work")).toBe(true);
+  });
+
+  it("a mix of failed and nothing-to-do runs still gives up FAILED", async () => {
+    const campaign = await emailSending();
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const eventId = res.body.event.id as string;
+    for (let i = 1; i <= TRIGGER_DELIVERY_MAX; i++) {
+      const live = (await deliveries(eventId)).find((d) => d.status === "dispatched")!;
+      await settleTriggerDelivery(live.runId, i === 1 ? { success: false } : { success: true, noWorkAvailable: true });
+      if (i < TRIGGER_DELIVERY_MAX) {
+        await db.update(campaigns).set({ consecutiveRunFailures: 0 }).where(eq(campaigns.id, campaign.id));
+        const pending = await eventRow(eventId);
+        expect(await fireDueTriggerEvents(new Date(pending.dueAt.getTime() + 1000))).toBe(1);
+      }
+    }
+    expect(await eventRow(eventId)).toMatchObject({ status: "done", outcome: "failed", skipReason: "run_failed" });
   });
 
   it(`after ${TRIGGER_DELIVERY_MAX} failed runs the occurrence is DONE failed, naming why and every run`, async () => {

@@ -1328,7 +1328,7 @@ export const UnsentAnswersQuery = z.object({
 export const UnsentAnswersResponse = z.object({
   generatedAt: z.string(),
   days: z.number().int(),
-  status: z.enum(["ok", "red"]).describe("red = an answer owed to a person who acted was refused by the sender (other than: the brand's team already answered) or given up after failed runs, in the last redWindowHours."),
+  status: z.enum(["ok", "red"]).describe("red = an answer owed to a person who acted was refused by the sender (other than: the brand's team already answered) or given up after failed runs, in the last redWindowHours, and nobody answered that person after their message (any campaign, run or channel)."),
   redWindowHours: z.number().int(),
   brokenLast24h: z.number().int(),
   unsent: z.array(z.object({
@@ -1353,6 +1353,7 @@ export const UnsentAnswersResponse = z.object({
     replaying: z.number().int().describe("Refused because the brand's channel was down, being replayed: normal."),
     refused: z.number().int().describe("Broken (red)."),
     failed: z.number().int().describe("Broken (red)."),
+    nothingToDo: z.number().int().describe("Every run carrying the person ended well but found nothing to do (the pipe owed them nothing): not a failure, normal colours."),
     refusedByCode: z.array(z.object({ code: z.string(), count: z.number().int() })),
   })).describe("Every UTC day of the window, oldest first, by the day the last run for the answer ended."),
 }).openapi("UnsentAnswersResponse");

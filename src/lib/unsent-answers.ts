@@ -30,7 +30,18 @@ import { REPLAY_STATE } from "./channel-down-replay.js";
  *       that cannot reach them is a defect to fix, never a normal "not yet".
  *     - `failed`: runs failed or never reported and nothing redelivers them any more. RED. Except an occurrence
  *       ended because a person turned the campaign OFF (`campaign_off`): their choice.
- *     - not counted: `not_admitted` only (the pipe's strategy does not answer that person).
+ *     - `nothingToDo`: every run that carried the person ended well but said "nothing to do" (`no_work`, the pipe's
+ *       queue owed that person nothing). Not a failure of the sender, never named one: counted on its own, not red
+ *       (UNSENT-ANSWERED-ELSEWHERE-1103: six such runs for Senthil read "every run failed").
+ *     - not counted: `not_admitted` only (the pipe's strategy does not answer that person), and an occurrence whose
+ *       fact its caller WITHDREW (`detail.withdrawnAt`: e.g. crm-service setting aside our own alert bot taken for a
+ *       hot lead): nobody acted, nobody is owed.
+ *
+ * ANSWERED AFTER THE FACT, BY ANYONE (UNSENT-ANSWERED-ELSEWHERE-1103, prod 2026-11-03: 5 "answers not sent", none
+ * true). A person who got an answer from us after their message is answered, whatever answered: the occurrence's own
+ * campaign folded it (`answered_after_fact`: a later run of it read their whole timeline, Tari), or a run of ANY
+ * campaign of the brand completed for the same person (same email, phone, or human the item names) dispatched after
+ * the fact. Checked before any refusal / failure verdict; a person with no answer anywhere keeps their verdict.
  *
  * Read-only, recomputed from the dated delivery rows (the daily series needs nothing stored). Day = UTC day of the
  * last delivery's end (when we learned the answer did not leave).
@@ -42,7 +53,10 @@ export const TEAM_ANSWERED_CODES: ReadonlySet<string> = new Set(["human_in_conve
 export const UNSENT_ANSWER_RED_WINDOW_MS = 24 * 3_600_000;
 const UNSENT_LIST_LIMIT = 100;
 
-export type AnswerState = "answered" | "answeredByTeam" | "replaying" | "refused" | "failed" | null;
+export type AnswerState = "answered" | "answeredByTeam" | "replaying" | "refused" | "failed" | "nothingToDo" | null;
+
+/** The occurrence's own skip reason (and per-campaign skip) meaning a later run already answered that person. */
+export const ANSWERED_AFTER_FACT = "answered_after_fact";
 
 /** The LAST delivery of one campaign for an occurrence. */
 export interface CampaignDelivery {
@@ -60,11 +74,12 @@ export interface CampaignDelivery {
  */
 export function answerState(
   deliveries: CampaignDelivery[],
-  event: { done: boolean; skipReason: string | null },
+  event: { done: boolean; skipReason: string | null; answeredAfterFact?: boolean },
 ): { state: AnswerState; by: CampaignDelivery | null } {
   const first = (pred: (d: CampaignDelivery) => boolean) => deliveries.find(pred) ?? null;
   const answered = first((d) => d.anyCompleted);
   if (answered) return { state: "answered", by: answered };
+  if (event.answeredAfterFact) return { state: "answered", by: deliveries[0] ?? null };
   const refused = (d: CampaignDelivery) => d.status === "refused";
   if (!event.done) {
     const replaying = first((d) => refused(d) && d.replayState === REPLAY_STATE.SCHEDULED);
@@ -76,6 +91,8 @@ export function answerState(
   if (refusal) return { state: "refused", by: refusal };
   const failed = first((d) => d.status === "failed" || d.status === "timed_out");
   if (failed && event.skipReason !== "campaign_off") return { state: "failed", by: failed };
+  const nothing = first((d) => d.status === "no_work");
+  if (nothing && event.skipReason !== "campaign_off") return { state: "nothingToDo", by: nothing };
   return { state: null, by: null };
 }
 
@@ -109,6 +126,7 @@ export interface UnsentAnswers {
     replaying: number;
     refused: number;
     failed: number;
+    nothingToDo: number;
     refusedByCode: { code: string; count: number }[];
   }[];
 }
@@ -129,6 +147,7 @@ export async function readUnsentAnswers(days: number, now: Date = new Date()): P
     replay_state: string | null;
     at: Date | string;
     any_completed: boolean;
+    any_failed: boolean;
     runs: number;
     org_id: string;
     brand_id: string;
@@ -136,6 +155,7 @@ export async function readUnsentAnswers(days: number, now: Date = new Date()): P
     trigger_id: string | null;
     event_status: string;
     skip_reason: string | null;
+    folded: boolean;
     person: { name?: string | null; email?: string | null; phone?: string | null } | null;
   }>(sql`
     WITH last AS (
@@ -146,30 +166,40 @@ export async function readUnsentAnswers(days: number, now: Date = new Date()): P
       WHERE dispatched_at >= ${since}::timestamptz
       ORDER BY event_id, campaign_id, dispatched_at DESC
     ), agg AS (
-      SELECT event_id, campaign_id, bool_or(status = 'completed') AS any_completed, count(*)::int AS runs
+      SELECT event_id, campaign_id, bool_or(status = 'completed') AS any_completed,
+             bool_or(status IN ('failed', 'timed_out')) AS any_failed, count(*)::int AS runs
       FROM trigger_event_deliveries
       WHERE dispatched_at >= ${since}::timestamptz
       GROUP BY event_id, campaign_id
     )
     SELECT l.event_id, l.campaign_id, l.status, l.refusal_code, l.refusal_reason, l.replay_state, l.at,
-           a.any_completed, a.runs, e.org_id, e.brand_id, e.offer_id, e.trigger_id,
+           a.any_completed, a.any_failed, a.runs, e.org_id, e.brand_id, e.offer_id, e.trigger_id,
            e.status AS event_status, e.skip_reason,
+           (e.skip_reason = ${ANSWERED_AFTER_FACT}
+             OR coalesce(e.detail->'skipped', '[]'::jsonb) @> ${JSON.stringify([{ reason: ANSWERED_AFTER_FACT }])}::jsonb) AS folded,
            e.detail->'person' AS person
     FROM last l
     JOIN agg a ON a.event_id = l.event_id AND a.campaign_id = l.campaign_id
     JOIN trigger_events e ON e.id = l.event_id
-    WHERE (e.detail ? 'person' OR e.detail ? 'item' OR e.detail ? 'peopleCampaignIds')`);
+    WHERE (e.detail ? 'person' OR e.detail ? 'item' OR e.detail ? 'peopleCampaignIds')
+      -- A fact its caller WITHDREW (lib/trigger-withdrawal.ts: not a person, a machine) owes nobody an answer.
+      AND NOT (e.detail ? 'withdrawnAt')`);
 
   const iso = (v: Date | string) => new Date(v).toISOString();
   const byEvent = new Map<string, typeof pairs>();
   for (const p of pairs) byEvent.set(p.event_id, [...(byEvent.get(p.event_id) ?? []), p]);
 
+  // Occurrences none of their own runs answered: did any run of the brand answer the same person after the fact?
+  const unanswered = [...byEvent.entries()].filter(([, ps]) => !ps.some((p) => p.any_completed) && !ps[0].folded).map(([id]) => id);
+  const answeredLater = await answeredLaterByOwnRuns(unanswered);
+
   const classified = [...byEvent.values()]
     .map((ps) => {
       const head = ps[0];
       const { state, by } = answerState(
-        ps.map((p) => ({ campaignId: p.campaign_id, status: p.status, refusalCode: p.refusal_code, replayState: p.replay_state, anyCompleted: p.any_completed })),
-        { done: head.event_status === "done", skipReason: head.skip_reason },
+        // A campaign that failed a run and then found nothing to do still failed the person (as its give-up says).
+        ps.map((p) => ({ campaignId: p.campaign_id, status: p.status === "no_work" && p.any_failed ? "failed" : p.status, refusalCode: p.refusal_code, replayState: p.replay_state, anyCompleted: p.any_completed })),
+        { done: head.event_status === "done", skipReason: head.skip_reason, answeredAfterFact: head.folded || answeredLater.has(head.event_id) },
       );
       const row = ps.find((p) => p.campaign_id === by?.campaignId) ?? head;
       return {
@@ -197,7 +227,7 @@ export async function readUnsentAnswers(days: number, now: Date = new Date()): P
 
   // Every day of the window is served, a quiet one with zeros (it renders in normal colours).
   const byDay = new Map<string, UnsentAnswers["byDay"][number] & { codes: Map<string, number> }>();
-  const emptyDay = (day: string) => ({ day, answered: 0, answeredByTeam: 0, replaying: 0, refused: 0, failed: 0, refusedByCode: [], codes: new Map<string, number>() });
+  const emptyDay = (day: string) => ({ day, answered: 0, answeredByTeam: 0, replaying: 0, refused: 0, failed: 0, nothingToDo: 0, refusedByCode: [], codes: new Map<string, number>() });
   for (let i = days - 1; i >= 0; i--) {
     const day = new Date(now.getTime() - i * 86_400_000).toISOString().slice(0, 10);
     byDay.set(day, emptyDay(day));
@@ -244,4 +274,29 @@ export async function readUnsentAnswers(days: number, now: Date = new Date()): P
         refusedByCode: [...codes.entries()].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count),
       })),
   };
+}
+
+/**
+ * Of these occurrences, the ones whose person a run of ANY campaign of the same (org, brand) answered after the
+ * fact: a `completed` delivery of another occurrence naming the same person (email, else phone; an item's human)
+ * dispatched at or after `greatest(occurred_at, created_at)`. One read; [] = nothing asked.
+ */
+export async function answeredLaterByOwnRuns(eventIds: string[]): Promise<Set<string>> {
+  if (eventIds.length === 0) return new Set();
+  const found = await rows<{ event_id: string }>(sql`
+    SELECT DISTINCT e.id AS event_id
+    FROM trigger_events e
+    JOIN trigger_events o ON o.org_id = e.org_id AND o.brand_id = e.brand_id AND o.id <> e.id
+    JOIN trigger_event_deliveries d ON d.event_id = o.id AND d.status = 'completed'
+    WHERE e.id IN (${sql.join(eventIds.map((id) => sql`${id}`), sql`, `)})
+      AND d.dispatched_at >= greatest(e.occurred_at, e.created_at)
+      AND (
+        (e.detail->'person'->>'email' IS NOT NULL
+          AND lower(o.detail->'person'->>'email') = lower(e.detail->'person'->>'email'))
+        OR (e.detail->'person'->>'phone' IS NOT NULL
+          AND o.detail->'person'->>'phone' = e.detail->'person'->>'phone')
+        OR (e.detail->'item'->>'humanId' IS NOT NULL
+          AND o.detail->'item'->>'humanId' = e.detail->'item'->>'humanId')
+      )`);
+  return new Set(found.map((r) => r.event_id));
 }
