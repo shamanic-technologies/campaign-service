@@ -1353,6 +1353,7 @@ export const UnsentAnswersResponse = z.object({
     day: z.string(),
     answered: z.number().int(),
     answeredByTeam: z.number().int().describe("Refused because the brand's team already answered by hand (human_in_conversation): normal."),
+    silencedByBrand: z.number().int().describe("Refused because the brand stated the person is not someone of the brand (stated_not_to_brand): an intended silence, normal colours, never listed."),
     replaying: z.number().int().describe("Refused because the brand's channel was down, being replayed: normal."),
     refused: z.number().int().describe("Broken (red)."),
     failed: z.number().int().describe("Broken (red)."),

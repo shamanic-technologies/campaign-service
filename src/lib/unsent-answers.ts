@@ -25,6 +25,9 @@ import { fetchSentAfter, type SentAfterAsk } from "./crm-sent-after-client.js";
  *   - done, nobody completed:
  *     - `answeredByTeam`: refused because the brand's TEAM already answered that person by hand (crm-service code
  *       `human_in_conversation`, `TEAM_ANSWERED_CODES`): the person got an answer, not a defect.
+ *     - `silencedByBrand`: refused because the brand stated that person is NOT someone of the brand (crm-service code
+ *       `stated_not_to_brand`, a people correction, `BRAND_SILENCED_CODES`): we stay silent on purpose on every channel
+ *       until the brand undoes it (owner 2026-11-04). Normal colours, never listed.
  *     - `refused`: any other refusal (no channel for this person, cannot write, not verified, a recent-contact guard,
  *       a channel still down past the replay window). RED: the person wrote to us and got no answer. "Not on
  *       WhatsApp" or "cannot write" are RED on purpose: a person who acted is reachable where they acted, so a writer
@@ -54,11 +57,13 @@ import { fetchSentAfter, type SentAfterAsk } from "./crm-sent-after-client.js";
 
 /** Refusal codes meaning the brand's own team already answered the person: not a defect. */
 export const TEAM_ANSWERED_CODES: ReadonlySet<string> = new Set(["human_in_conversation"]);
+/** Refusal codes meaning the brand stated the person is not theirs: an intended silence, not a defect. */
+export const BRAND_SILENCED_CODES: ReadonlySet<string> = new Set(["stated_not_to_brand"]);
 /** How far back a broken answer keeps the card red. */
 export const UNSENT_ANSWER_RED_WINDOW_MS = 24 * 3_600_000;
 const UNSENT_LIST_LIMIT = 100;
 
-export type AnswerState = "answered" | "answeredByTeam" | "replaying" | "refused" | "failed" | "nothingToDo" | null;
+export type AnswerState = "answered" | "answeredByTeam" | "silencedByBrand" | "replaying" | "refused" | "failed" | "nothingToDo" | null;
 
 /** The occurrence's own skip reason (and per-campaign skip) meaning a later run already answered that person. */
 export const ANSWERED_AFTER_FACT = "answered_after_fact";
@@ -92,6 +97,8 @@ export function answerState(
   }
   const team = first((d) => refused(d) && d.refusalCode !== null && TEAM_ANSWERED_CODES.has(d.refusalCode));
   if (team) return { state: "answeredByTeam", by: team };
+  const silenced = first((d) => refused(d) && d.refusalCode !== null && BRAND_SILENCED_CODES.has(d.refusalCode));
+  if (silenced) return { state: "silencedByBrand", by: silenced };
   const refusal = first(refused);
   if (refusal) return { state: "refused", by: refusal };
   const failed = first((d) => d.status === "failed" || d.status === "timed_out");
@@ -128,6 +135,7 @@ export interface UnsentAnswers {
     day: string;
     answered: number;
     answeredByTeam: number;
+    silencedByBrand: number;
     replaying: number;
     refused: number;
     failed: number;
@@ -240,7 +248,7 @@ export async function readUnsentAnswers(days: number, now: Date = new Date()): P
 
   // Every day of the window is served, a quiet one with zeros (it renders in normal colours).
   const byDay = new Map<string, UnsentAnswers["byDay"][number] & { codes: Map<string, number> }>();
-  const emptyDay = (day: string) => ({ day, answered: 0, answeredByTeam: 0, replaying: 0, refused: 0, failed: 0, nothingToDo: 0, refusedByCode: [], codes: new Map<string, number>() });
+  const emptyDay = (day: string) => ({ day, answered: 0, answeredByTeam: 0, silencedByBrand: 0, replaying: 0, refused: 0, failed: 0, nothingToDo: 0, refusedByCode: [], codes: new Map<string, number>() });
   for (let i = days - 1; i >= 0; i--) {
     const day = new Date(now.getTime() - i * 86_400_000).toISOString().slice(0, 10);
     byDay.set(day, emptyDay(day));
