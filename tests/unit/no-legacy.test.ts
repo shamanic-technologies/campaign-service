@@ -573,6 +573,9 @@ describe('No Legacy Patterns - CRITICAL', () => {
         // shared by six codebases, held once in lib/leg-identity.ts. Nothing else.
         if (relative.split(path.sep).join('/') === 'lib/leg-identity.ts'
           && /^\["start_to_(conversation|website_visit)", "lead_found_to_\1"\],$/.test(code.trim())) return;
+        // Not a leg: crm-service's refusal code `stated_not_to_brand` (DUALIST-WA-SILENCE-WF), held once.
+        if (relative.split(path.sep).join('/') === 'lib/unsent-answers.ts'
+          && /^export const BRAND_SILENCED_CODES: ReadonlySet<string> = new Set\(\["stated_not_to_brand"\]\);$/.test(code.trim())) return;
         const literal = /["'][a-z][a-z_]*_to_[a-z][a-z_]*["']/.test(code);
         const parsed = /\blegKey\b[^\n]*\.(split|slice|substring|match|replace|indexOf|startsWith|endsWith)\s*\(/.test(code)
           || /\.(split|slice|substring|match|replace|indexOf|startsWith|endsWith)\s*\([^)]*\)[^\n]*\blegKey\b/.test(code);

@@ -104,6 +104,16 @@ describe("an answer we owed and never sent is red on the Monitoring hub (lib/uns
     expect(read.byDay.at(-1)).toMatchObject({ day: today, answeredByTeam: 1, refused: 0 });
   });
 
+  it("a refusal because the brand stated the person is not theirs (stated_not_to_brand) is an intended silence, NOT red", async () => {
+    const c = await campaign();
+    const ev = await occurrence();
+    await delivery(ev.id, c.id, { status: "refused", refusalCode: "stated_not_to_brand", refusalReason: "The brand stated this person is not someone of the brand.", replayState: "final" });
+    const read = await readUnsentAnswers(7, NOW);
+    expect(read).toMatchObject({ status: "ok", brokenLast24h: 0, unsent: [] });
+    expect(read.byDay.at(-1)).toMatchObject({ day: today, silencedByBrand: 1, refused: 0, answeredByTeam: 0, refusedByCode: [] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("a channel-down refusal being replayed is a normal 'not yet'; an answered occurrence counts answered", async () => {
     const c = await campaign();
     const down = await occurrence({ status: "pending", outcome: null, detail: { person: { email: "staff+a@distribute.you" }, retryCampaignIds: [c.id] } });
@@ -287,6 +297,13 @@ describe("answerState", () => {
   it("classifies what the person finally got", () => {
     expect(answerState([d({ status: "failed" }), d({ campaignId: "b", anyCompleted: true })], done).state).toBe("answered");
     expect(answerState([d({ refusalCode: "human_in_conversation" })], done).state).toBe("answeredByTeam");
+    expect(answerState([d({ refusalCode: "stated_not_to_brand" })], done)).toMatchObject({ state: "silencedByBrand", by: { campaignId: "a" } });
+    expect(answerState([d({ refusalCode: "stated_not_to_brand" }), d({ campaignId: "b", status: "failed" })], done).state).toBe("silencedByBrand");
+    // Every other refusal code keeps its bucket.
+    for (const code of ["not_on_whatsapp", "named_lead_unwritable", "email_not_verified", "recent_brand_contact", "whatsapp_not_connected", "x"]) {
+      expect(answerState([d({ refusalCode: code })], done).state).toBe("refused");
+    }
+    expect(answerState([d({ refusalCode: null })], done).state).toBe("refused");
     expect(answerState([d({ replayState: "scheduled" })], { done: false, skipReason: null }).state).toBe("replaying");
     expect(answerState([d({ status: "failed" })], { done: false, skipReason: null }).state).toBeNull();
     expect(answerState([d({ replayState: "expired" })], done)).toMatchObject({ state: "refused", by: { campaignId: "a" } });
