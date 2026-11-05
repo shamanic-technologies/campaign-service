@@ -11,6 +11,18 @@ export interface AuthenticatedRequest extends Request {
   activeGoalId?: string;
   brandProfileId?: string;
   audienceId?: string;
+  /**
+   * MIGRATE-1105 S0: the run is an ENGINE run (a stored script, no workflow): workflow-service's runner names the
+   * Engine (`x-engine-outcome`) on every pipeline callback and sends no `x-workflow-slug`. Such a run is never
+   * stamped with a workflow slug, not even the campaign's stored one.
+   */
+  engineOutcome?: string;
+}
+
+/** The workflow a pipeline callback runs under: none for an Engine run, else the header, else the campaign's. */
+export function runWorkflowSlug(req: AuthenticatedRequest, campaignWorkflowSlug: string | null | undefined): string | null {
+  if (req.engineOutcome) return null;
+  return req.workflowSlug || campaignWorkflowSlug || null;
 }
 
 /** Parse the x-brand-id header as a comma-separated list of UUIDs. */
@@ -81,6 +93,7 @@ export function trackingHeaders(
   const activeGoalId = req.headers["x-active-goal-id"] as string | undefined;
   const brandProfileId = req.headers["x-brand-profile-id"] as string | undefined;
   const audienceId = req.headers["x-audience-id"] as string | undefined;
+  const engineOutcome = req.headers["x-engine-outcome"] as string | undefined;
 
   if (orgId && !req.orgId) req.orgId = orgId;
   if (userId && !req.userId) req.userId = userId;
@@ -92,6 +105,10 @@ export function trackingHeaders(
   if (activeGoalId) req.activeGoalId = activeGoalId;
   if (brandProfileId) req.brandProfileId = brandProfileId;
   if (audienceId) req.audienceId = audienceId;
+  if (engineOutcome) {
+    req.engineOutcome = engineOutcome;
+    delete req.workflowSlug;
+  }
 
   next();
 }
@@ -115,7 +132,9 @@ export function requirePipelineHeaders(
   res: Response,
   next: NextFunction,
 ) {
-  const missing = REQUIRED_PIPELINE_HEADERS.filter((h) => !req.headers[h]);
+  // An Engine run (MIGRATE-1105 S0) names its Engine instead of a workflow.
+  const engineRun = typeof req.headers["x-engine-outcome"] === "string" && req.headers["x-engine-outcome"] !== "";
+  const missing = REQUIRED_PIPELINE_HEADERS.filter((h) => !req.headers[h] && !(engineRun && h === "x-workflow-slug"));
   if (missing.length > 0) {
     console.warn(`[campaign-service] 400 on ${req.path} — missing pipeline headers: ${missing.join(", ")}`);
     return res.status(400).json({

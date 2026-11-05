@@ -10,7 +10,7 @@ import { targetingOfSalesFunnelCampaigns } from "../lib/sales-funnel-people-stor
 import { eq, and, sql, or, ne, isNotNull, gt, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { brandPauseTransitions, campaigns, triggerEvents } from "../db/schema.js";
-import { requireApiKey, requirePipelineHeaders, serviceAuth, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
+import { requireApiKey, requirePipelineHeaders, runWorkflowSlug, serviceAuth, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
@@ -154,7 +154,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       runId: req.runId,
       brandId: resolvedBrandIds.join(","),
       brandIds: resolvedBrandIds,
-      workflowSlug: req.workflowSlug || campaign.workflowSlug || undefined,
+      workflowSlug: runWorkflowSlug(req, campaign.workflowSlug) ?? undefined,
       featureSlug: req.featureSlug || campaign.featureSlug || undefined,
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
@@ -274,8 +274,9 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     const parentRunId = req.runId;
     const brandIdCsv = campaign.brandIds!.join(",");
     const primaryBrandId = campaign.brandIds[0];
-    const workflowSlug = req.workflowSlug || campaign.workflowSlug;
-    if (!workflowSlug) {
+    const workflowSlug = runWorkflowSlug(req, campaign.workflowSlug);
+    // An Engine run (MIGRATE-1105 S0) runs a stored script: no workflow, and none stamped on the run opened here.
+    if (!workflowSlug && !req.engineOutcome) {
       // A campaign whose channel the CUSTOMER operates runs no DAG, so nothing should ever have
       // reached this route for it — the scheduler never claims it and never triggers it. Fail
       // loud rather than minting a slug or starting a run nothing can execute.
@@ -359,7 +360,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
           campaignId,
           identity: preRunIdentity,
         });
-        audienceId = selectAudienceFromProjection(projectionRows, workflowSlug, {
+        audienceId = selectAudienceFromProjection(projectionRows, workflowSlug ?? "", {
           excludedAudienceIds,
         });
       } catch (err) {
@@ -380,7 +381,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       brandId: brandIdCsv,
       userId: campaign.createdByUserId || undefined,
       parentRunId: parentRunId || undefined,
-      workflowSlug,
+      workflowSlug: workflowSlug ?? undefined,
       featureSlug,
       audienceId: audienceId ?? undefined,
     });
@@ -501,7 +502,7 @@ async function hasServeableAudience(
     runId: req.runId!,
     campaignId: campaign.id,
     brandId: primaryBrandId,
-    workflowSlug: req.workflowSlug || campaign.workflowSlug,
+    workflowSlug: runWorkflowSlug(req, campaign.workflowSlug),
     featureSlug,
   };
   // Same definition the resume sweep reads. The two must agree: the leg that stops a campaign

@@ -27,6 +27,11 @@ An org whose card billing cannot charge stops every campaign.
 - **NOTHING RESUMES AUTOMATICALLY**: the customer presses start once billing stops saying `charge_blocked`. Owner accepted; auto-resume would be the retired resume sweep.
 - `tests/setup.ts` mocks `lib/payment-hold.js` to "not held"; `tests/unit/payment-hold.test.ts` uses `vi.importActual`.
 
+### A campaign's ENGINE runs its stored script, no workflow (MIGRATE-1105 S0, owner 2026-11-05 « IL FAUT MIGRER »; `lib/engine-dispatch.ts`)
+
+- Every dispatch path (scheduler, step trigger, a person's start) asks `liveEngineFor(campaign, org)`: the Engine = the step the campaign's leg reaches, read off the catalogue (never parsed), live per workflow-service `GET /internal/engines/{outcome}?orgId=` (cached 60 s). Live = no workflow selected, `POST /engines/{outcome}/execute` (same identity, trigger, admission); 409 `engine_not_live`, a 404 state or an unreadable one = the workflow path byte for byte. One rule for every outcome: never a branch on an outcome, channel or client.
+- An Engine run's callbacks carry `x-engine-outcome` and no `x-workflow-slug`: `runWorkflowSlug` (middleware/auth.ts) answers null, so `/start-run` opens its run with NO workflow slug (never the campaign's stored one), gate-check and the audience read send none downstream. A workflow run is unchanged.
+
 ### One proactive ON per offer; reactive ON by default (owner 2026-10-05)
 
 - **Rule 1** (`lib/single-proactive.ts`): a PERSON turning ON a campaign on an ENTRY leg (catalogue `fromStep` null) stops every other ongoing entry-leg campaign of the same (org, offer) IN THE SAME TRANSACTION (`setCampaignStatusWithStops` `displace`, or `stopProactiveReplacedBy` inside an insert tx), reason `manual`, source `proactive_switch`, billing signalled with the same actor. All person starts: `POST /campaigns` (insert + restart), start-funded-pair (insert, restart AND already-running), `PATCH status=activate`; answers carry `stoppedCampaigns`. Advisory xact lock per (org, offer) serializes racing starts. Catalogue read ONLY when another campaign of the offer is live; unreadable then = 502 `catalogue_unavailable`, rolled back. Nothing else ever switches it (no tick/ROI/AI); offers already holding two are left until a person acts.

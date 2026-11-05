@@ -1,5 +1,6 @@
 import type { EventPerson } from "./trigger-person.js";
 import { WorkflowExecutionRefusedError } from "./workflow-refusal.js";
+import { executeCampaignEngine, type CampaignEngine } from "./engine-dispatch.js";
 
 export interface WorkflowExecutionInputs {
   campaignId: string;
@@ -76,7 +77,14 @@ export function validateWorkflowInputs(
 export async function executeCampaignWorkflow(
   workflowSlug: string,
   inputs: WorkflowExecutionInputs,
+  /** MIGRATE-1105 S0: the campaign's Engine when it is live (lib/engine-dispatch.ts): dispatched instead of the workflow. */
+  engine?: CampaignEngine | null,
 ): Promise<WorkflowExecution> {
+  if (engine) {
+    const ran = await executeCampaignEngine(engine, inputs);
+    if (ran) return ran;
+    // workflow-service says the Engine is not live for this org after all: the workflow, as before.
+  }
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
 

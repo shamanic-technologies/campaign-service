@@ -39,6 +39,12 @@ vi.mock("../src/lib/sourcing-origins-client.js", async (importOriginal) => {
 // WHO DISPATCHES A PIPE (src/lib/on-demand-mode.ts) is read on the catalogue at every claim and person start. Tests
 // that are not about it read it as unreadable (sources parked on demand, everything else runs: today's behaviour);
 // the on-demand tests state their own reading.
+// MIGRATE-1105 S0: no Engine is live in tests unless a suite says so (lib/engine-dispatch.ts); its own suite uses the actual.
+vi.mock("../src/lib/engine-dispatch.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/engine-dispatch.js")>();
+  return { ...original, liveEngineFor: vi.fn().mockResolvedValue(null) };
+});
+
 vi.mock("../src/lib/on-demand-mode.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/on-demand-mode.js")>();
   return { ...original, readDispatchCatalogue: vi.fn().mockResolvedValue({ ok: false, detail: "not read in tests" }) };
