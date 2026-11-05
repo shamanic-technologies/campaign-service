@@ -52,7 +52,11 @@ describe("the Engine of a campaign", () => {
     expect(await liveEngineFor({ featureSlug: "lead-sourcing", legKey: "start_to_lead_found" }, "org-1")).toEqual({ fromOutcome: "start", outcome: "lead_found" });
     expect(await liveEngineFor({ featureSlug: "lead-sourcing", legKey: "start_to_lead_found" }, "org-1")).not.toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0]![0])).toBe("http://workflow/internal/engines/lead_found?orgId=org-1");
+    expect(String(fetchMock.mock.calls[0]![0])).toBe("http://workflow/internal/engines/lead_found?orgId=org-1&featureSlug=lead-sourcing");
+    // Another channel of the same org and Engine is its own read.
+    fetchMock.mockResolvedValueOnce(json(200, { live: false }));
+    expect(await liveEngineFor({ featureSlug: "sourcing-crm-contacts", legKey: "start_to_lead_found" }, "org-1")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("runs the workflow when the Engine is not live, unknown, or its state unreadable", async () => {
