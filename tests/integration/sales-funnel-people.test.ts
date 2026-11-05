@@ -95,7 +95,7 @@ const followUp = (email: string, extra: Record<string, unknown> = {}) =>
 const isFollowUpPipe = (c: { featureSlug: string | null; legKey: string | null }) =>
   c.featureSlug === CHANNEL && sameLeg(c.featureSlug, LEG, c.legKey);
 
-describe("a sales funnel campaign that names its people and carries an instruction", () => {
+describe("a sales funnel campaign that names its people and carries a brief", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     await cleanTestData();
@@ -111,15 +111,16 @@ describe("a sales funnel campaign that names its people and carries an instructi
     await closeDb();
   });
 
-  it("is born ACTIVE naming its person (canonical) with its instruction; the same person again is handed back", async () => {
-    const res = await followUp(" Marie@Example.com ", { instruction: "Give Marie her exact cost per booked meeting." }).expect(201);
+  it("is born ACTIVE naming its person (canonical) with its brief; the same person again is handed back", async () => {
+    const res = await followUp(" Marie@Example.com ", { brief: "Give Marie her exact cost per booked meeting." }).expect(201);
     const fc = res.body.salesFunnelCampaign;
     expect(res.body).toMatchObject({ created: true, started: true });
     expect(fc).toMatchObject({
       status: "ongoing",
       people: [{ email: "marie@example.com", leadId: "lead-marie@example.com" }],
-      instruction: "Give Marie her exact cost per booked meeting.",
+      brief: "Give Marie her exact cost per booked meeting.",
     });
+    expect(fc).not.toHaveProperty("instruction");
     expect(fc.units).toHaveLength(1);
     expect(fc.people).toEqual([{ email: "marie@example.com", leadId: null }].map((p) => ({ ...p, leadId: "lead-marie@example.com" })));
     expect(mockFile).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG, campaignId: fc.units[0].campaignId, email: "marie@example.com" }));
@@ -132,7 +133,7 @@ describe("a sales funnel campaign that names its people and carries an instructi
     expect(mockFile).not.toHaveBeenCalled();
     expect(again.body).toMatchObject({ created: false, started: false });
     expect(again.body.salesFunnelCampaign.id).toBe(fc.id);
-    expect(again.body.salesFunnelCampaign.instruction).toBe("Give Marie her exact cost per booked meeting.");
+    expect(again.body.salesFunnelCampaign.brief).toBe("Give Marie her exact cost per booked meeting.");
   });
 
   it("a person the brand does not know is still born, said in `filing`, leadId null", async () => {
@@ -171,20 +172,29 @@ describe("a sales funnel campaign that names its people and carries an instructi
     expect(await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.orgId, ORG))).toHaveLength(0);
   });
 
-  it("rewords the instruction without touching the status; null clears it; an empty body is refused", async () => {
-    const created = await followUp("marie@example.com", { instruction: "old words" }).expect(201);
+  it("rewords the brief without touching the status; null clears it; an empty body is refused", async () => {
+    const created = await followUp("marie@example.com", { brief: "old words" }).expect(201);
     const id = created.body.salesFunnelCampaign.id;
 
-    const reworded = await patch(id, { instruction: "new words" }).expect(200);
-    expect(reworded.body.salesFunnelCampaign).toMatchObject({ instruction: "new words", status: "ongoing" });
+    const reworded = await patch(id, { brief: "new words" }).expect(200);
+    expect(reworded.body.salesFunnelCampaign).toMatchObject({ brief: "new words", status: "ongoing" });
 
-    const cleared = await patch(id, { instruction: null }).expect(200);
-    expect(cleared.body.salesFunnelCampaign.instruction).toBeNull();
+    const cleared = await patch(id, { brief: null }).expect(200);
+    expect(cleared.body.salesFunnelCampaign.brief).toBeNull();
 
     await patch(id, {}).expect(400);
 
-    const stopped = await patch(id, { status: "stop", instruction: "kept" }).expect(200);
-    expect(stopped.body.salesFunnelCampaign).toMatchObject({ status: "stopped", instruction: "kept" });
+    const stopped = await patch(id, { status: "stop", brief: "kept" }).expect(200);
+    expect(stopped.body.salesFunnelCampaign).toMatchObject({ status: "stopped", brief: "kept" });
+  });
+
+  it("ONE-BRIEF-1105-REMOVE: a write stating the retired instruction is refused by name, nothing written", async () => {
+    const created = await followUp("marie@example.com", { instruction: "old words" }).expect(400);
+    expect(created.body.reason).toBe("instruction_retired");
+    expect(await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.orgId, ORG))).toHaveLength(0);
+    const born = await followUp("marie@example.com", { brief: "words" }).expect(201);
+    const refused = await patch(born.body.salesFunnelCampaign.id, { instruction: null }).expect(400);
+    expect(refused.body.reason).toBe("instruction_retired");
   });
 
   it("lists the campaigns naming a person (case-insensitive)", async () => {
@@ -197,10 +207,10 @@ describe("a sales funnel campaign that names its people and carries an instructi
     expect(res.body.salesFunnelCampaigns[0].people[0].email).toBe("marie@example.com");
   });
 
-  it("/start-run answers the funnel campaign's CURRENT instruction and people; null for a campaign naming nothing", async () => {
-    const created = await followUp("marie@example.com", { instruction: "first" }).expect(201);
+  it("/start-run answers the funnel campaign's CURRENT brief and people, and no instruction", async () => {
+    const created = await followUp("marie@example.com", { brief: "first" }).expect(201);
     const unitId = created.body.salesFunnelCampaign.units[0].campaignId;
-    await patch(created.body.salesFunnelCampaign.id, { instruction: "edited" }).expect(200);
+    await patch(created.body.salesFunnelCampaign.id, { brief: "edited" }).expect(200);
 
     const run = await request(app)
       .post("/start-run")
@@ -214,9 +224,9 @@ describe("a sales funnel campaign that names its people and carries an instructi
         "x-feature-slug": CHANNEL,
       })
       .expect(200);
-    expect(run.body.instruction).toBe("edited");
-    // ONE-BRIEF-1105: every run carries the campaign's brief, which holds every instruction ever stated.
-    expect(run.body.brief).toBe("first\n\nedited");
+    // ONE-BRIEF-1105: every run carries the campaign's ONE text, its brief; the retired instruction is gone.
+    expect(run.body).not.toHaveProperty("instruction");
+    expect(run.body.brief).toBe("edited");
     expect(run.body.people).toEqual([{ email: "marie@example.com", leadId: "lead-marie@example.com" }]);
   });
 

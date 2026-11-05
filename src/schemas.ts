@@ -219,11 +219,10 @@ export const StoppedCampaignSchema = z.object({
 
 // --- Sales funnel campaigns (owner 2026-10-10, lib/sales-funnel-campaigns.ts) ---
 
-/** The longest instruction a funnel campaign carries (it rides every run into a writer's prompt). */
-export const MAX_INSTRUCTION_LENGTH = 4000;
-// A funnel campaign's brief (lib/sales-funnel-target.ts): its one text, read by the judge and every LLM step.
-// Room for a full brief + a folded instruction (ONE-BRIEF-1105), so a folded brief stays editable as is.
-export const MAX_BRIEF_LENGTH = 8000 + MAX_INSTRUCTION_LENGTH;
+// A funnel campaign's brief (lib/sales-funnel-target.ts): its ONE text, read by the judge and every LLM step.
+// 12,000 = 8,000 + the 4,000 the retired `instruction` could add when migration 0086 folded it in, so a folded
+// brief stays editable as is (ONE-BRIEF-1105).
+export const MAX_BRIEF_LENGTH = 12000;
 // What `target` accepts is a LIVE vocabulary (lib/target-step-vocabulary.ts): the doc names the read validation makes.
 export const TargetStepSchema = z.string().trim().min(1, "target must name a step (omit it to keep the sales funnel's last step)").max(200)
   .openapi({ description: TARGET_STEP_DESCRIPTION, example: "paid_client" });
@@ -260,8 +259,6 @@ export const CreateSalesFunnelCampaignBody = z.object({
     email: z.string().trim().email("people[].email must be an email address"),
   }).strict()).min(1, "people must name at least one person (omit it to name nobody)")
     .max(MAX_NAMED_PEOPLE, `people names at most ${MAX_NAMED_PEOPLE} people`).optional(),
-  // LEGACY (ONE-BRIEF-1105): folded into `brief` (appended as its own paragraph); state the brief instead.
-  instruction: z.string().trim().min(1, "instruction must not be empty (omit it)").max(MAX_INSTRUCTION_LENGTH).optional(),
   // OPTIONAL (lib/github-issue-trigger.ts): the GitHub issue this campaign WAITS ON. Its units answering a
   // `github_issue_in_prod` trigger run once this issue is in prod (closed as completed by a merge to the
   // default branch AND served by every deploy target of the repo on the box). Part of its identity.
@@ -281,12 +278,11 @@ export const CreateSalesFunnelCampaignBody = z.object({
 }).strict().openapi("CreateSalesFunnelCampaignBody");
 
 /**
- * Run or pause the WHOLE funnel (every unit moves with it, in one transaction), and/or reword its
- * instruction (null clears it). At least one of the two.
+ * Run or pause the WHOLE funnel (every unit moves with it, in one transaction), and/or edit its target, its
+ * brief (null clears it) or whether it follows its plan. At least one of them.
  */
 export const UpdateSalesFunnelCampaignBody = z.object({
   status: z.enum(["activate", "stop"], { error: 'status must be "activate" or "stop"' }).optional(),
-  instruction: z.string().trim().min(1, "instruction must not be empty (null clears it)").max(MAX_INSTRUCTION_LENGTH).nullable().optional(),
   // The OUTCOME it targets (a catalogue step key). Unknown step = 400 unknown_target_step.
   target: TargetStepSchema.optional(),
   // Its strategy in plain language (null clears it). Dated + attributed on every edit (briefUpdatedAt/By).
@@ -295,8 +291,8 @@ export const UpdateSalesFunnelCampaignBody = z.object({
   // false = keep the funnel it runs now, fixed.
   followsPlan: z.boolean().optional(),
 }).strict().refine(
-  (b) => b.status !== undefined || b.instruction !== undefined || b.target !== undefined || b.brief !== undefined || b.followsPlan !== undefined,
-  { message: "state status, instruction, target, brief and/or followsPlan" },
+  (b) => b.status !== undefined || b.target !== undefined || b.brief !== undefined || b.followsPlan !== undefined,
+  { message: "state status, target, brief and/or followsPlan" },
 ).openapi("UpdateSalesFunnelCampaignBody");
 
 export const SalesFunnelCampaignsQuery = z.object({
@@ -341,8 +337,6 @@ export const SalesFunnelCampaignSchema = z.object({
   createdByUserId: z.string().nullable(),
   // The exact people it acts for (null = whoever its pipes serve). leadId null = not filed yet.
   people: z.array(z.object({ email: z.string(), leadId: z.string().nullable() })).nullable(),
-  // Free text every run of its units carries to the workflow; null = none.
-  instruction: z.string().nullable(),
   // The GitHub issue it waits on (lowercased), or null.
   githubIssue: GithubIssueRefSchema.nullable(),
   // The detector's latest verdict on that issue (null = not checked yet / waits on none). `state`:
@@ -548,8 +542,6 @@ export const StartRunResponse = z.object({
   // LLM step of the run reads it (ONE-BRIEF-1105; read at every run, so an edit is used by the next run).
   // null = none / not a funnel unit.
   brief: z.string().nullable(),
-  // LEGACY (ONE-BRIEF-1105): already folded into `brief`; served until its last reader is gone, then removed.
-  instruction: z.string().nullable(),
   // A sales funnel unit whose campaign NAMES its people: exactly them ([{email, leadId}]; leadId null =
   // not filed at lead-service yet). null = whoever the campaign's pipes serve.
   people: z.array(z.object({ email: z.string(), leadId: z.string().nullable() })).nullable(),

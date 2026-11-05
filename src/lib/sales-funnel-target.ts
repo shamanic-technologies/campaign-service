@@ -11,9 +11,8 @@ import { fetchSalesFunnel, type SalesFunnelFromCatalogue } from "./sales-funnel-
  *   - `target`: the final step it aims at (a catalogue step key, features-service's vocabulary, carried verbatim:
  *     `meeting_booked`, `paid_client`...; the accepted set = lib/target-step-vocabulary.ts). Born = the LAST step of the funnel it runs (the last
  *     leg's `toStep` as the catalogue publishes it, never parsed off a leg key or a funnel id); settable by the org.
- *   - `brief`: the strategy in plain language ("Cold email only, never write to someone who asked to stop"). Read
- *     later by a judge (Jev) choosing the play per pipe. NOT `instruction` (that one is what the writer's message
- *     follows). Every edit is dated + attributed (`brief_updated_at`, `brief_updated_by_user_id`) so a judge knows
+ *   - `brief`: the strategy in plain language ("Cold email only, never write to someone who asked to stop"). The campaign's ONE
+ *     text: the judge (Jev) choosing the play per pipe and every LLM step of every run read it. Every edit is dated + attributed (`brief_updated_at`, `brief_updated_by_user_id`) so a judge knows
  *     when to re-judge.
  *   - `mode` (proactive | reactive) + `triggerId`: what the funnel STARTS from, features-service's statement (the
  *     funnel's head trigger, else its head pipe's mode), copied at birth so every read serves it without a catalogue

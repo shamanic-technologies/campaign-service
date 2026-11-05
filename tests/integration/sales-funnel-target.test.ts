@@ -97,19 +97,18 @@ describe("funnel campaign target + brief (FACTORY-P1-CAMPAIGN-TARGET-BRIEF)", ()
       brief: null,
       briefUpdatedAt: null,
       briefUpdatedByUserId: null,
-      instruction: null,
     });
+    expect(res.body.salesFunnelCampaign).not.toHaveProperty("instruction");
     expect(mockCatalogue).not.toHaveBeenCalled();
   });
 
-  it("is born with a stated target and brief (dated, attributed); ONE-BRIEF-1105: an instruction is folded into the brief", async () => {
-    const res = await launch({ target: "meeting_booked", brief: "Cold email only, never write to someone who asked to stop.", instruction: "Be short." }).expect(201);
+  it("is born with a stated target and brief (dated, attributed)", async () => {
+    const res = await launch({ target: "meeting_booked", brief: "Cold email only, never write to someone who asked to stop." }).expect(201);
     const fc = res.body.salesFunnelCampaign;
     expect(fc).toMatchObject({
       target: "meeting_booked",
-      brief: "Cold email only, never write to someone who asked to stop.\n\nBe short.",
+      brief: "Cold email only, never write to someone who asked to stop.",
       briefUpdatedByUserId: "user_target",
-      instruction: "Be short.",
     });
     expect(Date.parse(fc.briefUpdatedAt)).toBeGreaterThan(Date.now() - 60_000);
   });
@@ -126,13 +125,12 @@ describe("funnel campaign target + brief (FACTORY-P1-CAMPAIGN-TARGET-BRIEF)", ()
     expect(res.body.reason).toBe("catalogue_unavailable");
   });
 
-  it("PATCH sets the brief alone (dated + attributed) and keeps instruction, target and status", async () => {
-    const born = (await launch({ instruction: "Be short." }).expect(201)).body.salesFunnelCampaign;
+  it("PATCH sets the brief alone (dated + attributed) and keeps target and status", async () => {
+    const born = (await launch({}).expect(201)).body.salesFunnelCampaign;
     const res = await patch(born.id, { brief: "Test for 30 days." }, "user_editor").expect(200);
     expect(res.body.salesFunnelCampaign).toMatchObject({
       brief: "Test for 30 days.",
       briefUpdatedByUserId: "user_editor",
-      instruction: "Be short.",
       target: "paid_client",
       status: "stopped",
     });
@@ -142,7 +140,7 @@ describe("funnel campaign target + brief (FACTORY-P1-CAMPAIGN-TARGET-BRIEF)", ()
     expect(again.body.salesFunnelCampaign.briefUpdatedByUserId).toBe("user_editor");
     // null clears it (and is an edit).
     const cleared = await patch(born.id, { brief: null }).expect(200);
-    expect(cleared.body.salesFunnelCampaign).toMatchObject({ brief: null, briefUpdatedByUserId: "user_target", instruction: "Be short." });
+    expect(cleared.body.salesFunnelCampaign).toMatchObject({ brief: null, briefUpdatedByUserId: "user_target" });
   });
 
   it("ENGINE-HANDOVER-RETIRE-1102: no Engine hand-over list is served, and a write stating one is refused by name", async () => {
@@ -168,10 +166,10 @@ describe("funnel campaign target + brief (FACTORY-P1-CAMPAIGN-TARGET-BRIEF)", ()
   });
 
   it("a hand-back applies a stated brief/target and leaves the rest", async () => {
-    await launch({ instruction: "Be short." }).expect(201);
+    await launch({ brief: "Be short." }).expect(201);
     const back = await launch({ brief: "Never on Sundays." }).expect(200);
     expect(back.body).toMatchObject({ created: false });
-    expect(back.body.salesFunnelCampaign).toMatchObject({ brief: "Never on Sundays.", instruction: "Be short.", target: "paid_client" });
+    expect(back.body.salesFunnelCampaign).toMatchObject({ brief: "Never on Sundays.", target: "paid_client" });
   });
 
   it("backfill fills every row missing a target from its funnel's last step, never overwrites a stated one", async () => {

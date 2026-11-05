@@ -1,4 +1,3 @@
-import { foldInstructionIntoBrief } from "../lib/campaign-brief.js";
 import { adoptSalesFunnelUnitWorkflows, repairSalesFunnelUnitLegWorkflows } from "../lib/sales-funnel-unit-workflows.js";
 import { Router } from "express";
 import { z } from "zod";
@@ -9,6 +8,7 @@ import { campaigns, salesFunnelCampaigns, type SalesFunnelCampaign } from "../db
 import { serviceAuth, requireApiKey, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { refuseRetiredEngineOutcomes } from "../lib/retired-engine-outcomes.js";
+import { refuseRetiredInstruction } from "../lib/retired-instruction.js";
 import {
   CreateSalesFunnelCampaignBody,
   SalesFunnelCampaignsQuery,
@@ -70,24 +70,19 @@ async function unitsOf(parentIds: string[], orgId: string): Promise<Map<string, 
 }
 
 /**
- * The stated edits of a funnel campaign's own words (lib/sales-funnel-target.ts): instruction, target, brief. Only
+ * The stated edits of a funnel campaign's own words (lib/sales-funnel-target.ts): target, brief, followsPlan. Only
  * what the caller STATES moves; a brief that changes is dated + attributed (a judge re-judges after it).
  */
 function statedEdits(
   current: SalesFunnelCampaign,
-  stated: { instruction?: string | null; target?: string; brief?: string | null; followsPlan?: boolean },
+  stated: { target?: string; brief?: string | null; followsPlan?: boolean },
   userId: string | undefined,
 ): Partial<typeof salesFunnelCampaigns.$inferInsert> {
   const edits: Partial<typeof salesFunnelCampaigns.$inferInsert> = {};
   // The customer's switch (lib/sales-funnel-plan.ts): follow the plan, or keep the funnel it runs now, fixed.
   if (stated.followsPlan !== undefined && stated.followsPlan !== current.followsPlan) edits.followsPlan = stated.followsPlan;
-  if (stated.instruction !== undefined && stated.instruction !== current.instruction) edits.instruction = stated.instruction;
   if (stated.target !== undefined && stated.target !== current.target) edits.target = stated.target;
-  // ONE-BRIEF-1105: a stated instruction lands in the brief too (the client sees and edits it there).
-  const brief =
-    stated.instruction != null
-      ? foldInstructionIntoBrief(stated.brief !== undefined ? stated.brief : current.brief, stated.instruction)
-      : stated.brief;
+  const brief = stated.brief;
   if (brief !== undefined && brief !== current.brief) {
     edits.brief = brief;
     edits.briefUpdatedAt = new Date();
@@ -164,10 +159,11 @@ router.post(
   requireApiKey,
   serviceAuth,
   refuseRetiredEngineOutcomes,
+  refuseRetiredInstruction,
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId, salesFunnelId, status, people: namedInput, instruction, githubIssue: issueInput, target, brief, followsPlan } =
+      const { brandId, offerId, salesFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan } =
         CreateSalesFunnelCampaignBody.parse(req.body);
       // The GitHub issue it waits on (lib/github-issue-trigger.ts): part of its identity too.
       const issueRef = issueInput ? parseGithubIssue(issueInput) : null;
@@ -203,9 +199,9 @@ router.post(
 
       let incumbent = await findIncumbent();
       const incumbentBefore = incumbent ?? null;
-      // Handed back with the instruction, target and brief the caller states now (absent = untouched).
+      // Handed back with the target and brief the caller states now (absent = untouched).
       const wasFollowing = incumbent?.followsPlan ?? false;
-      if (incumbent) incumbent = await applyEdits(incumbent, statedEdits(incumbent, { instruction, target, brief, followsPlan }, req.userId));
+      if (incumbent) incumbent = await applyEdits(incumbent, statedEdits(incumbent, { target, brief, followsPlan }, req.userId));
       // Told to stop following its plan: back on its own funnel at once (lib/sales-funnel-plan.ts `switchOffPlan`).
       if (incumbent && wasFollowing && followsPlan === false) {
         await runSwitchOffFor(incumbent.id);
@@ -322,12 +318,10 @@ router.post(
           parentRunId: req.runId!,
           people,
           peopleKey,
-          instruction: instruction ?? null,
           githubIssue,
           // The outcome it targets: stated, else the funnel's last step (lib/sales-funnel-target.ts).
           target: target ?? plan.shape?.target ?? null,
-          // ONE-BRIEF-1105: an instruction stated at birth is folded into the brief (lib/campaign-brief.ts).
-          brief: foldInstructionIntoBrief(brief, instruction),
+          brief: brief ?? null,
           briefUpdatedByUserId: req.userId!,
           mode: plan.shape?.mode ?? null,
           triggerId: plan.shape?.triggerId ?? null,
@@ -450,10 +444,11 @@ router.patch(
   requireApiKey,
   serviceAuth,
   refuseRetiredEngineOutcomes,
+  refuseRetiredInstruction,
   validateBody(UpdateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { status, instruction, target, brief, followsPlan } = UpdateSalesFunnelCampaignBody.parse(req.body);
+      const { status, target, brief, followsPlan } = UpdateSalesFunnelCampaignBody.parse(req.body);
       const orgId = req.orgId!;
       const existing = await db.query.salesFunnelCampaigns.findFirst({
         where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
@@ -463,7 +458,7 @@ router.patch(
         const check = await checkTargetStep(target);
         if (!check.ok) return res.status(check.status).json(check.body);
       }
-      const edits = statedEdits(existing, { instruction, target, brief, followsPlan }, req.userId);
+      const edits = statedEdits(existing, { target, brief, followsPlan }, req.userId);
       // Turned to follow its plan, or started while it does: checked against its plan at once (after the write).
       const checkPlanNow = (followsPlan === true && !existing.followsPlan) || (status === "activate" && (followsPlan ?? existing.followsPlan));
       // Turned OFF: back on its own funnel at once, before answering (lib/sales-funnel-plan.ts `switchOffPlan`).
@@ -474,8 +469,8 @@ router.patch(
         return (await db.query.salesFunnelCampaigns.findFirst({ where: eq(salesFunnelCampaigns.id, row.id) })) ?? row;
       };
 
-      // Reword (or clear) the instruction its runs carry (read by every run at /start-run, so the next message
-      // follows the new words), restate its target, rewrite its brief. Status untouched unless stated too.
+      // Rewrite (or clear) its brief (read by every run at /start-run, so the next message follows the new
+      // words), restate its target. Status untouched unless stated too.
       if (status === undefined) {
         const reworded = await backHome(await applyEdits(existing, edits));
         reportSalesFunnelCampaignAction(req, existing, reworded, false);

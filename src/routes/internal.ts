@@ -411,7 +411,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     }
 
     // A funnel unit carries what its funnel campaign NAMES (lib/sales-funnel-people.ts): the exact
-    // people it acts for and the instruction its message follows. Read at every run, so an edit is
+    // people it acts for and its brief. Read at every run, so an edit is
     // what the next run uses. A pre-funnel campaign makes no read and answers null for both.
     const targeting = campaign.salesFunnelCampaignId
       ? (await targetingOfSalesFunnelCampaigns([campaign.salesFunnelCampaignId])).get(campaign.salesFunnelCampaignId) ?? null
@@ -449,10 +449,8 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       servicesOffered: campaign.servicesOffered ?? null,
       clickDestinationUrl: campaign.clickDestinationUrl ?? null,
       // The funnel campaign's brief: the one text the client edits on the dashboard, read by EVERY LLM step of
-      // the run (ONE-BRIEF-1105; null = none, or not a funnel unit). Holds the former instruction too.
+      // the run (ONE-BRIEF-1105; null = none, or not a funnel unit). The former `instruction` is folded into it.
       brief: targeting?.brief ?? null,
-      // LEGACY (ONE-BRIEF-1105): folded into `brief`, served until its last reader is gone, then removed.
-      instruction: targeting?.instruction ?? null,
       // The exact people this campaign acts for ([{email, leadId}]; null = whoever its pipes serve).
       people: targeting?.people ?? null,
       reactive,
