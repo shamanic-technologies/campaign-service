@@ -102,12 +102,12 @@ describe("funnel campaign target + brief (FACTORY-P1-CAMPAIGN-TARGET-BRIEF)", ()
     expect(mockCatalogue).not.toHaveBeenCalled();
   });
 
-  it("is born with a stated target and brief (dated, attributed), distinct from its instruction", async () => {
+  it("is born with a stated target and brief (dated, attributed); ONE-BRIEF-1105: an instruction is folded into the brief", async () => {
     const res = await launch({ target: "meeting_booked", brief: "Cold email only, never write to someone who asked to stop.", instruction: "Be short." }).expect(201);
     const fc = res.body.salesFunnelCampaign;
     expect(fc).toMatchObject({
       target: "meeting_booked",
-      brief: "Cold email only, never write to someone who asked to stop.",
+      brief: "Cold email only, never write to someone who asked to stop.\n\nBe short.",
       briefUpdatedByUserId: "user_target",
       instruction: "Be short.",
     });

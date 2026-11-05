@@ -763,7 +763,7 @@
           "brief": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 8000
+            "maxLength": 12000
           },
           "followsPlan": {
             "type": "boolean"
@@ -893,7 +893,7 @@
             "type": "string",
             "nullable": true,
             "minLength": 1,
-            "maxLength": 8000
+            "maxLength": 12000
           },
           "followsPlan": {
             "type": "boolean"
@@ -1610,6 +1610,10 @@
             "type": "string",
             "nullable": true
           },
+          "brief": {
+            "type": "string",
+            "nullable": true
+          },
           "instruction": {
             "type": "string",
             "nullable": true
@@ -1666,6 +1670,7 @@
           "offerId",
           "servicesOffered",
           "clickDestinationUrl",
+          "brief",
           "instruction",
           "people",
           "reactive",

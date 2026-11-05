@@ -11,7 +11,7 @@ import {
 
 /** The reads of lib/sales-funnel-people.ts (kept apart so the rules stay importable without a database). */
 
-/** For each funnel campaign id, what it names (people, instruction). One query. */
+/** For each funnel campaign id, what it names (people, instruction) and its brief. One query. */
 export async function targetingOfSalesFunnelCampaigns(
   salesFunnelCampaignIds: readonly string[],
 ): Promise<Map<string, SalesFunnelCampaignTargeting>> {
@@ -23,12 +23,13 @@ export async function targetingOfSalesFunnelCampaigns(
       id: salesFunnelCampaigns.id,
       people: salesFunnelCampaigns.people,
       instruction: salesFunnelCampaigns.instruction,
+      brief: salesFunnelCampaigns.brief,
       githubIssue: salesFunnelCampaigns.githubIssue,
     })
     .from(salesFunnelCampaigns)
     .where(inArray(salesFunnelCampaigns.id, ids));
   for (const r of rows) {
-    out.set(r.id, { people: storedPeople(r.people), instruction: r.instruction ?? null, githubIssue: r.githubIssue ?? null });
+    out.set(r.id, { people: storedPeople(r.people), instruction: r.instruction ?? null, brief: r.brief ?? null, githubIssue: r.githubIssue ?? null });
   }
   return out;
 }
