@@ -65,11 +65,12 @@ export async function liveEngineFor(
     return null;
   }
   if (!engine) return null;
-  const key = `${engine.outcome}|${orgId}`;
+  // Per channel too: an Engine may hold scripts for one channel only (workflow-service answers per feature slug).
+  const key = `${engine.outcome}|${orgId}|${campaign.featureSlug ?? ""}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < ENGINE_STATE_CACHE_MS) return hit.live ? engine : null;
   try {
-    const res = await fetch(`${url}/internal/engines/${encodeURIComponent(engine.outcome)}?orgId=${encodeURIComponent(orgId)}`, {
+    const res = await fetch(`${url}/internal/engines/${encodeURIComponent(engine.outcome)}?orgId=${encodeURIComponent(orgId)}${campaign.featureSlug ? `&featureSlug=${encodeURIComponent(campaign.featureSlug)}` : ""}`, {
       headers: { "x-api-key": apiKey },
       signal: AbortSignal.timeout(10_000),
     });
@@ -126,7 +127,7 @@ export async function executeCampaignEngine(engine: CampaignEngine, inputs: Work
   const text = await res.text();
   if (!res.ok) {
     if (res.status === 409 && engineNotLive(text)) {
-      cache.set(`${engine.outcome}|${inputs.orgId}`, { live: false, at: Date.now() });
+      cache.set(`${engine.outcome}|${inputs.orgId}|${inputs.featureSlug ?? ""}`, { live: false, at: Date.now() });
       return null;
     }
     throw new WorkflowExecutionRefusedError({ workflowSlug: `engine:${engine.outcome}`, campaignId: inputs.campaignId, status: res.status, body: text });
