@@ -5,6 +5,7 @@ import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./on-demand-mode.js";
 import { answersATrigger, reactiveWake } from "./reactive-wake.js";
 import { executeCampaignWorkflow } from "./workflows.js";
+import { engineSelection, liveEngineFor } from "./engine-dispatch.js";
 import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { attributeRunPlay } from "./run-play-attribution.js";
 import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
@@ -268,7 +269,9 @@ export async function reRunDueCampaigns(): Promise<number> {
       // selection never blocks a run.
       try {
         const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
-        const selection = await resolveSelectionForTrigger({
+        // MIGRATE-1105 S0: a campaign whose Engine is live runs its stored script, no workflow selected (lib/engine-dispatch.ts).
+        const engine = await liveEngineFor(campaign, campaign.orgId);
+        const selection = engine ? engineSelection(campaign.workflowSlug) : await resolveSelectionForTrigger({
           featureSlug,
           primaryBrandId: campaign.brandIds![0],
           identity: {
@@ -346,7 +349,7 @@ export async function reRunDueCampaigns(): Promise<number> {
         let dispatchedSlug = selection.workflowSlug;
         let execution;
         try {
-          execution = await executeCampaignWorkflow(selection.workflowSlug, inputs);
+          execution = await (engine ? executeCampaignWorkflow(selection.workflowSlug, inputs, engine) : executeCampaignWorkflow(selection.workflowSlug, inputs));
         } catch (err) {
           // A deprecated workflow (410) is replaced once and never asked for again — see
           // retired-workflow.ts. Anything else (or no live successor) is a failed dispatch.
