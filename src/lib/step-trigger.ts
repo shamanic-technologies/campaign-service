@@ -130,7 +130,11 @@ export const STEP_TRIGGER_SKIPS = {
    * Every audience the grid lists for the campaign is freshly exhausted: a run would reach lead-service with nobody to serve, so none is dispatched.
    */
   NO_SERVEABLE_AUDIENCE: "no_serveable_audience",
-  /** features-service states the campaign's play allows no workflow yet: nothing may run. */
+  /**
+   * features-service states the campaign's play allows no workflow yet: nothing may run. A passing condition (a script's
+   * new version waiting for Jev): an event carrying a person or an item is retried while young
+   * (lib/trigger-person.ts `YOUNG_ONLY_RETRY_SKIPS`, UPGRADE-WINDOW-1105), never dropped on the first read.
+   */
   PLAY_ALLOWS_NO_WORKFLOW: "play_allows_no_workflow",
   /**
    * A campaign that NAMES its people (lib/sales-funnel-people.ts) and the event names a lead that is
