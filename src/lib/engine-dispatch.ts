@@ -6,11 +6,9 @@
  * One rule for every campaign, every outcome, proactive tick and reactive occurrence alike (never a branch on an
  * outcome, a channel or a client): the Engine of a campaign is the outcome its leg reaches (`<from>_to_<to>`), it is
  * dispatched when workflow-service says it is live for the org, and everything else goes exactly as before. Live:
- * no workflow is selected or run (the Engine's Rating picks the script; `/start-run` picks the audience as it does for
- * a run that supplies none), and the run's callbacks carry `x-engine-outcome`, never a workflow slug. Not live, or the
+ * the audience is picked as for any run, no workflow is run (the Engine's Rating picks the script), and the run's callbacks carry `x-engine-outcome`, never a workflow slug. Not live, or the
  * state cannot be read: the workflow path, byte for byte.
  */
-import type { TriggerSelection } from "./features-workflow-projection-client.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { catalogueLegOf } from "./leg-identity.js";
 import type { WorkflowExecution, WorkflowExecutionInputs } from "./workflows.js";
@@ -84,11 +82,6 @@ export async function liveEngineFor(
     console.warn(`[campaign-service] Engine state of ${engine.outcome} for org ${orgId} unreadable: its campaigns run their workflow:`, err);
     return null;
   }
-}
-
-/** A run dispatched to its Engine selects no workflow: `/start-run` picks the audience, the Engine its script. */
-export function engineSelection(storedWorkflowSlug: string | null | undefined): TriggerSelection {
-  return { workflowSlug: storedWorkflowSlug ?? "", audienceId: null, noServeableAudience: false };
 }
 
 /**

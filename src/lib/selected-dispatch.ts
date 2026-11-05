@@ -1,5 +1,5 @@
 import { executeCampaignWorkflow } from "./workflows.js";
-import { engineSelection, liveEngineFor } from "./engine-dispatch.js";
+import { liveEngineFor } from "./engine-dispatch.js";
 import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { attributeRunPlay } from "./run-play-attribution.js";
 import { eq } from "drizzle-orm";
@@ -82,9 +82,10 @@ export async function dispatchSelectedRun(
   const brandIds = campaign.brandIds ?? [];
   const brandIdCsv = brandIds.join(",");
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
-  // MIGRATE-1105 S0: a campaign whose Engine is live runs its stored script, no workflow selected (lib/engine-dispatch.ts).
+  // MIGRATE-1105 S0: a campaign whose Engine is live runs its stored script (lib/engine-dispatch.ts): the audience is
+      // still picked here, the workflow pick and its play hold are not used.
       const engine = await liveEngineFor(campaign, identity.orgId);
-      const selection = engine ? engineSelection(campaign.workflowSlug) : await resolveSelectionForTrigger({
+      const selection = await resolveSelectionForTrigger({
     featureSlug: campaign.featureSlug,
     primaryBrandId: brandIds[0],
     identity: {
@@ -101,7 +102,7 @@ export async function dispatchSelectedRun(
     campaignId: campaign.id,
     excludedAudienceIds,
   });
-  if (selection.playHold) {
+  if (selection.playHold && !engine) {
     // The campaign's play allows no workflow yet: parked, the scheduler holds it out loud.
     await db
       .update(campaigns)

@@ -29,7 +29,7 @@ An org whose card billing cannot charge stops every campaign.
 
 ### A campaign's ENGINE runs its stored script, no workflow (MIGRATE-1105 S0, owner 2026-11-05 « IL FAUT MIGRER »; `lib/engine-dispatch.ts`)
 
-- Every dispatch path (scheduler, step trigger, a person's start) asks `liveEngineFor(campaign, org)`: the Engine = the step the campaign's leg reaches, read off the catalogue (never parsed), live per workflow-service `GET /internal/engines/{outcome}?orgId=` (cached 60 s). Live = no workflow selected, `POST /engines/{outcome}/execute` (same identity, trigger, admission); 409 `engine_not_live`, a 404 state or an unreadable one = the workflow path byte for byte. One rule for every outcome: never a branch on an outcome, channel or client.
+- Every dispatch path (scheduler, step trigger, a person's start) asks `liveEngineFor(campaign, org)`: the Engine = the step the campaign's leg reaches, read off the catalogue (never parsed), live per workflow-service `GET /internal/engines/{outcome}?orgId=` (cached 60 s). Live = the audience is picked as for any run (the run serves it), the workflow pick and its play hold are ignored, `POST /engines/{outcome}/execute` (same identity, trigger, admission); 409 `engine_not_live`, a 404 state or an unreadable one = the workflow path byte for byte. One rule for every outcome: never a branch on an outcome, channel or client.
 - An Engine run's callbacks carry `x-engine-outcome` and no `x-workflow-slug`: `runWorkflowSlug` (middleware/auth.ts) answers null, so `/start-run` opens its run with NO workflow slug (never the campaign's stored one), gate-check and the audience read send none downstream. A workflow run is unchanged.
 
 ### One proactive ON per offer; reactive ON by default (owner 2026-10-05)
