@@ -447,7 +447,10 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       offerId: campaign.offerId ?? null,
       servicesOffered: campaign.servicesOffered ?? null,
       clickDestinationUrl: campaign.clickDestinationUrl ?? null,
-      // Free text the writer of this run's message must follow (null = none). The funnel campaign's.
+      // The funnel campaign's brief: the one text the client edits on the dashboard, read by EVERY LLM step of
+      // the run (ONE-BRIEF-1105; null = none, or not a funnel unit). Holds the former instruction too.
+      brief: targeting?.brief ?? null,
+      // LEGACY (ONE-BRIEF-1105): folded into `brief`, served until its last reader is gone, then removed.
       instruction: targeting?.instruction ?? null,
       // The exact people this campaign acts for ([{email, leadId}]; null = whoever its pipes serve).
       people: targeting?.people ?? null,

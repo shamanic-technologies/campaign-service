@@ -215,6 +215,8 @@ describe("a sales funnel campaign that names its people and carries an instructi
       })
       .expect(200);
     expect(run.body.instruction).toBe("edited");
+    // ONE-BRIEF-1105: every run carries the campaign's brief, which holds every instruction ever stated.
+    expect(run.body.brief).toBe("first\n\nedited");
     expect(run.body.people).toEqual([{ email: "marie@example.com", leadId: "lead-marie@example.com" }]);
   });
 
