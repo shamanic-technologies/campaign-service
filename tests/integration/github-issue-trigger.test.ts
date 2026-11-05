@@ -90,7 +90,7 @@ const plan = {
 const launch = (body: Record<string, unknown>) =>
   request(app).post("/sales-funnel-campaigns")
     .set("x-api-key", API_KEY).set("x-org-id", ORG).set("x-user-id", "user_copilot").set("x-run-id", crypto.randomUUID())
-    .send({ brandId: BRAND, offerId: OFFER, salesFunnelId: FUNNEL, status: "ongoing", people: [{ email: "staff@distribute.you" }], instruction: "Tell them the exact figure.", ...body });
+    .send({ brandId: BRAND, offerId: OFFER, salesFunnelId: FUNNEL, status: "ongoing", people: [{ email: "staff@distribute.you" }], brief: "Tell them the exact figure.", ...body });
 
 const ISSUE = { repo: "Shamanic-Technologies/Chat-Service", number: 42 };
 

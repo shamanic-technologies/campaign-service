@@ -146,7 +146,6 @@ export const CAMPAIGN_FIELD_LABELS: Record<string, FieldLabel> = {
 
 /** The fields a client edits on a sales funnel campaign. */
 export const SALES_FUNNEL_CAMPAIGN_FIELD_LABELS: Record<string, FieldLabel> = {
-  instruction: { label: "Instruction" },
   target: { label: "Target" },
   brief: { label: "Brief" },
   followsPlan: { label: "Follows its plan", format: yesNo },

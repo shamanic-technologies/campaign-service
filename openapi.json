@@ -483,10 +483,6 @@
               ]
             }
           },
-          "instruction": {
-            "type": "string",
-            "nullable": true
-          },
           "githubIssue": {
             "$ref": "#/components/schemas/GithubIssueRef"
           },
@@ -623,7 +619,6 @@
           "stopReason",
           "createdByUserId",
           "people",
-          "instruction",
           "githubIssue",
           "githubIssueCheck",
           "target",
@@ -744,11 +739,6 @@
             },
             "minItems": 1,
             "maxItems": 50
-          },
-          "instruction": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 4000
           },
           "githubIssue": {
             "$ref": "#/components/schemas/GithubIssueRef"
@@ -875,12 +865,6 @@
               "activate",
               "stop"
             ]
-          },
-          "instruction": {
-            "type": "string",
-            "nullable": true,
-            "minLength": 1,
-            "maxLength": 4000
           },
           "target": {
             "type": "string",
@@ -1614,10 +1598,6 @@
             "type": "string",
             "nullable": true
           },
-          "instruction": {
-            "type": "string",
-            "nullable": true
-          },
           "people": {
             "type": "array",
             "nullable": true,
@@ -1671,7 +1651,6 @@
           "servicesOffered",
           "clickDestinationUrl",
           "brief",
-          "instruction",
           "people",
           "reactive",
           "whatsappSenderPhone",
