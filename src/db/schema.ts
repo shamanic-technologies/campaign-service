@@ -273,8 +273,6 @@ export const salesFunnelCampaigns = pgTable(
     // The people's canonical identity (sorted lowercased emails joined by ","; '' = names nobody).
     // Part of the identity: the same funnel naming other people is another campaign.
     peopleKey: text("people_key").notNull().default(""),
-    // Free text every run of its units carries to the workflow (/start-run `instruction`). Editable.
-    instruction: text("instruction"),
     // The GitHub issue this campaign WAITS ON (migration 0068, lib/github-issue-trigger.ts): canonical
     // `owner/repo#number`; NULL = none. A unit answering the `github_issue_in_prod` kind runs only for
     // an event naming this issue. Part of the identity.
@@ -284,7 +282,7 @@ export const salesFunnelCampaigns = pgTable(
     // The OUTCOME it targets (migration 0081, lib/sales-funnel-target.ts): a catalogue step key, features-service's
     // vocabulary, carried verbatim. Born = the funnel's last step; settable by the org. NULL only until backfilled.
     target: text("target"),
-    // The strategy in plain language a judge reads to pick plays (NOT `instruction`, the writer's words). NULL = none.
+    // The campaign's ONE text (ONE-BRIEF-1105): the judge picking plays and every LLM step read it. NULL = none.
     brief: text("brief"),
     // When and by whom the brief was last edited (a judge re-judges after it). NULL = never stated.
     briefUpdatedAt: timestamp("brief_updated_at", { withTimezone: true }),

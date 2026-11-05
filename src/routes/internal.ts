@@ -10,7 +10,7 @@ import { targetingOfSalesFunnelCampaigns } from "../lib/sales-funnel-people-stor
 import { eq, and, sql, or, ne, isNotNull, gt, desc } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { brandPauseTransitions, campaigns, triggerEvents } from "../db/schema.js";
-import { requireApiKey, requirePipelineHeaders, serviceAuth, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
+import { requireApiKey, requirePipelineHeaders, runWorkflowSlug, serviceAuth, trackingHeaders, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
@@ -154,7 +154,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       runId: req.runId,
       brandId: resolvedBrandIds.join(","),
       brandIds: resolvedBrandIds,
-      workflowSlug: req.workflowSlug || campaign.workflowSlug || undefined,
+      workflowSlug: runWorkflowSlug(req, campaign.workflowSlug) ?? undefined,
       featureSlug: req.featureSlug || campaign.featureSlug || undefined,
       status: campaign.status,
       maxBudgetDailyUsd: campaign.maxBudgetDailyUsd,
@@ -274,8 +274,9 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     const parentRunId = req.runId;
     const brandIdCsv = campaign.brandIds!.join(",");
     const primaryBrandId = campaign.brandIds[0];
-    const workflowSlug = req.workflowSlug || campaign.workflowSlug;
-    if (!workflowSlug) {
+    const workflowSlug = runWorkflowSlug(req, campaign.workflowSlug);
+    // An Engine run (MIGRATE-1105 S0) runs a stored script: no workflow, and none stamped on the run opened here.
+    if (!workflowSlug && !req.engineOutcome) {
       // A campaign whose channel the CUSTOMER operates runs no DAG, so nothing should ever have
       // reached this route for it — the scheduler never claims it and never triggers it. Fail
       // loud rather than minting a slug or starting a run nothing can execute.
@@ -359,7 +360,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
           campaignId,
           identity: preRunIdentity,
         });
-        audienceId = selectAudienceFromProjection(projectionRows, workflowSlug, {
+        audienceId = selectAudienceFromProjection(projectionRows, workflowSlug ?? "", {
           excludedAudienceIds,
         });
       } catch (err) {
@@ -380,7 +381,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       brandId: brandIdCsv,
       userId: campaign.createdByUserId || undefined,
       parentRunId: parentRunId || undefined,
-      workflowSlug,
+      workflowSlug: workflowSlug ?? undefined,
       featureSlug,
       audienceId: audienceId ?? undefined,
     });
@@ -410,7 +411,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     }
 
     // A funnel unit carries what its funnel campaign NAMES (lib/sales-funnel-people.ts): the exact
-    // people it acts for and the instruction its message follows. Read at every run, so an edit is
+    // people it acts for and its brief. Read at every run, so an edit is
     // what the next run uses. A pre-funnel campaign makes no read and answers null for both.
     const targeting = campaign.salesFunnelCampaignId
       ? (await targetingOfSalesFunnelCampaigns([campaign.salesFunnelCampaignId])).get(campaign.salesFunnelCampaignId) ?? null
@@ -448,10 +449,8 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       servicesOffered: campaign.servicesOffered ?? null,
       clickDestinationUrl: campaign.clickDestinationUrl ?? null,
       // The funnel campaign's brief: the one text the client edits on the dashboard, read by EVERY LLM step of
-      // the run (ONE-BRIEF-1105; null = none, or not a funnel unit). Holds the former instruction too.
+      // the run (ONE-BRIEF-1105; null = none, or not a funnel unit). The former `instruction` is folded into it.
       brief: targeting?.brief ?? null,
-      // LEGACY (ONE-BRIEF-1105): folded into `brief`, served until its last reader is gone, then removed.
-      instruction: targeting?.instruction ?? null,
       // The exact people this campaign acts for ([{email, leadId}]; null = whoever its pipes serve).
       people: targeting?.people ?? null,
       reactive,
@@ -501,7 +500,7 @@ async function hasServeableAudience(
     runId: req.runId!,
     campaignId: campaign.id,
     brandId: primaryBrandId,
-    workflowSlug: req.workflowSlug || campaign.workflowSlug,
+    workflowSlug: runWorkflowSlug(req, campaign.workflowSlug),
     featureSlug,
   };
   // Same definition the resume sweep reads. The two must agree: the leg that stops a campaign

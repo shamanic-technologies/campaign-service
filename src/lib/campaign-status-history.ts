@@ -421,8 +421,6 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
   people?: Array<{ email: string; leadId: string | null }> | null;
   /** Their identity (lib/sales-funnel-people.ts `peopleKeyOf`); '' = names nobody. */
   peopleKey?: string;
-  /** Free text every run of its units carries to the workflow. */
-  instruction?: string | null;
   /** The GitHub issue it waits on (`owner/repo#n`, lib/github-issue-trigger.ts); null/absent = none. */
   githubIssue?: string | null;
   /** The outcome it targets, its brief (+ who stated it) and what it starts from (lib/sales-funnel-target.ts). */
@@ -453,7 +451,6 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
         parentRunId: input.parentRunId,
         people: input.people ?? null,
         peopleKey: input.peopleKey ?? "",
-        instruction: input.instruction ?? null,
         githubIssue: input.githubIssue ?? null,
         target: input.target ?? null,
         brief: input.brief ?? null,

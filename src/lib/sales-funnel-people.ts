@@ -21,8 +21,8 @@ import type { Campaign } from "../db/schema.js";
  *        flight, cohort busy) leaves a durable debt the unit's next run claims;
  *      * is never rationed against another campaign on a shared pipe (different people, no double
  *        answer to fear); an event naming a lead acts only for the campaign that names that lead.
- *  - INSTRUCTION (`instruction`): free text every run of its units carries to the workflow (/start-run
- *    answers it top-level), read at each run, so an edit is what the next message follows.
+ *  - What its messages say is its BRIEF (the campaign's ONE text, /start-run `brief`, ONE-BRIEF-1105), read at
+ *    each run, so an edit is what the next message follows. The former `instruction` is retired.
  *
  * Money is unchanged: a unit's money is its funnel's caps at billing; status is the caller's statement.
  */
@@ -64,8 +64,7 @@ export function storedPeople(value: unknown): NamedPerson[] | null {
 
 export interface SalesFunnelCampaignTargeting {
   people: NamedPerson[] | null;
-  instruction: string | null;
-  /** Its brief: the one text every LLM working for the campaign reads (ONE-BRIEF-1105, lib/campaign-brief.ts). */
+  /** Its brief: the one text every LLM working for the campaign reads (ONE-BRIEF-1105). */
   brief: string | null;
   /** The GitHub issue it waits on (`owner/repo#n`, lib/github-issue-trigger.ts), or null. */
   githubIssue: string | null;

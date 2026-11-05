@@ -610,6 +610,13 @@
       "when": 1781086400000,
       "tag": "0086_fold_instruction_into_brief",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1781186400000,
+      "tag": "0087_drop_sales_funnel_campaign_instruction",
+      "breakpoints": true
     }
   ]
 }

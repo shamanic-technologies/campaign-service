@@ -32,7 +32,7 @@ describe("sales funnel people (pure rules)", () => {
 
   it("a pre-funnel campaign names nobody", () => {
     expect(unitPeople({ salesFunnelCampaignId: null }, new Map())).toBeNull();
-    const t = new Map([["F", { people: [{ email: "a@x.com", leadId: null }], instruction: null }]]);
+    const t = new Map([["F", { people: [{ email: "a@x.com", leadId: null }], brief: null, githubIssue: null }]]);
     expect(unitPeople({ salesFunnelCampaignId: "F" }, t)).toEqual([{ email: "a@x.com", leadId: null }]);
   });
 });
