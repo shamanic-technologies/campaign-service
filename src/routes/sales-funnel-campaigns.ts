@@ -1,3 +1,4 @@
+import { foldInstructionIntoBrief } from "../lib/campaign-brief.js";
 import { adoptSalesFunnelUnitWorkflows, repairSalesFunnelUnitLegWorkflows } from "../lib/sales-funnel-unit-workflows.js";
 import { Router } from "express";
 import { z } from "zod";
@@ -82,8 +83,13 @@ function statedEdits(
   if (stated.followsPlan !== undefined && stated.followsPlan !== current.followsPlan) edits.followsPlan = stated.followsPlan;
   if (stated.instruction !== undefined && stated.instruction !== current.instruction) edits.instruction = stated.instruction;
   if (stated.target !== undefined && stated.target !== current.target) edits.target = stated.target;
-  if (stated.brief !== undefined && stated.brief !== current.brief) {
-    edits.brief = stated.brief;
+  // ONE-BRIEF-1105: a stated instruction lands in the brief too (the client sees and edits it there).
+  const brief =
+    stated.instruction != null
+      ? foldInstructionIntoBrief(stated.brief !== undefined ? stated.brief : current.brief, stated.instruction)
+      : stated.brief;
+  if (brief !== undefined && brief !== current.brief) {
+    edits.brief = brief;
     edits.briefUpdatedAt = new Date();
     edits.briefUpdatedByUserId = userId ?? null;
   }
@@ -320,7 +326,8 @@ router.post(
           githubIssue,
           // The outcome it targets: stated, else the funnel's last step (lib/sales-funnel-target.ts).
           target: target ?? plan.shape?.target ?? null,
-          brief: brief ?? null,
+          // ONE-BRIEF-1105: an instruction stated at birth is folded into the brief (lib/campaign-brief.ts).
+          brief: foldInstructionIntoBrief(brief, instruction),
           briefUpdatedByUserId: req.userId!,
           mode: plan.shape?.mode ?? null,
           triggerId: plan.shape?.triggerId ?? null,

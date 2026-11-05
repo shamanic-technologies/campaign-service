@@ -65,6 +65,8 @@ export function storedPeople(value: unknown): NamedPerson[] | null {
 export interface SalesFunnelCampaignTargeting {
   people: NamedPerson[] | null;
   instruction: string | null;
+  /** Its brief: the one text every LLM working for the campaign reads (ONE-BRIEF-1105, lib/campaign-brief.ts). */
+  brief: string | null;
   /** The GitHub issue it waits on (`owner/repo#n`, lib/github-issue-trigger.ts), or null. */
   githubIssue: string | null;
 }

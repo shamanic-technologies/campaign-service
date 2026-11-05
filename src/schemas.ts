@@ -221,8 +221,9 @@ export const StoppedCampaignSchema = z.object({
 
 /** The longest instruction a funnel campaign carries (it rides every run into a writer's prompt). */
 export const MAX_INSTRUCTION_LENGTH = 4000;
-// A funnel campaign's brief (lib/sales-funnel-target.ts): the strategy in plain language a judge reads.
-export const MAX_BRIEF_LENGTH = 8000;
+// A funnel campaign's brief (lib/sales-funnel-target.ts): its one text, read by the judge and every LLM step.
+// Room for a full brief + a folded instruction (ONE-BRIEF-1105), so a folded brief stays editable as is.
+export const MAX_BRIEF_LENGTH = 8000 + MAX_INSTRUCTION_LENGTH;
 // What `target` accepts is a LIVE vocabulary (lib/target-step-vocabulary.ts): the doc names the read validation makes.
 export const TargetStepSchema = z.string().trim().min(1, "target must name a step (omit it to keep the sales funnel's last step)").max(200)
   .openapi({ description: TARGET_STEP_DESCRIPTION, example: "paid_client" });
@@ -259,7 +260,7 @@ export const CreateSalesFunnelCampaignBody = z.object({
     email: z.string().trim().email("people[].email must be an email address"),
   }).strict()).min(1, "people must name at least one person (omit it to name nobody)")
     .max(MAX_NAMED_PEOPLE, `people names at most ${MAX_NAMED_PEOPLE} people`).optional(),
-  // OPTIONAL: free text every run of its units carries to the workflow (/start-run `instruction`).
+  // LEGACY (ONE-BRIEF-1105): folded into `brief` (appended as its own paragraph); state the brief instead.
   instruction: z.string().trim().min(1, "instruction must not be empty (omit it)").max(MAX_INSTRUCTION_LENGTH).optional(),
   // OPTIONAL (lib/github-issue-trigger.ts): the GitHub issue this campaign WAITS ON. Its units answering a
   // `github_issue_in_prod` trigger run once this issue is in prod (closed as completed by a merge to the
@@ -270,7 +271,8 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // Unknown step = 400 unknown_target_step.
   target: TargetStepSchema.optional(),
   // OPTIONAL: its strategy in plain language ("Cold email only, never write to someone who asked to stop, test for
-  // 30 days"), read by the judge that picks plays. NOT `instruction` (the words the writer's messages follow).
+  // 30 days"). The ONE text of the campaign: the judge that picks plays AND every LLM step of every run read it
+  // (/start-run `brief`, ONE-BRIEF-1105).
   brief: z.string().trim().min(1, "brief must not be empty (omit it)").max(MAX_BRIEF_LENGTH).optional(),
   // OPTIONAL (lib/sales-funnel-plan.ts, FACTORY-P1-FOLLOW-PLAN): true = it runs the pipes and plays of the plan
   // features-service computes for it (best line to its target) and follows each plan change; false/omitted = it runs
@@ -542,8 +544,11 @@ export const StartRunResponse = z.object({
   offerId: z.string().nullable(),
   servicesOffered: z.array(z.string()).nullable(),
   clickDestinationUrl: z.string().nullable(),
-  // A sales funnel unit: the free text its funnel campaign tells the writer of this run's message to
-  // follow (read at every run, so an edit is used by the next run). null = none / not a funnel unit.
+  // A sales funnel unit: its funnel campaign's BRIEF, the one text the client edits on the dashboard. EVERY
+  // LLM step of the run reads it (ONE-BRIEF-1105; read at every run, so an edit is used by the next run).
+  // null = none / not a funnel unit.
+  brief: z.string().nullable(),
+  // LEGACY (ONE-BRIEF-1105): already folded into `brief`; served until its last reader is gone, then removed.
   instruction: z.string().nullable(),
   // A sales funnel unit whose campaign NAMES its people: exactly them ([{email, leadId}]; leadId null =
   // not filed at lead-service yet). null = whoever the campaign's pipes serve.
