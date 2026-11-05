@@ -97,7 +97,14 @@ export const OWED_UNTIL_ROOM_SKIPS: ReadonlySet<string> = new Set([
  * occurrences lost in 7 days to one timeout, a WhatsApp number given among them). A definitive refusal
  * (`followup_unavailable`, `person_suppressed`...) is never here: final on the first try.
  */
-export const YOUNG_ONLY_RETRY_SKIPS: ReadonlySet<string> = new Set(["person_not_known", LEAD_SERVICE_UNAVAILABLE]);
+export const YOUNG_ONLY_RETRY_SKIPS: ReadonlySet<string> = new Set([
+  "person_not_known",
+  LEAD_SERVICE_UNAVAILABLE,
+  // The play allows no workflow RIGHT NOW (UPGRADE-WINDOW-1105): Jev judges a script's new version a few minutes after
+  // its upgrade, and the scheduler already holds on this (`campaign-hold`). Prod 2026-11-05 17:45: a Lead event of James
+  // Barnett landed while the ai-follow-up-email dynasties were being judged and was closed skipped, never answered.
+  "play_allows_no_workflow",
+]);
 
 /**
  * The skips that make an event naming a person RETRY rather than record: every money / pacing hold

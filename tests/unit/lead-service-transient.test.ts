@@ -58,4 +58,10 @@ describe("lead-service not answering vs refusing (filing / making due)", () => {
     expect(OWED_UNTIL_ROOM_SKIPS.has(STEP_TRIGGER_SKIPS.LEAD_SERVICE_UNAVAILABLE)).toBe(false);
     expect(PERSON_EVENT_RETRY_SKIPS.has(STEP_TRIGGER_SKIPS.FOLLOWUP_UNAVAILABLE)).toBe(false);
   });
+
+  it("UPGRADE-WINDOW-1105: a play allowing no workflow yet is retried while young, never owed forever", () => {
+    expect(PERSON_EVENT_RETRY_SKIPS.has(STEP_TRIGGER_SKIPS.PLAY_ALLOWS_NO_WORKFLOW)).toBe(true);
+    expect(YOUNG_ONLY_RETRY_SKIPS.has(STEP_TRIGGER_SKIPS.PLAY_ALLOWS_NO_WORKFLOW)).toBe(true);
+    expect(OWED_UNTIL_ROOM_SKIPS.has(STEP_TRIGGER_SKIPS.PLAY_ALLOWS_NO_WORKFLOW)).toBe(false);
+  });
 });
