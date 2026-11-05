@@ -5,7 +5,7 @@ import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./on-demand-mode.js";
 import { answersATrigger, reactiveWake } from "./reactive-wake.js";
 import { executeCampaignWorkflow } from "./workflows.js";
-import { engineSelection, liveEngineFor } from "./engine-dispatch.js";
+import { liveEngineFor } from "./engine-dispatch.js";
 import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { attributeRunPlay } from "./run-play-attribution.js";
 import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
@@ -269,9 +269,10 @@ export async function reRunDueCampaigns(): Promise<number> {
       // selection never blocks a run.
       try {
         const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
-        // MIGRATE-1105 S0: a campaign whose Engine is live runs its stored script, no workflow selected (lib/engine-dispatch.ts).
+        // MIGRATE-1105 S0: a campaign whose Engine is live runs its stored script (lib/engine-dispatch.ts): the audience is
+      // still picked here, the workflow pick and its play hold are not used.
         const engine = await liveEngineFor(campaign, campaign.orgId);
-        const selection = engine ? engineSelection(campaign.workflowSlug) : await resolveSelectionForTrigger({
+        const selection = await resolveSelectionForTrigger({
           featureSlug,
           primaryBrandId: campaign.brandIds![0],
           identity: {
@@ -298,7 +299,7 @@ export async function reRunDueCampaigns(): Promise<number> {
         // cadence and SAID, never run; status untouched.
         // features-service states the campaign's play allows no workflow: held, never run on the
         // configured workflow (that is not what the client asked for). Status untouched.
-        if (selection.playHold) {
+        if (selection.playHold && !engine) {
           const nextRunAt = new Date(now.getTime() + PLAY_NO_WORKFLOW_RECHECK_MS);
           await db
             .update(campaigns)

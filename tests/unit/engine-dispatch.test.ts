@@ -13,7 +13,7 @@ vi.mock("../../src/lib/channel-operator-client.js", async (importOriginal) => ({
   fetchChannelCatalogue: vi.fn(async () => catalogueRead),
 }));
 const actual = await vi.importActual<typeof import("../../src/lib/engine-dispatch.js")>("../../src/lib/engine-dispatch.js");
-const { engineOfLeg, liveEngineFor, executeCampaignEngine, engineSelection, resetEngineStateCache } = actual;
+const { engineOfLeg, liveEngineFor, executeCampaignEngine, resetEngineStateCache } = actual;
 
 const inputs = {
   campaignId: "camp-1",
@@ -65,9 +65,6 @@ describe("the Engine of a campaign", () => {
     expect(await liveEngineFor({ featureSlug: "x", legKey: null }, "org-1")).toBeNull();
   });
 
-  it("selects no workflow: the audience is /start-run's and the script the Engine's", () => {
-    expect(engineSelection("sales-x")).toEqual({ workflowSlug: "sales-x", audienceId: null, noServeableAudience: false });
-  });
 });
 
 describe("dispatching the Engine", () => {

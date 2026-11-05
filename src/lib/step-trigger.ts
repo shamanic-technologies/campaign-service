@@ -10,7 +10,7 @@ import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { attributeRunPlay, playRationKeys } from "./run-play-attribution.js";
 import { executeCampaignWorkflow, type WorkflowTriggerInput } from "./workflows.js";
-import { engineSelection, liveEngineFor } from "./engine-dispatch.js";
+import { liveEngineFor } from "./engine-dispatch.js";
 import { isRunInFlightRefusal } from "./workflow-refusal.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import {
@@ -565,9 +565,10 @@ export async function runCampaignsInScope(
       // Same cell pick as the scheduled path — the audience first, then the cheapest workflow in
       // its column — so an event-triggered run lands on the same grid cell a due one would.
       const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
-      // MIGRATE-1105 S0: a campaign whose Engine is live runs its stored script, no workflow selected (lib/engine-dispatch.ts).
+      // MIGRATE-1105 S0: a campaign whose Engine is live runs its stored script (lib/engine-dispatch.ts): the audience is
+      // still picked here, the workflow pick and its play hold are not used.
       const engine = await liveEngineFor(campaign, req.orgId);
-      const selection = engine ? engineSelection(campaign.workflowSlug) : await resolveSelectionForTrigger({
+      const selection = await resolveSelectionForTrigger({
         featureSlug: campaign.featureSlug,
         primaryBrandId: brandIds[0],
         identity: {
@@ -587,7 +588,7 @@ export async function runCampaignsInScope(
         campaignId: campaign.id,
         excludedAudienceIds,
       });
-      if (selection.playHold) {
+      if (selection.playHold && !engine) {
         skip(STEP_TRIGGER_SKIPS.PLAY_ALLOWS_NO_WORKFLOW, selection.playHold.detail);
         continue;
       }
