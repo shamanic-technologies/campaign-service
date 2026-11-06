@@ -6,8 +6,13 @@
  * One rule for every campaign, every outcome, proactive tick and reactive occurrence alike (never a branch on an
  * outcome, a channel or a client): the Engine of a campaign is the outcome its leg reaches (`<from>_to_<to>`), it is
  * dispatched when workflow-service says it is live for the org, and everything else goes exactly as before. Live:
- * the audience is picked as for any run, no workflow is run (the Engine's Rating picks the script), and the run's callbacks carry `x-engine-outcome`, never a workflow slug. Not live, or the
- * state cannot be read: the workflow path, byte for byte.
+ * the audience is picked as for any run, no workflow is run (the Engine's Rating picks the script), and the run's callbacks carry `x-engine-outcome`, never a workflow slug. Not live: the
+ * workflow path, byte for byte.
+ *
+ * MIGRATE-1105 S2-FALLBACK (prod 2026-11-06: Doc Dinners ran the retired cold email workflow twice on a 10 s
+ * timeout of this read): a state that cannot be read is NEVER read as "not live". The last answer read within
+ * `ENGINE_STATE_STALE_MAX_MS` is served (loud); none = `EngineStateUnreadableError`, and the dispatcher holds this
+ * run (`engine_state_unreadable`, retried on `ENGINE_STATE_RECHECK_MS`), never the old workflow.
  */
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
 import { catalogueLegOf } from "./leg-identity.js";
@@ -25,6 +30,18 @@ export interface CampaignEngine {
 export const START_OUTCOME = "start";
 /** A minute: how long an Engine state read (and the catalogue it is keyed on) is reused. */
 export const ENGINE_STATE_CACHE_MS = 60_000;
+/** An hour: how long the last good answer stands in for a read that failed (served loud). */
+export const ENGINE_STATE_STALE_MAX_MS = 60 * 60_000;
+/** A minute: when a run held on an unreadable Engine state is tried again. */
+export const ENGINE_STATE_RECHECK_MS = 60_000;
+
+/** The Engine state (or the catalogue it is keyed on) could not be read and no recent answer stands in: hold the run. */
+export class EngineStateUnreadableError extends Error {
+  constructor(readonly detail: string) {
+    super(`Engine state unreadable: ${detail}`);
+    this.name = "EngineStateUnreadableError";
+  }
+}
 
 /** PURE: the Engine a leg reaches, read off the steps the catalogue publishes beside it (a leg is never parsed). */
 export function engineOfLeg(catalogue: ChannelCatalogueRead, featureSlug: string | null | undefined, legKey: string | null | undefined): CampaignEngine | null {
@@ -43,12 +60,29 @@ export function resetEngineStateCache(): void {
 
 async function catalogue(): Promise<ChannelCatalogueRead> {
   if (catalogueCache && Date.now() - catalogueCache.at < ENGINE_STATE_CACHE_MS) return catalogueCache.read;
-  const read = await fetchChannelCatalogue();
-  if (read.ok) catalogueCache = { read, at: Date.now() };
-  return read;
+  let detail: string;
+  try {
+    const read = await fetchChannelCatalogue();
+    if (read.ok) {
+      catalogueCache = { read, at: Date.now() };
+      return read;
+    }
+    detail = read.detail;
+  } catch (err) {
+    detail = err instanceof Error ? err.message : String(err);
+  }
+  if (catalogueCache && Date.now() - catalogueCache.at < ENGINE_STATE_STALE_MAX_MS) {
+    console.error(`[campaign-service] catalogue unreadable (${detail}): the Engine of each campaign is read off the last catalogue read`);
+    return catalogueCache.read;
+  }
+  throw new EngineStateUnreadableError(`catalogue unreadable (${detail})`);
 }
 
-/** The campaign's Engine when it runs this org's campaigns; null = run its workflow as before. Never throws. */
+/**
+ * The campaign's Engine when it runs this org's campaigns; null = run its workflow as before. Throws
+ * `EngineStateUnreadableError` when the state cannot be read and no answer of the last hour stands in: the caller
+ * holds the run, never runs the workflow on a guess.
+ */
 export async function liveEngineFor(
   campaign: { featureSlug?: string | null; legKey?: string | null },
   orgId: string,
@@ -57,32 +91,34 @@ export async function liveEngineFor(
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
   if (!url || !apiKey) return null;
-  let engine: CampaignEngine | null;
-  try {
-    engine = engineOfLeg(await catalogue(), campaign.featureSlug, campaign.legKey);
-  } catch (err) {
-    console.warn("[campaign-service] catalogue unreadable, campaigns run their workflow:", err);
-    return null;
-  }
+  const engine = engineOfLeg(await catalogue(), campaign.featureSlug, campaign.legKey);
   if (!engine) return null;
   // Per channel too: an Engine may hold scripts for one channel only (workflow-service answers per feature slug).
   const key = `${engine.outcome}|${orgId}|${campaign.featureSlug ?? ""}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < ENGINE_STATE_CACHE_MS) return hit.live ? engine : null;
+  let detail: string;
   try {
     const res = await fetch(`${url}/internal/engines/${encodeURIComponent(engine.outcome)}?orgId=${encodeURIComponent(orgId)}${campaign.featureSlug ? `&featureSlug=${encodeURIComponent(campaign.featureSlug)}` : ""}`, {
       headers: { "x-api-key": apiKey },
       signal: AbortSignal.timeout(10_000),
     });
-    // 404 = workflow-service serves no Engine state yet: not live.
-    const live = res.ok ? ((await res.json()) as { live?: unknown }).live === true : false;
-    if (!res.ok && res.status !== 404) console.warn(`[campaign-service] Engine state of ${engine.outcome} for org ${orgId} unreadable (${res.status}): its campaigns run their workflow`);
-    cache.set(key, { live, at: Date.now() });
-    return live ? engine : null;
+    // 404 = workflow-service serves no Engine state yet: not live (an answer, not an outage).
+    if (res.ok || res.status === 404) {
+      const live = res.ok ? ((await res.json()) as { live?: unknown }).live === true : false;
+      cache.set(key, { live, at: Date.now() });
+      return live ? engine : null;
+    }
+    detail = `HTTP ${res.status}`;
   } catch (err) {
-    console.warn(`[campaign-service] Engine state of ${engine.outcome} for org ${orgId} unreadable: its campaigns run their workflow:`, err);
-    return null;
+    detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
   }
+  if (hit && Date.now() - hit.at < ENGINE_STATE_STALE_MAX_MS) {
+    console.error(`[campaign-service] Engine state of ${engine.outcome} for org ${orgId} unreadable (${detail}): its last answer (${hit.live ? "live" : "not live"}, ${Math.round((Date.now() - hit.at) / 1000)}s old) stands`);
+    return hit.live ? engine : null;
+  }
+  console.error(`[campaign-service] Engine state of ${engine.outcome} for org ${orgId} unreadable (${detail}): this run is held, never run on its workflow`);
+  throw new EngineStateUnreadableError(`Engine state of ${engine.outcome} for org ${orgId} unreadable (${detail})`);
 }
 
 /**

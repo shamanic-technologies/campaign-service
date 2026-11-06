@@ -13,7 +13,8 @@ vi.mock("../../src/lib/channel-operator-client.js", async (importOriginal) => ({
   fetchChannelCatalogue: vi.fn(async () => catalogueRead),
 }));
 const actual = await vi.importActual<typeof import("../../src/lib/engine-dispatch.js")>("../../src/lib/engine-dispatch.js");
-const { engineOfLeg, liveEngineFor, executeCampaignEngine, resetEngineStateCache } = actual;
+const { engineOfLeg, liveEngineFor, executeCampaignEngine, resetEngineStateCache, EngineStateUnreadableError, ENGINE_STATE_CACHE_MS, ENGINE_STATE_STALE_MAX_MS } = actual;
+const { fetchChannelCatalogue } = await import("../../src/lib/channel-operator-client.js");
 
 const inputs = {
   campaignId: "camp-1",
@@ -59,14 +60,40 @@ describe("the Engine of a campaign", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("runs the workflow when the Engine is not live, unknown, or its state unreadable", async () => {
+  it("runs the workflow when the Engine is not live or unknown", async () => {
     fetchMock.mockResolvedValueOnce(json(200, { live: false }));
     expect(await liveEngineFor({ featureSlug: "lead-sourcing", legKey: "start_to_lead_found" }, "org-1")).toBeNull();
     fetchMock.mockResolvedValueOnce(json(404, { error: "Not found" }));
     expect(await liveEngineFor({ featureSlug: "x", legKey: "lead_found_to_conversation" }, "org-1")).toBeNull();
-    fetchMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));
-    expect(await liveEngineFor({ featureSlug: "x", legKey: "conversation_to_meeting_booked" }, "org-1")).toBeNull();
     expect(await liveEngineFor({ featureSlug: "x", legKey: null }, "org-1")).toBeNull();
+  });
+
+  // MIGRATE-1105 S2-FALLBACK (prod 2026-11-06, Doc Dinners): a 10 s timeout of this read ran the retired workflow twice.
+  it("never reads an unreadable state as not live: it throws, so the dispatcher holds the run", async () => {
+    // The catalogue the Engine is keyed on, first read (nothing to stand in).
+    vi.mocked(fetchChannelCatalogue).mockResolvedValueOnce({ ok: false, detail: "HTTP 502" } as never);
+    await expect(liveEngineFor({ featureSlug: "x", legKey: "conversation_to_meeting_booked" }, "org-1")).rejects.toThrow(/catalogue unreadable/);
+    fetchMock.mockRejectedValueOnce(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }));
+    await expect(liveEngineFor({ featureSlug: "x", legKey: "conversation_to_meeting_booked" }, "org-1")).rejects.toBeInstanceOf(EngineStateUnreadableError);
+    fetchMock.mockResolvedValueOnce(json(503, { error: "down" }));
+    await expect(liveEngineFor({ featureSlug: "x", legKey: "conversation_to_meeting_booked" }, "org-1")).rejects.toThrow(/HTTP 503/);
+  });
+
+  it("serves the last answer of the hour while the read fails, then holds", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      fetchMock.mockResolvedValueOnce(json(200, { live: true }));
+      const campaign = { featureSlug: "x", legKey: "lead_found_to_conversation" };
+      expect(await liveEngineFor(campaign, "org-1")).toEqual({ fromOutcome: "lead_found", outcome: "conversation" });
+      vi.setSystemTime(Date.now() + ENGINE_STATE_CACHE_MS + 1);
+      fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+      expect(await liveEngineFor(campaign, "org-1")).toEqual({ fromOutcome: "lead_found", outcome: "conversation" });
+      vi.setSystemTime(Date.now() + ENGINE_STATE_STALE_MAX_MS);
+      fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+      await expect(liveEngineFor(campaign, "org-1")).rejects.toBeInstanceOf(EngineStateUnreadableError);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
 });

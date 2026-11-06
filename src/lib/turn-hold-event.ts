@@ -45,7 +45,12 @@ export type TurnHoldReason =
    * features-service states the campaign's PLAY (pipe x strategy) allows no workflow yet: held,
    * never run on the configured workflow (lib/features-workflow-projection-client.ts `playHold`).
    */
-  | "play_allows_no_workflow";
+  | "play_allows_no_workflow"
+  /**
+   * workflow-service could not say whether the campaign's Engine runs it (MIGRATE-1105 S2-FALLBACK): held, never run
+   * on its old workflow on a guess (lib/engine-dispatch.ts `EngineStateUnreadableError`).
+   */
+  | "engine_state_unreadable";
 
 /** The campaign fields an event needs to be attributable. A structural subset of a claimed row. */
 export interface TurnHoldCampaign {
@@ -75,7 +80,7 @@ export interface TurnHold {
  * threw, is a genuine fault and is the one class this repo reserves `warn` for.
  */
 function levelFor(reason: TurnHoldReason): "info" | "warn" {
-  return reason === "budgets_unreadable" || reason === "planning_failed" ? "warn" : "info";
+  return reason === "budgets_unreadable" || reason === "planning_failed" || reason === "engine_state_unreadable" ? "warn" : "info";
 }
 
 /**
