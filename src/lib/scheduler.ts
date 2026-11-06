@@ -5,7 +5,7 @@ import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./on-demand-mode.js";
 import { answersATrigger, reactiveWake } from "./reactive-wake.js";
 import { executeCampaignWorkflow } from "./workflows.js";
-import { liveEngineFor } from "./engine-dispatch.js";
+import { ENGINE_STATE_RECHECK_MS, EngineStateUnreadableError, liveEngineFor } from "./engine-dispatch.js";
 import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { attributeRunPlay } from "./run-play-attribution.js";
 import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
@@ -271,7 +271,25 @@ export async function reRunDueCampaigns(): Promise<number> {
         const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
         // MIGRATE-1105 S0: a campaign whose Engine is live runs its stored script (lib/engine-dispatch.ts): the audience is
       // still picked here, the workflow pick and its play hold are not used.
-        const engine = await liveEngineFor(campaign, campaign.orgId);
+        // Unreadable = held and said, never the old workflow on a guess (MIGRATE-1105 S2-FALLBACK).
+        let engine;
+        try {
+          engine = await liveEngineFor(campaign, campaign.orgId);
+        } catch (err) {
+          if (!(err instanceof EngineStateUnreadableError)) throw err;
+          const nextRunAt = new Date(now.getTime() + ENGINE_STATE_RECHECK_MS);
+          await db
+            .update(campaigns)
+            .set({ nextRunAt, updatedAt: new Date() })
+            .where(eq(campaigns.id, campaign.id));
+          await reportTurnHolds([{
+            campaign,
+            reason: "engine_state_unreadable",
+            detail: `Campaign ${campaign.id} is held: ${err.detail}, so it is not known whether its Engine or its workflow runs it. It is looked at again at ${nextRunAt.toISOString()}.`,
+            nextRunAt,
+          }]);
+          continue;
+        }
         const selection = await resolveSelectionForTrigger({
           featureSlug,
           primaryBrandId: campaign.brandIds![0],

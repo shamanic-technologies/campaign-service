@@ -10,7 +10,7 @@ import { getFreshExhaustedAudienceIds } from "./audience-exhaustion.js";
 import { resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { attributeRunPlay, playRationKeys } from "./run-play-attribution.js";
 import { executeCampaignWorkflow, type WorkflowTriggerInput } from "./workflows.js";
-import { liveEngineFor } from "./engine-dispatch.js";
+import { EngineStateUnreadableError, liveEngineFor } from "./engine-dispatch.js";
 import { isRunInFlightRefusal } from "./workflow-refusal.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import {
@@ -137,6 +137,12 @@ export const STEP_TRIGGER_SKIPS = {
    * (lib/trigger-person.ts `YOUNG_ONLY_RETRY_SKIPS`, UPGRADE-WINDOW-1105), never dropped on the first read.
    */
   PLAY_ALLOWS_NO_WORKFLOW: "play_allows_no_workflow",
+  /**
+   * workflow-service could not say whether the campaign's Engine runs it (timeout, outage) and no answer of the last
+   * hour stands in: nothing dispatched, never the old workflow on a guess (MIGRATE-1105 S2-FALLBACK). A passing
+   * condition: an event carrying a person or an item is owed (lib/trigger-person.ts `OWED_UNTIL_ROOM_SKIPS`).
+   */
+  ENGINE_STATE_UNREADABLE: "engine_state_unreadable",
   /**
    * A campaign that NAMES its people (lib/sales-funnel-people.ts) and the event names a lead that is
    * not one of them: the event is about somebody else.
@@ -567,7 +573,15 @@ export async function runCampaignsInScope(
       const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
       // MIGRATE-1105 S0: a campaign whose Engine is live runs its stored script (lib/engine-dispatch.ts): the audience is
       // still picked here, the workflow pick and its play hold are not used.
-      const engine = await liveEngineFor(campaign, req.orgId);
+      // Unreadable = owed and retried, never the old workflow on a guess (MIGRATE-1105 S2-FALLBACK).
+      let engine;
+      try {
+        engine = await liveEngineFor(campaign, req.orgId);
+      } catch (err) {
+        if (!(err instanceof EngineStateUnreadableError)) throw err;
+        skip(STEP_TRIGGER_SKIPS.ENGINE_STATE_UNREADABLE, err.detail);
+        continue;
+      }
       const selection = await resolveSelectionForTrigger({
         featureSlug: campaign.featureSlug,
         primaryBrandId: brandIds[0],

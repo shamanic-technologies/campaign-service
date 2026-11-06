@@ -1,5 +1,5 @@
 import { executeCampaignWorkflow } from "./workflows.js";
-import { liveEngineFor } from "./engine-dispatch.js";
+import { ENGINE_STATE_RECHECK_MS, EngineStateUnreadableError, liveEngineFor } from "./engine-dispatch.js";
 import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { attributeRunPlay } from "./run-play-attribution.js";
 import { eq } from "drizzle-orm";
@@ -83,9 +83,20 @@ export async function dispatchSelectedRun(
   const brandIdCsv = brandIds.join(",");
   const excludedAudienceIds = await getFreshExhaustedAudienceIds(campaign.id);
   // MIGRATE-1105 S0: a campaign whose Engine is live runs its stored script (lib/engine-dispatch.ts): the audience is
-      // still picked here, the workflow pick and its play hold are not used.
-      const engine = await liveEngineFor(campaign, identity.orgId);
-      const selection = await resolveSelectionForTrigger({
+  // still picked here, the workflow pick and its play hold are not used.
+  // Unreadable = parked a minute (the scheduler takes it from there), never the old workflow (MIGRATE-1105 S2-FALLBACK).
+  let engine;
+  try {
+    engine = await liveEngineFor(campaign, identity.orgId);
+  } catch (err) {
+    if (!(err instanceof EngineStateUnreadableError)) throw err;
+    await db
+      .update(campaigns)
+      .set({ nextRunAt: new Date(Date.now() + ENGINE_STATE_RECHECK_MS), updatedAt: new Date() })
+      .where(eq(campaigns.id, campaign.id));
+    return null;
+  }
+  const selection = await resolveSelectionForTrigger({
     featureSlug: campaign.featureSlug,
     primaryBrandId: brandIds[0],
     identity: {
