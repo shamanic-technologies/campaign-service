@@ -26,6 +26,13 @@ export interface CampaignEngine {
   fromOutcome: string;
 }
 
+/**
+ * MIGRATE-1105 S0b: the workflow slug a unit STORES when no workflow runs its pipe and its Engine does (a play its strategy
+ * keeps a script for, no workflow allowed): the Engine's name, never a workflow's. Every dispatch runs the Engine
+ * (`liveEngineFor` first); were the Engine switched off, the workflow path refuses this slug loudly (no such workflow).
+ */
+export const engineUnitWorkflowSlug = (outcome: string): string => `engine:${outcome}`;
+
 /** The step a proactive leg starts from (the catalogue states none). */
 export const START_OUTCOME = "start";
 /** A minute: how long an Engine state read (and the catalogue it is keyed on) is reused. */

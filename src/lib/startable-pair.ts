@@ -9,6 +9,7 @@ import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source
 import { fetchPipe, fetchSalesFunnel, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
 import { fetchOfferSteps, missingOfferSteps } from "./sales-funnel-offer-steps.js";
 import { unitRunsOnTrigger } from "./sales-funnel-head-trigger.js";
+import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "./engine-dispatch.js";
 
 /**
  * CAN THE CUSTOMER START THE CAMPAIGN FOR THIS (OFFER, LEG, CHANNEL)?
@@ -266,6 +267,7 @@ export async function resolveSalesFunnelPlan(
     pipe?: typeof fetchPipe;
     catalogue?: () => Promise<ChannelCatalogueRead>;
     workflow?: typeof fetchLegSeedWorkflowSlug;
+    engine?: typeof liveEngineFor;
   } = {},
 ): Promise<{ ok: true; plan: SalesFunnelPlan } | { ok: false; refusal: SalesFunnelRefusal }> {
   const refuseLaunch = (status: SalesFunnelRefusal["status"], code: SalesFunnelRefusal["code"], message: string) =>
@@ -386,7 +388,24 @@ export async function resolveSalesFunnelPlan(
       },
       { pacedBySalesFunnelCaps: true },
     );
-    if (!workflow.ok) {
+    // MIGRATE-1105 S0b (owner 2026-11-06, Doc Dinners refused `no_workflow` on « Contacted pure prospects »): a pipe no
+    // workflow runs is run by its ENGINE when features-service says a script of it runs the pipe (the play's strategy
+    // keeps one, or the bare pipe is runnable) AND workflow-service says that Engine runs this org's campaigns of this
+    // channel. The unit is born on the Engine (`engineUnitWorkflowSlug`); one rule for every pipe, never a slug.
+    let engineSlug: string | null = null;
+    if (!workflow.ok && workflow.code === "no_workflow") {
+      const scriptRuns = play ? (play.keptScriptDynasties?.length ?? 0) > 0 : pipe.value.runnable === true;
+      if (scriptRuns) {
+        try {
+          const engine = await (deps.engine ?? liveEngineFor)({ featureSlug: channelSlug, legKey: storedLegKey(channelSlug, legKey) }, identity.orgId);
+          if (engine) engineSlug = engineUnitWorkflowSlug(engine.outcome);
+        } catch (err) {
+          if (!(err instanceof EngineStateUnreadableError)) throw err;
+          return refuseLaunch(502, "workflow_unavailable", "We couldn't work out how to run this sales funnel just now. Please try again in a minute.");
+        }
+      }
+    }
+    if (!workflow.ok && engineSlug === null) {
       const label = name ?? pipeId;
       if (workflow.code === "workflow_unavailable") {
         return refuseLaunch(502, "workflow_unavailable", "We couldn't work out how to run this sales funnel just now. Please try again in a minute.");
@@ -417,7 +436,7 @@ export async function resolveSalesFunnelPlan(
       featureSlug: channelSlug,
       legKey: storedLegKey(channelSlug, legKey),
       mode,
-      workflowSlug: workflow.workflowSlug,
+      workflowSlug: engineSlug ?? (workflow.ok ? workflow.workflowSlug : null),
       // A funnel HEADED by a trigger (FUNNEL-HEAD-TRIGGER-1015): its head unit and proactive pipes run on that
       // trigger only. The funnel's head = its first leg's pipe, as the catalogue lists it.
       runsOnTriggerId: unitRunsOnTrigger(
