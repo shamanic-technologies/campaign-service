@@ -88,6 +88,8 @@ export const OWED_UNTIL_ROOM_SKIPS: ReadonlySet<string> = new Set([
   "sales_funnel_caps_unavailable",
   // The funnel's cap is reached (a $10/month reactive funnel): owed until its period rolls over or the cap is raised.
   "sales_funnel_cap",
+  // workflow-service could not say whether the Engine runs the campaign (MIGRATE-1105 S2-FALLBACK): held, never the old workflow.
+  "engine_state_unreadable",
 ]);
 
 /**

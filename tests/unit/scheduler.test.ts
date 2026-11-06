@@ -408,6 +408,35 @@ describe("Scheduler - reRunDueCampaigns", () => {
     ]);
   });
 
+  // MIGRATE-1105 S2-FALLBACK (prod 2026-11-06, Doc Dinners): an Engine state read that timed out ran the retired workflow.
+  it("holds, never dispatches a workflow, a campaign whose Engine state cannot be read — and says so", async () => {
+    const { liveEngineFor, EngineStateUnreadableError, ENGINE_STATE_RECHECK_MS } = await import("../../src/lib/engine-dispatch.js");
+    vi.mocked(liveEngineFor).mockRejectedValueOnce(new EngineStateUnreadableError("Engine state of conversation for org org-1 unreadable (TimeoutError)"));
+    mockDbReturning.mockResolvedValue([
+      {
+        id: "campaign-engine",
+        orgId: "org-1",
+        workflowSlug: "sales-cold-email-outreach-ballad",
+        brandIds: ["brand-1"],
+        createdByUserId: "user-1",
+        parentRunId: "anchor-1",
+        featureSlug: "sales-cold-email-outreach",
+        legKey: "lead_found_to_conversation",
+        audienceId: null,
+      },
+    ]);
+    const before = Date.now();
+
+    await reRunDueCampaigns();
+
+    expect(mockExecuteCampaignWorkflow).not.toHaveBeenCalled();
+    expect(mockReportTurnHolds).toHaveBeenCalledWith([
+      expect.objectContaining({ reason: "engine_state_unreadable", detail: expect.stringContaining("TimeoutError") }),
+    ]);
+    const hold = mockReportTurnHolds.mock.calls[0][0][0];
+    expect(hold.nextRunAt.getTime()).toBeGreaterThanOrEqual(before + ENGINE_STATE_RECHECK_MS);
+  });
+
   it("should NOT create the EXECUTION run — start-run in the DAG still owns that", async () => {
     mockDbReturning.mockResolvedValue([
       {

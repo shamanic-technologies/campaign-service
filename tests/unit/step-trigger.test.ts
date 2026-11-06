@@ -325,6 +325,22 @@ describe("a lead reaching a step runs the campaign bought for the leg out of it"
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
+  // MIGRATE-1105 S2-FALLBACK (prod 2026-11-06, Doc Dinners): an Engine state read that timed out ran the retired workflow.
+  it("never runs the workflow when the Engine state cannot be read: a named skip the occurrence is owed on", async () => {
+    const { liveEngineFor, EngineStateUnreadableError } = await import("../../src/lib/engine-dispatch.js");
+    const { OWED_UNTIL_ROOM_SKIPS } = await import("../../src/lib/trigger-person.js");
+    vi.mocked(liveEngineFor).mockRejectedValueOnce(new EngineStateUnreadableError("Engine state of conversation for org org-1 unreadable (TimeoutError)"));
+    mockFindMany.mockResolvedValue([campaign()]);
+
+    const outcome = await triggerCampaignsForStep(request);
+
+    expect(outcome.triggered).toEqual([]);
+    expect(outcome.skipped[0].reason).toBe(STEP_TRIGGER_SKIPS.ENGINE_STATE_UNREADABLE);
+    expect(outcome.skipped[0].detail).toContain("TimeoutError");
+    expect(OWED_UNTIL_ROOM_SKIPS.has(STEP_TRIGGER_SKIPS.ENGINE_STATE_UNREADABLE)).toBe(true);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
   it("reports a refused dispatch rather than swallowing it", async () => {
     mockFindMany.mockResolvedValue([campaign()]);
     mockExecute.mockRejectedValue(new Error("workflow-service refused (502)"));
