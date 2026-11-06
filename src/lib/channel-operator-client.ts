@@ -111,6 +111,13 @@ export type ChannelCatalogueRead =
        * absent. Optional so a hand-built read (tests) may omit it.
        */
       nameBySlug?: ReadonlyMap<string, string>;
+      /**
+       * MIGRATE-1105 S5 (owner 2026-11-06: the outcome is the WHAT, as fine as possible): channel slug -> (leg key as
+       * that channel publishes it -> the outcome its pipe's ENGINE makes, `stepTransitions[].outcome`), only where
+       * features-service states one finer than the leg's `to` step. Absent = the Engine is the `to` step. Optional so a
+       * hand-built read (tests) may omit it.
+       */
+      engineOutcomeBySlug?: ReadonlyMap<string, ReadonlyMap<string, string>>;
     }
   | { ok: false; detail: string };
 
@@ -183,7 +190,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
         slug?: unknown;
         name?: unknown;
         operatedBy?: unknown;
-        stepTransitions?: Array<{ legKey?: unknown; reactive?: unknown; mode?: unknown; triggerId?: unknown }>;
+        stepTransitions?: Array<{ legKey?: unknown; reactive?: unknown; mode?: unknown; triggerId?: unknown; outcome?: unknown }>;
       }>;
       triggers?: Array<{
         id?: unknown;
@@ -221,6 +228,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
     const reactiveBySlug = new Map<string, ReadonlyMap<string, boolean>>();
     const triggerTransitions: CatalogueTriggerTransition[] = [];
     const nameBySlug = new Map<string, string>();
+    const engineOutcomeBySlug = new Map<string, ReadonlyMap<string, string>>();
     for (const channel of data.channels) {
       if (typeof channel?.slug !== "string" || channel.slug.length === 0) continue;
       if (typeof channel.name === "string" && channel.name.trim().length > 0) nameBySlug.set(channel.slug, channel.name.trim());
@@ -229,11 +237,13 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       // not the same thing as a slug the catalogue never names.
       const legs = new Set<string>();
       const reactive = new Map<string, boolean>();
+      const engineOutcomes = new Map<string, string>();
       if (Array.isArray(channel.stepTransitions)) {
         for (const transition of channel.stepTransitions) {
           if (typeof transition?.legKey === "string" && transition.legKey.length > 0) {
             legs.add(transition.legKey);
             if (typeof transition.reactive === "boolean") reactive.set(transition.legKey, transition.reactive);
+            if (typeof transition.outcome === "string" && transition.outcome.length > 0) engineOutcomes.set(transition.legKey, transition.outcome);
             if (
               transition.mode === "reactive" &&
               typeof transition.triggerId === "string" &&
@@ -251,6 +261,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       }
       legsBySlug.set(channel.slug, legs);
       reactiveBySlug.set(channel.slug, reactive);
+      if (engineOutcomes.size > 0) engineOutcomeBySlug.set(channel.slug, engineOutcomes);
       // Only the two published values are read. A third one this service has never heard of is
       // NOT guessed at: it is left out of the map, so the call site treats that channel exactly
       // as it treats one the catalogue does not publish.
@@ -300,7 +311,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
       }
     }
 
-    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug, triggers, triggerTransitions, triggerAliases, nameBySlug };
+    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug, triggers, triggerTransitions, triggerAliases, nameBySlug, engineOutcomeBySlug };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
