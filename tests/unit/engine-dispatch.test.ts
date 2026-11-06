@@ -48,6 +48,23 @@ describe("the Engine of a campaign", () => {
     expect(engineOfLeg({ ok: false, detail: "down" } as never, "x", "start_to_lead_found")).toBeNull();
   });
 
+  // MIGRATE-1105 S5 (owner 2026-11-06: the outcome is the WHAT, as fine as possible): a pipe naming a finer outcome.
+  it("is the outcome the pipe names when the catalogue states one (either outbound spelling), else its leg's step", () => {
+    const c = {
+      ...catalogueRead,
+      legs: [...legs, { legKey: "start_to_conversation", fromStepKey: null, toStepKey: "conversation" }, { legKey: "start_to_post_published", fromStepKey: null, toStepKey: "post_published" }],
+      engineOutcomeBySlug: new Map([
+        ["threads-post", new Map([["start_to_post_published", "threads_post_published"]])],
+        ["sales-cold-email-outreach", new Map([["lead_found_to_conversation", "email_sequence_sent"]])],
+      ]),
+    } as never;
+    expect(engineOfLeg(c, "threads-post", "start_to_post_published")).toEqual({ fromOutcome: "start", outcome: "threads_post_published" });
+    expect(engineOfLeg(c, "sales-cold-email-outreach", "lead_found_to_conversation")).toEqual({ fromOutcome: "lead_found", outcome: "email_sequence_sent" });
+    expect(engineOfLeg(c, "sales-cold-email-outreach", "start_to_conversation")?.outcome).toBe("email_sequence_sent");
+    // Another channel on the same leg keeps its leg's step.
+    expect(engineOfLeg(c, "ai-follow-up-email", "lead_found_to_conversation")).toEqual({ fromOutcome: "lead_found", outcome: "conversation" });
+  });
+
   it("is dispatched only when workflow-service says it is live for the org (cached a minute)", async () => {
     fetchMock.mockResolvedValueOnce(json(200, { live: true }));
     expect(await liveEngineFor({ featureSlug: "lead-sourcing", legKey: "start_to_lead_found" }, "org-1")).toEqual({ fromOutcome: "start", outcome: "lead_found" });

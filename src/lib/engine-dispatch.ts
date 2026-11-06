@@ -15,7 +15,7 @@
  * run (`engine_state_unreadable`, retried on `ENGINE_STATE_RECHECK_MS`), never the old workflow.
  */
 import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
-import { catalogueLegOf } from "./leg-identity.js";
+import { catalogueLegOf, publishedSpelling } from "./leg-identity.js";
 import type { WorkflowExecution, WorkflowExecutionInputs } from "./workflows.js";
 import { WorkflowExecutionRefusedError } from "./workflow-refusal.js";
 
@@ -50,12 +50,18 @@ export class EngineStateUnreadableError extends Error {
   }
 }
 
-/** PURE: the Engine a leg reaches, read off the steps the catalogue publishes beside it (a leg is never parsed). */
+/**
+ * PURE: the Engine a campaign's pipe runs, read off the catalogue (a leg is never parsed): the outcome the pipe names
+ * (MIGRATE-1105 S5, `stepTransitions[].outcome`: the finest WHAT, e.g. Threads post published on the Threads leg to Post
+ * published), else the step its leg reaches. One rule for every pipe; the Rating then picks among that outcome's scripts.
+ */
 export function engineOfLeg(catalogue: ChannelCatalogueRead, featureSlug: string | null | undefined, legKey: string | null | undefined): CampaignEngine | null {
   if (!legKey || !catalogue.ok) return null;
   const leg = catalogueLegOf(catalogue, featureSlug, legKey);
   if (!leg?.toStepKey) return null;
-  return { outcome: leg.toStepKey, fromOutcome: leg.fromStepKey ?? START_OUTCOME };
+  const stated = featureSlug ? catalogue.engineOutcomeBySlug?.get(featureSlug) : undefined;
+  const spelling = stated ? publishedSpelling(featureSlug, stated.keys(), legKey) : null;
+  return { outcome: (spelling ? stated!.get(spelling) : undefined) ?? leg.toStepKey, fromOutcome: leg.fromStepKey ?? START_OUTCOME };
 }
 
 const cache = new Map<string, { live: boolean; at: number }>();
