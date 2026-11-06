@@ -369,6 +369,38 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
       expect(workflow).not.toHaveBeenCalled();
     });
 
+    it("a play allowing no workflow whose strategy keeps a SCRIPT is born on its Engine when the Engine runs the org (MIGRATE-1105 S0b)", async () => {
+      const engine = vi.fn(async () => ({ outcome: "meeting_booked", fromOutcome: "conversation" }));
+      const d = {
+        ...deps([PLAY]),
+        pipe: playPipe({ default: false, allowedActiveWorkflowCount: 0, excludedWorkflowDynastySlugs: active, keptScriptDynasties: ["dy_book"] } as never),
+        workflow,
+        engine,
+      };
+      const res = await resolveSalesFunnelPlan("f@x", identity, d);
+      expect(res).toMatchObject({ ok: true, plan: { units: [{ featureSlug: "ai-meeting-booking", workflowSlug: "engine:meeting_booked" }] } });
+      expect(engine).toHaveBeenCalledWith({ featureSlug: "ai-meeting-booking", legKey: expect.any(String) }, identity.orgId);
+      // The Engine not running this org's campaigns of the channel = the same refusal as before.
+      engine.mockResolvedValue(null as never);
+      expect(await resolveSalesFunnelPlan("f@x", identity, d)).toMatchObject({ ok: false, refusal: { code: "play_allows_no_workflow" } });
+      // No script kept = never asks the Engine.
+      engine.mockClear();
+      const none = { ...d, pipe: playPipe({ default: false, allowedActiveWorkflowCount: 0, excludedWorkflowDynastySlugs: active }) };
+      expect(await resolveSalesFunnelPlan("f@x", identity, none)).toMatchObject({ ok: false, refusal: { code: "play_allows_no_workflow" } });
+      expect(engine).not.toHaveBeenCalled();
+    });
+
+    it("an Engine state that cannot be read refuses the launch 502, never born on a guess", async () => {
+      const { EngineStateUnreadableError } = await import("../../src/lib/engine-dispatch.js");
+      const d = {
+        ...deps([PLAY]),
+        pipe: playPipe({ default: false, allowedActiveWorkflowCount: 0, excludedWorkflowDynastySlugs: active, keptScriptDynasties: ["dy_book"] } as never),
+        workflow,
+        engine: vi.fn(async () => { throw new EngineStateUnreadableError("timeout"); }),
+      };
+      expect(await resolveSalesFunnelPlan("f@x", identity, d)).toMatchObject({ ok: false, refusal: { status: 502, code: "workflow_unavailable" } });
+    });
+
     it("a play allowing none, with no reason served yet, still names the strategy", async () => {
       const d = { ...deps([PLAY]), pipe: playPipe({ default: false, allowedActiveWorkflowCount: 0, excludedWorkflowDynastySlugs: [] }), workflow };
       const res = await resolveSalesFunnelPlan("f@x", identity, d);

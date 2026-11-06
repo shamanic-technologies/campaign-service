@@ -63,6 +63,8 @@ export interface PipeFromCatalogue {
    */
   notRunnableReason?: string | null;
   notRunnableDetail?: string | null;
+  /** features-service's verdict that something of ours runs the pipe (a workflow OR a script of its Engine). Absent on an older answer. */
+  runnable?: boolean;
 }
 
 export interface PipePlay {
@@ -75,6 +77,11 @@ export interface PipePlay {
   allowedActiveWorkflowCount: number;
   /** The workflow dynasties the strategy rules out on this pipe. */
   excludedWorkflowDynastySlugs: string[];
+  /**
+   * MIGRATE-1105 S0b: the scripts of the pipe's Engine (its outcome, its channel) the strategy keeps. Non-empty = the play
+   * runs with no workflow (the Engine runs it). Absent on an older answer = none.
+   */
+  keptScriptDynasties?: string[];
 }
 
 const SalesFunnelResponse = z.object({
@@ -104,11 +111,13 @@ const PipeResponse = z.object({
       default: z.boolean(),
       allowedActiveWorkflowCount: z.number().int(),
       excludedWorkflowDynastySlugs: z.array(z.string()),
+      keptScriptDynasties: z.array(z.string()).optional(),
     })
     .nullable()
     .optional(),
   notRunnableReason: z.string().nullable().optional(),
   notRunnableDetail: z.string().nullable().optional(),
+  runnable: z.boolean().optional(),
 });
 
 async function readCatalogue<T>(path: string, parse: (body: unknown) => T): Promise<CatalogueRead<T>> {
