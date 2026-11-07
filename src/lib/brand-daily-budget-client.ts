@@ -1,4 +1,5 @@
 import type { IdentityHeaders } from "@distribute/runs-client";
+import { siblingReadSignal } from "./sibling-read-timeout.js";
 
 /**
  * The BRAND's daily budget, as billing serves it:
@@ -40,7 +41,7 @@ export async function fetchBrandDailyBudget(
   try {
     const res = await fetch(
       `${url.replace(/\/$/, "")}/internal/brands/${encodeURIComponent(brandId)}/daily-budget`,
-      { headers },
+      { headers, signal: siblingReadSignal() },
     );
     if (!res.ok) return { ok: false };
     const data = (await res.json()) as { dailyBudgetCents?: string | number | null };

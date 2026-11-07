@@ -86,7 +86,9 @@ describe("fetchChannelCatalogue", () => {
     const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit | undefined];
     // Every declared trigger, the inline ones included: this service's own door accepts them all.
     expect(url).toBe("https://features.test.local/public/channels?includeInline=true");
-    expect(init).toBeUndefined();
+    // Only a deadline (FLEET-STALL-1107): no headers, so no identity.
+    expect(Object.keys(init ?? {})).toEqual(["signal"]);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("does not answer for a channel it has never been told about", async () => {

@@ -1,4 +1,5 @@
 import type { IdentityHeaders } from "@distribute/runs-client";
+import { siblingReadSignal } from "./sibling-read-timeout.js";
 
 /**
  * The offers ONE (org, brand) pair holds, as brand-service reports them.
@@ -48,7 +49,7 @@ export async function fetchPairOffers(
   try {
     const res = await fetch(
       `${baseUrl.replace(/\/$/, "")}/internal/brands/${encodeURIComponent(brandId)}/offers`,
-      { headers },
+      { headers, signal: siblingReadSignal() },
     );
     if (!res.ok) {
       return { ok: false, reason: "unavailable", detail: `brand ${brandId}: HTTP ${res.status}` };

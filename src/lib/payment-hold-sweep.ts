@@ -47,21 +47,25 @@ export async function holdPaymentDeclinedOrgs(now: number = Date.now()): Promise
     .from(campaigns)
     .where(eq(campaigns.status, "ongoing"));
 
-  let stopped = 0;
-  for (const { orgId } of rows) {
+  // Every org is asked AT ONCE (FLEET-STALL-1107): the sweep runs first in every scheduler tick, so
+  // it must cost one bounded billing read, never one per org in a row. Prod 2026-11-07: billing
+  // answered each read with a 502 after ~2.3 min while Postgres was saturated, the orgs were read
+  // one after the other, and the tick (every client's dispatch) waited ~40 min behind it.
+  const counts = await Promise.all(rows.map(async ({ orgId }) => {
     try {
       const read = await readPaymentHold(orgId);
       if (!read.ok) {
         console.warn(`[campaign-service] Payment hold: could not read billing for org ${orgId} (${read.detail}) — left as is`);
-        continue;
+        return 0;
       }
-      if (!read.held) continue;
-      stopped += (await stopHeldOrg(orgId, read.blockedReason)).length;
+      if (!read.held) return 0;
+      return (await stopHeldOrg(orgId, read.blockedReason)).length;
     } catch (err) {
       console.error(`[campaign-service] Payment hold failed for org ${orgId}:`, err);
+      return 0;
     }
-  }
-  return stopped;
+  }));
+  return counts.reduce((a, b) => a + b, 0);
 }
 
 /**
