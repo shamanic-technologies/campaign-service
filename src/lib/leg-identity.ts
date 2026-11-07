@@ -1,4 +1,5 @@
 import type { CatalogueLeg } from "./channel-operator-client.js";
+import { fineOutcomeSpelling } from "./fine-outcome-spelling.js";
 
 /**
  * ONE LEG, TWO SPELLINGS — the outbound leg-key rename, wave 1 (owner, 2026-10-09).
@@ -69,8 +70,10 @@ function isRenamedChannel(featureSlug: string | null | undefined): boolean {
 export function legIdentity(featureSlug: string | null | undefined, legKey: string): string;
 export function legIdentity(featureSlug: string | null | undefined, legKey: string | null | undefined): string | null | undefined;
 export function legIdentity(featureSlug: string | null | undefined, legKey: string | null | undefined): string | null | undefined {
-  if (!legKey || !isRenamedChannel(featureSlug)) return legKey;
-  return NEW_TO_LEGACY.get(legKey) ?? legKey;
+  // The retired coarse `post_published` spelling is the same leg as its fine twin (DELETE-POST-PUBLISHED-1107).
+  const key = fineOutcomeSpelling(legKey);
+  if (!key || !isRenamedChannel(featureSlug)) return key;
+  return NEW_TO_LEGACY.get(key) ?? key;
 }
 
 /** Whether two leg keys name the same leg of `featureSlug`'s channel (null equals null only). */
@@ -113,6 +116,8 @@ export function isLegacyOutboundSpelling(featureSlug: string | null | undefined,
 export function storedLegKey(featureSlug: string | null | undefined, legKey: string): string;
 export function storedLegKey(featureSlug: string | null | undefined, legKey: string | null | undefined): string | null | undefined;
 export function storedLegKey(featureSlug: string | null | undefined, legKey: string | null | undefined): string | null | undefined {
+  // A retired coarse `post_published` leg is written in its fine spelling (DELETE-POST-PUBLISHED-1107, migration 0088).
+  legKey = fineOutcomeSpelling(legKey);
   if (!legKey || !isRenamedChannel(featureSlug)) return legKey;
   return STORED_SPELLING === "legacy"
     ? NEW_TO_LEGACY.get(legKey) ?? legKey
