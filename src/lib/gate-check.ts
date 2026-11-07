@@ -5,6 +5,7 @@ import { salesFunnelUnitMoney, salesFunnelUnitRef } from "./sales-funnel-campaig
 import { isPersonCarryingRun, personCarryingRunIds } from "./person-runs.js";
 import { readPaymentHold } from "./payment-hold.js";
 import { stopHeldOrg } from "./payment-hold-sweep.js";
+import { siblingReadSignal } from "./sibling-read-timeout.js";
 
 // THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
 // hours here against fifteen minutes there, and that gap is a full stop: the sweep re-fires a
@@ -321,7 +322,7 @@ async function fetchLeadStats(
   if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
 
   const params = new URLSearchParams({ brandId, campaignId });
-  const res = await fetch(`${url}/stats?${params}`, { headers });
+  const res = await fetch(`${url}/stats?${params}`, { headers, signal: siblingReadSignal() });
 
   if (!res.ok) {
     const err = new Error(`Lead stats failed: ${res.status}`) as Error & { status: number };
@@ -374,7 +375,7 @@ async function readCreditAffordability(
   if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
 
   try {
-    const res = await fetch(`${url}/internal/campaigns/${campaignId}/affordability`, { headers });
+    const res = await fetch(`${url}/internal/campaigns/${campaignId}/affordability`, { headers, signal: siblingReadSignal() });
     if (!res.ok) {
       return { readable: false, detail: `billing responded ${res.status}` };
     }

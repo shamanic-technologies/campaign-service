@@ -36,6 +36,7 @@
  */
 
 import { STOP_REASONS } from "./stop-reason.js";
+import { siblingReadSignal } from "./sibling-read-timeout.js";
 
 export type PaymentStopReason = typeof STOP_REASONS.PAYMENT_DECLINED | typeof STOP_REASONS.NO_PAYMENT_METHOD;
 
@@ -44,7 +45,15 @@ export type PaymentHoldRead =
   | { ok: true; held: true; blockedReason: string }
   | { ok: false; detail: string };
 
-export async function readPaymentHold(orgId: string): Promise<PaymentHoldRead> {
+/**
+ * Deadline of a person's start asking billing (FLEET-STALL-1107). Longer than the sweep's and the run
+ * gate's on purpose: a start is fail-CLOSED (unreadable = 502, nothing started), rare, and a person is
+ * waiting for it, while billing's payment-outlook took ~50 s under the 2026-11-07 Postgres saturation.
+ * Bounded all the same, so a hung billing never holds a request open without end.
+ */
+export const PERSON_START_PAYMENT_READ_TIMEOUT_MS = 120_000;
+
+export async function readPaymentHold(orgId: string, timeoutMs?: number): Promise<PaymentHoldRead> {
   const url = process.env.BILLING_SERVICE_URL;
   const apiKey = process.env.BILLING_SERVICE_API_KEY;
   if (!url || !apiKey) return { ok: false, detail: "billing not configured" };
@@ -52,6 +61,7 @@ export async function readPaymentHold(orgId: string): Promise<PaymentHoldRead> {
   try {
     const res = await fetch(`${url}/internal/accounts/by-org/${orgId}/payment-outlook`, {
       headers: { "x-api-key": apiKey },
+      signal: siblingReadSignal(timeoutMs),
     });
     if (res.status === 404) return { ok: true, held: false };
     if (!res.ok) return { ok: false, detail: `billing responded ${res.status}` };
@@ -119,7 +129,7 @@ export type StartRefusal = {
  * code a consumer branches on.
  */
 export async function paymentStartRefusal(orgId: string): Promise<StartRefusal | null> {
-  const read = await readPaymentHold(orgId);
+  const read = await readPaymentHold(orgId, PERSON_START_PAYMENT_READ_TIMEOUT_MS);
   if (!read.ok) {
     console.error(`[campaign-service] Payment state unreadable for org ${orgId}: ${read.detail}`);
     return {

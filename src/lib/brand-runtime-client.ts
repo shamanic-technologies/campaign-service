@@ -1,4 +1,5 @@
 import { buildServiceHeaders, type DownstreamIdentity } from "./downstream-headers.js";
+import { siblingReadSignal } from "./sibling-read-timeout.js";
 
 /**
  * The brand's runtime optimization goal, as brand-service reports it.
@@ -77,6 +78,7 @@ export async function fetchBrandRuntimeContext(
   const res = await fetch(url, {
     method: "GET",
     headers: buildServiceHeaders(apiKey, identity),
+    signal: siblingReadSignal(),
   });
 
   if (!res.ok) {

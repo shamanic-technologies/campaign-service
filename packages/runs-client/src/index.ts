@@ -115,6 +115,14 @@ function buildIdentityHeaders(identity?: IdentityHeaders): Record<string, string
   return h;
 }
 
+/**
+ * Deadline of one runs-service call (FLEET-STALL-1107). fetch has none of its own: on 2026-11-07 the
+ * shared Postgres was saturated (runs-service inserts took ~27 s) and an unanswered call could hold
+ * the campaign scheduler's single tick indefinitely. Generous on purpose (writes land late under
+ * load): a call this slow is a failure its caller already handles, never a wait without end.
+ */
+export const RUNS_REQUEST_TIMEOUT_MS = 60_000;
+
 async function runsRequest<T>(
   path: string,
   options: { method?: string; body?: unknown; identity?: IdentityHeaders } = {}
@@ -131,6 +139,7 @@ async function runsRequest<T>(
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(RUNS_REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) {

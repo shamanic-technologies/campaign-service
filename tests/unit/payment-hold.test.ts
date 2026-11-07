@@ -26,7 +26,7 @@ describe("readPaymentHold — billing's payment-outlook, read and never re-deriv
     await readPaymentHold(ORG);
     expect(global.fetch).toHaveBeenCalledWith(
       `https://billing.test.local/internal/accounts/by-org/${ORG}/payment-outlook`,
-      { headers: { "x-api-key": "billing-key" } },
+      { headers: { "x-api-key": "billing-key" }, signal: expect.any(AbortSignal) },
     );
   });
 
