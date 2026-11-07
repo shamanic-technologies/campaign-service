@@ -9,7 +9,7 @@
  * actually charge is on file. Both halves are billing's to judge, so neither is judged here.
  *
  * WHERE THE VERDICT COMES FROM. billing-service already serves it:
- * `GET /internal/accounts/by-org/:orgId/payment-outlook` → `state: "charge_blocked"` with a named
+ * `GET /internal/accounts/by-org/:orgId/charge-verdict` → `chargeBlocked: true` (= payment-outlook `state: "charge_blocked"`) with a named
  * `blockedReason`. That state is billing's own composition of the refused-card retry streak, the
  * permanently-unusable verdict and the unsupported-issuing-country check, and it clears on
  * billing's own tests (a successful charge, or `credited` moving because money arrived). This
@@ -59,18 +59,22 @@ export async function readPaymentHold(orgId: string, timeoutMs?: number): Promis
   if (!url || !apiKey) return { ok: false, detail: "billing not configured" };
 
   try {
-    const res = await fetch(`${url}/internal/accounts/by-org/${orgId}/payment-outlook`, {
+    // billing's verdict ALONE (v0.83.81, FLEET-STALL-1107-BILLING): `chargeBlocked` is exactly
+    // payment-outlook's `state === "charge_blocked"` (one decision function on billing's side), but
+    // it reads no burn / runs-service figures, so it stays fast while the shared Postgres is loaded
+    // (payment-outlook took ~50 s on 2026-11-07).
+    const res = await fetch(`${url}/internal/accounts/by-org/${orgId}/charge-verdict`, {
       headers: { "x-api-key": apiKey },
       signal: siblingReadSignal(timeoutMs),
     });
     if (res.status === 404) return { ok: true, held: false };
     if (!res.ok) return { ok: false, detail: `billing responded ${res.status}` };
 
-    const data = (await res.json()) as { state?: unknown; blockedReason?: unknown };
-    if (typeof data.state !== "string") {
-      return { ok: false, detail: "billing answered without a payment state" };
+    const data = (await res.json()) as { chargeBlocked?: unknown; blockedReason?: unknown };
+    if (typeof data.chargeBlocked !== "boolean") {
+      return { ok: false, detail: "billing answered without a charge verdict" };
     }
-    if (data.state !== "charge_blocked") return { ok: true, held: false };
+    if (!data.chargeBlocked) return { ok: true, held: false };
     if (typeof data.blockedReason !== "string" || data.blockedReason.length === 0) {
       return { ok: false, detail: "billing said charge_blocked without naming why" };
     }
