@@ -5,6 +5,7 @@ import { campaigns, planFollowingDays, salesFunnelCampaigns, salesFunnelPlanChan
 import { applySalesFunnelPlanChange, type PlanUnitDecision, type SalesFunnelUnitBirth } from "./campaign-status-history.js";
 import { acquisitionChannelForFeature, derivedCampaignName } from "./campaign-identity.js";
 import { sameLeg } from "./leg-identity.js";
+import { fineOutcomeSpelling } from "./fine-outcome-spelling.js";
 import { ensureSourcesOnStart } from "./source-campaign-store.js";
 import { briefNamedUnits, type BriefGuardDeps } from "./sales-funnel-plan-brief.js";
 import { resolveSalesFunnelPlan, type SalesFunnelUnitPlan } from "./startable-pair.js";
@@ -102,6 +103,18 @@ const FactoryShadowBody = z
   })
   .passthrough();
 export type FactoryShadow = z.infer<typeof FactoryShadowBody>;
+
+type PlanLineRead = z.infer<typeof PlanLine>;
+
+/** A plan line with its funnel id, legs and pipe/play ids in the fine outcome spelling (`fine-outcome-spelling.ts`). */
+export function fineSpelledPlanLine(line: PlanLineRead | null): PlanLineRead | null {
+  if (!line) return line;
+  return {
+    ...line,
+    funnelId: fineOutcomeSpelling(line.funnelId),
+    legs: line.legs.map((l) => ({ ...l, legKey: fineOutcomeSpelling(l.legKey), pipeId: fineOutcomeSpelling(l.pipeId) ?? null, playId: fineOutcomeSpelling(l.playId) ?? null })),
+  };
+}
 
 export type PlanRead =
   | { ok: true; plan: FactoryShadow }
@@ -231,7 +244,9 @@ export async function checkSalesFunnelCampaignPlan(
       ? done("no_plan", "No plan is served for this campaign yet (features-service plans every 3 hours).")
       : done("plan_unreadable", `Its plan could not be read: ${read.detail}`);
   }
-  const shadow = read.plan.plan?.shadow ?? null;
+  // A plan computed before features-service retired the coarse `post_published` legs still names them: read it in the
+  // fine spelling the units carry since migration 0088, so it never moves the campaign back (DELETE-POST-PUBLISHED-1107).
+  const shadow = fineSpelledPlanLine(read.plan.plan?.shadow ?? null);
   const planMeta = { planComputedAt: read.plan.computedAt, ...(shadow ? { planSalesFunnelId: shadow.funnelId } : {}) };
   if (read.plan.status !== "ok" || !shadow) {
     return done(

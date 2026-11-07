@@ -617,6 +617,13 @@
       "when": 1781186400000,
       "tag": "0087_drop_sales_funnel_campaign_instruction",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1781286400000,
+      "tag": "0088_fine_threads_post_published_keys",
+      "breakpoints": true
     }
   ]
 }
