@@ -1,4 +1,5 @@
 import { TARGET_STEPS_CATALOGUE_PATH } from "./target-step-vocabulary.js";
+import { siblingReadSignal } from "./sibling-read-timeout.js";
 
 /**
  * WHO OPERATES AN ACQUISITION CHANNEL — features-service's statement, asked rather than held.
@@ -174,7 +175,7 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
     // `includeInline=true` (features-service, 2026-10-16): this service's own door validates EVERY declared trigger,
     // the inline requests between our services (`on_demand`, `lead_requested`) included; outside readers get the
     // entry doors only.
-    const res = await fetch(`${baseUrl.replace(/\/$/, "")}${TARGET_STEPS_CATALOGUE_PATH}?includeInline=true`);
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}${TARGET_STEPS_CATALOGUE_PATH}?includeInline=true`, { signal: siblingReadSignal() });
     if (!res.ok) {
       let body = "";
       try {

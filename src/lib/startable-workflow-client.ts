@@ -1,4 +1,5 @@
 import type { IdentityHeaders } from "@distribute/runs-client";
+import { siblingReadSignal } from "./sibling-read-timeout.js";
 
 /**
  * WHICH WORKFLOW A CHANNEL RUNS — workflow-service's statement, asked when a PERSON starts a
@@ -102,7 +103,7 @@ async function listActiveWorkflows(
     url.searchParams.set("featureSlug", featureSlug);
     url.searchParams.set("status", "active");
 
-    const res = await fetch(url, { headers });
+    const res = await fetch(url, { headers, signal: siblingReadSignal() });
     if (!res.ok) {
       // The BODY names the missing header (`x-org-id, x-user-id, and x-run-id headers are
       // required`), which is the whole diagnostic — a bare status says nothing actionable.
@@ -152,6 +153,7 @@ export async function fetchWorkflowDynastyBySlug(
     url.searchParams.set("status", "all");
     const res = await fetch(url, {
       headers: { "x-api-key": apiKey, "x-org-id": identity.orgId, "x-user-id": identity.userId, "x-run-id": identity.runId },
+      signal: siblingReadSignal(),
     });
     if (!res.ok) return { ok: false, detail: `HTTP ${res.status} ${(await res.text()).slice(0, 200)}` };
     const data = await res.json() as { workflows?: Array<{ workflowSlug?: string; workflowDynastySlug?: string }> } | Array<{ workflowSlug?: string; workflowDynastySlug?: string }>;

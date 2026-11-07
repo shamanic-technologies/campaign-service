@@ -221,6 +221,32 @@ describe("a declined card stops its org's campaigns, and nothing starts them unt
     expect((await db.query.campaigns.findFirst({ where: eq(campaigns.id, c.id) }))?.status).toBe("ongoing");
   });
 
+  it("asks every org AT ONCE: slow billing reads cost one read's time, never one per org (FLEET-STALL-1107)", async () => {
+    // Prod 2026-11-07: billing answered each read with a 502 after ~2.3 min, the orgs were read one
+    // after the other, and the scheduler tick (every client's dispatch) waited ~40 min behind it.
+    const orgs = Array.from({ length: 6 }, () => crypto.randomUUID());
+    for (const org of orgs) await insertTestCampaign(org);
+    const declined = await insertTestCampaign(DECLINED_ORG);
+    const READ_MS = 200;
+    vi.mocked(readPaymentHold).mockImplementation(async (orgId: string) => {
+      await new Promise((r) => setTimeout(r, READ_MS));
+      return orgId === DECLINED_ORG
+        ? { ok: true, held: true, blockedReason: "card_declined" }
+        : { ok: false, detail: "The operation was aborted due to timeout" };
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const started = Date.now();
+    expect(await holdPaymentDeclinedOrgs()).toBe(1);
+    // 7 orgs read in a row would take >= 1.4 s; at once, about one read.
+    expect(Date.now() - started).toBeLessThan(READ_MS * 3);
+    expect(vi.mocked(readPaymentHold)).toHaveBeenCalledTimes(7);
+    // An unreadable org stops nothing; the held one is still stopped in the same pass.
+    expect((await db.query.campaigns.findFirst({ where: eq(campaigns.id, declined.id) }))?.status).toBe("stopped");
+    const live = await db.query.campaigns.findMany({ where: eq(campaigns.status, "ongoing") });
+    expect(live).toHaveLength(6);
+  });
+
   it("refuses to resume while held, then lets the customer resume once billing clears the org", async () => {
     const brand = crypto.randomUUID();
     const c = await insertTestCampaign(DECLINED_ORG, { brandIds: [brand], nextRunAt: new Date() });
