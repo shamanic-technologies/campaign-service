@@ -12,7 +12,7 @@ function answer(status: number, body: unknown) {
   global.fetch = vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
 }
 
-describe("readPaymentHold — billing's payment-outlook, read and never re-derived", () => {
+describe("readPaymentHold — billing's charge verdict, read and never re-derived", () => {
   beforeEach(() => {
     process.env.BILLING_SERVICE_URL = "https://billing.test.local";
     process.env.BILLING_SERVICE_API_KEY = "billing-key";
@@ -21,30 +21,27 @@ describe("readPaymentHold — billing's payment-outlook, read and never re-deriv
     global.fetch = originalFetch;
   });
 
-  it("asks billing's payment-outlook for the org, with the service key only", async () => {
-    answer(200, { state: "will_charge", blockedReason: null });
+  it("asks billing's charge verdict for the org, with the service key only", async () => {
+    answer(200, { chargeBlocked: false, blockedReason: null });
     await readPaymentHold(ORG);
     expect(global.fetch).toHaveBeenCalledWith(
-      `https://billing.test.local/internal/accounts/by-org/${ORG}/payment-outlook`,
+      `https://billing.test.local/internal/accounts/by-org/${ORG}/charge-verdict`,
       { headers: { "x-api-key": "billing-key" }, signal: expect.any(AbortSignal) },
     );
   });
 
   it("charge_blocked is held, carrying billing's own reason verbatim", async () => {
-    answer(200, { state: "charge_blocked", blockedReason: "card_declined", balanceCents: "-4998.25" });
+    answer(200, { chargeBlocked: true, blockedReason: "card_declined", paymentMode: "postpaid" });
     expect(await readPaymentHold(ORG)).toEqual({ ok: true, held: true, blockedReason: "card_declined" });
 
-    answer(200, { state: "charge_blocked", blockedReason: "card_country_unsupported", balanceCents: "17.89" });
+    answer(200, { chargeBlocked: true, blockedReason: "card_country_unsupported", paymentMode: "postpaid" });
     expect(await readPaymentHold(ORG)).toEqual({ ok: true, held: true, blockedReason: "card_country_unsupported" });
   });
 
-  it.each(["will_charge", "charge_due_now", "no_autopay", "idle", "unknown"])(
-    "%s is not held — only billing saying it cannot charge holds an org",
-    async (state) => {
-      answer(200, { state, blockedReason: null, balanceCents: "-1.77" });
-      expect(await readPaymentHold(ORG)).toEqual({ ok: true, held: false });
-    },
-  );
+  it("chargeBlocked false is not held — only billing saying it cannot charge holds an org", async () => {
+    answer(200, { chargeBlocked: false, blockedReason: null, paymentMode: "prepaid" });
+    expect(await readPaymentHold(ORG)).toEqual({ ok: true, held: false });
+  });
 
   it("an org with no billing account (404) has no card to be refused", async () => {
     answer(404, { error: "No billing account for this org" });
@@ -58,7 +55,7 @@ describe("readPaymentHold — billing's payment-outlook, read and never re-deriv
     answer(200, { nothing: true });
     expect((await readPaymentHold(ORG)).ok).toBe(false);
 
-    answer(200, { state: "charge_blocked", blockedReason: null });
+    answer(200, { chargeBlocked: true, blockedReason: null });
     expect((await readPaymentHold(ORG)).ok).toBe(false);
 
     global.fetch = vi.fn(async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
@@ -81,12 +78,12 @@ describe("paymentStartRefusal — what a person pressing start is told", () => {
   });
 
   it("allows a start when billing can charge the org", async () => {
-    answer(200, { state: "will_charge", blockedReason: null });
+    answer(200, { chargeBlocked: false, blockedReason: null });
     expect(await paymentStartRefusal(ORG)).toBeNull();
   });
 
   it("refuses a declined card with 409 payment_declined and a sentence to render", async () => {
-    answer(200, { state: "charge_blocked", blockedReason: "card_declined" });
+    answer(200, { chargeBlocked: true, blockedReason: "card_declined" });
     const refusal = await paymentStartRefusal(ORG);
     expect(refusal?.status).toBe(409);
     expect(refusal?.body).toMatchObject({ reason: "payment_declined", blockedReason: "card_declined" });
@@ -95,14 +92,14 @@ describe("paymentStartRefusal — what a person pressing start is told", () => {
   });
 
   it("names the unsupported issuing country in its own words", async () => {
-    answer(200, { state: "charge_blocked", blockedReason: "card_country_unsupported" });
+    answer(200, { chargeBlocked: true, blockedReason: "card_country_unsupported" });
     const refusal = await paymentStartRefusal(ORG);
     expect(refusal?.status).toBe(409);
     expect(refusal?.body.error).toContain("issuing country");
   });
 
   it("refuses an org with NO payment method with 409 no_payment_method, and never says declined", async () => {
-    answer(200, { state: "charge_blocked", blockedReason: "no_chargeable_card" });
+    answer(200, { chargeBlocked: true, blockedReason: "no_chargeable_card" });
     const refusal = await paymentStartRefusal(ORG);
     expect(refusal?.status).toBe(409);
     expect(refusal?.body).toMatchObject({ reason: "no_payment_method", blockedReason: "no_chargeable_card" });
@@ -115,7 +112,7 @@ describe("paymentStartRefusal — what a person pressing start is told", () => {
   it.each(["card_declined", "card_unusable", "retries_exhausted", "card_country_unsupported", "some_future_reason"])(
     "keeps every other blocked reason (%s) on payment_declined, unchanged",
     async (blockedReason) => {
-      answer(200, { state: "charge_blocked", blockedReason });
+      answer(200, { chargeBlocked: true, blockedReason });
       const refusal = await paymentStartRefusal(ORG);
       expect(refusal?.status).toBe(409);
       expect(refusal?.body).toMatchObject({ reason: "payment_declined", blockedReason });
