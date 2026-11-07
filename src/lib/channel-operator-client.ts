@@ -165,7 +165,48 @@ export interface CatalogueTriggerTransition {
   triggerId: string;
 }
 
+/**
+ * THE HOLD (BOX-LOAD-1107). Every claim, gate-check, start-run, end-run and trigger read asks this catalogue; measured
+ * in prod on 2026-11-07 that was ~142 reads a minute of the same ~233 KB body (110/min from the workflow run routes
+ * alone), each one re-walked by features-service and re-parsed here, while the catalogue only moves when someone
+ * edits a script, tactic or trigger (minutes to hours). So a READABLE answer is held for one minute and shared by
+ * every caller; concurrent callers share the one read in flight.
+ *
+ * Why 60 s: it is the scheduler's own active tick (lib/scheduler.ts `ACTIVE_INTERVAL_MS`), so an edit upstream reaches
+ * dispatch at most one tick later than before, and an on-demand unit is already re-looked at only every 10 min
+ * (`ON_DEMAND_RECHECK_MS`). An UNREADABLE answer is never held: the next caller asks again, exactly as before, so an
+ * outage clears the moment features-service answers. The read is shared, so callers treat it as read-only (none
+ * mutates it).
+ */
+export const CHANNEL_CATALOGUE_HOLD_MS = 60_000;
+
+let held: { at: number; read: ChannelCatalogueRead } | null = null;
+let inFlight: Promise<ChannelCatalogueRead> | null = null;
+
+/** Drops the held read (tests: each case states its own catalogue). */
+export function forgetChannelCatalogueHold(): void {
+  held = null;
+  inFlight = null;
+}
+
 export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
+  if (!process.env.FEATURES_SERVICE_URL) {
+    return { ok: false, detail: "FEATURES_SERVICE_URL not configured" };
+  }
+  if (held && Date.now() - held.at < CHANNEL_CATALOGUE_HOLD_MS) return held.read;
+  if (inFlight) return inFlight;
+  const read = readChannelCatalogueNow().then((r) => {
+    if (inFlight === read) {
+      inFlight = null;
+      if (r.ok) held = { at: Date.now(), read: r };
+    }
+    return r;
+  });
+  inFlight = read;
+  return read;
+}
+
+async function readChannelCatalogueNow(): Promise<ChannelCatalogueRead> {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
   if (!baseUrl) {
     return { ok: false, detail: "FEATURES_SERVICE_URL not configured" };
