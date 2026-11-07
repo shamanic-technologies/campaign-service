@@ -18,6 +18,7 @@ import { paymentStartRefusal } from "../lib/payment-hold.js";
 import { STOP_REASONS } from "../lib/stop-reason.js";
 import {
   insertSalesFunnelCampaignWithUnits,
+  insertSalesFunnelUnits,
   setSalesFunnelCampaignStatus,
   type OnUnitStarted,
 } from "../lib/campaign-status-history.js";
@@ -26,6 +27,7 @@ import { acquisitionChannelForFeature, derivedCampaignName } from "../lib/campai
 import { ensureSourcesOnStart } from "../lib/source-campaign-store.js";
 import { serializeSalesFunnelCampaign } from "../lib/sales-funnel-campaigns.js";
 import { wakeScheduler } from "../lib/scheduler.js";
+import { sameLeg } from "../lib/leg-identity.js";
 import { completeSalesFunnelUnits } from "../lib/sales-funnel-unit-completion.js";
 import { runLeadSourcingSwitch } from "../lib/sales-funnel-lead-sourcing-switch.js";
 import { runSalesFunnelNameRepair } from "../lib/sales-funnel-name.js";
@@ -541,6 +543,73 @@ router.delete("/sales-funnel-campaigns/:id", requireApiKey, serviceAuth, async (
     res.json({ deleted: true, salesFunnelCampaignId: parent.id, unitIds: outcome.unitIds });
   } catch (error) {
     console.error("[campaign-service] Delete sales funnel campaign error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /sales-funnel-campaigns/:id/entries {salesFunnelId} — the campaign takes ANOTHER ENTRY (MIGRATE-1105 S6, owner
+ * 2026-11-08: one campaign per offer does everything, its own leads' form fills and callbacks included). A campaign
+ * starts from Start or a trigger; this adds the line a TRIGGER heads (`trigger:<id>+…`, e.g. a Lead event) to the same
+ * campaign: its units are born INTO it, in its status, on its offer, each running on that trigger only
+ * (`runsOnTriggerId`), so the trigger's events of THIS campaign's offer are answered inside it, on its own money and
+ * brief. Idempotent: a pipe the campaign already runs is never born twice. A line that no trigger heads is refused (it
+ * would prospect a second time). Stopping the separate campaign that answered the same events is the caller's next
+ * act (one answer per lead).
+ */
+router.post("/sales-funnel-campaigns/:id/entries", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const orgId = req.orgId!;
+    const salesFunnelId = typeof req.body?.salesFunnelId === "string" ? req.body.salesFunnelId.trim() : "";
+    if (!salesFunnelId) return res.status(400).json({ error: "salesFunnelId is required", reason: "sales_funnel_id_required" });
+    const parent = await db.query.salesFunnelCampaigns.findFirst({
+      where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
+    });
+    if (!parent) return res.status(404).json({ error: "Sales funnel campaign not found" });
+    const resolved = await resolveSalesFunnelPlan(salesFunnelId, {
+      orgId,
+      userId: req.userId!,
+      runId: req.runId!,
+      brandId: parent.brandId,
+      offerId: parent.offerId,
+    });
+    if (!resolved.ok) {
+      const { status: httpStatus, code, message } = resolved.refusal;
+      return res.status(httpStatus).json({ error: message, reason: code });
+    }
+    const { plan } = resolved;
+    const entering = plan.units.filter((u) => u.runsOnTriggerId);
+    if (entering.length === 0 || plan.units.some((u) => !u.runsOnTriggerId && u.mode !== "reactive" && u.workflowSlug)) {
+      return res.status(400).json({
+        error: "An entry is a line a trigger starts (its people's events); this line also finds new people, so it is not an entry.",
+        reason: "entry_needs_trigger_line",
+      });
+    }
+    const existing = (await unitsOf([parent.id], orgId)).get(parent.id)!;
+    const idTag = parent.id.slice(0, 8);
+    const births = entering
+      .filter((u) => !existing.some((e) => e.featureSlug === u.featureSlug && e.legKey !== null && sameLeg(u.featureSlug, e.legKey, u.legKey)))
+      .map((u) => ({
+        featureSlug: u.featureSlug,
+        legKey: u.legKey,
+        workflowSlug: u.workflowSlug,
+        runsOnTriggerId: u.runsOnTriggerId,
+        acquisitionChannel: acquisitionChannelForFeature(u.featureSlug)!,
+        name: `${parent.salesFunnelName} ${idTag} - ${derivedCampaignName(u.featureSlug, parent.brandId, parent.offerId, u.legKey)}`,
+      }));
+    const born = births.length === 0
+      ? []
+      : await db.transaction(async (tx) => {
+          const units = await insertSalesFunnelUnits(tx, parent, births);
+          if (parent.status === "ongoing") for (const unit of units) await ensureUnitSources(tx, unit);
+          return units;
+        });
+    if (born.length > 0 && parent.status === "ongoing") wakeScheduler();
+    console.log(`[campaign-service] Campaign ${parent.id} takes the entry ${salesFunnelId}: ${born.length} unit(s) born (${born.map((u) => u.id).join(", ") || "already there"})`);
+    const units = (await unitsOf([parent.id], orgId)).get(parent.id)!;
+    res.status(born.length > 0 ? 201 : 200).json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, units), bornUnitIds: born.map((u) => u.id) });
+  } catch (error) {
+    console.error("[campaign-service] Campaign entry error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
