@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { fetchChannelCatalogue } from "../../src/lib/channel-operator-client.js";
+import { fetchChannelCatalogue, CHANNEL_CATALOGUE_HOLD_MS } from "../../src/lib/channel-operator-client.js";
 
 /**
  * WHO operates a channel is features-service's statement, read from its PUBLIC catalogue. These
@@ -243,5 +243,61 @@ describe("fetchChannelCatalogue", () => {
     const read = await fetchChannelCatalogue();
     expect(read.ok).toBe(false);
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * THE HOLD (BOX-LOAD-1107): ~142 reads a minute of the same ~233 KB catalogue became one read a minute. A readable
+ * answer is shared for CHANNEL_CATALOGUE_HOLD_MS; an unreadable one is never held.
+ */
+describe("fetchChannelCatalogue hold", () => {
+  const body = (slug: string) => ({
+    ok: true,
+    json: async () => ({ channels: [{ slug, operatedBy: "platform" }], steps: [] }),
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    process.env.FEATURES_SERVICE_URL = "https://features.test.local";
+  });
+
+  it("answers every caller inside the hold from ONE read", async () => {
+    mockFetch.mockResolvedValue(body("a"));
+    const reads = await Promise.all([fetchChannelCatalogue(), fetchChannelCatalogue(), fetchChannelCatalogue()]);
+    const later = await fetchChannelCatalogue();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    for (const r of [...reads, later]) expect(r.ok && r.operatorBySlug.get("a")).toBe("platform");
+  });
+
+  it("reads again once the hold has passed, so an upstream edit reaches dispatch within it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    mockFetch.mockResolvedValueOnce(body("a")).mockResolvedValueOnce(body("b"));
+    const first = await fetchChannelCatalogue();
+    vi.setSystemTime(Date.now() + CHANNEL_CATALOGUE_HOLD_MS - 1);
+    const still = await fetchChannelCatalogue();
+    vi.setSystemTime(Date.now() + 2);
+    const next = await fetchChannelCatalogue();
+    vi.useRealTimers();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(first.ok && first.operatorBySlug.has("a")).toBe(true);
+    expect(still).toBe(first);
+    expect(next.ok && next.operatorBySlug.has("b")).toBe(true);
+  });
+
+  it("never holds an unreadable answer: the next caller asks again", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 502, text: async () => "down" }).mockResolvedValueOnce(body("a"));
+    const down = await fetchChannelCatalogue();
+    const up = await fetchChannelCatalogue();
+    expect(down.ok).toBe(false);
+    expect(up.ok && up.operatorBySlug.get("a")).toBe("platform");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("never holds a thrown read either", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("ECONNRESET")).mockResolvedValueOnce(body("a"));
+    expect((await fetchChannelCatalogue()).ok).toBe(false);
+    expect((await fetchChannelCatalogue()).ok).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });

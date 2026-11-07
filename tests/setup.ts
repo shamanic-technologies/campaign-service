@@ -1,4 +1,8 @@
-import { beforeAll, afterAll, vi } from "vitest";
+import { beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { forgetChannelCatalogueHold } from "../src/lib/channel-operator-client.js";
+
+// The catalogue read is HELD for a minute (src/lib/channel-operator-client.ts, BOX-LOAD-1107): every case states its own.
+beforeEach(() => forgetChannelCatalogueHold());
 
 // Every start path asks billing whether the org's card can be charged (src/lib/payment-hold.ts).
 // No test talks to billing, so the fleet default here is "not held"; the payment-hold tests
