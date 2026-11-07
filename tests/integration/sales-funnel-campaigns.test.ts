@@ -101,6 +101,34 @@ describe("sales funnel campaigns (brand x offer x sales funnel, one unit per pip
     await closeDb();
   });
 
+  it("a campaign takes its own leads' events as ANOTHER ENTRY: the trigger's line is born inside it, once (MIGRATE-1105 S6)", async () => {
+    const fc = (await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "stopped" }).expect(201)).body.salesFunnelCampaign;
+    const LEAD_EVENT_LINE = "trigger:lead_event+start_to_paid_client@ai-follow-up-email";
+    mockPlan.mockResolvedValue({
+      ok: true,
+      plan: {
+        salesFunnelId: LEAD_EVENT_LINE,
+        salesFunnelName: "Lead Follow-up",
+        units: [{ pipeId: "ai-follow-up-email|start_to_paid_client", featureSlug: "ai-follow-up-email", legKey: "start_to_paid_client", mode: "reactive", workflowSlug: "engine:paid_client", runsOnTriggerId: "lead_event" }],
+      },
+    });
+    const entry = (body: Record<string, unknown>) => withPerson(request(app).post(`/sales-funnel-campaigns/${fc.id}/entries`)).send(body);
+    const first = await entry({ salesFunnelId: LEAD_EVENT_LINE }).expect(201);
+    expect(first.body.bornUnitIds).toHaveLength(1);
+    const units = await unitsOf(fc.id);
+    expect(units).toHaveLength(3);
+    const born = units.find((u) => u.featureSlug === "ai-follow-up-email")!;
+    expect(born).toMatchObject({ offerId: OFFER, brandId: BRAND, runsOnTriggerId: "lead_event", status: "stopped", salesFunnelId: EPIPHANY, salesFunnelCampaignId: fc.id });
+    // Idempotent: the same entry twice is one unit.
+    expect((await entry({ salesFunnelId: LEAD_EVENT_LINE }).expect(200)).body.bornUnitIds).toEqual([]);
+    expect(await unitsOf(fc.id)).toHaveLength(3);
+    // A line that prospects is not an entry.
+    mockPlan.mockResolvedValue(planOf("Epiphany"));
+    expect((await entry({ salesFunnelId: EPIPHANY }).expect(400)).body.reason).toBe("entry_needs_trigger_line");
+    expect((await entry({}).expect(400)).body.reason).toBe("sales_funnel_id_required");
+    expect((await withPerson(request(app).post(`/sales-funnel-campaigns/${crypto.randomUUID()}/entries`)).send({ salesFunnelId: LEAD_EVENT_LINE })).status).toBe(404);
+  });
+
   it("creates a funnel STOPPED with one stopped unit per pipe, each carrying the funnel identity, and runs nothing", async () => {
     const res = await launch({ brandId: BRAND, offerId: OFFER, salesFunnelId: EPIPHANY, status: "stopped" }).expect(201);
 
