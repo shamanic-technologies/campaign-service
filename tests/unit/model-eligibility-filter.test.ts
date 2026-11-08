@@ -353,7 +353,7 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     await expect(resolveSelectionForTrigger(baseArgs)).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
-      noServeableAudience: false,
+      noServeableAudience: false, gridEnumeratesNoAudience: false,
     });
     expect((global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
     err.mockRestore();
@@ -403,7 +403,7 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
-      noServeableAudience: false,
+      noServeableAudience: false, gridEnumeratesNoAudience: false,
     });
     expect(err).toHaveBeenCalledTimes(1);
     err.mockRestore();
@@ -442,7 +442,7 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
-      noServeableAudience: false,
+      noServeableAudience: false, gridEnumeratesNoAudience: false,
     });
 
     // A play that allows workflows → selection as usual, no hold.
@@ -456,7 +456,7 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "strong-wf",
       audienceId: "aud-A",
-      noServeableAudience: false,
+      noServeableAudience: false, gridEnumeratesNoAudience: false,
     });
     err.mockRestore();
   });
@@ -473,7 +473,7 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
     await expect(resolveSelectionForTrigger({ ...baseArgs, legKey: LEG })).resolves.toEqual({
       workflowSlug: "wf-configured",
       audienceId: null,
-      noServeableAudience: false,
+      noServeableAudience: false, gridEnumeratesNoAudience: false,
     });
     // Wave C1: a LEG campaign never falls back to the funnel-keyed body.
     expect(f.mock.calls.every(([u]) => !new URL(String(u)).searchParams.has("funnel"))).toBe(true);
@@ -494,11 +494,11 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
 
     await expect(
       resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, excludedAudienceIds: ["aud-A", "aud-B"] }),
-    ).resolves.toEqual({ workflowSlug: "strong-wf", audienceId: null, noServeableAudience: true });
+    ).resolves.toEqual({ workflowSlug: "strong-wf", audienceId: null, noServeableAudience: true, gridEnumeratesNoAudience: false });
     // One audience left → it is served, nothing held.
     await expect(
       resolveSelectionForTrigger({ ...baseArgs, legKey: LEG, excludedAudienceIds: ["aud-A"] }),
-    ).resolves.toEqual({ workflowSlug: "strong-wf", audienceId: "aud-B", noServeableAudience: false });
+    ).resolves.toEqual({ workflowSlug: "strong-wf", audienceId: "aud-B", noServeableAudience: false, gridEnumeratesNoAudience: false });
   });
 
   it("a grid listing NO audience is not a hold — the run goes out exactly as before", async () => {
@@ -509,6 +509,8 @@ describe("resolveSelectionForTrigger — the verdict reaches the pick", () => {
       workflowSlug: "strong-wf",
       audienceId: null,
       noServeableAudience: false,
+      // ...and the dispatch says so, so /start-run does not re-read this body to find none (BOX-LOAD-1107).
+      gridEnumeratesNoAudience: true,
     });
   });
 });

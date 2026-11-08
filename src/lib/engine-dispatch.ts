@@ -167,6 +167,7 @@ export async function executeCampaignEngine(engine: CampaignEngine, inputs: Work
         activeGoalId: inputs.activeGoalId ?? null,
         brandProfileId: inputs.brandProfileId ?? null,
         audienceId: inputs.audienceId ?? null,
+        ...(inputs.noAudience && !inputs.audienceId ? { noAudience: true } : {}),
         ...(inputs.trigger ? { trigger: inputs.trigger } : {}),
       },
       ...(inputs.conflictPolicy ? { conflictPolicy: inputs.conflictPolicy } : {}),

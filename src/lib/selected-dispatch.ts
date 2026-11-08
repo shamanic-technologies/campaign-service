@@ -140,6 +140,8 @@ export async function dispatchSelectedRun(
     // Chosen at the trigger → /start-run CONSUMES it. Nothing chosen → exactly what this call
     // carried before, so a non-rotating feature is byte-unchanged.
     audienceId: selection.audienceId ?? campaign.audienceId,
+    // The grid was read and lists no audience: /start-run need not read it again (BOX-LOAD-1107).
+    noAudience: selection.gridEnumeratesNoAudience,
   };
   const attribute = (workflowSlug: string, runId: string | null) => {
     // The play this run went out under, kept with the run (STRATEGY-ATTRIBUTION-1018). Never awaited.
