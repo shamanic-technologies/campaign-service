@@ -742,6 +742,14 @@ export interface TriggerSelection {
    */
   noServeableAudience: boolean;
   /**
+   * BOX-LOAD-1107. True ONLY when the grid was READ and lists no audience at all (no row, or no row
+   * naming an audience): /start-run's own pick over that same body (`selectAudienceFromProjection`)
+   * can then only answer null, so the dispatch says so (`noAudience`) and /start-run skips its
+   * second read of the projection. False on every other answer (unreadable grid, no leg, a play
+   * hold, a grid listing audiences): /start-run reads and picks exactly as before.
+   */
+  gridEnumeratesNoAudience: boolean;
+  /**
    * Present ONLY when features-service states the campaign's play allows no workflow
    * (`play.allowedWorkflowCount === 0`): nothing may be dispatched, `workflowSlug` is NOT to be
    * run. Callers hold on `PLAY_NO_WORKFLOW_RECHECK_MS`. Absent on every other answer.
@@ -817,7 +825,7 @@ export async function resolveSelectionForTrigger(args: {
         `or audience is selected; running the configured workflow ${fallbackSlug}. State the ` +
         `campaign's legKey.`,
     );
-    return { workflowSlug: fallbackSlug, audienceId: null, noServeableAudience: false };
+    return { workflowSlug: fallbackSlug, audienceId: null, noServeableAudience: false, gridEnumeratesNoAudience: false };
   }
   try {
     // A campaign bought for a LEG is ranked on that leg's own outcome — the leg-keyed body, which
@@ -841,6 +849,7 @@ export async function resolveSelectionForTrigger(args: {
         workflowSlug: fallbackSlug,
         audienceId: null,
         noServeableAudience: false,
+        gridEnumeratesNoAudience: false,
         playHold: {
           playId: id,
           strategyId,
@@ -858,7 +867,8 @@ export async function resolveSelectionForTrigger(args: {
           `${legKey} ${eligibility ? "enumerated NO rows" : "could not be read"} — running the ` +
           `configured workflow ${fallbackSlug}.`,
       );
-      return { workflowSlug: fallbackSlug, audienceId: null, noServeableAudience: false };
+      // A READ grid with no row cannot give /start-run an audience either; an unread one can.
+      return { workflowSlug: fallbackSlug, audienceId: null, noServeableAudience: false, gridEnumeratesNoAudience: eligibility !== null };
     }
     const rows = eligibility.rows;
     // Applied to the ROWS, so the pooled audience column and the cell argmin are computed over the
@@ -882,12 +892,14 @@ export async function resolveSelectionForTrigger(args: {
       workflowSlug: featuresFirst ?? cell.workflowSlug ?? unrankedPick(candidates, fallbackSlug),
       audienceId: cell.audienceId,
       noServeableAudience: enumeratesAudiences && cell.audienceId == null,
+      // Over the UNRESTRICTED rows: /start-run's pick reads every row of this body, not the eligible ones.
+      gridEnumeratesNoAudience: !rows.some((r) => r.audienceId != null),
     };
   } catch (err) {
     console.warn(
       `[campaign-service] workflow bandit failed for brand ${primaryBrandId}, using configured workflow ${fallbackSlug}:`,
       err,
     );
-    return { workflowSlug: fallbackSlug, audienceId: null, noServeableAudience: false };
+    return { workflowSlug: fallbackSlug, audienceId: null, noServeableAudience: false, gridEnumeratesNoAudience: false };
   }
 }

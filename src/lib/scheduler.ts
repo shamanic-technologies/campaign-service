@@ -364,6 +364,8 @@ export async function reRunDueCampaigns(): Promise<number> {
           // CONSUMES it rather than drawing again. Nothing chosen → whatever this call carried
           // before the pick moved here, so a non-rotating feature is byte-unchanged.
           audienceId: selection.audienceId ?? campaign.audienceId,
+          // The grid was read and lists no audience: /start-run need not read it again (BOX-LOAD-1107).
+          noAudience: selection.gridEnumeratesNoAudience,
         };
         let dispatchedSlug = selection.workflowSlug;
         let execution;

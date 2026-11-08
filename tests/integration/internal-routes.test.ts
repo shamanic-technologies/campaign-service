@@ -589,6 +589,37 @@ describe("Pipeline routes", () => {
       expect(mockFetchCandidates).not.toHaveBeenCalled();
     });
 
+    it("consumes the trigger's NO-audience decision (x-no-audience) and makes NO projection call (BOX-LOAD-1107)", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({ "x-org-id": orgId, "x-campaign-id": campaign.id, "x-no-audience": "true" }))
+        .expect(200);
+
+      // The trigger read this same body and it listed no audience: the pick here could only be null.
+      expect(mockFetchCandidates).not.toHaveBeenCalled();
+      expect(res.body.audienceId).toBeNull();
+      expect(mockCreateRun).toHaveBeenCalledWith(expect.objectContaining({ audienceId: undefined }));
+    });
+
+    it("an audience supplied beside x-no-audience wins: consumed, no projection call", async () => {
+      const campaign = await insertTestCampaign(orgId, { brandIds });
+
+      const res = await request(app)
+        .post("/start-run")
+        .set(pipelineHeaders({
+          "x-org-id": orgId,
+          "x-campaign-id": campaign.id,
+          "x-audience-id": "aud-chosen-at-trigger",
+          "x-no-audience": "true",
+        }))
+        .expect(200);
+
+      expect(res.body.audienceId).toBe("aud-chosen-at-trigger");
+      expect(mockFetchCandidates).not.toHaveBeenCalled();
+    });
+
     it("picks the audience here exactly as before when the execute call supplied none", async () => {
       const campaign = await insertTestCampaign(orgId, { brandIds });
 

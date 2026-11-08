@@ -624,6 +624,8 @@ export async function runCampaignsInScope(
         activeGoalId: campaign.activeGoalId,
         brandProfileId: campaign.brandProfileId,
         audienceId: selection.audienceId ?? campaign.audienceId,
+        // The grid was read and lists no audience: /start-run need not read it again (BOX-LOAD-1107).
+        noAudience: selection.gridEnumeratesNoAudience,
         ...(campaignTrigger ? { trigger: campaignTrigger } : {}),
         // Two occurrences fired together for one campaign both pass the runs-service check above (it lags the
         // dispatch); workflow-service's reservation is the atomic one. Asked to REFUSE, never to answer the other
