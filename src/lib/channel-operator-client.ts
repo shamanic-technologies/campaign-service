@@ -180,6 +180,16 @@ export interface CatalogueTriggerTransition {
  */
 export const CHANNEL_CATALOGUE_HOLD_MS = 60_000;
 
+/**
+ * STALE IF ERROR (MIGRATE-1105 S6, prod 2026-11-08 04:20-07:25 UTC: 40 catalogue reads timed out or found
+ * features-service restarting after a heap OOM; each one 502'd billing's `/internal/campaigns/recurring-status`, billing
+ * read the max budget's consumption as unmeasured and HELD every unit of the org, Beyond Logic's cold email included).
+ * A failed read serves the last good one while it is younger than this, logged loud: the catalogue moves on an edit,
+ * minutes to hours apart, so a 30-minute-old copy names the same channels, legs and triggers. Older (or none) = the
+ * failure, as before: never a guess.
+ */
+export const CHANNEL_CATALOGUE_STALE_MAX_MS = 30 * 60_000;
+
 let held: { at: number; read: ChannelCatalogueRead } | null = null;
 let inFlight: Promise<ChannelCatalogueRead> | null = null;
 
@@ -199,6 +209,10 @@ export async function fetchChannelCatalogue(): Promise<ChannelCatalogueRead> {
     if (inFlight === read) {
       inFlight = null;
       if (r.ok) held = { at: Date.now(), read: r };
+    }
+    if (!r.ok && held && Date.now() - held.at < CHANNEL_CATALOGUE_STALE_MAX_MS) {
+      console.error(`[campaign-service] channel catalogue unreadable (${r.detail}): serving the last good read, ${Math.round((Date.now() - held.at) / 1000)}s old`);
+      return held.read;
     }
     return r;
   });
