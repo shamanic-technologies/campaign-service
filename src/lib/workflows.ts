@@ -13,6 +13,12 @@ export interface WorkflowExecutionInputs {
   brandProfileId?: string | null;
   audienceId?: string | null;
   /**
+   * BOX-LOAD-1107: the trigger READ the projection and it lists no audience, so /start-run's own pick could only
+   * answer none. Sent (`inputs.noAudience: true`) only beside no audienceId; workflow-service carries it to
+   * /start-run as `x-no-audience`, which then skips its second projection read. Absent = body byte-identical.
+   */
+  noAudience?: boolean;
+  /**
    * The trigger EVENT this run answers, when a detector fired it (a `delay` or `poll` trigger,
    * lib/trigger-detectors.ts): which event, which lead (delay) or which new item (poll). Absent on
    * every other dispatch, and then the body is byte-identical to before.
@@ -128,6 +134,7 @@ export async function executeCampaignWorkflow(
         activeGoalId: inputs.activeGoalId ?? null,
         brandProfileId: inputs.brandProfileId ?? null,
         audienceId: inputs.audienceId ?? null,
+        ...(inputs.noAudience && !inputs.audienceId ? { noAudience: true } : {}),
         ...(inputs.trigger ? { trigger: inputs.trigger } : {}),
       },
       ...(inputs.conflictPolicy ? { conflictPolicy: inputs.conflictPolicy } : {}),

@@ -338,11 +338,15 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
     // Nothing supplied → everything below is exactly what it was: the audience is picked here,
     // over this workflow's rows, with the same constraints.
     const suppliedAudienceId = req.audienceId ?? null;
-    const excludedAudienceIds = suppliedAudienceId
+    // BOX-LOAD-1107: the trigger READ this same leg-keyed body and it listed no audience
+    // (`x-no-audience: true`, carried by workflow-service), so the pick below could only answer
+    // null. The decision is consumed like a supplied audience: no second projection read.
+    const decidedNoAudience = !suppliedAudienceId && req.headers["x-no-audience"] === "true";
+    const excludedAudienceIds = suppliedAudienceId || decidedNoAudience
       ? []
       : await getFreshExhaustedAudienceIds(campaignId);
     let audienceId: string | null = suppliedAudienceId;
-    if (!suppliedAudienceId) {
+    if (!suppliedAudienceId && !decidedNoAudience) {
       try {
         // A LEG campaign picks its audience over the leg-keyed body — the same rows the trigger's
         // cell pick ranked on. A campaign that states no leg cannot be priced: no audience is
