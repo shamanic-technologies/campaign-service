@@ -294,6 +294,21 @@ describe("fetchChannelCatalogue hold", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
+  it("a failed read serves the last good one while it is under 30 minutes old, never older (MIGRATE-1105 S6)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-08T07:00:00Z"));
+    mockFetch.mockResolvedValueOnce(body("a"));
+    expect((await fetchChannelCatalogue()).ok).toBe(true);
+    vi.setSystemTime(new Date("2026-11-08T07:10:00Z"));
+    mockFetch.mockRejectedValueOnce(new Error("fetch failed"));
+    const stale = await fetchChannelCatalogue();
+    expect(stale.ok && stale.operatorBySlug.get("a")).toBe("platform");
+    vi.setSystemTime(new Date("2026-11-08T07:31:00Z"));
+    mockFetch.mockRejectedValueOnce(new Error("fetch failed"));
+    expect((await fetchChannelCatalogue()).ok).toBe(false);
+    vi.useRealTimers();
+  });
+
   it("never holds a thrown read either", async () => {
     mockFetch.mockRejectedValueOnce(new Error("ECONNRESET")).mockResolvedValueOnce(body("a"));
     expect((await fetchChannelCatalogue()).ok).toBe(false);
