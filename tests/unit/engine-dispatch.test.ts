@@ -135,6 +135,19 @@ describe("dispatching the Engine", () => {
     expect(body).toMatchObject({ inputs: { trigger }, conflictPolicy: "reject", executionSubject: "lead:lead-1" });
   });
 
+  it("a campaign its strategy keeps out never marks the org's Engine not live for its siblings", async () => {
+    // Org-wide: live for this channel.
+    fetchMock.mockResolvedValueOnce(json(200, { live: true }));
+    const campaign = { featureSlug: "ai-follow-up-email", legKey: "conversation_to_meeting_booked" };
+    expect(await liveEngineFor(campaign, "org-1")).not.toBeNull();
+    // One campaign's strategy keeps no script: it falls back, alone.
+    fetchMock.mockResolvedValueOnce(json(409, { code: "engine_not_live", state: { live: false } }));
+    expect(await executeCampaignEngine({ outcome: "meeting_booked", fromOutcome: "conversation" }, { ...inputs, featureSlug: "ai-follow-up-email" })).toBeNull();
+    // Its sibling of the same org and channel still runs the Engine (the cached org answer stands).
+    expect(await liveEngineFor(campaign, "org-1")).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("falls back (null) when workflow-service says not live, and throws any other refusal", async () => {
     fetchMock.mockResolvedValueOnce(json(409, { code: "engine_not_live" }));
     expect(await executeCampaignEngine({ outcome: "lead_found", fromOutcome: "start" }, inputs)).toBeNull();
