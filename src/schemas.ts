@@ -321,6 +321,9 @@ export const SalesFunnelUnitSchema = z.object({
   salesFunnelId: z.string(),
   // "draining" = its pipe left the plan: never stopped, answers the people it already owes, takes no new people.
   planRole: z.enum(["draining"]).nullable(),
+  // The trigger this unit runs on (its funnel is headed by it, lib/sales-funnel-head-trigger.ts), e.g.
+  // `lead_event`; null = it runs on its own (the tick) or answers its pipe's own trigger.
+  runsOnTriggerId: z.string().nullable(),
 }).openapi("SalesFunnelUnit");
 
 export const SalesFunnelCampaignSchema = z.object({
