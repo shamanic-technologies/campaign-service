@@ -690,6 +690,10 @@
               "draining",
               null
             ]
+          },
+          "runsOnTriggerId": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -701,7 +705,8 @@
           "workflowSlug",
           "name",
           "salesFunnelId",
-          "planRole"
+          "planRole",
+          "runsOnTriggerId"
         ]
       },
       "CreateSalesFunnelCampaignBody": {
