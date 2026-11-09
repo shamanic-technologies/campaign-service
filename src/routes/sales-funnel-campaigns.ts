@@ -43,7 +43,7 @@ import { pgErrorOf } from "../lib/pg-error.js";
 import { SALES_FUNNEL_CAMPAIGN_FIELD_LABELS, describeChanges, reportCampaignAction } from "../lib/account-activity.js";
 import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sales-funnel-target.js";
 import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "../lib/engine-dispatch.js";
-import { isTargetOnlyCampaign, targetOnlyUnitBirth } from "../lib/target-only-campaign.js";
+import { isTargetOnlyCampaign, targetLabelOf, targetOnlyUnitBirth } from "../lib/target-only-campaign.js";
 import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass, runSwitchOffFor } from "../lib/sales-funnel-plan.js";
 
 /**
@@ -287,13 +287,20 @@ router.post(
           console.warn(`[campaign-service] Not launching target ${salesFunnelId} — org=${orgId} brand=${brandId}: its Engine does not run this org's campaigns`);
           return res.status(409).json({ error: `Nothing makes "${salesFunnelId}" for this organization yet, so this campaign can't be launched.`, reason: "engine_not_live" });
         }
-        // The catalogue serves step keys only (no label): the target names the campaign.
+        // Named after its outcome's label as the catalogue publishes it, never its key: none = refused loud.
+        const catalogue = await fetchChannelCatalogue();
+        const label = catalogue.ok ? targetLabelOf(catalogue, salesFunnelId) : null;
+        if (!label) {
+          const why = catalogue.ok ? "the catalogue publishes no label for it" : `the catalogue is unreadable (${catalogue.detail})`;
+          console.error(`[campaign-service] Not launching target ${salesFunnelId} — org=${orgId} brand=${brandId}: ${why}`);
+          return res.status(502).json({ error: `We couldn't read the name of "${salesFunnelId}" just now, so this campaign can't be launched yet.`, reason: "target_label_missing" });
+        }
         birth = {
-          salesFunnelName: salesFunnelId,
+          salesFunnelName: label,
           target: salesFunnelId,
           mode: "proactive",
           triggerId: null,
-          units: [targetOnlyUnitBirth(salesFunnelId, `${salesFunnelId} ${idTag}`)],
+          units: [targetOnlyUnitBirth(salesFunnelId, `${label} ${idTag}`)],
         };
       } else {
         const resolved = await resolveSalesFunnelPlan(salesFunnelId, {
