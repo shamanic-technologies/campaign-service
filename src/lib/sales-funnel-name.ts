@@ -23,6 +23,7 @@ import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, salesFunnelCampaigns } from "../db/schema.js";
 import { fetchSalesFunnel } from "./sales-funnel-catalogue-client.js";
+import { isTargetOnlyCampaign } from "./target-only-campaign.js";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -118,6 +119,8 @@ export async function runSalesFunnelNameRepair(opts: {
   const result: NameRepairResult = { applied: opts.apply, renamed: [], skipped: [] };
 
   for (const parent of parents) {
+    // A campaign launched on its target alone is named after its target, not a funnel the catalogue serves.
+    if (isTargetOnlyCampaign(parent)) continue;
     if (!reads.has(parent.salesFunnelId)) reads.set(parent.salesFunnelId, await fetchFunnel(parent.salesFunnelId));
     const read = reads.get(parent.salesFunnelId)!;
     const skip = (reason: string) => result.skipped.push({ salesFunnelCampaignId: parent.id, salesFunnelId: parent.salesFunnelId, storedName: parent.salesFunnelName, reason });

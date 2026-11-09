@@ -504,7 +504,7 @@ export async function runCampaignsInScope(
       }
     }
 
-    const cohort = serializationCohort(campaign.featureSlug);
+    const cohort = serializationCohort(campaign.featureSlug, campaign.workflowSlug);
     // A run carrying ONE person locks that person, not the campaign (lib/person-runs.ts,
     // REACTIVE-THROUGHPUT-1028): different people run side by side, the same person never twice at once.
     if (person) {
@@ -516,7 +516,7 @@ export async function runCampaignsInScope(
         );
         continue;
       }
-      const cohortIds = live.filter((c) => serializationCohort(c.featureSlug) === cohort).map((c) => c.id);
+      const cohortIds = live.filter((c) => serializationCohort(c.featureSlug, c.workflowSlug) === cohort).map((c) => c.id);
       const slot = await reservePersonRun(`${req.orgId}|${brandIds[0]}|${cohort}`, cohortIds, campaign.id, person, now);
       if (!slot.ok) {
         skip(STEP_TRIGGER_SKIPS.RUN_IN_FLIGHT, slot.detail, undefined, slot.heldByCampaignId);

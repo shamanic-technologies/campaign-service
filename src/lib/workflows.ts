@@ -8,7 +8,8 @@ export interface WorkflowExecutionInputs {
   brandId: string;
   userId: string;
   runId: string;
-  featureSlug: string;
+  /** The unit's channel; null on a unit with none (a campaign launched on its target alone, run by its Engine only). */
+  featureSlug: string | null;
   activeGoalId?: string | null;
   brandProfileId?: string | null;
   audienceId?: string | null;
@@ -115,7 +116,8 @@ export async function executeCampaignWorkflow(
     "x-run-id": inputs.runId,
     "x-brand-id": inputs.brandId,
     "x-campaign-id": inputs.campaignId,
-    "x-feature-slug": inputs.featureSlug,
+    // Checked present above (REQUIRED_FIELDS): a workflow always runs on a channel.
+    "x-feature-slug": inputs.featureSlug!,
     "x-workflow-slug": workflowSlug,
   };
   if (inputs.activeGoalId) headers["x-active-goal-id"] = inputs.activeGoalId;

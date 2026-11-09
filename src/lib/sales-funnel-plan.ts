@@ -8,6 +8,7 @@ import { sameLeg } from "./leg-identity.js";
 import { ensureSourcesOnStart } from "./source-campaign-store.js";
 import { briefNamedUnits, type BriefGuardDeps } from "./sales-funnel-plan-brief.js";
 import { resolveSalesFunnelPlan, type SalesFunnelUnitPlan } from "./startable-pair.js";
+import { isTargetOnlyCampaign } from "./target-only-campaign.js";
 
 /**
  * A FUNNEL CAMPAIGN THAT FOLLOWS ITS PLAN (owner 2026-10-28, FACTORY-P1-FOLLOW-PLAN, GTM Factory v10 phase 1).
@@ -569,6 +570,7 @@ export async function dryRunPlans(scope: { orgId: string; brandId?: string; sale
   if (scope.salesFunnelCampaignId) conditions.push(inArray(salesFunnelCampaigns.id, [scope.salesFunnelCampaignId]));
   const rows = await db.select().from(salesFunnelCampaigns).where(and(...conditions));
   const out: PlanCheckResult[] = [];
-  for (const row of rows) out.push(await checkSalesFunnelCampaignPlan(row, { apply: false }, deps));
+  // A campaign launched on its target alone follows no plan (refused at launch and edit): nothing to dry-run.
+  for (const row of rows) if (!isTargetOnlyCampaign(row)) out.push(await checkSalesFunnelCampaignPlan(row, { apply: false }, deps));
   return out;
 }

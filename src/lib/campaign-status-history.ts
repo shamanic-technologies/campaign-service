@@ -385,11 +385,12 @@ export async function stopOrgCampaignsWithHistory(
 
 /** One unit to be born with its funnel campaign: a pipe, already resolved. */
 export interface SalesFunnelUnitBirth {
-  featureSlug: string;
-  legKey: string;
+  /** null (with legKey) = a unit with no channel, run by its Engine only (lib/target-only-campaign.ts). */
+  featureSlug: string | null;
+  legKey: string | null;
   workflowSlug: string | null;
   name: string;
-  acquisitionChannel: string;
+  acquisitionChannel: string | null;
   /** The trigger the unit runs on, and only on (lib/sales-funnel-head-trigger.ts); absent/null = runs as every unit. */
   runsOnTriggerId?: string | null;
 }
