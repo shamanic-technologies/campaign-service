@@ -176,10 +176,11 @@ export async function executeCampaignEngine(engine: CampaignEngine, inputs: Work
   });
   const text = await res.text();
   if (!res.ok) {
-    if (res.status === 409 && engineNotLive(text)) {
-      cache.set(`${engine.outcome}|${inputs.orgId}|${inputs.featureSlug ?? ""}`, { live: false, at: Date.now() });
-      return null;
-    }
+    // MIGRATE-1105 S7: this refusal is about THIS campaign (its strategy keeps no script of the Engine), never the org's
+    // Engine state: it is never written to the org x channel cache. Prod 2026-11-09: the three Lead event campaigns of
+    // one org fire on every occurrence; the two whose strategy kept no script wrote "not live" for the org, so the
+    // third, whose strategy keeps the answering script, ran its old workflow every time.
+    if (res.status === 409 && engineNotLive(text)) return null;
     throw new WorkflowExecutionRefusedError({ workflowSlug: `engine:${engine.outcome}`, campaignId: inputs.campaignId, status: res.status, body: text });
   }
   const body = (text ? JSON.parse(text) : null) as { runId?: unknown } | null;
