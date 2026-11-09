@@ -73,7 +73,8 @@ const CATALOGUE = {
   operatorBySlug: new Map(),
   legsBySlug: new Map(),
   legs: [],
-  stepKeys: new Set(["lead_found", "paid_client", "backlink_earned", "industry_news_found"]),
+  stepKeys: new Set(["lead_found", "paid_client", "backlink_earned", "industry_news_found", "unlabelled_outcome"]),
+  stepLabels: new Map([["backlink_earned", "Backlink earned"], ["industry_news_found", "Industry news found"]]),
 };
 
 const withPerson = (r: request.Test) =>
@@ -104,7 +105,8 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
     expect(res.body).toMatchObject({ created: true, started: true });
     expect(fc).toMatchObject({
       salesFunnelId: TARGET,
-      salesFunnelName: TARGET,
+      // The outcome's label as the catalogue publishes it, never its key.
+      salesFunnelName: "Backlink earned",
       target: TARGET,
       mode: "proactive",
       triggerId: null,
@@ -119,6 +121,7 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
 
     const [unit] = await db.select().from(campaigns).where(eq(campaigns.salesFunnelCampaignId, fc.id));
     expect(unit).toMatchObject({ acquisitionChannel: null, featureSlug: null, legKey: null, brandId: BRAND, offerId: OFFER, salesFunnelId: TARGET });
+    expect(unit.name).toBe(`Backlink earned ${fc.id.slice(0, 8)}`);
     expect(unit.nextRunAt).not.toBeNull();
 
     const again = await launch({}).expect(200);
@@ -133,6 +136,10 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
     expect((await launch({ people: [{ email: "staff@distribute.you" }] }).expect(400)).body.reason).toBe("people_need_reactive_funnel");
     expect((await launch({ githubIssue: { repo: "shamanic-technologies/campaign-service", number: 1 } }).expect(400)).body.reason).toBe("github_issue_needs_github_trigger");
     expect((await launch({ target: "not_a_step" }).expect(400)).body.reason).toBe("unknown_target_step");
+
+    // An outcome the catalogue publishes no label for: refused loud, never named after its key.
+    const unlabelled = await launch({ target: "unlabelled_outcome" }).expect(502);
+    expect(unlabelled.body.reason).toBe("target_label_missing");
 
     vi.mocked(liveEngineFor).mockResolvedValueOnce(null);
     const notLive = await launch({}).expect(409);
@@ -180,6 +187,36 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
     expect(mockExecute).not.toHaveBeenCalled();
     const [unit] = await db.select().from(campaigns).where(eq(campaigns.salesFunnelCampaignId, fc.id));
     expect(unit.nextRunAt!.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("born under its key before labels were read, is renamed to its outcome's label by the name repair (row + unit)", async () => {
+    const fc = (await launch({}).expect(201)).body.salesFunnelCampaign;
+    const tag = fc.id.slice(0, 8);
+    // The rows #883 wrote (prod 0380de8a): the key as name.
+    await db.update(salesFunnelCampaigns).set({ salesFunnelName: TARGET }).where(eq(salesFunnelCampaigns.id, fc.id));
+    await db.update(campaigns).set({ name: `${TARGET} ${tag}` }).where(eq(campaigns.salesFunnelCampaignId, fc.id));
+
+    const dry = await runSalesFunnelNameRepair({ apply: false, orgId: ORG, fetchFunnel: mockFunnel });
+    expect(dry.renamed).toHaveLength(1);
+    expect(dry.renamed[0]).toMatchObject({ salesFunnelCampaignId: fc.id, from: TARGET, to: "Backlink earned", nameSource: "catalogue" });
+    expect(dry.renamed[0].units).toEqual([{ campaignId: fc.units[0].campaignId, from: `${TARGET} ${tag}`, to: `Backlink earned ${tag}` }]);
+
+    await runSalesFunnelNameRepair({ apply: true, orgId: ORG, fetchFunnel: mockFunnel });
+    const [row] = await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.id, fc.id));
+    expect(row).toMatchObject({ salesFunnelName: "Backlink earned", salesFunnelId: TARGET, target: TARGET });
+    const [unit] = await db.select().from(campaigns).where(eq(campaigns.salesFunnelCampaignId, fc.id));
+    expect(unit.name).toBe(`Backlink earned ${tag}`);
+    // Idempotent.
+    expect((await runSalesFunnelNameRepair({ apply: true, orgId: ORG, fetchFunnel: mockFunnel })).renamed).toEqual([]);
+    expect(mockFunnel).not.toHaveBeenCalled();
+  });
+
+  it("is skipped by name, never renamed to its key, when the catalogue publishes no label for its target", async () => {
+    const fc = (await launch({}).expect(201)).body.salesFunnelCampaign;
+    mockCatalogue.mockResolvedValue({ ...CATALOGUE, stepLabels: new Map() });
+    const res = await runSalesFunnelNameRepair({ apply: true, orgId: ORG, fetchFunnel: mockFunnel });
+    expect(res.renamed).toEqual([]);
+    expect(res.skipped).toEqual([expect.objectContaining({ salesFunnelCampaignId: fc.id, reason: expect.stringContaining("target_label_missing") })]);
   });
 
   it("is left alone by the staff jobs that work on sales funnels (none throws, none lists it)", async () => {

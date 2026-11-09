@@ -8,6 +8,7 @@
  * bare step key. Its target therefore never moves (the unit's Engine is named after it).
  */
 import { engineOutcomeOfSlug, engineUnitWorkflowSlug } from "./engine-dispatch.js";
+import type { ChannelCatalogueRead } from "./channel-operator-client.js";
 
 /** A funnel campaign launched on its target alone (no sales funnel). Pure. */
 export function isTargetOnlyCampaign(row: { salesFunnelId: string; target: string | null }): boolean {
@@ -17,6 +18,15 @@ export function isTargetOnlyCampaign(row: { salesFunnelId: string; target: strin
 /** A unit of a target-only campaign: no channel, no leg, born on its Engine. Pure. */
 export function isEngineOnlyUnit(unit: { featureSlug?: string | null; legKey?: string | null; workflowSlug?: string | null }): boolean {
   return !unit.featureSlug && !unit.legKey && engineOutcomeOfSlug(unit.workflowSlug) !== null;
+}
+
+/**
+ * The NAME a target-only campaign reads everywhere a client sees it: its outcome's label as features-service publishes
+ * it ("Backlink earned"), never its key and never a map of ours. null = the catalogue publishes no label for it: the
+ * caller refuses (launch) or skips (repair), loud, never falls back to the key. Pure.
+ */
+export function targetLabelOf(catalogue: ChannelCatalogueRead, target: string): string | null {
+  return catalogue.ok ? (catalogue.stepLabels?.get(target) ?? null) : null;
 }
 
 /** The one unit a target-only campaign is born with. Pure. */

@@ -113,6 +113,12 @@ export type ChannelCatalogueRead =
        */
       nameBySlug?: ReadonlyMap<string, string>;
       /**
+       * step key -> the step's LABEL as features-service publishes it ("Backlink earned"). A campaign launched on its
+       * target alone is named after it (lib/target-only-campaign.ts). A step publishing no label is absent. Optional so
+       * a hand-built read (tests) may omit it.
+       */
+      stepLabels?: ReadonlyMap<string, string>;
+      /**
        * MIGRATE-1105 S5 (owner 2026-11-06: the outcome is the WHAT, as fine as possible): channel slug -> (leg key as
        * that channel publishes it -> the outcome its pipe's ENGINE makes, `stepTransitions[].outcome`), only where
        * features-service states one finer than the leg's `to` step. Absent = the Engine is the `to` step. Optional so a
@@ -264,7 +270,7 @@ async function readChannelCatalogueNow(): Promise<ChannelCatalogueRead> {
         fromStep?: { key?: unknown } | null;
         toStep?: { key?: unknown } | null;
       }>;
-      steps?: Array<{ key?: unknown }>;
+      steps?: Array<{ key?: unknown; label?: unknown }>;
       triggerAliases?: Array<{ id?: unknown; mergedInto?: unknown }>;
     };
     if (!Array.isArray(data.channels)) {
@@ -341,9 +347,12 @@ async function readChannelCatalogueNow(): Promise<ChannelCatalogueRead> {
     }
 
     const stepKeys = new Set<string>();
+    const stepLabels = new Map<string, string>();
     if (Array.isArray(data.steps)) {
       for (const step of data.steps) {
-        if (typeof step?.key === "string" && step.key.length > 0) stepKeys.add(step.key);
+        if (typeof step?.key !== "string" || step.key.length === 0) continue;
+        stepKeys.add(step.key);
+        if (typeof step.label === "string" && step.label.trim().length > 0) stepLabels.set(step.key, step.label.trim());
       }
     }
 
@@ -367,7 +376,7 @@ async function readChannelCatalogueNow(): Promise<ChannelCatalogueRead> {
       }
     }
 
-    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug, triggers, triggerTransitions, triggerAliases, nameBySlug, engineOutcomeBySlug };
+    return { ok: true, operatorBySlug, legsBySlug, legs, stepKeys, reactiveBySlug, triggers, triggerTransitions, triggerAliases, nameBySlug, engineOutcomeBySlug, stepLabels };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

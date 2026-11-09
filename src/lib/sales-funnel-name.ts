@@ -23,15 +23,19 @@ import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaigns, salesFunnelCampaigns } from "../db/schema.js";
 import { fetchSalesFunnel } from "./sales-funnel-catalogue-client.js";
-import { isTargetOnlyCampaign } from "./target-only-campaign.js";
+import { fetchChannelCatalogue, type ChannelCatalogueRead } from "./channel-operator-client.js";
+import { isTargetOnlyCampaign, targetLabelOf } from "./target-only-campaign.js";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** PURE: the unit name under the new funnel name, or null when the unit does not carry the funnel's prefix. */
 export function renamedUnitName(unitName: string, salesFunnelCampaignId: string, fromName: string, toName: string): string | null {
-  const prefix = `${fromName} ${salesFunnelCampaignId.slice(0, 8)} - `;
+  const tag = salesFunnelCampaignId.slice(0, 8);
+  // The one unit of a campaign on its target alone carries the bare `<name> <idTag>` (lib/target-only-campaign.ts).
+  if (unitName === `${fromName} ${tag}`) return `${toName} ${tag}`;
+  const prefix = `${fromName} ${tag} - `;
   if (!unitName.startsWith(prefix)) return null;
-  return `${toName} ${salesFunnelCampaignId.slice(0, 8)} - ${unitName.slice(prefix.length)}`;
+  return `${toName} ${tag} - ${unitName.slice(prefix.length)}`;
 }
 
 export interface UnitRename {
@@ -112,38 +116,52 @@ export async function runSalesFunnelNameRepair(opts: {
   /** Names for funnel ids the catalogue no longer serves (404), keyed on the stored `salesFunnelId`. */
   retiredFunnelNames?: Record<string, string>;
   fetchFunnel?: typeof fetchSalesFunnel;
+  fetchCatalogue?: typeof fetchChannelCatalogue;
 }): Promise<NameRepairResult> {
   const fetchFunnel = opts.fetchFunnel ?? fetchSalesFunnel;
   const parents = await db.select().from(salesFunnelCampaigns).where(opts.orgId ? eq(salesFunnelCampaigns.orgId, opts.orgId) : undefined);
   const reads = new Map<string, Awaited<ReturnType<typeof fetchSalesFunnel>>>();
   const result: NameRepairResult = { applied: opts.apply, renamed: [], skipped: [] };
 
+  let catalogue: ChannelCatalogueRead | null = null;
   for (const parent of parents) {
-    // A campaign launched on its target alone is named after its target, not a funnel the catalogue serves.
-    if (isTargetOnlyCampaign(parent)) continue;
-    if (!reads.has(parent.salesFunnelId)) reads.set(parent.salesFunnelId, await fetchFunnel(parent.salesFunnelId));
-    const read = reads.get(parent.salesFunnelId)!;
     const skip = (reason: string) => result.skipped.push({ salesFunnelCampaignId: parent.id, salesFunnelId: parent.salesFunnelId, storedName: parent.salesFunnelName, reason });
     let toName: string;
     let resolvedSalesFunnelId: string | undefined;
     let nameSource: NameRepairItem["nameSource"] = "catalogue";
-    if (!read.ok) {
-      const retiredName = read.notFound ? opts.retiredFunnelNames?.[parent.salesFunnelId] : undefined;
-      if (retiredName === undefined) {
-        if (read.notFound) {
-          skip(`funnel_retired: ${read.detail}`);
-          continue;
-        }
-        console.error(`[campaign-service] Sales funnel name repair: funnel ${parent.salesFunnelId} of ${parent.id} unreadable, not renamed: ${read.detail}`);
-        skip(`funnel_unreadable: ${read.detail}`);
+    // A campaign launched on its target alone (lib/target-only-campaign.ts) reads its OUTCOME's label, never a funnel's
+    // name, and never its key (MIGRATE-1105 S8: #883 named them after the key).
+    if (isTargetOnlyCampaign(parent)) {
+      catalogue ??= await (opts.fetchCatalogue ?? fetchChannelCatalogue)();
+      const label = targetLabelOf(catalogue, parent.target!);
+      if (!label) {
+        const why = catalogue.ok ? "the catalogue publishes no label for it" : `catalogue unreadable: ${catalogue.detail}`;
+        console.error(`[campaign-service] Sales funnel name repair: target ${parent.target} of ${parent.id} not renamed: ${why}`);
+        skip(`target_label_missing: ${why}`);
         continue;
       }
-      toName = retiredName;
-      nameSource = "retired";
+      toName = label;
     } else {
-      toName = read.value.name;
-      // A legacy id: the name is the funnel it resolves to; the stored id stays (billing's caps are keyed on it).
-      if (read.value.id !== parent.salesFunnelId) resolvedSalesFunnelId = read.value.id;
+      if (!reads.has(parent.salesFunnelId)) reads.set(parent.salesFunnelId, await fetchFunnel(parent.salesFunnelId));
+      const read = reads.get(parent.salesFunnelId)!;
+      if (!read.ok) {
+        const retiredName = read.notFound ? opts.retiredFunnelNames?.[parent.salesFunnelId] : undefined;
+        if (retiredName === undefined) {
+          if (read.notFound) {
+            skip(`funnel_retired: ${read.detail}`);
+            continue;
+          }
+          console.error(`[campaign-service] Sales funnel name repair: funnel ${parent.salesFunnelId} of ${parent.id} unreadable, not renamed: ${read.detail}`);
+          skip(`funnel_unreadable: ${read.detail}`);
+          continue;
+        }
+        toName = retiredName;
+        nameSource = "retired";
+      } else {
+        toName = read.value.name;
+        // A legacy id: the name is the funnel it resolves to; the stored id stays (billing's caps are keyed on it).
+        if (read.value.id !== parent.salesFunnelId) resolvedSalesFunnelId = read.value.id;
+      }
     }
     if (toName === parent.salesFunnelName) continue;
     const units = await db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns).where(eq(campaigns.salesFunnelCampaignId, parent.id));
