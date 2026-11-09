@@ -10,7 +10,8 @@ export interface DownstreamIdentity {
    * simply not sent rather than carrying an invented value.
    */
   workflowSlug: string | null;
-  featureSlug: string;
+  /** The campaign's channel; null on a unit with none (a campaign launched on its target alone): header not sent. */
+  featureSlug: string | null;
 }
 
 export function buildServiceHeaders(apiKey: string, identity: DownstreamIdentity): Record<string, string> {
@@ -22,8 +23,8 @@ export function buildServiceHeaders(apiKey: string, identity: DownstreamIdentity
     "x-run-id": identity.runId,
     "x-brand-id": identity.brandId,
     "x-campaign-id": identity.campaignId,
-    "x-feature-slug": identity.featureSlug,
   };
+  if (identity.featureSlug) headers["x-feature-slug"] = identity.featureSlug;
   if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
   return headers;
 }

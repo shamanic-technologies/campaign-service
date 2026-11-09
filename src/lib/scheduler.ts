@@ -6,7 +6,8 @@ import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./
 import { answersATrigger, reactiveWake } from "./reactive-wake.js";
 import { executeCampaignWorkflow } from "./workflows.js";
 import { ENGINE_STATE_RECHECK_MS, EngineStateUnreadableError, liveEngineFor } from "./engine-dispatch.js";
-import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
+import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger, type TriggerSelection } from "./features-workflow-projection-client.js";
+import { isEngineOnlyUnit } from "./target-only-campaign.js";
 import { attributeRunPlay } from "./run-play-attribution.js";
 import { getFreshExhaustedAudienceIds, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "./audience-exhaustion.js";
 import { listRuns, updateRun } from "@distribute/runs-client";
@@ -204,7 +205,9 @@ export async function reRunDueCampaigns(): Promise<number> {
       const missingFields: string[] = [];
       if (!campaign.brandIds || campaign.brandIds.length === 0) missingFields.push("brandIds");
       if (!campaign.createdByUserId) missingFields.push("createdByUserId");
-      if (!campaign.featureSlug) missingFields.push("featureSlug");
+      // A unit with no channel (MIGRATE-1105 S8, a campaign launched on its target alone) is run by its Engine only.
+      const engineOnly = isEngineOnlyUnit(campaign);
+      if (!campaign.featureSlug && !engineOnly) missingFields.push("featureSlug");
       if (missingFields.length > 0) {
         console.warn(`[campaign-service] Campaign ${campaign.id} missing required fields for workflow execution: ${missingFields.join(", ")} — skipping re-run`);
         // Left at NULL it would be re-claimed by the stuck sweep every tick, forever.
@@ -233,11 +236,12 @@ export async function reRunDueCampaigns(): Promise<number> {
 
       const brandIdCsv = campaign.brandIds!.join(",");
       const userId = campaign.createdByUserId!;
-      const featureSlug = campaign.featureSlug!;
+      const featureSlug = campaign.featureSlug;
 
       // Every lead source of the offer is OFF: lead-service would refuse every serve, and each refused
       // run marks an audience exhausted. Held on its own cadence and SAID, never run (sources-off-hold.ts).
-      const sourcesOff = await sourcesOffHold({ id: campaign.id, featureSlug, legKey: campaign.legKey });
+      // A unit with no channel serves no lead of a source: nothing to hold on.
+      const sourcesOff = featureSlug ? await sourcesOffHold({ id: campaign.id, featureSlug, legKey: campaign.legKey }) : null;
       if (sourcesOff) {
         const nextRunAt = new Date(now.getTime() + SOURCES_OFF_RECHECK_MS);
         await db
@@ -290,7 +294,14 @@ export async function reRunDueCampaigns(): Promise<number> {
           }]);
           continue;
         }
-        const selection = await resolveSelectionForTrigger({
+        // A unit with no channel picks no audience and no workflow: its Engine makes its outcome from Start. Not live
+        // for the org = a failed dispatch, loud (the stored slug names an Engine, never a workflow to fall back on).
+        if (engineOnly && !engine) {
+          throw new Error(`the ${campaign.workflowSlug} Engine does not run this org's campaigns: nothing can run this campaign`);
+        }
+        const selection: TriggerSelection = engineOnly || !featureSlug
+          ? { workflowSlug: campaign.workflowSlug!, audienceId: null, noServeableAudience: false, gridEnumeratesNoAudience: true }
+          : await resolveSelectionForTrigger({
           featureSlug,
           primaryBrandId: campaign.brandIds![0],
           identity: {
@@ -373,7 +384,9 @@ export async function reRunDueCampaigns(): Promise<number> {
           execution = await (engine ? executeCampaignWorkflow(selection.workflowSlug, inputs, engine) : executeCampaignWorkflow(selection.workflowSlug, inputs));
         } catch (err) {
           // A deprecated workflow (410) is replaced once and never asked for again — see
-          // retired-workflow.ts. Anything else (or no live successor) is a failed dispatch.
+          // retired-workflow.ts. Anything else (or no live successor) is a failed dispatch. A unit with no channel runs
+          // no workflow, so it has none to replace.
+          if (!featureSlug) throw err;
           const successor = await replaceRetiredWorkflow(err, {
             campaignId: campaign.id,
             storedSlug: campaign.workflowSlug,

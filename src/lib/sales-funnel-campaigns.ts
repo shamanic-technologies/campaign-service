@@ -586,9 +586,10 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
     updatedAt: row.updatedAt.toISOString(),
     units: units.map((u) => ({
       campaignId: u.id,
-      pipeId: `${u.featureSlug}|${u.legKey}`,
-      featureSlug: u.featureSlug!,
-      legKey: u.legKey!,
+      // A unit with no channel (a campaign launched on its target alone, lib/target-only-campaign.ts) has no pipe.
+      pipeId: u.featureSlug && u.legKey ? `${u.featureSlug}|${u.legKey}` : null,
+      featureSlug: u.featureSlug ?? null,
+      legKey: u.legKey ?? null,
       status: u.status,
       workflowSlug: u.workflowSlug,
       name: u.name,

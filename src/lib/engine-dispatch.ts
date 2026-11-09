@@ -33,6 +33,14 @@ export interface CampaignEngine {
  */
 export const engineUnitWorkflowSlug = (outcome: string): string => `engine:${outcome}`;
 
+/** The Engine outcome a unit is born on (`engine:<outcome>`), or null for a unit born on a workflow. Pure. */
+export function engineOutcomeOfSlug(workflowSlug: string | null | undefined): string | null {
+  const prefix = engineUnitWorkflowSlug("");
+  if (!workflowSlug?.startsWith(prefix)) return null;
+  const outcome = workflowSlug.slice(prefix.length);
+  return outcome.length > 0 ? outcome : null;
+}
+
 /** The step a proactive leg starts from (the catalogue states none). */
 export const START_OUTCOME = "start";
 /** A minute: how long an Engine state read (and the catalogue it is keyed on) is reused. */
@@ -97,14 +105,19 @@ async function catalogue(): Promise<ChannelCatalogueRead> {
  * holds the run, never runs the workflow on a guess.
  */
 export async function liveEngineFor(
-  campaign: { featureSlug?: string | null; legKey?: string | null },
+  campaign: { featureSlug?: string | null; legKey?: string | null; workflowSlug?: string | null },
   orgId: string,
 ): Promise<CampaignEngine | null> {
-  if (!campaign.legKey) return null;
+  // MIGRATE-1105 S8: a unit with no channel and no leg (a campaign launched on its target alone) names its Engine in
+  // its slug (`engine:<outcome>`) and makes it from Start; every other unit's Engine is read off its leg.
+  const ownEngine = !campaign.featureSlug && !campaign.legKey ? engineOutcomeOfSlug(campaign.workflowSlug) : null;
+  if (!campaign.legKey && !ownEngine) return null;
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
   if (!url || !apiKey) return null;
-  const engine = engineOfLeg(await catalogue(), campaign.featureSlug, campaign.legKey);
+  const engine = ownEngine
+    ? { outcome: ownEngine, fromOutcome: START_OUTCOME }
+    : engineOfLeg(await catalogue(), campaign.featureSlug, campaign.legKey);
   if (!engine) return null;
   // Per channel too: an Engine may hold scripts for one channel only (workflow-service answers per feature slug).
   const key = `${engine.outcome}|${orgId}|${campaign.featureSlug ?? ""}`;
@@ -151,8 +164,9 @@ export async function executeCampaignEngine(engine: CampaignEngine, inputs: Work
     "x-run-id": inputs.runId,
     "x-brand-id": inputs.brandId,
     "x-campaign-id": inputs.campaignId,
-    "x-feature-slug": inputs.featureSlug,
   };
+  // A unit with no channel (a campaign launched on its target alone) states none: no header, no body key.
+  if (inputs.featureSlug) headers["x-feature-slug"] = inputs.featureSlug;
   if (inputs.audienceId) headers["x-audience-id"] = inputs.audienceId;
   const res = await fetch(`${url}/engines/${encodeURIComponent(engine.outcome)}/execute`, {
     method: "POST",
@@ -163,7 +177,7 @@ export async function executeCampaignEngine(engine: CampaignEngine, inputs: Work
         campaignId: inputs.campaignId,
         orgId: inputs.orgId,
         brandId: inputs.brandId,
-        featureSlug: inputs.featureSlug,
+        ...(inputs.featureSlug ? { featureSlug: inputs.featureSlug } : {}),
         activeGoalId: inputs.activeGoalId ?? null,
         brandProfileId: inputs.brandProfileId ?? null,
         audienceId: inputs.audienceId ?? null,
