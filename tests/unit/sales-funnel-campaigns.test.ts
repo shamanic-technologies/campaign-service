@@ -597,6 +597,18 @@ describe("serializeSalesFunnelCampaign", () => {
       { id: "F1", orgId: "o", brandId: "b", offerId: "of", salesFunnelId: "f@x", salesFunnelName: "Epiphany", status: "stopped", stopReason: "manual", createdByUserId: "u", parentRunId: null, createdAt: now, updatedAt: now },
       [{ id: "c1", featureSlug: COLD, legKey: ENTRY, status: "stopped", workflowSlug: "aurora-v3", name: "n" } as never],
     );
-    expect(out.units).toEqual([{ campaignId: "c1", pipeId: `${COLD}|${ENTRY}`, featureSlug: COLD, legKey: ENTRY, status: "stopped", workflowSlug: "aurora-v3", name: "n", salesFunnelId: out.salesFunnelId, planRole: null }]);
+    expect(out.units).toEqual([{ campaignId: "c1", pipeId: `${COLD}|${ENTRY}`, featureSlug: COLD, legKey: ENTRY, status: "stopped", workflowSlug: "aurora-v3", name: "n", salesFunnelId: out.salesFunnelId, planRole: null, runsOnTriggerId: null }]);
+  });
+
+  it("states the trigger each unit runs on (null when it runs on its own)", () => {
+    const now = new Date("2026-11-09T00:00:00Z");
+    const out = serializeSalesFunnelCampaign(
+      { id: "0ea0fe2b", orgId: "o", brandId: "b", offerId: "of", salesFunnelId: "f@x", salesFunnelName: "Email Replies", status: "ongoing", stopReason: null, createdByUserId: "u", parentRunId: null, createdAt: now, updatedAt: now },
+      [
+        { id: "cold", featureSlug: COLD, legKey: ENTRY, status: "ongoing", workflowSlug: "aurora-v3", name: "n1", runsOnTriggerId: null } as never,
+        { id: "ca7e94df", featureSlug: "ai-follow-up-email", legKey: REACTIVE, status: "ongoing", workflowSlug: "w", name: "n2", runsOnTriggerId: "lead_event" } as never,
+      ],
+    );
+    expect(out.units.map((u) => [u.campaignId, u.runsOnTriggerId])).toEqual([["cold", null], ["ca7e94df", "lead_event"]]);
   });
 });

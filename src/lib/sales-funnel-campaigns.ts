@@ -594,6 +594,7 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
       name: u.name,
       salesFunnelId: u.salesFunnelId ?? row.salesFunnelId,
       planRole: (u.planRole ?? null) as "draining" | null,
+      runsOnTriggerId: u.runsOnTriggerId ?? null,
     })),
   };
 }
