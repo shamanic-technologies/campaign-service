@@ -247,8 +247,10 @@ export const GithubIssueRefSchema = z.object({
 export const CreateSalesFunnelCampaignBody = z.object({
   brandId: z.string().uuid("brandId must be a valid UUID"),
   offerId: z.string().uuid("offerId must be a valid UUID"),
-  // features-service's sales funnel id (`GET /internal/catalogue/sales-funnels` rows[].id), verbatim.
-  salesFunnelId: z.string().min(1, "salesFunnelId is required"),
+  // features-service's sales funnel id (`GET /internal/catalogue/sales-funnels` rows[].id), verbatim. OPTIONAL
+  // (MIGRATE-1105 S8): omitted = the campaign is its TARGET alone, made by that outcome's Engine (one unit, no channel;
+  // `target` is then required, `followsPlan`, `people` and `githubIssue` are refused). Its salesFunnelId reads its target.
+  salesFunnelId: z.string().min(1, "salesFunnelId must not be empty (omit it to launch the target alone)").optional(),
   // REQUIRED: "ongoing" launches it now, "stopped" creates it switched off. Never defaulted: a
   // campaign the customer did not start must never start.
   status: CampaignStatusEnum,
@@ -264,7 +266,8 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // default branch AND served by every deploy target of the repo on the box). Part of its identity.
   githubIssue: GithubIssueRefSchema.optional(),
   // OPTIONAL (lib/sales-funnel-target.ts): the OUTCOME it targets, a catalogue step key (features-service's
-  // vocabulary, e.g. "meeting_booked", "paid_client"). Omitted = the funnel's last step.
+  // vocabulary, e.g. "meeting_booked", "paid_client"). Omitted = the funnel's last step. REQUIRED without a
+  // salesFunnelId (e.g. "backlink_earned"): the campaign is then run by that outcome's Engine, and its target never moves.
   // Unknown step = 400 unknown_target_step.
   target: TargetStepSchema.optional(),
   // OPTIONAL: its strategy in plain language ("Cold email only, never write to someone who asked to stop, test for
@@ -307,10 +310,11 @@ export const SalesFunnelCampaignsQuery = z.object({
 /** One pipe of a funnel campaign: the `campaigns` row that runs it. */
 export const SalesFunnelUnitSchema = z.object({
   campaignId: z.string(),
-  // `<channel slug>|<leg key>`, features-service's pipe id.
-  pipeId: z.string(),
-  featureSlug: z.string(),
-  legKey: z.string(),
+  // `<channel slug>|<leg key>`, features-service's pipe id. null (with featureSlug and legKey) = a unit with no channel:
+  // the one unit of a campaign launched on its target alone, run by its Engine (workflowSlug `engine:<target>`).
+  pipeId: z.string().nullable(),
+  featureSlug: z.string().nullable(),
+  legKey: z.string().nullable(),
   // Always equal to the funnel campaign's status (they move together).
   status: z.string(),
   // The DAG fallback this unit runs (re-picked every run); null for a channel the customer

@@ -6,6 +6,7 @@ import { insertSalesFunnelUnits, type SalesFunnelUnitBirth } from "./campaign-st
 import { sameLeg, storedLegKey } from "./leg-identity.js";
 import { acquisitionChannelForFeature, derivedCampaignName } from "./campaign-identity.js";
 import { fetchPipe, fetchSalesFunnel, isSourcingLeg, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
+import { isTargetOnlyCampaign } from "./target-only-campaign.js";
 
 /** A pipe of the funnel the CUSTOMER's own team works ("Your team"): a unit with no workflow. */
 export interface CustomerPipe {
@@ -74,6 +75,8 @@ export async function completeSalesFunnelUnits(opts: { apply: boolean; orgId?: s
 
   const out: UnitCompletion[] = [];
   for (const parent of parents) {
+    // A campaign launched on its target alone has no funnel to complete (lib/target-only-campaign.ts): its one unit is its Engine.
+    if (isTargetOnlyCampaign(parent)) continue;
     // The funnel it RUNS (a campaign following its plan runs the plan's, lib/sales-funnel-plan.ts).
     const runningFunnelId = parent.runningSalesFunnelId ?? parent.salesFunnelId;
     const funnel = await fetchSalesFunnel(runningFunnelId);

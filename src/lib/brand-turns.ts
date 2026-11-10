@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { campaigns } from "../db/schema.js";
 import { isOutboundSalesFeature, isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { acquisitionChannelForFeature } from "./campaign-identity.js";
+import { engineOutcomeOfSlug, engineUnitWorkflowSlug } from "./engine-dispatch.js";
 import { salesFunnelUnitMoney, salesFunnelUnitRef } from "./sales-funnel-campaigns.js";
 import { reportTurnHolds, type TurnHold } from "./turn-hold-event.js";
 
@@ -213,7 +214,7 @@ async function planSalesFunnelUnits(
   const byId = new Map(members.map((m) => [m.campaign.id, m.campaign]));
   const cohorts = new Map<string, TurnCandidate[]>();
   for (const { campaign, candidate } of members) {
-    const cohort = serializationCohort(campaign.featureSlug);
+    const cohort = serializationCohort(campaign.featureSlug, campaign.workflowSlug);
     cohorts.set(cohort, [...(cohorts.get(cohort) ?? []), candidate]);
   }
   for (const [cohort, candidates] of cohorts) {
@@ -229,9 +230,14 @@ async function planSalesFunnelUnits(
  * offer they carry. Every other channel is its own, keyed on the acquisition channel it already
  * states, so a paid-reach campaign is serial against itself and against nothing else.
  */
-export function serializationCohort(featureSlug: string | null | undefined): string {
+export function serializationCohort(featureSlug: string | null | undefined, workflowSlug?: string | null): string {
   if (isOutboundSalesFeature(featureSlug)) return "outbound_cold_email";
-  return acquisitionChannelForFeature(featureSlug) ?? "unknown_channel";
+  const channel = acquisitionChannelForFeature(featureSlug);
+  if (channel) return channel;
+  // MIGRATE-1105 S8: a unit with no channel (a campaign launched on its target alone) is serial against its own Engine
+  // only: a brand's backlink and industry news campaigns share no lead and no mailbox, so neither waits on the other.
+  const engine = !featureSlug ? engineOutcomeOfSlug(workflowSlug) : null;
+  return engine ? engineUnitWorkflowSlug(engine) : "unknown_channel";
 }
 
 async function planOneCohort(
@@ -330,13 +336,13 @@ export async function hasLiveRunForBrandCohort(
       eq(campaigns.status, "ongoing"),
       arrayContains(campaigns.brandIds, [brandId]),
     ),
-    columns: { id: true, featureSlug: true, salesFunnelCampaignId: true },
+    columns: { id: true, featureSlug: true, workflowSlug: true, salesFunnelCampaignId: true },
   });
 
   const startedAfter = new Date(now.getTime() - LIVE_RUN_FRESHNESS_MS).toISOString();
   for (const c of alive) {
     if (!isSalesFamilyFeature(c.featureSlug) && !c.salesFunnelCampaignId) continue;
-    if (serializationCohort(c.featureSlug) !== cohort) continue;
+    if (serializationCohort(c.featureSlug, c.workflowSlug) !== cohort) continue;
     const { runs } = await listRuns({
       orgId,
       campaignId: c.id,

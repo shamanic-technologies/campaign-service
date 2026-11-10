@@ -155,6 +155,24 @@ describe("fetchChannelCatalogue", () => {
     expect(read.stepKeys.has("smoke_signal")).toBe(false);
   });
 
+  // MIGRATE-1105 S8: a campaign on its target alone is NAMED after its outcome's label, read here (never a map of ours).
+  it("keeps each step's LABEL as features-service publishes it, and no label where it publishes none", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        channels: [],
+        steps: [{ key: "backlink_earned", label: " Backlink earned " }, { key: "industry_news_found", label: "" }, { key: "paid_client" }],
+      }),
+    });
+    const read = await fetchChannelCatalogue();
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.stepLabels?.get("backlink_earned")).toBe("Backlink earned");
+    expect(read.stepLabels?.has("industry_news_found")).toBe(false);
+    expect(read.stepLabels?.has("paid_client")).toBe(false);
+    expect(read.stepKeys.has("paid_client")).toBe(true);
+  });
+
   it("states an EMPTY leg vocabulary rather than throwing when the payload carries none", async () => {
     mockFetch.mockResolvedValue({ ok: true, json: async () => ({ channels: [], steps: [] }) });
     const read = await fetchChannelCatalogue();

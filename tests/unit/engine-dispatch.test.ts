@@ -190,3 +190,57 @@ describe("an Engine run's callbacks", () => {
     expect(status).toHaveBeenCalledWith(400);
   });
 });
+
+// MIGRATE-1105 S8: a campaign launched on its target alone has one unit with no channel and no leg, born on its Engine.
+describe("a unit with no channel (a campaign on its target alone)", () => {
+  it("names its Engine in its slug and makes it from Start, asked without a channel (no catalogue read)", async () => {
+    vi.mocked(fetchChannelCatalogue).mockClear();
+    fetchMock.mockResolvedValueOnce(json(200, { live: true }));
+    const engine = await liveEngineFor({ featureSlug: null, legKey: null, workflowSlug: "engine:backlink_earned" }, "org-1");
+    expect(engine).toEqual({ outcome: "backlink_earned", fromOutcome: "start" });
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://workflow/internal/engines/backlink_earned?orgId=org-1");
+    expect(fetchChannelCatalogue).not.toHaveBeenCalled();
+    // A workflow slug, or a slug on a unit that HAS a leg, is never read as an Engine.
+    expect(await liveEngineFor({ featureSlug: null, legKey: null, workflowSlug: "aurora-v3" }, "org-1")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not live when workflow-service says so", async () => {
+    fetchMock.mockResolvedValueOnce(json(200, { live: false }));
+    expect(await liveEngineFor({ featureSlug: null, legKey: null, workflowSlug: "engine:industry_news_found" }, "org-1")).toBeNull();
+  });
+
+  it("is dispatched with no channel header and no channel key (never the text \"undefined\" or null)", async () => {
+    fetchMock.mockResolvedValueOnce(json(201, { runId: "run-x" }));
+    const ran = await executeCampaignEngine({ outcome: "backlink_earned", fromOutcome: "start" }, { ...inputs, featureSlug: null, audienceId: null, noAudience: true });
+    expect(ran).toEqual({ runId: "run-x" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("http://workflow/engines/backlink_earned/execute");
+    expect(init.headers).not.toHaveProperty("x-feature-slug");
+    const body = JSON.parse(init.body);
+    expect(body.inputs).not.toHaveProperty("featureSlug");
+    expect(body).toMatchObject({ fromOutcome: "start", inputs: { campaignId: "camp-1", noAudience: true } });
+  });
+
+  it("its Engine run's callbacks need no channel header", async () => {
+    const { requirePipelineHeaders } = await import("../../src/middleware/auth.js");
+    const headers = { "x-org-id": "o", "x-campaign-id": "c", "x-user-id": "u", "x-run-id": "r", "x-engine-outcome": "backlink_earned" };
+    const next = vi.fn();
+    requirePipelineHeaders({ headers, path: "/gate-check" } as never, { status: vi.fn(() => ({ json: vi.fn() })) } as never, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    // A workflow run still needs both.
+    const status = vi.fn(() => ({ json: vi.fn() }));
+    const refused = vi.fn();
+    const { "x-engine-outcome": _e, ...workflowRun } = headers;
+    requirePipelineHeaders({ headers: { ...workflowRun, "x-workflow-slug": "w" }, path: "/gate-check" } as never, { status } as never, refused);
+    expect(refused).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(400);
+  });
+
+  it("calls downstream services with no channel header when it has none", async () => {
+    const { buildServiceHeaders } = await import("../../src/lib/downstream-headers.js");
+    const identity = { orgId: "o", userId: "u", runId: "r", campaignId: "c", brandId: "b", workflowSlug: null };
+    expect(buildServiceHeaders("k", { ...identity, featureSlug: null })).not.toHaveProperty("x-feature-slug");
+    expect(buildServiceHeaders("k", { ...identity, featureSlug: "threads-post" })["x-feature-slug"]).toBe("threads-post");
+  });
+});

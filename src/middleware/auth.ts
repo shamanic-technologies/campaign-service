@@ -132,9 +132,10 @@ export function requirePipelineHeaders(
   res: Response,
   next: NextFunction,
 ) {
-  // An Engine run (MIGRATE-1105 S0) names its Engine instead of a workflow.
+  // An Engine run (MIGRATE-1105 S0) names its Engine instead of a workflow, and states a channel only when its campaign
+  // has one (MIGRATE-1105 S8: a campaign launched on its target alone has none).
   const engineRun = typeof req.headers["x-engine-outcome"] === "string" && req.headers["x-engine-outcome"] !== "";
-  const missing = REQUIRED_PIPELINE_HEADERS.filter((h) => !req.headers[h] && !(engineRun && h === "x-workflow-slug"));
+  const missing = REQUIRED_PIPELINE_HEADERS.filter((h) => !req.headers[h] && !(engineRun && (h === "x-workflow-slug" || h === "x-feature-slug")));
   if (missing.length > 0) {
     console.warn(`[campaign-service] 400 on ${req.path} — missing pipeline headers: ${missing.join(", ")}`);
     return res.status(400).json({

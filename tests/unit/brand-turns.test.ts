@@ -218,6 +218,14 @@ describe("serializationCohort", () => {
     expect(serializationCohort(AI_MEETING_BOOKING)).not.toBe(serializationCohort(SALES));
   });
 
+  // MIGRATE-1105 S8: a unit with no channel (a campaign on its target alone) is serial against its own Engine only.
+  it("puts a unit with no channel in its Engine's cohort, apart from every other Engine and channel", () => {
+    expect(serializationCohort(null, "engine:backlink_earned")).toBe("engine:backlink_earned");
+    expect(serializationCohort(null, "engine:backlink_earned")).not.toBe(serializationCohort(null, "engine:industry_news_found"));
+    expect(serializationCohort(null, "aurora-v3")).toBe("unknown_channel");
+    expect(serializationCohort(SALES, "engine:email_sent")).toBe("outbound_cold_email");
+  });
+
   it("gives earned media its own cohort — it holds no leads and burns no mailbox", () => {
     expect(serializationCohort("pr-expert-quote-outreach")).toBe("expert_quote_outreach");
     expect(serializationCohort("pr-expert-quote-outreach")).not.toBe(serializationCohort(SALES));

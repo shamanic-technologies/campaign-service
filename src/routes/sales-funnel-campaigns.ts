@@ -21,6 +21,7 @@ import {
   insertSalesFunnelUnits,
   setSalesFunnelCampaignStatus,
   type OnUnitStarted,
+  type SalesFunnelUnitBirth,
 } from "../lib/campaign-status-history.js";
 import { resolveSalesFunnelPlan, sourcingPipeWorkflow } from "../lib/startable-pair.js";
 import { acquisitionChannelForFeature, derivedCampaignName } from "../lib/campaign-identity.js";
@@ -41,6 +42,8 @@ import { deleteSalesFunnelCampaign } from "../lib/sales-funnel-campaign-delete.j
 import { pgErrorOf } from "../lib/pg-error.js";
 import { SALES_FUNNEL_CAMPAIGN_FIELD_LABELS, describeChanges, reportCampaignAction } from "../lib/account-activity.js";
 import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sales-funnel-target.js";
+import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "../lib/engine-dispatch.js";
+import { isTargetOnlyCampaign, targetLabelOf, targetOnlyUnitBirth } from "../lib/target-only-campaign.js";
 import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass, runSwitchOffFor } from "../lib/sales-funnel-plan.js";
 
 /**
@@ -165,8 +168,20 @@ router.post(
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId, salesFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan } =
+      const { brandId, offerId, salesFunnelId: statedFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan } =
         CreateSalesFunnelCampaignBody.parse(req.body);
+      // MIGRATE-1105 S8 (lib/target-only-campaign.ts): no sales funnel = the campaign is its TARGET alone, made by that
+      // outcome's Engine. It follows no plan and only prospects (one unit from Start), so it names nobody and waits on
+      // no issue. Its funnel id reads its target (billing's caps and its identity are keyed on it).
+      const targetOnly = statedFunnelId === undefined;
+      if (targetOnly) {
+        const refuse = (reason: string, error: string) => res.status(400).json({ error, reason });
+        if (target === undefined) return refuse("target_required", "State the outcome this campaign targets (target), or the sales funnel it runs (salesFunnelId).");
+        if (followsPlan === true) return refuse("follows_plan_needs_sales_funnel", "A campaign follows a plan only on a sales funnel: state salesFunnelId, or omit followsPlan.");
+        if (namedInput) return refuse("people_need_reactive_funnel", "A campaign that names its people only answers triggers, but a campaign on its target alone finds new people.");
+        if (issueInput) return refuse("github_issue_needs_github_trigger", "A campaign on its target alone never runs when a GitHub issue reaches production, so it would never run.");
+      }
+      const salesFunnelId = statedFunnelId ?? target!;
       // The GitHub issue it waits on (lib/github-issue-trigger.ts): part of its identity too.
       const issueRef = issueInput ? parseGithubIssue(issueInput) : null;
       if (issueInput && !issueRef) {
@@ -249,85 +264,106 @@ router.post(
         if (refusal) return res.status(refusal.status).json(refusal.body);
       }
 
-      const resolved = await resolveSalesFunnelPlan(salesFunnelId, {
-        orgId,
-        userId: req.userId!,
-        runId: req.runId!,
-        brandId,
-        offerId,
-      });
-      if (!resolved.ok) {
-        const { status: httpStatus, code, message, missingSteps, offerSteps, pipeId, notRunnableReason, notRunnableDetail } = resolved.refusal;
-        console.warn(
-          `[campaign-service] Not launching sales funnel ${salesFunnelId} — org=${orgId} brand=${brandId} offer=${offerId}: ${code}`,
-        );
-        return res.status(httpStatus).json({
-          error: message,
-          reason: code,
-          ...(missingSteps ? { missingSteps, offerSteps } : {}),
-          ...(code === "play_allows_no_workflow" ? { pipeId, notRunnableReason, notRunnableDetail } : {}),
-        });
-      }
-      const { plan } = resolved;
-      // A campaign naming its people only ANSWERS events for them: a pipe that prospects (an entry or
-      // sourcing pipe) would act on strangers, so such a funnel is refused, naming the pipe.
-      if (people) {
-        // A unit running on its funnel's head trigger (lib/sales-funnel-head-trigger.ts) only answers that trigger's people.
-        const prospecting = plan.units.filter((u) => u.mode !== "reactive" && !u.runsOnTriggerId);
-        if (prospecting.length > 0) {
-          return res.status(400).json({
-            error: `A campaign that names its people only answers triggers, but this sales funnel also finds new people (${prospecting.map((u) => u.pipeId).join(", ")}).`,
-            reason: "people_need_reactive_funnel",
-          });
-        }
-      }
-
-      // A campaign waiting on a GitHub issue must own a pipe a `github_issue_in_prod` trigger fires, or it would
-      // wait forever: refused, nothing written.
-      if (githubIssue) {
-        const catalogue = await fetchChannelCatalogue();
-        if (!catalogue.ok) {
-          return res.status(502).json({ error: "The channel catalogue could not be read. Try again.", reason: "catalogue_unavailable" });
-        }
-        const issueTriggers = new Set(
-          [...(catalogue.triggers?.values() ?? [])].filter((t) => t.kind === GITHUB_ISSUE_IN_PROD_KIND).map((t) => t.id),
-        );
-        // A pipe a github trigger names, or a unit of a funnel headed by one (lib/sales-funnel-head-trigger.ts).
-        const answers = plan.units.some((u) =>
-          [...issueTriggers].some((id) => answersTrigger(u, id, catalogue.triggerTransitions ?? [])),
-        );
-        if (!answers) {
-          return res.status(400).json({
-            error: "This sales funnel has no step that runs when a GitHub issue reaches production, so it would never run.",
-            reason: "github_issue_needs_github_trigger",
-          });
-        }
-      }
-
       const id = randomUUID();
       const idTag = id.slice(0, 8);
-      let born;
-      try {
-        born = await insertSalesFunnelCampaignWithUnits({
-          id,
+      // What the campaign is born with: its name, its units and what it starts from.
+      let birth: {
+        salesFunnelName: string;
+        target: string | null;
+        mode: "proactive" | "reactive" | null;
+        triggerId: string | null;
+        units: SalesFunnelUnitBirth[];
+      };
+      if (targetOnly) {
+        // Its Engine must make the target for this org, or nothing would ever run it: refused by name, nothing written.
+        let engine;
+        try {
+          engine = await liveEngineFor({ featureSlug: null, legKey: null, workflowSlug: engineUnitWorkflowSlug(salesFunnelId) }, orgId);
+        } catch (err) {
+          if (!(err instanceof EngineStateUnreadableError)) throw err;
+          return res.status(502).json({ error: "We couldn't tell what makes this outcome just now. Please try again in a minute.", reason: "engine_state_unavailable" });
+        }
+        if (!engine) {
+          console.warn(`[campaign-service] Not launching target ${salesFunnelId} — org=${orgId} brand=${brandId}: its Engine does not run this org's campaigns`);
+          return res.status(409).json({ error: `Nothing makes "${salesFunnelId}" for this organization yet, so this campaign can't be launched.`, reason: "engine_not_live" });
+        }
+        // Named after its outcome's label as the catalogue publishes it, never its key: none = refused loud.
+        const catalogue = await fetchChannelCatalogue();
+        const label = catalogue.ok ? targetLabelOf(catalogue, salesFunnelId) : null;
+        if (!label) {
+          const why = catalogue.ok ? "the catalogue publishes no label for it" : `the catalogue is unreadable (${catalogue.detail})`;
+          console.error(`[campaign-service] Not launching target ${salesFunnelId} — org=${orgId} brand=${brandId}: ${why}`);
+          return res.status(502).json({ error: `We couldn't read the name of "${salesFunnelId}" just now, so this campaign can't be launched yet.`, reason: "target_label_missing" });
+        }
+        birth = {
+          salesFunnelName: label,
+          target: salesFunnelId,
+          mode: "proactive",
+          triggerId: null,
+          units: [targetOnlyUnitBirth(salesFunnelId, `${label} ${idTag}`)],
+        };
+      } else {
+        const resolved = await resolveSalesFunnelPlan(salesFunnelId, {
           orgId,
+          userId: req.userId!,
+          runId: req.runId!,
           brandId,
           offerId,
-          salesFunnelId,
+        });
+        if (!resolved.ok) {
+          const { status: httpStatus, code, message, missingSteps, offerSteps, pipeId, notRunnableReason, notRunnableDetail } = resolved.refusal;
+          console.warn(
+            `[campaign-service] Not launching sales funnel ${salesFunnelId} — org=${orgId} brand=${brandId} offer=${offerId}: ${code}`,
+          );
+          return res.status(httpStatus).json({
+            error: message,
+            reason: code,
+            ...(missingSteps ? { missingSteps, offerSteps } : {}),
+            ...(code === "play_allows_no_workflow" ? { pipeId, notRunnableReason, notRunnableDetail } : {}),
+          });
+        }
+        const { plan } = resolved;
+        // A campaign naming its people only ANSWERS events for them: a pipe that prospects (an entry or
+        // sourcing pipe) would act on strangers, so such a funnel is refused, naming the pipe.
+        if (people) {
+          // A unit running on its funnel's head trigger (lib/sales-funnel-head-trigger.ts) only answers that trigger's people.
+          const prospecting = plan.units.filter((u) => u.mode !== "reactive" && !u.runsOnTriggerId);
+          if (prospecting.length > 0) {
+            return res.status(400).json({
+              error: `A campaign that names its people only answers triggers, but this sales funnel also finds new people (${prospecting.map((u) => u.pipeId).join(", ")}).`,
+              reason: "people_need_reactive_funnel",
+            });
+          }
+        }
+
+        // A campaign waiting on a GitHub issue must own a pipe a `github_issue_in_prod` trigger fires, or it would
+        // wait forever: refused, nothing written.
+        if (githubIssue) {
+          const catalogue = await fetchChannelCatalogue();
+          if (!catalogue.ok) {
+            return res.status(502).json({ error: "The channel catalogue could not be read. Try again.", reason: "catalogue_unavailable" });
+          }
+          const issueTriggers = new Set(
+            [...(catalogue.triggers?.values() ?? [])].filter((t) => t.kind === GITHUB_ISSUE_IN_PROD_KIND).map((t) => t.id),
+          );
+          // A pipe a github trigger names, or a unit of a funnel headed by one (lib/sales-funnel-head-trigger.ts).
+          const answers = plan.units.some((u) =>
+            [...issueTriggers].some((id) => answersTrigger(u, id, catalogue.triggerTransitions ?? [])),
+          );
+          if (!answers) {
+            return res.status(400).json({
+              error: "This sales funnel has no step that runs when a GitHub issue reaches production, so it would never run.",
+              reason: "github_issue_needs_github_trigger",
+            });
+          }
+        }
+
+        birth = {
           salesFunnelName: plan.salesFunnelName,
-          status,
-          createdByUserId: req.userId!,
-          parentRunId: req.runId!,
-          people,
-          peopleKey,
-          githubIssue,
           // The outcome it targets: stated, else the funnel's last step (lib/sales-funnel-target.ts).
           target: target ?? plan.shape?.target ?? null,
-          brief: brief ?? null,
-          briefUpdatedByUserId: req.userId!,
           mode: plan.shape?.mode ?? null,
           triggerId: plan.shape?.triggerId ?? null,
-          followsPlan: followsPlan ?? false,
           units: plan.units.map((u) => ({
             featureSlug: u.featureSlug,
             legKey: u.legKey,
@@ -337,6 +373,31 @@ router.post(
             // Names are unique per org; the funnel campaign's id keeps two funnels sharing a pipe apart.
             name: `${plan.salesFunnelName} ${idTag} - ${derivedCampaignName(u.featureSlug, brandId, offerId, u.legKey)}`,
           })),
+        };
+      }
+
+      let born;
+      try {
+        born = await insertSalesFunnelCampaignWithUnits({
+          id,
+          orgId,
+          brandId,
+          offerId,
+          salesFunnelId,
+          salesFunnelName: birth.salesFunnelName,
+          status,
+          createdByUserId: req.userId!,
+          parentRunId: req.runId!,
+          people,
+          peopleKey,
+          githubIssue,
+          target: birth.target,
+          brief: brief ?? null,
+          briefUpdatedByUserId: req.userId!,
+          mode: birth.mode,
+          triggerId: birth.triggerId,
+          followsPlan: followsPlan ?? false,
+          units: birth.units,
           onUnitStarted: ensureUnitSources,
         });
       } catch (error: any) {
@@ -358,7 +419,7 @@ router.post(
       }
 
       console.log(
-        `[campaign-service] Sales funnel campaign ${born.salesFunnelCampaign.id} (${plan.salesFunnelName}) born ${status} — org=${orgId} brand=${brandId} offer=${offerId}, units ${born.units.map((u) => u.id).join(", ")}`,
+        `[campaign-service] Sales funnel campaign ${born.salesFunnelCampaign.id} (${birth.salesFunnelName}) born ${status} — org=${orgId} brand=${brandId} offer=${offerId}, units ${born.units.map((u) => u.id).join(", ")}`,
       );
       if (status === "ongoing") wakeScheduler();
       reportSalesFunnelCampaignAction(req, null, born.salesFunnelCampaign, true);
@@ -456,6 +517,19 @@ router.patch(
         where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
       });
       if (!existing) return res.status(404).json({ error: "Sales funnel campaign not found" });
+      // A campaign launched on its target alone (lib/target-only-campaign.ts): its one unit IS its target's Engine, so the
+      // target never moves, and it has no sales funnel to follow a plan on.
+      if (isTargetOnlyCampaign(existing)) {
+        if (target !== undefined && target !== existing.target) {
+          return res.status(409).json({
+            error: `This campaign is made by the Engine of "${existing.target}", so its target can't change. Launch a new campaign on the other target.`,
+            reason: "target_fixed",
+          });
+        }
+        if (followsPlan === true) {
+          return res.status(400).json({ error: "A campaign follows a plan only on a sales funnel.", reason: "follows_plan_needs_sales_funnel" });
+        }
+      }
       if (target !== undefined) {
         const check = await checkTargetStep(target);
         if (!check.ok) return res.status(check.status).json(check.body);

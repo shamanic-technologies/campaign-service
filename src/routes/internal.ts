@@ -299,7 +299,7 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       campaignId,
       brandId: primaryBrandId,
       workflowSlug,
-      featureSlug: featureSlug!,
+      featureSlug: featureSlug ?? null,
     };
     // brand-service also answers the brand PROFILE, which the sending runtime needs downstream —
     // so this read stays whatever the campaign sells. The campaign's OFFER names whose confirmed

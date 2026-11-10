@@ -662,13 +662,16 @@
             "type": "string"
           },
           "pipeId": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "featureSlug": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "legKey": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "status": {
             "type": "string"
@@ -767,7 +770,6 @@
         "required": [
           "brandId",
           "offerId",
-          "salesFunnelId",
           "status"
         ],
         "additionalProperties": false

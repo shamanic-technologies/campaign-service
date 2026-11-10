@@ -7,6 +7,7 @@ import { sameLeg } from "./leg-identity.js";
 import { fetchLegSeedWorkflowSlug, legSeedFrom } from "./leg-seed-workflow.js";
 import { fetchPipe, fetchSalesFunnel } from "./sales-funnel-catalogue-client.js";
 import { fetchWorkflowDynastyBySlug } from "./startable-workflow-client.js";
+import { isEngineOnlyUnit } from "./target-only-campaign.js";
 
 type UnitRow = typeof campaigns.$inferSelect;
 type PipeRead = Extract<Awaited<ReturnType<typeof fetchPipe>>, { ok: true }>;
@@ -214,7 +215,8 @@ export async function repairSalesFunnelUnitLegWorkflows(opts: {
       isNotNull(campaigns.workflowSlug),
       opts.orgId ? sql`${campaigns.orgId}::text = ${opts.orgId}` : undefined,
     ));
-  const candidates = rows.filter((r) => (catalogue.operatorBySlug.get(r.featureSlug ?? "") ?? "platform") === "platform");
+  // A unit with no channel (a campaign launched on its target alone) runs its Engine, never a leg's workflow.
+  const candidates = rows.filter((r) => !isEngineOnlyUnit(r) && (catalogue.operatorBySlug.get(r.featureSlug ?? "") ?? "platform") === "platform");
 
   // One read per channel (dynasty of every version) and per (channel, leg, brand, offer|unit) (the leg's order).
   const dynastiesByChannel = new Map<string, Map<string, string>>();
