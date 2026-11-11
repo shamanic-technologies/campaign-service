@@ -14,6 +14,7 @@ import { requireApiKey, requirePipelineHeaders, runWorkflowSlug, serviceAuth, tr
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { createRun, listRuns, updateRun, type IdentityHeaders } from "@distribute/runs-client";
 import { runGateChecks } from "../lib/gate-check.js";
+import { isGateHold, stateEngineAnswer } from "../lib/engine-answer.js";
 import {
   FAILING_ALERT_COOLDOWN_MS,
   FAILING_ALERT_THRESHOLD,
@@ -205,6 +206,11 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       // terminal branch: a gate that cannot let a run through has said nothing about
       // whether the customer still wants this campaign.
       const nextRunAt = result.nextRunAt ?? new Date(Date.now() + GATE_BLOCK_BACKOFF_MS);
+      // NEXT-STEPS-TRUE-REASON-1111: an Engine run refused here is held for a reason of ours: stated on the campaign's
+      // next steps (lib/engine-answer.ts), its Engine = the run's own. Never awaited.
+      if (req.engineOutcome && result.reason && isGateHold(result.reason)) {
+        void stateEngineAnswer({ id: campaignId }, result.reason, req.engineOutcome);
+      }
       await db.update(campaigns)
         .set({ nextRunAt, updatedAt: new Date() })
         .where(eq(campaigns.id, campaignId));

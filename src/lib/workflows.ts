@@ -1,6 +1,7 @@
 import type { EventPerson } from "./trigger-person.js";
 import { WorkflowExecutionRefusedError } from "./workflow-refusal.js";
 import { executeCampaignEngine, type CampaignEngine } from "./engine-dispatch.js";
+import { stateEngineAnswer } from "./engine-answer.js";
 
 export interface WorkflowExecutionInputs {
   campaignId: string;
@@ -89,7 +90,11 @@ export async function executeCampaignWorkflow(
 ): Promise<WorkflowExecution> {
   if (engine) {
     const ran = await executeCampaignEngine(engine, inputs);
-    if (ran) return ran;
+    if (ran) {
+      // NEXT-STEPS-TRUE-REASON-1111: the Engine ran, any hold of ours is over (lib/engine-answer.ts). Never awaited.
+      void stateEngineAnswer({ id: inputs.campaignId }, null, engine.outcome);
+      return ran;
+    }
     // workflow-service says the Engine is not live for this org after all: the workflow, as before.
   }
   const url = process.env.WORKFLOW_SERVICE_URL;
