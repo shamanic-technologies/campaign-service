@@ -1,3 +1,4 @@
+import { RUN_IN_PROGRESS_REASON } from "./engine-answer.js";
 import { listRuns, updateRun, getStatsBudget, type Run, type BudgetWindow, type IdentityHeaders } from "@distribute/runs-client";
 import { isSalesFamilyFeature } from "./sales-outreach-campaign.js";
 import { RUN_LIVENESS_THRESHOLD_MS } from "./run-liveness.js";
@@ -141,7 +142,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // also held one of the 4 slots for the 15-min liveness window, and the queue drained at ~1 run at a time while
   // a person who had written to us waited hours.
   if (await blockedByAnotherRun(runningRuns, campaign.runId)) {
-    return { allowed: false, reason: "A run is already in progress" };
+    return { allowed: false, reason: RUN_IN_PROGRESS_REASON };
   }
 
   // 2b. ONE money model (owner 2026-10-14): a campaign IS a sales funnel campaign, and what it may

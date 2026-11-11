@@ -100,6 +100,21 @@ async function catalogue(): Promise<ChannelCatalogueRead> {
 }
 
 /**
+ * The Engine a campaign's runs make, whether or not it is live for the org (no workflow-service read). Throws
+ * `EngineStateUnreadableError` when the catalogue cannot be read and no read of the last hour stands in.
+ */
+export async function campaignEngineOf(
+  campaign: { featureSlug?: string | null; legKey?: string | null; workflowSlug?: string | null },
+): Promise<CampaignEngine | null> {
+  // MIGRATE-1105 S8: a unit with no channel and no leg (a campaign launched on its target alone) names its Engine in
+  // its slug (`engine:<outcome>`) and makes it from Start; every other unit's Engine is read off its leg.
+  const ownEngine = !campaign.featureSlug && !campaign.legKey ? engineOutcomeOfSlug(campaign.workflowSlug) : null;
+  if (ownEngine) return { outcome: ownEngine, fromOutcome: START_OUTCOME };
+  if (!campaign.legKey) return null;
+  return engineOfLeg(await catalogue(), campaign.featureSlug, campaign.legKey);
+}
+
+/**
  * The campaign's Engine when it runs this org's campaigns; null = run its workflow as before. Throws
  * `EngineStateUnreadableError` when the state cannot be read and no answer of the last hour stands in: the caller
  * holds the run, never runs the workflow on a guess.
@@ -108,16 +123,10 @@ export async function liveEngineFor(
   campaign: { featureSlug?: string | null; legKey?: string | null; workflowSlug?: string | null },
   orgId: string,
 ): Promise<CampaignEngine | null> {
-  // MIGRATE-1105 S8: a unit with no channel and no leg (a campaign launched on its target alone) names its Engine in
-  // its slug (`engine:<outcome>`) and makes it from Start; every other unit's Engine is read off its leg.
-  const ownEngine = !campaign.featureSlug && !campaign.legKey ? engineOutcomeOfSlug(campaign.workflowSlug) : null;
-  if (!campaign.legKey && !ownEngine) return null;
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;
   if (!url || !apiKey) return null;
-  const engine = ownEngine
-    ? { outcome: ownEngine, fromOutcome: START_OUTCOME }
-    : engineOfLeg(await catalogue(), campaign.featureSlug, campaign.legKey);
+  const engine = await campaignEngineOf(campaign);
   if (!engine) return null;
   // Per channel too: an Engine may hold scripts for one channel only (workflow-service answers per feature slug).
   const key = `${engine.outcome}|${orgId}|${campaign.featureSlug ?? ""}`;

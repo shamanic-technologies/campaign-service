@@ -11,6 +11,7 @@ import { resolveSelectionForTrigger } from "./features-workflow-projection-clien
 import { attributeRunPlay, playRationKeys } from "./run-play-attribution.js";
 import { executeCampaignWorkflow, type WorkflowTriggerInput } from "./workflows.js";
 import { EngineStateUnreadableError, liveEngineFor } from "./engine-dispatch.js";
+import { isCampaignHold, stateEngineAnswer } from "./engine-answer.js";
 import { isRunInFlightRefusal } from "./workflow-refusal.js";
 import { replaceRetiredWorkflow } from "./retired-workflow.js";
 import {
@@ -409,6 +410,8 @@ export async function runCampaignsInScope(
     let releaseSlot: (() => void) | null = null;
     const skip = (reason: StepTriggerSkipReason, detail: string, retryAt?: Date, heldByCampaignId?: string) => {
       releaseSlot?.();
+      // NEXT-STEPS-TRUE-REASON-1111: a hold of ours is stated on the campaign's next steps (lib/engine-answer.ts).
+      if (isCampaignHold(reason)) void stateEngineAnswer(campaign, reason);
       outcome.skipped.push({
         campaignId: campaign.id,
         legKey: campaign.legKey,

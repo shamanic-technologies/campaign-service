@@ -16,6 +16,13 @@ vi.mock("../src/lib/payment-hold.js", async (importOriginal) => {
   };
 });
 
+// NEXT-STEPS-TRUE-REASON-1111 (src/lib/engine-answer.ts): every hold / Engine dispatch states itself to features-service,
+// fire-and-forget. No test talks to features-service for it; tests/unit/engine-answer.test.ts reads the real module.
+vi.mock("../src/lib/engine-answer.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/engine-answer.js")>();
+  return { ...original, stateEngineAnswer: vi.fn().mockResolvedValue(undefined) };
+});
+
 // SOURCE CAMPAIGNS (src/lib/source-campaign-store.ts): the outreach spend read also counts the
 // offer's source campaigns, and a person's first outreach start may birth a default source (which
 // reads the catalogue). Tests that are not about sources see neither; the source tests use

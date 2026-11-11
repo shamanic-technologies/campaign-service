@@ -1,3 +1,4 @@
+import { stateEngineAnswer } from "./engine-answer.js";
 import { traceEvent } from "./trace-event.js";
 
 /**
@@ -61,6 +62,8 @@ export interface TurnHoldCampaign {
   workflowSlug: string | null;
   brandIds: string[] | null;
   featureSlug: string | null;
+  /** Its leg: names its Engine (lib/engine-answer.ts). */
+  legKey?: string | null;
 }
 
 export interface TurnHold {
@@ -98,7 +101,9 @@ function levelFor(reason: TurnHoldReason): "info" | "warn" {
 export async function reportTurnHolds(holds: TurnHold[]): Promise<void> {
   // allSettled, not all: a hold that cannot be reported is not a licence to change what the
   // planner decided, and `traceEvent` swallowing its own failures is not something to rely on.
-  await Promise.allSettled(holds.map(reportOne));
+  // NEXT-STEPS-TRUE-REASON-1111: every hold is also stated on the campaign's next steps (features-service), so the
+  // client and the assistant read the real reason. Never awaited by the planner's decision (already made).
+  await Promise.allSettled([...holds.map(reportOne), ...holds.map((h) => stateEngineAnswer(h.campaign, h.reason))]);
 }
 
 async function reportOne(hold: TurnHold): Promise<void> {
