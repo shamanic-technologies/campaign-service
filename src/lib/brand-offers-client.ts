@@ -71,3 +71,40 @@ export async function fetchPairOffers(
     return { ok: false, reason: "unavailable", detail: `brand ${brandId}: ${message}` };
   }
 }
+
+export type OfferNameRead = { ok: true; name: string } | { ok: false; reason: "unavailable" | "offer_not_found"; detail: string };
+
+/**
+ * The NAME the (org, brand) pair gave one of its offers, as brand-service reports it (same read as `fetchPairOffers`).
+ * Read so a campaign is born with a brief written from what its client stated (lib/sales-funnel-birth-brief.ts).
+ * An offer the pair does not hold, or one with no name, is said so, never guessed.
+ */
+export async function fetchOfferName(
+  brandId: string,
+  offerId: string,
+  identity: { orgId: string; userId?: string | null; runId?: string | null },
+): Promise<OfferNameRead> {
+  const baseUrl = process.env.BRAND_SERVICE_URL;
+  const apiKey = process.env.BRAND_SERVICE_API_KEY;
+  if (!baseUrl || !apiKey) return { ok: false, reason: "unavailable", detail: "brand-service not configured" };
+  const headers: Record<string, string> = { "x-api-key": apiKey, "x-org-id": identity.orgId, "x-brand-id": brandId };
+  if (identity.userId) headers["x-user-id"] = identity.userId;
+  if (identity.runId) headers["x-run-id"] = identity.runId;
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/internal/brands/${encodeURIComponent(brandId)}/offers`, {
+      headers,
+      signal: siblingReadSignal(),
+    });
+    if (!res.ok) return { ok: false, reason: "unavailable", detail: `brand ${brandId}: HTTP ${res.status}` };
+    const data = (await res.json()) as { offers?: Array<{ offerId?: string | null; name?: string | null }> };
+    if (!Array.isArray(data?.offers)) return { ok: false, reason: "unavailable", detail: `brand ${brandId}: unparseable payload` };
+    const offer = data.offers.find((o) => o?.offerId === offerId);
+    const name = typeof offer?.name === "string" ? offer.name.trim() : "";
+    if (!offer || name.length === 0) {
+      return { ok: false, reason: "offer_not_found", detail: `brand ${brandId}: no named offer ${offerId}` };
+    }
+    return { ok: true, name };
+  } catch (err) {
+    return { ok: false, reason: "unavailable", detail: `brand ${brandId}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
