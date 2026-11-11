@@ -20,6 +20,7 @@ import { startScheduler, wakeScheduler } from "./lib/scheduler.js";
 import { backfillTargetsAtBoot } from "./lib/sales-funnel-target.js";
 import { startTriggerDetectors } from "./lib/trigger-detectors.js";
 import { startPlanFollower } from "./lib/sales-funnel-plan.js";
+import { startBriefRepair } from "./lib/sales-funnel-birth-brief.js";
 import { registerExtendAudienceTemplate } from "./lib/transactional-email.js";
 import { logLegacyOutboundLegKeys } from "./lib/legacy-leg-key-log.js";
 const app = express();
@@ -81,6 +82,8 @@ if (process.env.NODE_ENV !== "test") {
       startTriggerDetectors(wakeScheduler);
       // FACTORY-P1-FOLLOW-PLAN: funnel campaigns following their plan (lib/sales-funnel-plan.ts), first pass ~60s after boot.
       startPlanFollower();
+      // CAMPAIGN-BORN-WITH-BRIEF-1111: a funnel campaign born without a brief gets its birth brief (lib/sales-funnel-birth-brief.ts).
+      startBriefRepair();
       app.listen(Number(PORT), "::", () => {
         console.log(`[campaign-service] Running on port ${PORT}`);
         // Register lifecycle email templates AFTER port-bind, fire-and-forget: a slow or
