@@ -69,6 +69,14 @@ vi.mock("../src/lib/run-play-attribution.js", async (importOriginal) => {
   return { ...original, attributeRunPlay: vi.fn(), playRationKeys: vi.fn(async () => new Map<string, string>()) };
 });
 
+// A funnel campaign launched with no brief is born with one read from features-service + brand-service
+// (src/lib/sales-funnel-birth-brief.ts). Launch tests read it as unreadable (born without, as before); its own tests
+// restore the actual via vi.importActual.
+vi.mock("../src/lib/sales-funnel-birth-brief.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/sales-funnel-birth-brief.js")>();
+  return { ...original, birthBriefFor: vi.fn(async () => ({ ok: false, reason: "catalogue_unavailable", detail: "not read in tests" })) };
+});
+
 process.env.NODE_ENV = "test";
 process.env.CAMPAIGN_SERVICE_DATABASE_URL = process.env.CAMPAIGN_SERVICE_DATABASE_URL || "postgresql://test:test@localhost/campaign_test";
 process.env.SERVICE_SECRET_KEY = "test-service-secret";

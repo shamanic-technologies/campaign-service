@@ -44,6 +44,7 @@ import { SALES_FUNNEL_CAMPAIGN_FIELD_LABELS, describeChanges, reportCampaignActi
 import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sales-funnel-target.js";
 import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "../lib/engine-dispatch.js";
 import { isTargetOnlyCampaign, targetLabelOf, targetOnlyUnitBirth } from "../lib/target-only-campaign.js";
+import { birthBriefFor, repairMissingBriefs } from "../lib/sales-funnel-birth-brief.js";
 import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass, runSwitchOffFor } from "../lib/sales-funnel-plan.js";
 
 /**
@@ -376,6 +377,18 @@ router.post(
         };
       }
 
+      // Every campaign is born with a brief (lib/sales-funnel-birth-brief.ts): none stated = the one written from what its
+      // client already stated (Target, offer, channels). A source unreadable now never blocks the launch: the repair fills it.
+      let bornBrief = brief ?? null;
+      if (bornBrief === null) {
+        const read = await birthBriefFor(
+          { orgId, brandId, offerId, target: birth.target, units: birth.units },
+          { userId: req.userId, runId: req.runId },
+        );
+        if (read.ok) bornBrief = read.brief;
+        else console.error(`[campaign-service] Funnel campaign ${id} born without a brief (${read.reason}: ${read.detail}); the brief repair fills it`);
+      }
+
       let born;
       try {
         born = await insertSalesFunnelCampaignWithUnits({
@@ -392,8 +405,9 @@ router.post(
           peopleKey,
           githubIssue,
           target: birth.target,
-          brief: brief ?? null,
-          briefUpdatedByUserId: req.userId!,
+          brief: bornBrief,
+          // A brief WE wrote is stated by nobody (a person's own is theirs).
+          briefUpdatedByUserId: brief ? req.userId! : null,
           mode: birth.mode,
           triggerId: birth.triggerId,
           followsPlan: followsPlan ?? false,
@@ -762,6 +776,21 @@ router.post("/internal/sales-funnel-campaigns/target-backfill", requireApiKey, a
     res.json(await backfillSalesFunnelCampaignTargets({ apply }));
   } catch (error) {
     console.error("[campaign-service] Target backfill error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/sales-funnel-campaigns/brief-repair {apply?, orgId?} — every funnel campaign whose brief nobody ever
+ * stated nor cleared gets the brief it would be born with now (lib/sales-funnel-birth-brief.ts, CAMPAIGN-BORN-WITH-BRIEF-1111).
+ * Dry run unless `apply: true`; idempotent; never overwrites a stated brief. Also run at boot and every 10 min.
+ */
+router.post("/internal/sales-funnel-campaigns/brief-repair", requireApiKey, async (req, res) => {
+  try {
+    const body = z.object({ apply: z.boolean().optional(), orgId: z.string().min(1).optional() }).parse(req.body ?? {});
+    res.json(await repairMissingBriefs({ apply: body.apply === true, orgId: body.orgId }));
+  } catch (error) {
+    console.error("[campaign-service] Brief repair error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
