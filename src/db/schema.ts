@@ -704,3 +704,12 @@ export const runPlayAttributions = pgTable(
 );
 
 export type RunPlayAttribution = typeof runPlayAttributions.$inferSelect;
+
+// A brand's spendable budget may have changed on this side (migration 0089, MON-PAGE-SPEED-2-1112).
+// Written ONLY by the database triggers on campaigns / sales_funnel_campaigns; drained into
+// billing-service's invalidation route by lib/spendable-budget-push.ts.
+export const spendableBudgetChanges = pgTable("spendable_budget_changes", {
+  orgId: text("org_id").notNull(),
+  brandId: text("brand_id").notNull(),
+  changedAt: timestamp("changed_at", { withTimezone: true }).notNull(),
+});
