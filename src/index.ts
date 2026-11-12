@@ -23,6 +23,7 @@ import { startPlanFollower } from "./lib/sales-funnel-plan.js";
 import { startBriefRepair } from "./lib/sales-funnel-birth-brief.js";
 import { registerExtendAudienceTemplate } from "./lib/transactional-email.js";
 import { logLegacyOutboundLegKeys } from "./lib/legacy-leg-key-log.js";
+import { startSpendableBudgetPush } from "./lib/spendable-budget-push.js";
 const app = express();
 const PORT = process.env.PORT || 3003;
 
@@ -84,6 +85,8 @@ if (process.env.NODE_ENV !== "test") {
       startPlanFollower();
       // CAMPAIGN-BORN-WITH-BRIEF-1111: a funnel campaign born without a brief gets its birth brief (lib/sales-funnel-birth-brief.ts).
       startBriefRepair();
+      // MON-PAGE-SPEED-2-1112: tell billing which brands' spendable budget changed here (lib/spendable-budget-push.ts).
+      startSpendableBudgetPush();
       app.listen(Number(PORT), "::", () => {
         console.log(`[campaign-service] Running on port ${PORT}`);
         // Register lifecycle email templates AFTER port-bind, fire-and-forget: a slow or
