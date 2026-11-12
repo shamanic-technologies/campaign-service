@@ -624,6 +624,13 @@
       "when": 1781286400000,
       "tag": "0088_fine_threads_post_published_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1781300000000,
+      "tag": "0089_spendable_budget_changes",
+      "breakpoints": true
     }
   ]
 }
