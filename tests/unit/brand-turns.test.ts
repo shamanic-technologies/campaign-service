@@ -469,6 +469,28 @@ describe("planBrandTurns — the hold is stated on the run ledger", () => {
     expect(holdFor("campaign-1")?.payload.data.reason).toBe("daily_ceiling_reached");
   });
 
+  it("carries a reached max budget's figures on the hold's data (HOLD-FIGURES-1113)", async () => {
+    unitVerdicts({
+      "campaign-1": (now: Date) => ({
+        ...held("cap_reached")(now),
+        figures: { cap: "max_budget", period: "daily", spentCents: 1425.21, ceilingCents: 1500, refusedSpendCents: 99.82 },
+      }),
+    });
+    await planBrandTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
+    expect(holdFor("campaign-1")?.payload.data).toMatchObject({
+      reason: "daily_ceiling_reached",
+      spentCents: 1425.21,
+      ceilingCents: 1500,
+      refusedSpendCents: 99.82,
+    });
+  });
+
+  it("puts no figures on a hold that has none", async () => {
+    unitVerdicts({ "campaign-1": held("unfunded") });
+    await planBrandTurns([claimed()], new Date("2026-09-17T05:33:27Z"));
+    expect(holdFor("campaign-1")?.payload.data).not.toHaveProperty("spentCents");
+  });
+
   it("stays SILENT for a unit that merely yielded its turn — the brand is visibly working", async () => {
     unitVerdicts({ "c-reply": runs(900, 1000), "c-visit": runs(100, 1000) });
     const now = new Date("2026-09-17T05:33:27Z");

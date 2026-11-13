@@ -150,6 +150,9 @@ export async function planBrandTurns(
             reason: verdict.kind === "cap_reached" ? "daily_ceiling_reached" : verdict.kind === "unreadable" ? "budgets_unreadable" : "unfunded",
             detail: verdict.detail,
             nextRunAt: verdict.nextRunAt,
+            // HOLD-FIGURES-1113: a reached cap states its figures (the dashboard reads data.spentCents /
+            // data.ceilingCents on this event, never the prose).
+            ...(verdict.figures ? { data: { ...verdict.figures } } : {}),
           });
           continue;
         }

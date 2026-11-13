@@ -102,7 +102,19 @@ export type SalesFunnelMoneyVerdict =
       reason: string;
       detail: string;
       nextRunAt: Date;
+      /**
+       * The figures a `cap_reached` hold was decided on (HOLD-FIGURES-1113), carried on the
+       * `campaign-hold` event's `data` so a reader never parses `detail`. Max budget:
+       * `{ spentCents, ceilingCents, refusedSpendCents }` (consumed this period, the max budget,
+       * and the next spend billing refused, null when billing named none). Max volume:
+       * `{ volumeConsumed, volumeCount, volumeUnit }`. Absent on every other hold.
+       */
+      figures?: SalesFunnelCapFigures;
     };
+
+export type SalesFunnelCapFigures =
+  | { cap: "max_budget"; period: string; spentCents: number; ceilingCents: number; refusedSpendCents: number | null }
+  | { cap: "max_volume"; period: string; volumeConsumed: number; volumeCount: number; volumeUnit: string };
 
 const CapPeriod = z.enum(["one_off", "daily", "weekly", "monthly"]);
 const Figure = z.union([z.string(), z.number()]).nullable().transform((v) => (v === null ? null : Number(v)));
@@ -336,7 +348,12 @@ export async function salesFunnelUnitMoney(
   now: Date = new Date(),
 ): Promise<SalesFunnelMoneyVerdict> {
   const nextRunAt = new Date(now.getTime() + SALES_FUNNEL_MONEY_RECHECK_MS);
-  const held = (kind: "unfunded" | "unreadable" | "cap_reached", reason: string, why: string): SalesFunnelMoneyVerdict => ({
+  const held = (
+    kind: "unfunded" | "unreadable" | "cap_reached",
+    reason: string,
+    why: string,
+    figures?: SalesFunnelCapFigures,
+  ): SalesFunnelMoneyVerdict => ({
     run: false,
     kind,
     reason,
@@ -344,6 +361,7 @@ export async function salesFunnelUnitMoney(
       `Campaign not run — it is a pipe of sales funnel campaign ${unit.salesFunnelCampaignId} (sales funnel ${unit.salesFunnelId ?? "?"}): ` +
       `${why} Re-checked at ${nextRunAt.toISOString()}.`,
     nextRunAt,
+    ...(figures ? { figures } : {}),
   });
 
   if (!unit.brandId || !unit.offerId || !unit.salesFunnelId) {
@@ -390,7 +408,13 @@ export async function salesFunnelUnitMoney(
     return held("unreadable", "Sales funnel budget unavailable", `billing could not measure what its max budget consumed (${budget.consumedUnavailableReason}). Held rather than spent (fail-closed).`);
   }
   if (budget?.reached) {
-    return held("cap_reached", "Sales funnel max budget reached", `${maxBudgetReachedWhy(budget.period, budget.consumedCents!, amountCents, budget.refusedSpend ?? null)} Every pipe of the funnel stops spending until the next period or a raise.`);
+    return held("cap_reached", "Sales funnel max budget reached", `${maxBudgetReachedWhy(budget.period, budget.consumedCents!, amountCents, budget.refusedSpend ?? null)} Every pipe of the funnel stops spending until the next period or a raise.`, {
+      cap: "max_budget",
+      period: budget.period,
+      spentCents: budget.consumedCents!,
+      ceilingCents: amountCents,
+      refusedSpendCents: budget.refusedSpend?.requiredCents ?? null,
+    });
   }
   const volume = caps.maxVolume;
   if (volume) {
@@ -401,7 +425,13 @@ export async function salesFunnelUnitMoney(
       return held("unreadable", "Sales funnel volume unavailable", `billing could not measure its max volume (${volume.consumedUnavailableReason}). Held rather than spent (fail-closed).`);
     }
     if (volume.reached) {
-      return held("cap_reached", "Sales funnel max volume reached", `its ${volume.period} max volume is reached (${volume.consumed} of ${volume.count} ${volume.unit}). No new first touch and no new event is taken until the next period or a raise.`);
+      return held("cap_reached", "Sales funnel max volume reached", `its ${volume.period} max volume is reached (${volume.consumed} of ${volume.count} ${volume.unit}). No new first touch and no new event is taken until the next period or a raise.`, {
+        cap: "max_volume",
+        period: volume.period,
+        volumeConsumed: volume.consumed,
+        volumeCount: volume.count,
+        volumeUnit: volume.unit,
+      });
     }
   }
   // A reactive pipe answers people already contacted: it ranks first in its cohort's turn.
