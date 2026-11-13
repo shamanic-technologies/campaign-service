@@ -12,6 +12,8 @@
  * (`isCampaignHold`), a gate refusal of an Engine run, and the Engine dispatch all call `stateEngineAnswer`.
  * A queue turn (a run of the campaign or its cohort in flight) is not a hold: the Engine is running.
  *
+ * Each hold carries `expected` (MON-HELD-FALSE-1113, `isExpectedHold`): true = a normal business state, false = a fault.
+ *
  * Fail-SOFT: never awaited by a dispatcher, never throws, a failed statement is `console.error`ed. It never changes
  * whether, when or what a campaign runs.
  */
@@ -36,6 +38,46 @@ export function isCampaignHold(reason: string): boolean {
 /** A gate refusal that holds the campaign (every refusal but a queue turn). */
 export function isGateHold(reason: string): boolean {
   return !QUEUE_TURN_SKIPS.has(reason);
+}
+
+/**
+ * MON-HELD-FALSE-1113: the holds that are a NORMAL business state decided on purpose (the client has not topped up,
+ * a budget or volume the client set is spent until its period rolls over, nothing funded yet, a source a person turned
+ * off, an audience fully served, a person's stop). Stated `expected: true` on features-service so the Monitoring hub
+ * keeps them in normal colours, and traced at `info` (lib/turn-hold-event.ts `levelFor`): ONE list for both.
+ * Everything else is a FAULT (an unreadable read, a planner that threw, a campaign failing every run): `expected: false`
+ * and `warn`. An unknown reason is a fault, so a renamed reason turns red, never silently green.
+ */
+export const EXPECTED_HOLD_REASONS: ReadonlySet<string> = new Set([
+  // Turn planner holds (lib/turn-hold-event.ts TurnHoldReason).
+  "unfunded",
+  "daily_ceiling_reached",
+  "not_a_sales_funnel_campaign",
+  "sources_off",
+  "no_serveable_audience",
+  "play_allows_no_workflow",
+  // Step-trigger holds (lib/trigger-person.ts OWED_UNTIL_ROOM_SKIPS).
+  "sales_funnel_cap",
+  // Gate refusals (lib/gate-check.ts, lib/sales-funnel-campaigns.ts salesFunnelUnitMoney), verbatim.
+  "Campaign is not ongoing",
+  "Not a sales funnel campaign",
+  "Sales funnel not funded",
+  "Sales funnel max budget reached",
+  "Sales funnel max volume reached",
+  "daily budget exceeded",
+  "weekly budget exceeded",
+  "monthly budget exceeded",
+  "total budget exceeded",
+  "Insufficient credits",
+  "Max leads reached",
+]);
+
+/** A gate refusal because the org's card cannot be charged: the client's own billing, decided on purpose. */
+const PAYMENT_HOLD_REASON_PREFIX = "Billing cannot charge this org (";
+
+/** Is this hold a normal business state (true) or a fault (false)? Pure. */
+export function isExpectedHold(reason: string): boolean {
+  return EXPECTED_HOLD_REASONS.has(reason) || reason.startsWith(PAYMENT_HOLD_REASON_PREFIX);
 }
 
 export interface EngineAnswerCampaign {
@@ -63,7 +105,13 @@ export async function stateEngineAnswer(campaign: EngineAnswerCampaign, heldReas
     const res = await fetch(`${url.replace(/\/$/, "")}/internal/campaign-engine-answers`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": apiKey },
-      body: JSON.stringify({ campaignId: campaign.id, outcome: engineOutcome, heldReason }),
+      body: JSON.stringify({
+        campaignId: campaign.id,
+        outcome: engineOutcome,
+        heldReason,
+        // MON-HELD-FALSE-1113: a normal business hold is never red on Monitoring; a run that ran states no verdict.
+        ...(heldReason ? { expected: isExpectedHold(heldReason) } : {}),
+      }),
       signal: siblingReadSignal(),
     });
     if (!res.ok) {

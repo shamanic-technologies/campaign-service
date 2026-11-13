@@ -1,4 +1,4 @@
-import { stateEngineAnswer } from "./engine-answer.js";
+import { isExpectedHold, stateEngineAnswer } from "./engine-answer.js";
 import { traceEvent } from "./trace-event.js";
 
 /**
@@ -80,10 +80,11 @@ export interface TurnHold {
 /**
  * Out of credit, out of budget and out of money are EXPECTED business states, so they trace at
  * `info` exactly as the credit gate's own block does. A read that FAILED, or a planner that
- * threw, is a genuine fault and is the one class this repo reserves `warn` for.
+ * threw, is a genuine fault and is the one class this repo reserves `warn` for. The SAME
+ * classification states the hold to features-service (`isExpectedHold`, MON-HELD-FALSE-1113).
  */
-function levelFor(reason: TurnHoldReason): "info" | "warn" {
-  return reason === "budgets_unreadable" || reason === "planning_failed" || reason === "engine_state_unreadable" ? "warn" : "info";
+export function levelFor(reason: TurnHoldReason): "info" | "warn" {
+  return isExpectedHold(reason) ? "info" : "warn";
 }
 
 /**
