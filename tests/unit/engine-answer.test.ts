@@ -9,8 +9,9 @@ vi.mock("../../src/lib/channel-operator-client.js", async (importOriginal) => ({
   fetchChannelCatalogue: vi.fn(async () => ({ ok: true, operatorBySlug: new Map(), legsBySlug: new Map(), legs })),
 }));
 
-const { stateEngineAnswer, isCampaignHold, isGateHold, RUN_IN_PROGRESS_REASON } = await import("../../src/lib/engine-answer.js");
-const { reportTurnHolds } = await import("../../src/lib/turn-hold-event.js");
+const { stateEngineAnswer, isCampaignHold, isGateHold, isExpectedHold, RUN_IN_PROGRESS_REASON } = await import("../../src/lib/engine-answer.js");
+const { reportTurnHolds, levelFor } = await import("../../src/lib/turn-hold-event.js");
+const { NOT_A_SALES_FUNNEL_CAMPAIGN } = await import("../../src/lib/gate-check.js");
 const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
 const { resetEngineStateCache } = await import("../../src/lib/engine-dispatch.js");
 
@@ -46,7 +47,7 @@ describe("a hold of ours on a campaign's Engine run", () => {
   it("a run held for budget states {unit, Engine, reason}; the next run that dispatches states null", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await reportTurnHolds([{ campaign: unit, reason: "daily_ceiling_reached", detail: "spent", nextRunAt: new Date() }]);
-    expect(answers()).toEqual([{ campaignId: "unit-1", outcome: "conversation", heldReason: "daily_ceiling_reached" }]);
+    expect(answers()).toEqual([{ campaignId: "unit-1", outcome: "conversation", heldReason: "daily_ceiling_reached", expected: true }]);
     const [, init] = fetchMock.mock.calls.find(([url]) => String(url).startsWith("http://features"))!;
     expect((init as RequestInit).headers).toMatchObject({ "x-api-key": "fk" });
 
@@ -81,5 +82,40 @@ describe("a hold of ours on a campaign's Engine run", () => {
     for (const r of ["run_in_flight", "cohort_run_in_flight", "event_names_another_person", "person_suppressed"]) expect(isCampaignHold(r)).toBe(false);
     expect(isGateHold(RUN_IN_PROGRESS_REASON)).toBe(false);
     expect(isGateHold("Insufficient credits")).toBe(true);
+  });
+});
+
+describe("MON-HELD-FALSE-1113: a normal business hold is stated expected, a fault is not", () => {
+  const EXPECTED = [
+    "unfunded", "daily_ceiling_reached", "sales_funnel_cap", "Insufficient credits", "Sales funnel max budget reached",
+    "Sales funnel max volume reached", "Sales funnel not funded", "daily budget exceeded", "Max leads reached",
+    NOT_A_SALES_FUNNEL_CAMPAIGN, "Billing cannot charge this org (card_declined)",
+  ];
+  const FAULTS = [
+    "budgets_unreadable", "planning_failed", "engine_state_unreadable", "sales_funnel_caps_unavailable", "failure_backoff",
+    "Sales funnel caps unavailable", "Sales funnel budget unavailable", "Sales funnel volume unavailable",
+    "Lead stats unavailable (fail-closed)", "some_reason_nobody_classified",
+  ];
+
+  it("states expected: true for out of credit, daily ceiling, funnel max budget, unfunded", async () => {
+    for (const r of EXPECTED) await stateEngineAnswer(unit, r);
+    expect(answers()).toEqual(EXPECTED.map((heldReason) => ({ campaignId: "unit-1", outcome: "conversation", heldReason, expected: true })));
+  });
+
+  it("states expected: false for an unreadable / unavailable / failed hold, and an unknown reason", async () => {
+    for (const r of FAULTS) await stateEngineAnswer(unit, r);
+    expect(answers()).toEqual(FAULTS.map((heldReason) => ({ campaignId: "unit-1", outcome: "conversation", heldReason, expected: false })));
+  });
+
+  it("a run that ran (heldReason null) states no verdict", async () => {
+    await stateEngineAnswer(unit, null, "conversation");
+    expect(answers()).toEqual([{ campaignId: "unit-1", outcome: "conversation", heldReason: null }]);
+  });
+
+  it("trace levels are unchanged and come from the same classification", () => {
+    const warn = ["budgets_unreadable", "planning_failed", "engine_state_unreadable"] as const;
+    const info = ["unfunded", "daily_ceiling_reached", "not_a_sales_funnel_campaign", "sources_off", "no_serveable_audience", "play_allows_no_workflow"] as const;
+    for (const r of warn) { expect(levelFor(r)).toBe("warn"); expect(isExpectedHold(r)).toBe(false); }
+    for (const r of info) { expect(levelFor(r)).toBe("info"); expect(isExpectedHold(r)).toBe(true); }
   });
 });
