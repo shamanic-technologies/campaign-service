@@ -215,6 +215,27 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
     }
   });
 
+  it("states the figures of a reached cap, never only prose (HOLD-FIGURES-1113)", async () => {
+    // Prod 2026-11-13, sales funnel campaign 86cbd471 (CeXO): 1425.21 of 1500 cents, next spend 99.82 refused.
+    const prod = { ...budget("1500", "1425.21", true, "daily"), refusedSpend: { at: "2026-11-13T09:12:00.000Z", requiredCents: "99.8200000000" } };
+    const r = await withCaps({ stated: true, funded: true, fundedBy: "max_budget", maxBudget: prod, maxVolume: null, pipes: null });
+    expect(r.verdict).toMatchObject({
+      run: false,
+      kind: "cap_reached",
+      figures: { cap: "max_budget", period: "daily", spentCents: 1425.21, ceilingCents: 1500, refusedSpendCents: 99.82 },
+    });
+    expect((r.verdict as { detail: string }).detail).toContain("1425.21 of 1500 cents spent, and the next spend of 99.82 cents would pass the cap");
+    // No refusal served: refusedSpendCents is null, never made up.
+    const noRefusal = (await withCaps({ stated: true, funded: true, fundedBy: "max_budget", maxBudget: budget("200", "200.4", true), maxVolume: null, pipes: null })).verdict;
+    expect(noRefusal).toMatchObject({ figures: { cap: "max_budget", spentCents: 200.4, ceilingCents: 200, refusedSpendCents: null } });
+    // A max volume hold states its consumed / count.
+    const vol = (await withCaps({ stated: true, funded: true, fundedBy: "max_volume", maxBudget: null, maxVolume: { count: 10, period: "daily", unit: "first_contacts", consumed: 10, reached: true, consumedUnavailableReason: null }, pipes: null })).verdict;
+    expect(vol).toMatchObject({ kind: "cap_reached", figures: { cap: "max_volume", period: "daily", volumeConsumed: 10, volumeCount: 10, volumeUnit: "first_contacts" } });
+    // Every other hold carries no figures.
+    const unfunded = (await withCaps({ stated: false, funded: false, fundedBy: null, maxBudget: null, maxVolume: null, pipes: null })).verdict;
+    expect(unfunded).not.toHaveProperty("figures");
+  });
+
   it("holds a proactive pipe LOUDLY when a consumption cannot be measured (never read as not reached)", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const { verdict } = await withCaps({ stated: true, funded: true, fundedBy: "both", maxBudget: budget("1000", "10", false), maxVolume: { count: 5, period: "daily", unit: "first_contacts", consumed: null, reached: null, consumedUnavailableReason: "volume_not_measured_on_channel" }, pipes: null });
