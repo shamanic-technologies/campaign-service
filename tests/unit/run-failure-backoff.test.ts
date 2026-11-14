@@ -110,6 +110,60 @@ describe("isInFailureBackoff — an event must not bypass a widened interval", (
   });
 });
 
+describe("stale streak detection — a gate-blocked campaign's past streak is recognized as stale", () => {
+  // The gate-check handler (POST /gate-check) resets a streak when it is stale, because
+  // gate-blocked campaigns never go through /end-run and recordRunSuccess never fires.
+  // The condition mirrors recordRunFailure's own stale detection: the last failure is older
+  // than FAILURE_STREAK_STALE_MS.
+  //
+  // Prod 2026-11-14: 25 campaigns listed as "failing" by /internal/campaigns/failing, 20 of
+  // them with a single transient failure from days or weeks ago that was never reset.
+  const STALE_MS = 2 * FAILURE_RETRY_CEILING_MS; // FAILURE_STREAK_STALE_MS
+
+  function isStaleStreak(row: { consecutiveRunFailures: number; lastRunFailureAt: Date | null }): boolean {
+    return (
+      row.consecutiveRunFailures > 0 &&
+      row.lastRunFailureAt !== null &&
+      Date.now() - row.lastRunFailureAt.getTime() > STALE_MS
+    );
+  }
+
+  it("a failure from 23 days ago is stale", () => {
+    expect(isStaleStreak({
+      consecutiveRunFailures: 1,
+      lastRunFailureAt: new Date(Date.now() - 23 * 24 * 60 * 60_000),
+    })).toBe(true);
+  });
+
+  it("a failure from 2 hours ago is stale (ceiling is 30 min, stale = 2×ceiling = 1 h)", () => {
+    expect(isStaleStreak({
+      consecutiveRunFailures: 12,
+      lastRunFailureAt: new Date(Date.now() - 2 * 60 * 60_000),
+    })).toBe(true);
+  });
+
+  it("a failure from 30 minutes ago is NOT stale (within the ceiling window)", () => {
+    expect(isStaleStreak({
+      consecutiveRunFailures: 5,
+      lastRunFailureAt: new Date(Date.now() - 30 * 60_000),
+    })).toBe(false);
+  });
+
+  it("a healthy campaign (streak=0) is never stale", () => {
+    expect(isStaleStreak({
+      consecutiveRunFailures: 0,
+      lastRunFailureAt: new Date(Date.now() - 30 * 24 * 60 * 60_000),
+    })).toBe(false);
+  });
+
+  it("a campaign with no recorded failure time is never stale", () => {
+    expect(isStaleStreak({
+      consecutiveRunFailures: 3,
+      lastRunFailureAt: null,
+    })).toBe(false);
+  });
+});
+
 describe("formatInterval", () => {
   it("reads as a person would say it", () => {
     expect(formatInterval(30 * 60_000)).toBe("30 min");
