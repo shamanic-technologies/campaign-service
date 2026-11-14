@@ -20,6 +20,7 @@ import {
   FAILING_ALERT_THRESHOLD,
   FAILURE_RETRY_BASE_MS,
   FAILURE_RETRY_CEILING_MS,
+  FAILURE_STREAK_STALE_MS,
   FAILURES_AT_BASE_CADENCE,
   runHealthOf,
   notifyFailingCampaign,
@@ -196,6 +197,27 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
           creditCheckDetail: result.creditCheckDetail,
         },
       }, req.headers).catch(() => {});
+    }
+
+    // A campaign that REACHES the gate is alive and scheduled. If its failure streak is stale
+    // (last failure older than FAILURE_STREAK_STALE_MS), the streak is from a past episode and
+    // should be reset. Without this, a gate-blocked campaign (budget reached, insufficient
+    // credits, etc.) never goes through /end-run, so recordRunSuccess never fires: the stale
+    // streak stays frozen on the row, and the monitoring endpoint reports the campaign as
+    // "failing" even though its runs stopped failing long ago. Prod 2026-11-14: 25 campaigns
+    // listed as failing, 20 of them with a single stale failure from days or weeks ago.
+    // Fail-SOFT: an unwritable reset is harmless (the monitoring just keeps showing the stale
+    // streak until the next gate check).
+    if (
+      campaign.consecutiveRunFailures > 0 &&
+      campaign.lastRunFailureAt &&
+      Date.now() - campaign.lastRunFailureAt.getTime() > FAILURE_STREAK_STALE_MS
+    ) {
+      try {
+        await recordRunSuccess(campaignId);
+      } catch (err) {
+        console.error(`[campaign-service] could not reset stale failure streak of campaign ${campaignId} at the gate:`, err);
+      }
     }
 
     if (!result.allowed) {
