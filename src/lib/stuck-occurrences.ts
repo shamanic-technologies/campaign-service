@@ -38,7 +38,7 @@ export const MOVING_QUEUE_WINDOW_MS = 15 * 60_000;
 const STUCK_LIST_LIMIT = 100;
 
 /** Holds the CUSTOMER chose through their money: owed, never a defect. */
-export const MONEY_HOLDS: ReadonlySet<string> = new Set(["sales_funnel_cap", "unfunded"]);
+export const MONEY_HOLDS: ReadonlySet<string> = new Set(["sales_funnel_cap", "unfunded", "insufficient_credits"]);
 /** Holds that only mean "a run is busy": a turn in a queue, while the queue moves. */
 export const QUEUE_HOLDS: ReadonlySet<string> = new Set(["run_in_flight", "cohort_run_in_flight"]);
 
