@@ -129,10 +129,75 @@ export function runDelivered(end: RunEnd): boolean {
   return end.success === true && end.stopCampaign !== true && end.noWorkAvailable !== true;
 }
 
-/** Record the runs just dispatched for a carrying occurrence. A dispatch with no run id cannot be settled: said. */
+/**
+ * A RUN'S END IS NEVER LOST BECAUSE IT CAME BACK FASTER THAN OUR OWN BOOKKEEPING (2026-11-19, SOPHIE-SILENT-1119-LOST-END-RUN).
+ *
+ * The delivery row is written AFTER `/execute` answers (and after every other campaign of the occurrence was
+ * dispatched), so a fast run's `/end-run` (or its gate refusal) can reach us before the row exists. Prod
+ * 2026-11-19, Distribute.you's Lead Follow-up unit 6c54479c: run 81d86819 ended at 08:57:05.209 (`nobody_due`), its
+ * row was written at 08:57:05.738; the end settled nothing, the row stayed `dispatched`, and the person-run lock
+ * (lib/person-runs.ts) held every Lead event of that person `run_in_flight` for 15 min while he wrote 4 times. Fleet,
+ * 7 days: 95 of the 96 deliveries left `dispatched` past the liveness window ended this way (gap p50 0.4 s, max 19.5 s).
+ *
+ * So an end (or a gate refusal) finding no `dispatched` row is REMEMBERED by run id (`EARLY_END_TTL_MS`, in process:
+ * the service runs as one container and the row follows within seconds), and `recordDeliveries` applies it the moment
+ * the row is written: the delivery settles with the status the run stated, its person is released at once, and the
+ * occurrence follows the same redelivery / verdict rules as a normal end. Both sides write first and look second, so
+ * whichever comes last sees the other; a delivery is only ever settled once (every settle is guarded on
+ * `dispatched`). A run carrying nothing has no row: its remembered end simply expires. The liveness window and the
+ * unreported-delivery sweep stay the safety net (a restart inside that sub-second gap).
+ */
+export const EARLY_END_TTL_MS = 5 * 60_000;
+
+type EarlyEnd =
+  | { kind: "end"; end: RunEnd; at: Date }
+  | { kind: "gate"; reason: string; gateNextRunAt?: Date; at: Date };
+
+const earlyEnds = new Map<string, EarlyEnd>();
+
+function rememberEarlyEnd(runId: string, early: EarlyEnd): void {
+  const cutoff = early.at.getTime() - EARLY_END_TTL_MS;
+  for (const [id, e] of earlyEnds) if (e.at.getTime() < cutoff) earlyEnds.delete(id);
+  earlyEnds.set(runId, early);
+}
+
+function takeEarlyEnd(runId: string): EarlyEnd | undefined {
+  const early = earlyEnds.get(runId);
+  if (!early) return undefined;
+  earlyEnds.delete(runId);
+  return Date.now() - early.at.getTime() > EARLY_END_TTL_MS ? undefined : early;
+}
+
+/** Test hook: forget every remembered end. */
+export function resetEarlyEnds(): void {
+  earlyEnds.clear();
+}
+
+/** Apply a remembered end to the row just written. Never throws (logged). */
+async function applyEarlyEnd(runId: string, early: EarlyEnd): Promise<void> {
+  try {
+    const settled = early.kind === "end"
+      ? await settleDispatched(runId, early.end, early.at, FIRING_WAIT_MS)
+      : await settleGateRefusedRow(runId, early.reason, early.at, FIRING_WAIT_MS, early.gateNextRunAt);
+    if (settled.kind !== "no_row") {
+      console.log(
+        `[campaign-service] run ${runId} ended before its delivery row was written; settled now with what its end stated (${settled.kind})`,
+      );
+    }
+  } catch (err) {
+    console.error(`[campaign-service] the end of run ${runId}, reported before its delivery row, could not be settled:`, err);
+  }
+}
+
+/**
+ * Record the runs just dispatched for a carrying occurrence. A dispatch with no run id cannot be settled: said.
+ * A run whose end already arrived (above) is settled right after, in the background (the occurrence is being fired
+ * by the caller: a settle that needs it waits for the fire to end); `onSettledEarly` is told once it is.
+ */
 export async function recordDeliveries(
   eventId: string,
   triggered: ReadonlyArray<{ campaignId: string; runId?: string }>,
+  onSettledEarly?: (campaignId: string) => void,
 ): Promise<void> {
   for (const t of triggered) {
     if (!t.runId) {
@@ -145,6 +210,11 @@ export async function recordDeliveries(
       .insert(triggerEventDeliveries)
       .values({ eventId, campaignId: t.campaignId, runId: t.runId, status: "dispatched" })
       .onConflictDoNothing();
+    const early = takeEarlyEnd(t.runId);
+    if (early) {
+      const campaignId = t.campaignId;
+      void applyEarlyEnd(t.runId, early).then(() => onSettledEarly?.(campaignId));
+    }
   }
 }
 
@@ -171,6 +241,26 @@ export async function settleTriggerDelivery(
   now: Date = new Date(),
   waitMs: number = FIRING_WAIT_MS,
 ): Promise<DeliverySettlement> {
+  const first = await settleDispatched(runId, end, now, waitMs);
+  if (first.kind !== "no_row") return first;
+  // No row yet: the run may have ended before its row was written (see `EARLY_END_TTL_MS`). Remember the end, then
+  // look once more: a row written while we looked is settled here, else `recordDeliveries` settles it.
+  rememberEarlyEnd(runId, { kind: "end", end, at: now });
+  const again = await settleDispatched(runId, end, now, waitMs);
+  if (again.kind === "no_row") return { kind: "not_a_delivery" };
+  earlyEnds.delete(runId);
+  return again;
+}
+
+type NoRow = { kind: "no_row" };
+
+/** Settle the run's `dispatched` row with what its end stated; `no_row` when there is none (yet). */
+async function settleDispatched(
+  runId: string,
+  end: RunEnd,
+  now: Date,
+  waitMs: number,
+): Promise<DeliverySettlement | NoRow> {
   if (end.delivery?.state === "refused") return settleRefusedDelivery(runId, end.delivery, now, waitMs);
   if (end.success === true && end.personNotAdmitted) return settleNotAdmitted(runId, end.personNotAdmitted.reason, now, waitMs);
   const status = settledStatus(end);
@@ -180,7 +270,7 @@ export async function settleTriggerDelivery(
     .set({ status, endedAt: now })
     .where(and(eq(triggerEventDeliveries.runId, runId), eq(triggerEventDeliveries.status, "dispatched")))
     .returning();
-  if (!d) return { kind: "not_a_delivery" };
+  if (!d) return { kind: "no_row" };
   if (delivered) return { kind: "completed", eventId: d.eventId, campaignId: d.campaignId };
 
   const failedRuns = await db
@@ -328,17 +418,35 @@ export async function settleGateRefusedDelivery(
   now: Date = new Date(),
   waitMs: number = FIRING_WAIT_MS,
   gateNextRunAt?: Date,
-): Promise<{ kind: "not_a_delivery" } | { kind: "requeued" | "event_busy"; eventId: string; campaignId: string }> {
-  let d: TriggerEventDelivery | undefined;
-  for (let i = 0; i < GATE_REFUSED_ROW_TRIES && !d; i++) {
+): Promise<{ kind: "not_a_delivery" } | GateRefusedSettlement> {
+  for (let i = 0; i < GATE_REFUSED_ROW_TRIES; i++) {
     if (i > 0) await sleep(waitMs);
-    [d] = await db
-      .update(triggerEventDeliveries)
-      .set({ status: "gate_refused", endedAt: new Date() })
-      .where(and(eq(triggerEventDeliveries.runId, runId), eq(triggerEventDeliveries.status, "dispatched")))
-      .returning();
+    const settled = await settleGateRefusedRow(runId, reason, now, waitMs, gateNextRunAt);
+    if (settled.kind !== "no_row") return settled;
   }
-  if (!d) return { kind: "not_a_delivery" };
+  // Still no row: remembered, settled by `recordDeliveries` when the row is written (see `EARLY_END_TTL_MS`).
+  rememberEarlyEnd(runId, { kind: "gate", reason, gateNextRunAt, at: now });
+  const again = await settleGateRefusedRow(runId, reason, now, waitMs, gateNextRunAt);
+  if (again.kind === "no_row") return { kind: "not_a_delivery" };
+  earlyEnds.delete(runId);
+  return again;
+}
+
+type GateRefusedSettlement = { kind: "requeued" | "event_busy"; eventId: string; campaignId: string };
+
+async function settleGateRefusedRow(
+  runId: string,
+  reason: string,
+  now: Date,
+  waitMs: number,
+  gateNextRunAt?: Date,
+): Promise<NoRow | { kind: "not_a_delivery" } | GateRefusedSettlement> {
+  const [d] = await db
+    .update(triggerEventDeliveries)
+    .set({ status: "gate_refused", endedAt: new Date() })
+    .where(and(eq(triggerEventDeliveries.runId, runId), eq(triggerEventDeliveries.status, "dispatched")))
+    .returning();
+  if (!d) return { kind: "no_row" };
   const delivery = d;
   const skipToken = gateReasonToSkip(reason);
   // Funding refusals use the gate's own nextRunAt hint (typically 30 min for "Insufficient credits"):
@@ -395,7 +503,7 @@ async function settleRefusedDelivery(
   refusal: { code: string; reason: string },
   now: Date,
   waitMs: number,
-): Promise<DeliverySettlement> {
+): Promise<DeliverySettlement | NoRow> {
   const code = clip(refusal.code, 200);
   const reason = clip(refusal.reason, 1000);
   const [d] = await db
@@ -403,7 +511,7 @@ async function settleRefusedDelivery(
     .set({ status: "refused", endedAt: now, refusalCode: code, refusalReason: reason })
     .where(and(eq(triggerEventDeliveries.runId, runId), eq(triggerEventDeliveries.status, "dispatched")))
     .returning();
-  if (!d) return { kind: "not_a_delivery" };
+  if (!d) return { kind: "no_row" };
 
   for (let attempt = 1; attempt <= FIRING_TRIES; attempt++) {
     const applied = await db.transaction(async (tx) => {
@@ -526,13 +634,13 @@ export async function deliveriesByEvent(eventIds: string[]): Promise<Map<string,
  * The run's pipe refused the occurrence's person (see header): final for that campaign, never redelivered. Waits
  * out a fire in progress like a failed delivery does.
  */
-async function settleNotAdmitted(runId: string, reason: string, now: Date, waitMs: number): Promise<DeliverySettlement> {
+async function settleNotAdmitted(runId: string, reason: string, now: Date, waitMs: number): Promise<DeliverySettlement | NoRow> {
   const [d] = await db
     .update(triggerEventDeliveries)
     .set({ status: "not_admitted", endedAt: now })
     .where(and(eq(triggerEventDeliveries.runId, runId), eq(triggerEventDeliveries.status, "dispatched")))
     .returning();
-  if (!d) return { kind: "not_a_delivery" };
+  if (!d) return { kind: "no_row" };
 
   for (let attempt = 1; attempt <= FIRING_TRIES; attempt++) {
     const applied = await db.transaction(async (tx) => {

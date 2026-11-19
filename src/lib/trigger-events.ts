@@ -11,7 +11,7 @@ import {
   type StepTriggerRequest,
 } from "./step-trigger.js";
 import type { WorkflowTriggerInput } from "./workflows.js";
-import { releasePersonRunReservations } from "./person-runs.js";
+import { releasePersonRunReservations, wakeOccurrencesHeldBy } from "./person-runs.js";
 import {
   OWED_EVENT_RECHECK_MS,
   OWED_UNTIL_ROOM_SKIPS,
@@ -500,7 +500,15 @@ export async function fireClaimedEvent(
         if (carried.length > 0) {
           // Already dispatched: a failure to record must never put the event back (it would dispatch twice).
           try {
-            await recordDeliveries(event.id, carried);
+            // A run that already ENDED (its /end-run came before this row) is settled as soon as the row exists;
+            // the slot it held then wakes the occurrences it held back, as /end-run does (SOPHIE-SILENT-1119-LOST-END-RUN).
+            await recordDeliveries(event.id, carried, (campaignId) => {
+              void wakeOccurrencesHeldBy(campaignId)
+                .then(async (woken) => {
+                  if (woken > 0) (await import("./scheduler.js")).wakeScheduler();
+                })
+                .catch((err) => console.error(`[campaign-service] could not wake the occurrences held by campaign ${campaignId}:`, err));
+            });
           } catch (err) {
             console.error(`[campaign-service] trigger event ${event.id}: the runs just dispatched could not be recorded, a failure of them will not redeliver it:`, err);
           }
