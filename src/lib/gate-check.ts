@@ -7,6 +7,7 @@ import { isPersonCarryingRun, personCarryingRunIds } from "./person-runs.js";
 import { readPaymentHold } from "./payment-hold.js";
 import { stopHeldOrg } from "./payment-hold-sweep.js";
 import { siblingReadSignal } from "./sibling-read-timeout.js";
+import { admitAnswerOwed } from "./answer-owed.js";
 
 // THE definition of "a run is alive", shared with the scheduler's stuck sweep. It used to be three
 // hours here against fifteen minutes there, and that gap is a full stop: the sweep re-fires a
@@ -63,7 +64,9 @@ export interface GateCheckInput {
  * genuine authorization apart from a default-allow — the two used to be the same word.
  * Absent when the gate returned before block 3b ever ran.
  */
-export type CreditCheckOutcome = "affordable" | "unaffordable" | "unreadable";
+// `answer_owed` (REPLY-NO-BALANCE-1118): billing said the org cannot afford it, and the run was admitted anyway because
+// it answers a person waiting on us (lib/answer-owed.ts); billing holds the pass for its spends.
+export type CreditCheckOutcome = "affordable" | "unaffordable" | "unreadable" | "answer_owed";
 
 export interface GateCheckResult {
   allowed: boolean;
@@ -248,7 +251,12 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
   // reach the run trace as the same word (PASSED). During an incident that is the one
   // question worth answering about this gate, and the trace was unable to answer it.
   const credit = await readCreditAffordability(campaign.campaignId, identity);
-  if (credit.readable && !credit.affordable) {
+  // A reply is not new outreach (REPLY-NO-BALANCE-1118): a run carrying a person waiting on our answer goes out
+  // whatever the balance (lib/answer-owed.ts). Every other run keeps the refusal below.
+  const answerOwed = credit.readable && !credit.affordable
+    ? await admitAnswerOwed({ orgId: campaign.orgId, campaignId: campaign.campaignId, runId: campaign.runId })
+    : null;
+  if (credit.readable && !credit.affordable && !answerOwed?.owed) {
     return {
       allowed: false,
       reason: "Insufficient credits",
@@ -256,7 +264,7 @@ export async function runGateChecks(campaign: GateCheckInput): Promise<GateCheck
       creditCheck: "unaffordable",
     };
   }
-  const creditCheck: CreditCheckOutcome = credit.readable ? "affordable" : "unreadable";
+  const creditCheck: CreditCheckOutcome = answerOwed?.owed ? "answer_owed" : credit.readable ? "affordable" : "unreadable";
   const creditCheckDetail = credit.readable ? undefined : credit.detail;
 
   // 4. Volume check

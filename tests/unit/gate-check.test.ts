@@ -45,6 +45,10 @@ vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => {
   return { ...actual, salesFunnelUnitMoney: mockUnitMoney };
 });
 
+// REPLY-NO-BALANCE-1118: whether an unaffordable run answers a person waiting on us (tests/unit/answer-owed.test.ts).
+const { mockAdmitAnswerOwed } = vi.hoisted(() => ({ mockAdmitAnswerOwed: vi.fn() }));
+vi.mock("../../src/lib/answer-owed.js", () => ({ admitAnswerOwed: mockAdmitAnswerOwed }));
+
 // Mock fetch for lead stats
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -154,6 +158,7 @@ describe("Gate Check", () => {
     mockGetStatsBudget.mockResolvedValue({ windows: [] });
     mockUpdateRun.mockResolvedValue({});
     mockUnitMoney.mockResolvedValue({ run: true, pace: { spentCents: 0, ceilingCents: 1000 } });
+    mockAdmitAnswerOwed.mockResolvedValue({ owed: false, why: "the run carries no occurrence" });
   });
 
   it("should block if campaign is not ongoing", async () => {
@@ -690,6 +695,24 @@ describe("Gate Check", () => {
       expect(result.nextRunAt!.getTime()).toBeLessThanOrEqual(after + 30 * 60 * 1000 + 1000);
       // Must NOT auto-stop — that would need a manual restart instead of self-healing.
             expect(mockDbUpdate).not.toHaveBeenCalled();
+    });
+
+    it("admits an unaffordable run that answers a person waiting on us (REPLY-NO-BALANCE-1118)", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ affordable: false, balanceCents: "0", lastRequiredCents: "150", hasHistory: true }),
+      });
+      mockAdmitAnswerOwed.mockResolvedValueOnce({ owed: true, answer: { leadId: "lead-1", brandId: "brand-1" } });
+      const result = await runGateChecks(makeCampaign({ runId: "run-1" }));
+      expect(result.allowed).toBe(true);
+      expect(result.creditCheck).toBe("answer_owed");
+      expect(mockAdmitAnswerOwed).toHaveBeenCalledWith({ orgId: "org-1", campaignId: "campaign-1", runId: "run-1" });
+    });
+
+    it("never asks whether a run answers somebody when the org can afford it", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ affordable: true }) });
+      await runGateChecks(makeCampaign({ runId: "run-1" }));
+      expect(mockAdmitAnswerOwed).not.toHaveBeenCalled();
     });
 
     it("should proceed when org can afford the run (affordable=true)", async () => {
