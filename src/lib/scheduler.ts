@@ -24,6 +24,7 @@ import { fireDueTriggerEvents, nextPendingTriggerDueAt } from "./trigger-events.
 import { settleUnreportedDeliveries } from "./trigger-deliveries.js";
 import { checkTriggerHealth } from "./trigger-health.js";
 import { replayChannelDownRefusals } from "./channel-down-replay.js";
+import { retryOwedAnswersOnTriggerUnit } from "./owed-answer-retry.js";
 
 // Cadence while a campaign is actively running (a run is in-flight). At this
 // rate the scheduler catches /end-run reschedules and stuck-run detection.
@@ -160,6 +161,9 @@ export async function reRunDueCampaigns(): Promise<number> {
     let parkUntil: Date | null = null;
     if (answersOnDemand(campaign, catalogue)) {
       parkUntil = parkedUntil;
+      // A unit running ONLY on its trigger never runs on its own, but a person lead-service holds owed our answer on
+      // it is retried through the occurrence that carried them (lib/owed-answer-retry.ts, ANSWER-RETRY-TRIGGER-UNIT-1119).
+      if (campaign.runsOnTriggerId) await retryOwedAnswersOnTriggerUnit(campaign, now);
     } else if (answersATrigger(campaign, catalogue)) {
       // A REACTIVE pipe runs only when someone is owed (lib/reactive-wake.ts); its trigger's occurrences dispatch it
       // through the trigger path, never here. Nobody owed = parked until the next owed moment, no run.
