@@ -1,5 +1,6 @@
 import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { FRESH_START_STREAK_FIELDS } from "./run-failure-backoff.js";
+import { appendSettingChanges, settingChangeRowsOf } from "./sales-funnel-setting-changes.js";
 import { db } from "../db/index.js";
 import {
   campaigns,
@@ -465,6 +466,8 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
       })
       .returning();
 
+    // CAMPAIGN-CHANGE-LOG-1119: its words at birth start their history.
+    await appendSettingChanges(tx, settingChangeRowsOf(parent, null, { target: parent.target, brief: parent.brief, followsPlan: parent.followsPlan ? true : null }, input.createdByUserId ?? null, "birth"));
     const units = await insertSalesFunnelUnits(tx, parent, input.units);
     if (input.status === "ongoing" && input.onUnitStarted) {
       for (const unit of units) await input.onUnitStarted(tx, unit);

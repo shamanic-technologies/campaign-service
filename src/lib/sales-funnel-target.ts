@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
+import { appendSettingChanges, settingChangeRowsOf } from "./sales-funnel-setting-changes.js";
 import { campaigns, salesFunnelCampaigns } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead, type CatalogueLeg } from "./channel-operator-client.js";
 import { fetchSalesFunnel, type SalesFunnelFromCatalogue } from "./sales-funnel-catalogue-client.js";
@@ -207,10 +208,16 @@ export async function backfillSalesFunnelCampaignTargets(
         .set({ mode: shape.mode, triggerId: shape.triggerId })
         .where(and(eq(salesFunnelCampaigns.id, row.id), isNull(salesFunnelCampaigns.mode)));
       if (shape.target !== null) {
-        await db
-          .update(salesFunnelCampaigns)
-          .set({ target: shape.target })
-          .where(and(eq(salesFunnelCampaigns.id, row.id), isNull(salesFunnelCampaigns.target)));
+        const target = shape.target;
+        await db.transaction(async (tx) => {
+          const done = await tx
+            .update(salesFunnelCampaigns)
+            .set({ target })
+            .where(and(eq(salesFunnelCampaigns.id, row.id), isNull(salesFunnelCampaigns.target)))
+            .returning({ id: salesFunnelCampaigns.id, orgId: salesFunnelCampaigns.orgId });
+          // CAMPAIGN-CHANGE-LOG-1119: a target read off its funnel, where it had none.
+          if (done[0]) await appendSettingChanges(tx, settingChangeRowsOf(done[0], { target: null }, { target }, null, "target_backfill"));
+        });
       }
     }
   }

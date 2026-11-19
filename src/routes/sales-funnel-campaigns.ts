@@ -4,7 +4,7 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaigns, salesFunnelCampaigns, type SalesFunnelCampaign } from "../db/schema.js";
+import { campaigns, campaignStatusTransitions, salesFunnelCampaigns, type SalesFunnelCampaign } from "../db/schema.js";
 import { serviceAuth, requireApiKey, type AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { refuseRetiredEngineOutcomes } from "../lib/retired-engine-outcomes.js";
@@ -45,6 +45,7 @@ import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sale
 import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "../lib/engine-dispatch.js";
 import { isTargetOnlyCampaign, targetLabelOf, targetOnlyUnitBirth } from "../lib/target-only-campaign.js";
 import { birthBriefFor, repairMissingBriefs } from "../lib/sales-funnel-birth-brief.js";
+import { appendSettingChanges, readSettingChanges, settingChangeRowsOf, SETTING_CHANGES_RECORDED_SINCE } from "../lib/sales-funnel-setting-changes.js";
 import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass, runSwitchOffFor } from "../lib/sales-funnel-plan.js";
 
 /**
@@ -97,14 +98,18 @@ function statedEdits(
   return edits;
 }
 
-async function applyEdits(row: SalesFunnelCampaign, edits: Partial<typeof salesFunnelCampaigns.$inferInsert>): Promise<SalesFunnelCampaign> {
+async function applyEdits(row: SalesFunnelCampaign, edits: Partial<typeof salesFunnelCampaigns.$inferInsert>, actorUserId: string | null): Promise<SalesFunnelCampaign> {
   if (Object.keys(edits).length === 0) return row;
-  const [written] = await db
-    .update(salesFunnelCampaigns)
-    .set({ ...edits, updatedAt: new Date() })
-    .where(and(eq(salesFunnelCampaigns.id, row.id), eq(salesFunnelCampaigns.orgId, row.orgId)))
-    .returning();
-  return written;
+  // CAMPAIGN-CHANGE-LOG-1119: each changed word is appended to its history in the same transaction.
+  return db.transaction(async (tx) => {
+    const [written] = await tx
+      .update(salesFunnelCampaigns)
+      .set({ ...edits, updatedAt: new Date() })
+      .where(and(eq(salesFunnelCampaigns.id, row.id), eq(salesFunnelCampaigns.orgId, row.orgId)))
+      .returning();
+    if (written) await appendSettingChanges(tx, settingChangeRowsOf(row, row, { target: edits.target, brief: edits.brief, followsPlan: edits.followsPlan }, actorUserId, "edit"));
+    return written;
+  });
 }
 
 /**
@@ -219,7 +224,7 @@ router.post(
       const incumbentBefore = incumbent ?? null;
       // Handed back with the target and brief the caller states now (absent = untouched).
       const wasFollowing = incumbent?.followsPlan ?? false;
-      if (incumbent) incumbent = await applyEdits(incumbent, statedEdits(incumbent, { target, brief, followsPlan }, req.userId));
+      if (incumbent) incumbent = await applyEdits(incumbent, statedEdits(incumbent, { target, brief, followsPlan }, req.userId), req.userId ?? null);
       // Told to stop following its plan: back on its own funnel at once (lib/sales-funnel-plan.ts `switchOffPlan`).
       if (incumbent && wasFollowing && followsPlan === false) {
         await runSwitchOffFor(incumbent.id);
@@ -562,7 +567,7 @@ router.patch(
       // Rewrite (or clear) its brief (read by every run at /start-run, so the next message follows the new
       // words), restate its target. Status untouched unless stated too.
       if (status === undefined) {
-        const reworded = await backHome(await applyEdits(existing, edits));
+        const reworded = await backHome(await applyEdits(existing, edits, req.userId ?? null));
         reportSalesFunnelCampaignAction(req, existing, reworded, false);
         if (checkPlanNow) void runPlanCheckFor(reworded.id);
         const units = (await unitsOf([reworded.id], orgId)).get(reworded.id)!;
@@ -586,7 +591,7 @@ router.patch(
         ...(status === "activate" ? { onUnitStarted: ensureUnitSources } : {}),
       });
       if (!written) return res.status(404).json({ error: "Sales funnel campaign not found" });
-      const parent = await backHome(await applyEdits(written.salesFunnelCampaign, edits));
+      const parent = await backHome(await applyEdits(written.salesFunnelCampaign, edits, req.userId ?? null));
       reportSalesFunnelCampaignAction(req, existing, parent, true);
       if (status === "activate") wakeScheduler();
       if (checkPlanNow) void runPlanCheckFor(parent.id);
@@ -719,6 +724,47 @@ router.get("/sales-funnel-campaigns/:id/plan-changes", requireApiKey, serviceAut
     });
   } catch (error) {
     console.error("[campaign-service] Plan changes read error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /sales-funnel-campaigns/:id/change-history — CAMPAIGN-CHANGE-LOG-1119. Everything this service dated about a
+ * funnel campaign, oldest first, for a reader building its change log: every unit it ever had (stopped and replaced
+ * ones too), every status transition of those units (from, to, reason, source, when), every change of its own words
+ * (target, brief, follows-its-plan; recorded since migration 0090 only) and every plan change applied to it.
+ */
+router.get("/sales-funnel-campaigns/:id/change-history", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const parent = await db.query.salesFunnelCampaigns.findFirst({
+      where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, req.orgId!)),
+    });
+    if (!parent) return res.status(404).json({ error: "Sales funnel campaign not found" });
+    const units = await db
+      .select({ campaignId: campaigns.id, name: campaigns.name, featureSlug: campaigns.featureSlug, legKey: campaigns.legKey, status: campaigns.status, createdAt: campaigns.createdAt })
+      .from(campaigns)
+      .where(eq(campaigns.salesFunnelCampaignId, parent.id))
+      .orderBy(asc(campaigns.createdAt), asc(campaigns.id));
+    const transitions =
+      units.length === 0
+        ? []
+        : await db
+            .select()
+            .from(campaignStatusTransitions)
+            .where(inArray(campaignStatusTransitions.campaignId, units.map((u) => u.campaignId)))
+            .orderBy(asc(campaignStatusTransitions.occurredAt), asc(campaignStatusTransitions.id));
+    const [settings, plans] = await Promise.all([readSettingChanges(parent.id), readPlanChanges(parent.id)]);
+    res.json({
+      salesFunnelCampaignId: parent.id,
+      createdAt: parent.createdAt.toISOString(),
+      settingsRecordedSince: SETTING_CHANGES_RECORDED_SINCE,
+      units: units.map((u) => ({ ...u, createdAt: u.createdAt.toISOString() })),
+      statusTransitions: transitions.map((t) => ({ id: t.id, campaignId: t.campaignId, fromStatus: t.fromStatus, toStatus: t.toStatus, reason: t.reason, source: t.source, occurredAt: t.occurredAt.toISOString() })),
+      settingChanges: settings.map((c) => ({ id: c.id, field: c.field, before: c.beforeValue, after: c.afterValue, changedByUserId: c.changedByUserId, source: c.source, changedAt: c.changedAt.toISOString() })),
+      planChanges: [...plans].reverse(),
+    });
+  } catch (error) {
+    console.error("[campaign-service] Change history read error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
