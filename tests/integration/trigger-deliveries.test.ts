@@ -59,6 +59,8 @@ import {
   TRIGGER_DELIVERY_MAX,
   deliveryOf,
   resetDeliverySettleClock,
+  resetEarlyEnds,
+  settleGateRefusedDelivery,
   settleTriggerDelivery,
   settleUnreportedDeliveries,
 } from "../../src/lib/trigger-deliveries.js";
@@ -133,6 +135,7 @@ describe("an occurrence carrying something is consumed only by a run that did it
     mockExecute.mockImplementation(async () => ({ runId: nextRun() }));
     mockFile.mockResolvedValue({ ok: true, leadId: "lead-jane", filed: true });
     mockDue.mockResolvedValue({ ok: true });
+    resetEarlyEnds();
   });
 
   afterAll(async () => {
@@ -527,6 +530,80 @@ describe("an occurrence carrying something is consumed only by a run that did it
     const [own] = await deliveries(waiting.id);
     expect(own).toMatchObject({ campaignId: campaign.id, status: "dispatched" });
     expect(own.runId).not.toBe(firstDelivery.runId);
+  });
+
+  // SOPHIE-SILENT-1119-LOST-END-RUN: the run ends (its /end-run reaches us) BEFORE `/execute` answered and the
+  // delivery row was written. Reproduced by ending the run inside the execute call itself.
+  const waitFor = async <T>(read: () => Promise<T>, ok: (v: T) => boolean): Promise<T> => {
+    let v = await read();
+    for (let i = 0; i < 200 && !ok(v); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      v = await read();
+    }
+    return v;
+  };
+  const endsBeforeItsRow = (end: Parameters<typeof settleTriggerDelivery>[1]) =>
+    mockExecute.mockImplementationOnce(async () => {
+      const runId = nextRun();
+      expect((await settleTriggerDelivery(runId, end)).kind).toBe("not_a_delivery");
+      return { runId };
+    });
+
+  it("an end that arrives BEFORE its delivery row settles the row once written (completed) and frees the person at once", async () => {
+    const campaign = await emailSending();
+    endsBeforeItsRow({ success: true });
+    const first = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    expect(first.body.event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+    const [d] = await waitFor(() => deliveries(first.body.event.id), (rows) => rows[0]?.status !== "dispatched");
+    expect(d.status).toBe("completed");
+    expect(d.endedAt).not.toBeNull();
+    // The run is over: the same person's next fact runs now, never held run_in_flight.
+    const next = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: { subject: "Again", bodyText: "Hi" } });
+    expect(next.body.event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+  });
+
+  it("an early end with NOTHING TO DO follows the normal rule: delivery no_work, occurrence redelivered to that campaign", async () => {
+    const campaign = await emailSending();
+    endsBeforeItsRow({ success: true, noWorkAvailable: true });
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const eventId = res.body.event.id as string;
+    const pending = await waitFor(() => eventRow(eventId), (e) => e.status === "pending");
+    expect(pending).toMatchObject({ status: "pending", outcome: null, ranCampaignIds: [] });
+    expect((pending.detail as Record<string, unknown>).retryCampaignIds).toEqual([campaign.id]);
+    expect((await deliveries(eventId))[0].status).toBe("no_work");
+  }, 20_000);
+
+  it("an early FAILED end redelivers; an early sender refusal is final", async () => {
+    await emailSending();
+    endsBeforeItsRow({ success: false });
+    const failed = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const pending = await waitFor(() => eventRow(failed.body.event.id), (e) => e.status === "pending");
+    expect(pending.lastError).toContain("did not complete its work");
+    expect((await deliveries(failed.body.event.id))[0].status).toBe("failed");
+
+    endsBeforeItsRow({ success: true, delivery: { state: "refused", code: "email_not_verified", reason: "Not verified" } });
+    const refused = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: { email: "other.lead@example.com" }, item: ITEM });
+    const done = await waitFor(() => eventRow(refused.body.event.id), (e) => e.outcome === "refused");
+    expect(done).toMatchObject({ status: "done", outcome: "refused", skipReason: "email_not_verified" });
+    expect((await deliveries(refused.body.event.id))[0].status).toBe("refused");
+  }, 20_000);
+
+  it("a gate refusal that arrives before the row hands the slot back once the row is written", async () => {
+    const campaign = await emailSending();
+    mockExecute.mockImplementationOnce(async () => {
+      const runId = nextRun();
+      expect(await settleGateRefusedDelivery(runId, "A run is already in progress", new Date(), 1)).toEqual({ kind: "not_a_delivery" });
+      return { runId };
+    });
+    const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
+    const pending = await waitFor(() => eventRow(res.body.event.id), (e) => e.status === "pending");
+    expect(pending.lastError).toContain(`${campaign.id} run_in_flight`);
+    expect((await deliveries(res.body.event.id))[0].status).toBe("gate_refused");
+  }, 20_000);
+
+  it("an end for a run carrying nothing (no row ever) settles nothing and is forgotten", async () => {
+    expect((await settleTriggerDelivery("wf-run-never-recorded", { success: true })).kind).toBe("not_a_delivery");
+    expect(await db.select().from(triggerEventDeliveries)).toHaveLength(0);
   });
 
   it("a delivery whose run never reported holds the same person only inside the run liveness window, then lets a new occurrence run", async () => {
