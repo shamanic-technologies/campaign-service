@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
+import { appendSettingChanges, settingChangeRowsOf } from "./sales-funnel-setting-changes.js";
 import { campaigns, salesFunnelCampaigns } from "../db/schema.js";
 import { fetchChannelCatalogue, type ChannelCatalogueRead, type CatalogueLeg } from "./channel-operator-client.js";
 import { fetchOfferName, type OfferNameRead } from "./brand-offers-client.js";
@@ -151,11 +152,16 @@ export async function repairMissingBriefs(input: { apply: boolean; orgId?: strin
       out.push({ ...base, outcome: "would_write", brief: read.brief, reason: null, detail: null });
       continue;
     }
-    const written = await db
-      .update(salesFunnelCampaigns)
-      .set({ brief: read.brief, briefUpdatedAt: new Date(), briefUpdatedByUserId: null, updatedAt: new Date() })
-      .where(and(eq(salesFunnelCampaigns.id, r.id), never))
-      .returning({ id: salesFunnelCampaigns.id });
+    const written = await db.transaction(async (tx) => {
+      const done = await tx
+        .update(salesFunnelCampaigns)
+        .set({ brief: read.brief, briefUpdatedAt: new Date(), briefUpdatedByUserId: null, updatedAt: new Date() })
+        .where(and(eq(salesFunnelCampaigns.id, r.id), never))
+        .returning({ id: salesFunnelCampaigns.id });
+      // CAMPAIGN-CHANGE-LOG-1119: it had no brief (the `never` guard), so the history is from nothing.
+      if (done.length > 0) await appendSettingChanges(tx, settingChangeRowsOf({ id: r.id, orgId: r.orgId }, { brief: null }, { brief: read.brief }, null, "birth_brief"));
+      return done;
+    });
     out.push(
       written.length > 0
         ? { ...base, outcome: "written", brief: read.brief, reason: null, detail: null }

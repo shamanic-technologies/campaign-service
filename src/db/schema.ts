@@ -319,6 +319,27 @@ export const salesFunnelCampaigns = pgTable(
 export type SalesFunnelCampaign = typeof salesFunnelCampaigns.$inferSelect;
 export type NewSalesFunnelCampaign = typeof salesFunnelCampaigns.$inferInsert;
 
+// CAMPAIGN-CHANGE-LOG-1119 (migration 0090): every change of a funnel campaign's own words (target, brief,
+// followsPlan), appended in the same transaction as the write (lib/sales-funnel-setting-changes.ts). Append-only;
+// before 0090 = not recorded. `source` = the path that wrote it (`edit` = a caller's stated edit, `birth_brief` = the
+// brief written for it from its offer, `target_backfill` = the target read off its funnel).
+export const salesFunnelCampaignSettingChanges = pgTable(
+  "sales_funnel_campaign_setting_changes",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    salesFunnelCampaignId: text("sales_funnel_campaign_id").notNull(),
+    orgId: text("org_id").notNull(),
+    /** `target` | `brief` | `follows_plan` */
+    field: text("field").notNull(),
+    beforeValue: text("before_value"),
+    afterValue: text("after_value"),
+    changedByUserId: text("changed_by_user_id"),
+    source: text("source").notNull(),
+    changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_sfc_setting_changes_campaign").on(table.salesFunnelCampaignId, table.changedAt)]
+);
+
 // Every plan change APPLIED to a funnel campaign that follows its plan (FACTORY-P1-FOLLOW-PLAN, migration 0082):
 // when, from which funnel to which, what each unit did. Append-only: the dashboard's history.
 export const salesFunnelPlanChanges = pgTable(
