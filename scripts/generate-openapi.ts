@@ -369,6 +369,36 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "get",
+  path: "/sales-funnel-campaigns/{id}/change-history",
+  tags: ["Sales funnel campaigns"],
+  summary: "Everything dated about a funnel campaign, oldest first: its units, their status transitions, changes of its words, its plan changes",
+  description:
+    "Header x-org-id. CAMPAIGN-CHANGE-LOG-1119, for a reader building the campaign's change log. `units` = every unit it ever had (stopped and replaced ones too). `statusTransitions` = every status change of those units (append-only since each unit's record opened: `source` = the path that wrote it, `sales_funnel` = the whole funnel moved with a person's start/stop, `payment_hold` = billing could not charge the org, `record_opened` = an observation of the present at migration 0057, never a change; `reason` = the stop reason). `settingChanges` = every change of its target, brief or follows-its-plan, recorded since `settingsRecordedSince` only (before = not recorded): `source` edit (a caller's stated edit; `changedByUserId` = x-user-id) | birth | birth_brief (the brief written from its offer) | target_backfill. `planChanges` = as `/plan-changes`, oldest first.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: {
+      description: "History",
+      content: {
+        "application/json": {
+          schema: z.object({
+            salesFunnelCampaignId: z.string(),
+            createdAt: z.string(),
+            settingsRecordedSince: z.string(),
+            units: z.array(z.object({ campaignId: z.string(), name: z.string(), featureSlug: z.string().nullable(), legKey: z.string().nullable(), status: z.string(), createdAt: z.string() })),
+            statusTransitions: z.array(z.object({ id: z.string(), campaignId: z.string(), fromStatus: z.string().nullable(), toStatus: z.string(), reason: z.string().nullable(), source: z.string(), occurredAt: z.string() })),
+            settingChanges: z.array(z.object({ id: z.string(), field: z.enum(["target", "brief", "follows_plan"]), before: z.string().nullable(), after: z.string().nullable(), changedByUserId: z.string().nullable(), source: z.enum(["edit", "birth", "birth_brief", "target_backfill"]), changedAt: z.string() })),
+            planChanges: z.array(SalesFunnelPlanChangeSchema),
+          }),
+        },
+      },
+    },
+    404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
   method: "post",
   path: "/internal/sales-funnel-campaigns/plan-check",
   tags: ["Sales funnel campaigns"],

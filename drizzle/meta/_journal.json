@@ -631,6 +631,13 @@
       "when": 1781300000000,
       "tag": "0089_spendable_budget_changes",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1781400000000,
+      "tag": "0090_sales_funnel_campaign_setting_changes",
+      "breakpoints": true
     }
   ]
 }
