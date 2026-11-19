@@ -189,6 +189,16 @@ export const STEP_TRIGGER_SKIPS = {
    * ONE-AI-CONVERSES-1029-QUEUE). Final for that campaign, nobody answered twice, no slot spent.
    */
   ANSWERED_AFTER_FACT: "answered_after_fact",
+  /**
+   * The gate refused the run because the org has no credits (billing says unaffordable). A NORMAL
+   * business state: the customer tops up and the campaign auto-resumes. Owed (never dropped), and
+   * recognized as a money hold so the monitoring hub does not turn red.
+   * This skip is NOT produced by the step trigger itself — it is written by `settleGateRefusedDelivery`
+   * when a gate-refused occurrence is re-queued. It exists in `STEP_TRIGGER_SKIPS` because the
+   * `OWED_UNTIL_ROOM_SKIPS` → `PERSON_EVENT_RETRY_SKIPS` test invariant requires every owed reason to
+   * be a named skip.
+   */
+  INSUFFICIENT_CREDITS: "insufficient_credits",
 } as const;
 
 export type StepTriggerSkipReason = (typeof STEP_TRIGGER_SKIPS)[keyof typeof STEP_TRIGGER_SKIPS];
