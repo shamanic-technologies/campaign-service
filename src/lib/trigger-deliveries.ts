@@ -325,9 +325,9 @@ export function gateReasonToSkip(reason: string): string {
 export async function settleGateRefusedDelivery(
   runId: string,
   reason: string,
-  gateNextRunAt?: Date,
   now: Date = new Date(),
   waitMs: number = FIRING_WAIT_MS,
+  gateNextRunAt?: Date,
 ): Promise<{ kind: "not_a_delivery" } | { kind: "requeued" | "event_busy"; eventId: string; campaignId: string }> {
   let d: TriggerEventDelivery | undefined;
   for (let i = 0; i < GATE_REFUSED_ROW_TRIES && !d; i++) {
