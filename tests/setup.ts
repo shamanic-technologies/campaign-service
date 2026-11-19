@@ -23,6 +23,13 @@ vi.mock("../src/lib/engine-answer.js", async (importOriginal) => {
   return { ...original, stateEngineAnswer: vi.fn().mockResolvedValue(undefined) };
 });
 
+// ANSWER-RETRY-TRIGGER-UNIT-1119 (src/lib/owed-answer-retry.ts): a claimed trigger-run unit asks lead-service who is
+// owed. No test talks to lead-service for it: nobody owed. tests/integration/owed-answer-retry.test.ts reads the real module.
+vi.mock("../src/lib/owed-answer-retry.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/owed-answer-retry.js")>();
+  return { ...original, retryOwedAnswersOnTriggerUnit: vi.fn().mockResolvedValue({ kind: "nobody_owed" }) };
+});
+
 // SOURCE CAMPAIGNS (src/lib/source-campaign-store.ts): the outreach spend read also counts the
 // offer's source campaigns, and a person's first outreach start may birth a default source (which
 // reads the catalogue). Tests that are not about sources see neither; the source tests use
