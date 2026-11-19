@@ -240,7 +240,7 @@ router.post("/gate-check", requireApiKey, requirePipelineHeaders, trackingHeader
       // occurrence is owed again (lib/trigger-deliveries.ts settleGateRefusedDelivery, ONE-AI-CONVERSES-1029-QUEUE).
       if (req.runId) {
         const refusedRunId = req.runId;
-        void settleGateRefusedDelivery(refusedRunId, result.reason ?? "refused").catch((err) => {
+        void settleGateRefusedDelivery(refusedRunId, result.reason ?? "refused", result.nextRunAt).catch((err) => {
           console.error(`[campaign-service] could not hand back the slot of run ${refusedRunId} refused at the gate (campaign ${campaignId}):`, err);
         });
       }

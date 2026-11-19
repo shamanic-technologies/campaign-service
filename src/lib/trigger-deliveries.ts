@@ -296,15 +296,36 @@ export async function settleTriggerDelivery(
  * window (15 min), then settled `failed` an hour later by the sweep. Prod 2026-10-29: ~11 such refusals an hour per
  * Lead event campaign held about 3 of its 4 slots at any time. Now the gate settles the delivery itself:
  * `gate_refused` (not a failed run: never counted toward `TRIGGER_DELIVERY_MAX`) and the occurrence goes back
- * `pending` for THAT campaign, held `<campaignId> run_in_flight` (owed, woken by the next `/end-run`), due within
- * `GATE_REFUSED_RETRY_MS`. The gate can reach us BEFORE the dispatch wrote the row (prod: up to 2.6 s early), so a
- * missing row is looked for again `GATE_REFUSED_ROW_TRIES` times. A run carrying nothing has no row: nothing to do.
+ * `pending` for THAT campaign, due within `GATE_REFUSED_RETRY_MS` (transient refusals) or at the gate's own
+ * `nextRunAt` (funding refusals).
+ *
+ * MON-STUCK-RETRY-1119: before this fix, every gate refusal — including permanent ones like "Insufficient credits" —
+ * was re-queued as `run_in_flight` on a 2-min cadence. A prospect stuck on a broke org retried 643 times in 39 h:
+ * each attempt dispatched a Windmill run, the gate refused it, and the occurrence went straight back. Now the gate
+ * reason maps to the right skip token (`gateReasonToSkip`): a funding refusal is `insufficient_credits` (owed, in
+ * `MONEY_HOLDS`, retried at the gate's 30-min hint), and a true run-in-flight stays `run_in_flight` on its 2-min
+ * cadence. The gate can reach us BEFORE the dispatch wrote the row (prod: up to 2.6 s early), so a missing row is
+ * looked for again `GATE_REFUSED_ROW_TRIES` times. A run carrying nothing has no row: nothing to do.
  */
 export const GATE_REFUSED_RETRY_MS = 2 * 60_000;
 export const GATE_REFUSED_ROW_TRIES = 6;
+
+/**
+ * Map a gate-check refusal reason to the occurrence skip token that the trigger-events retry loop
+ * will store. A FUNDING reason gets its own token so the monitoring hub recognizes it as a money
+ * hold (stuck-occurrences `MONEY_HOLDS`) and not a defect. Everything else keeps `run_in_flight`
+ * (the original behaviour, correct for transient refusals like "A run is already in progress").
+ * Pure.
+ */
+export function gateReasonToSkip(reason: string): string {
+  if (reason === "Insufficient credits") return "insufficient_credits";
+  return "run_in_flight";
+}
+
 export async function settleGateRefusedDelivery(
   runId: string,
   reason: string,
+  gateNextRunAt?: Date,
   now: Date = new Date(),
   waitMs: number = FIRING_WAIT_MS,
 ): Promise<{ kind: "not_a_delivery" } | { kind: "requeued" | "event_busy"; eventId: string; campaignId: string }> {
@@ -319,7 +340,12 @@ export async function settleGateRefusedDelivery(
   }
   if (!d) return { kind: "not_a_delivery" };
   const delivery = d;
-  const dueAt = new Date(now.getTime() + GATE_REFUSED_RETRY_MS);
+  const skipToken = gateReasonToSkip(reason);
+  // Funding refusals use the gate's own nextRunAt hint (typically 30 min for "Insufficient credits"):
+  // the org has no money so retrying sooner only wastes a Windmill job slot. Transient refusals keep
+  // the short 2-min cadence (a run in flight finishes within seconds/minutes).
+  const retryMs = gateNextRunAt ? Math.max(gateNextRunAt.getTime() - now.getTime(), GATE_REFUSED_RETRY_MS) : GATE_REFUSED_RETRY_MS;
+  const dueAt = new Date(now.getTime() + retryMs);
   for (let attempt = 1; attempt <= FIRING_TRIES; attempt++) {
     const applied = await db.transaction(async (tx) => {
       const [event] = await tx.select().from(triggerEvents).where(eq(triggerEvents.id, delivery.eventId)).for("update");
@@ -333,7 +359,7 @@ export async function settleGateRefusedDelivery(
       const ran = others(event.ranCampaignIds ?? []);
       const priorRan = others(strings(own.priorRanCampaignIds));
       const retry = [...new Set([...(pending ? strings(own.retryCampaignIds) : []), delivery.campaignId])];
-      const why = `${delivery.campaignId} run_in_flight: its run ${runId} was refused at the gate (${reason}), retried by ${dueAt.toISOString()}`;
+      const why = `${delivery.campaignId} ${skipToken}: its run ${runId} was refused at the gate (${reason}), retried by ${dueAt.toISOString()}`;
       await tx
         .update(triggerEvents)
         .set({

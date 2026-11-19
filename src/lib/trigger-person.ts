@@ -90,6 +90,12 @@ export const OWED_UNTIL_ROOM_SKIPS: ReadonlySet<string> = new Set([
   "sales_funnel_cap",
   // workflow-service could not say whether the Engine runs the campaign (MIGRATE-1105 S2-FALLBACK): held, never the old workflow.
   "engine_state_unreadable",
+  // The gate refused the run because the org has no credits (billing says unaffordable): the
+  // customer's money, owed until they top up. MON-STUCK-RETRY-1119: before this, the gate refusal
+  // was re-queued as `run_in_flight` regardless of the actual reason, so a prospect stuck on
+  // "Insufficient credits" retried every ~3 min indefinitely (643 attempts in 39 h). Now the reason
+  // rides the occurrence and the retry uses the gate's own 30-min `nextRunAt` hint.
+  "insufficient_credits",
 ]);
 
 /**
