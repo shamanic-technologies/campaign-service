@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { nextRunFrom, isOneOffFinished } from "../../src/lib/campaign-first-run.js";
 import { billingCapsPath, type SalesFunnelMoneyVerdict } from "../../src/lib/sales-funnel-campaigns.js";
-import { composeBirthBrief } from "../../src/lib/sales-funnel-birth-brief.js";
 import type { Campaign } from "../../src/db/schema.js";
 
 // DISTRY-CALL-IS-CAMPAIGN-1121: when a campaign's next run happens, read from what the dispatch reads.
@@ -52,12 +51,5 @@ describe("billingCapsPath", () => {
     expect(billingCapsPath({ brandId: "b", offerId: null, salesFunnelId: "newsletter_drafted", salesFunnelCampaignId: "c" }))
       .toBe("/internal/brands/b/sales-funnels/newsletter_drafted/campaigns/c/caps");
     expect(billingCapsPath({ brandId: "b", offerId: "o", salesFunnelId: "f" })).toBe("/internal/brands/b/offers/o/sales-funnels/f/caps");
-  });
-});
-
-describe("composeBirthBrief", () => {
-  it("states the goal alone for a campaign naming no offer", () => {
-    expect(composeBirthBrief({ targetLabel: "Newsletter drafted", offerName: null, channelNames: [] })).toBe("Goal: Newsletter drafted.");
-    expect(composeBirthBrief({ targetLabel: "Paid client", offerName: "Pro", channelNames: [] })).toBe("Goal: Paid client for Pro.");
   });
 });

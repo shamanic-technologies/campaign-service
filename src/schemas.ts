@@ -274,8 +274,8 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // salesFunnelId (e.g. "backlink_earned"): the campaign is then run by that outcome's Engine, and its target never moves.
   // Unknown step = 400 unknown_target_step.
   target: TargetStepSchema.optional(),
-  // OPTIONAL: its strategy in plain language ("Cold email only, never write to someone who asked to stop, test for
-  // 30 days"). The ONE text of the campaign: the judge that picks plays AND every LLM step of every run read it
+  // REQUIRED to create a NEW campaign (400 brief_required, HUMAN-BRIEF-1121); omitted = hand back the identity's existing
+  // campaign. Its strategy in plain language ("Book meetings with HR leaders by cold email"). The ONE text of the campaign: the judge that picks plays AND every LLM step of every run read it
   // (/start-run `brief`, ONE-BRIEF-1105).
   brief: z.string().trim().min(1, "brief must not be empty (omit it)").max(MAX_BRIEF_LENGTH).optional(),
   // OPTIONAL (lib/sales-funnel-plan.ts, FACTORY-P1-FOLLOW-PLAN): true = it runs the pipes and plays of the plan
