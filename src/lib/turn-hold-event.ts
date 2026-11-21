@@ -51,7 +51,12 @@ export type TurnHoldReason =
    * workflow-service could not say whether the campaign's Engine runs it (MIGRATE-1105 S2-FALLBACK): held, never run
    * on its old workflow on a guess (lib/engine-dispatch.ts `EngineStateUnreadableError`).
    */
-  | "engine_state_unreadable";
+  | "engine_state_unreadable"
+  /**
+   * A unit with no channel whose Engine has no script serving it (TARGET-ONLY-NO-SCRIPT-1121): held, red (a script is
+   * missing), looked at again every 10 min (lib/engine-dispatch.ts `EngineServesNoScriptError`).
+   */
+  | "engine_serves_no_script";
 
 /** The campaign fields an event needs to be attributable. A structural subset of a claimed row. */
 export interface TurnHoldCampaign {

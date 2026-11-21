@@ -49,6 +49,23 @@ export const ENGINE_STATE_CACHE_MS = 60_000;
 export const ENGINE_STATE_STALE_MAX_MS = 60 * 60_000;
 /** A minute: when a run held on an unreadable Engine state is tried again. */
 export const ENGINE_STATE_RECHECK_MS = 60_000;
+/** Ten minutes: when a unit with no channel whose Engine has no script serving it is looked at again. */
+export const ENGINE_NO_SCRIPT_RECHECK_MS = 10 * 60_000;
+
+/**
+ * TARGET-ONLY-NO-SCRIPT-1121 (prod 2026-11-21, campaigns 4cafe25b + f1a0f033 on target `conversation`): a unit with no
+ * channel (a campaign launched on its target alone) runs ONLY on its Engine, it has no workflow to fall back on. When
+ * workflow-service answers that no script of that Engine serves the campaign (its `engine_not_live`, or the Engine not
+ * live for the org), the run is HELD by name, never sent to a workflow path that cannot exist (every tick threw
+ * "missing required fields: featureSlug" and counted as a failed run). Not an expected hold: red on Monitoring, a
+ * script is missing (an outcome a campaign needs with no runnable script is a gap to fill).
+ */
+export class EngineServesNoScriptError extends Error {
+  constructor(readonly outcome: string, readonly campaignId: string) {
+    super(`no script of the ${outcome} Engine serves campaign ${campaignId}: it has no channel, so no workflow can run it`);
+    this.name = "EngineServesNoScriptError";
+  }
+}
 
 /** The Engine state (or the catalogue it is keyed on) could not be read and no recent answer stands in: hold the run. */
 export class EngineStateUnreadableError extends Error {

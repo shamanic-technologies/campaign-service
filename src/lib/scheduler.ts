@@ -5,7 +5,7 @@ import { eq, and, lte, isNotNull, isNull } from "drizzle-orm";
 import { answersOnDemand, ON_DEMAND_RECHECK_MS, readDispatchCatalogue } from "./on-demand-mode.js";
 import { answersATrigger, reactiveWake } from "./reactive-wake.js";
 import { executeCampaignWorkflow } from "./workflows.js";
-import { ENGINE_STATE_RECHECK_MS, EngineStateUnreadableError, liveEngineFor } from "./engine-dispatch.js";
+import { ENGINE_NO_SCRIPT_RECHECK_MS, ENGINE_STATE_RECHECK_MS, EngineServesNoScriptError, EngineStateUnreadableError, liveEngineFor } from "./engine-dispatch.js";
 import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger, type TriggerSelection } from "./features-workflow-projection-client.js";
 import { isEngineOnlyUnit } from "./target-only-campaign.js";
 import { attributeRunPlay } from "./run-play-attribution.js";
@@ -301,7 +301,7 @@ export async function reRunDueCampaigns(): Promise<number> {
         // A unit with no channel picks no audience and no workflow: its Engine makes its outcome from Start. Not live
         // for the org = a failed dispatch, loud (the stored slug names an Engine, never a workflow to fall back on).
         if (engineOnly && !engine) {
-          throw new Error(`the ${campaign.workflowSlug} Engine does not run this org's campaigns: nothing can run this campaign`);
+          throw new EngineServesNoScriptError(campaign.workflowSlug!.replace(/^engine:/, ""), campaign.id);
         }
         const selection: TriggerSelection = engineOnly || !featureSlug
           ? { workflowSlug: campaign.workflowSlug!, audienceId: null, noServeableAudience: false, gridEnumeratesNoAudience: true }
@@ -415,6 +415,19 @@ export async function reRunDueCampaigns(): Promise<number> {
           });
         }
       } catch (err) {
+        // TARGET-ONLY-NO-SCRIPT-1121: a unit with no channel whose Engine has no script serving it is HELD by name (red on
+        // Monitoring, stated on its next steps), never a failed run on a loop.
+        if (err instanceof EngineServesNoScriptError) {
+          const nextRunAt = new Date(Date.now() + ENGINE_NO_SCRIPT_RECHECK_MS);
+          await db.update(campaigns).set({ nextRunAt, updatedAt: new Date() }).where(eq(campaigns.id, campaign.id));
+          await reportTurnHolds([{
+            campaign,
+            reason: "engine_serves_no_script",
+            detail: `Campaign ${campaign.id} is held: no script of the ${err.outcome} Engine serves it, and a campaign launched on its target alone has no other way to run. It is looked at again at ${nextRunAt.toISOString()}.`,
+            nextRunAt,
+          }]);
+          continue;
+        }
         console.error(`[campaign-service] Failed to re-trigger campaign ${campaign.id}:`, err);
         // The claim cleared next_run_at: a failed dispatch must reschedule on the failure backoff
         // (and reach the staff alert), or the stuck sweep re-claims it every tick, invisibly.

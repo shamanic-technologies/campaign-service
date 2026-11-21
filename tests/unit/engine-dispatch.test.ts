@@ -156,6 +156,19 @@ describe("dispatching the Engine", () => {
   });
 });
 
+describe("a unit with no channel whose Engine serves no script (TARGET-ONLY-NO-SCRIPT-1121)", () => {
+  it("is refused by name, never sent to a workflow it does not have", async () => {
+    const { executeCampaignWorkflow } = await import("../../src/lib/workflows.js");
+    const { EngineServesNoScriptError } = actual;
+    fetchMock.mockResolvedValueOnce(json(409, { code: "engine_not_live", state: { live: false } }));
+    const run = executeCampaignWorkflow("engine:conversation", { ...inputs, featureSlug: null as unknown as string }, { outcome: "conversation", fromOutcome: "start" });
+    await expect(run).rejects.toBeInstanceOf(EngineServesNoScriptError);
+    // Only the Engine was asked: no workflow execute.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]![0])).toContain("/engines/conversation/execute");
+  });
+});
+
 describe("one mechanism for every Engine", () => {
   it("names no outcome, channel or slug", async () => {
     const { readFileSync } = await import("node:fs");
