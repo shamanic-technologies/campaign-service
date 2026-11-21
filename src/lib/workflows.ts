@@ -1,6 +1,6 @@
 import type { EventPerson } from "./trigger-person.js";
 import { WorkflowExecutionRefusedError } from "./workflow-refusal.js";
-import { executeCampaignEngine, type CampaignEngine } from "./engine-dispatch.js";
+import { EngineServesNoScriptError, executeCampaignEngine, type CampaignEngine } from "./engine-dispatch.js";
 import { stateEngineAnswer } from "./engine-answer.js";
 
 export interface WorkflowExecutionInputs {
@@ -95,7 +95,9 @@ export async function executeCampaignWorkflow(
       void stateEngineAnswer({ id: inputs.campaignId }, null, engine.outcome);
       return ran;
     }
-    // workflow-service says the Engine is not live for this org after all: the workflow, as before.
+    // workflow-service says the Engine is not live for this org after all: the workflow, as before. A unit with no
+    // channel has no workflow: held by name (TARGET-ONLY-NO-SCRIPT-1121).
+    if (!inputs.featureSlug) throw new EngineServesNoScriptError(engine.outcome, inputs.campaignId);
   }
   const url = process.env.WORKFLOW_SERVICE_URL;
   const apiKey = process.env.WORKFLOW_SERVICE_API_KEY;

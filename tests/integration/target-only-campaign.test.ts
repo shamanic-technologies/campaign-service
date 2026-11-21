@@ -57,7 +57,7 @@ import { eq } from "drizzle-orm";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
 import { db } from "../../src/db/index.js";
 import { campaigns, salesFunnelCampaigns } from "../../src/db/schema.js";
-import { EngineStateUnreadableError, liveEngineFor } from "../../src/lib/engine-dispatch.js";
+import { EngineServesNoScriptError, EngineStateUnreadableError, liveEngineFor } from "../../src/lib/engine-dispatch.js";
 import { fetchSalesFunnelCaps } from "../../src/lib/sales-funnel-campaigns.js";
 import { reRunDueCampaigns } from "../../src/lib/scheduler.js";
 import { completeSalesFunnelUnits } from "../../src/lib/sales-funnel-unit-completion.js";
@@ -218,7 +218,7 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
     expect(inputs).toMatchObject({ campaignId: fc.units[0].campaignId, orgId: ORG, brandId: BRAND, featureSlug: null, audienceId: null, noAudience: true });
   });
 
-  it("is a failed dispatch, never a workflow run, when its Engine stops running the org's campaigns", async () => {
+  it("is HELD by name, never a workflow run nor a failed run, when its Engine stops running the org's campaigns", async () => {
     const fc = (await launch({}).expect(201)).body.salesFunnelCampaign;
     await db.update(campaigns).set({ nextRunAt: new Date(Date.now() - 1_000) }).where(eq(campaigns.salesFunnelCampaignId, fc.id));
     vi.mocked(liveEngineFor).mockResolvedValue(null);
@@ -227,7 +227,21 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
 
     expect(mockExecute).not.toHaveBeenCalled();
     const [unit] = await db.select().from(campaigns).where(eq(campaigns.salesFunnelCampaignId, fc.id));
-    expect(unit.nextRunAt!.getTime()).toBeGreaterThan(Date.now());
+    expect(unit.nextRunAt!.getTime()).toBeGreaterThan(Date.now() + 9 * 60_000);
+    expect(unit.consecutiveRunFailures ?? 0).toBe(0);
+  });
+
+  it("is HELD by name when its live Engine has no script serving it (TARGET-ONLY-NO-SCRIPT-1121, prod campaigns on `conversation`)", async () => {
+    const fc = (await launch({}).expect(201)).body.salesFunnelCampaign;
+    await db.update(campaigns).set({ nextRunAt: new Date(Date.now() - 1_000) }).where(eq(campaigns.salesFunnelCampaignId, fc.id));
+    mockExecute.mockRejectedValueOnce(new EngineServesNoScriptError(TARGET, fc.units[0].campaignId));
+
+    await reRunDueCampaigns();
+
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    const [unit] = await db.select().from(campaigns).where(eq(campaigns.salesFunnelCampaignId, fc.id));
+    expect(unit.nextRunAt!.getTime()).toBeGreaterThan(Date.now() + 9 * 60_000);
+    expect(unit.consecutiveRunFailures ?? 0).toBe(0);
   });
 
   it("born under its key before labels were read, is renamed to its outcome's label by the name repair (row + unit)", async () => {
