@@ -1,5 +1,5 @@
 import { executeCampaignWorkflow } from "./workflows.js";
-import { ENGINE_STATE_RECHECK_MS, EngineStateUnreadableError, liveEngineFor } from "./engine-dispatch.js";
+import { ENGINE_NO_SCRIPT_RECHECK_MS, ENGINE_STATE_RECHECK_MS, EngineServesNoScriptError, EngineStateUnreadableError, liveEngineFor } from "./engine-dispatch.js";
 import { PLAY_NO_WORKFLOW_RECHECK_MS, resolveSelectionForTrigger } from "./features-workflow-projection-client.js";
 import { attributeRunPlay } from "./run-play-attribution.js";
 import { eq } from "drizzle-orm";
@@ -167,6 +167,14 @@ export async function dispatchSelectedRun(
     attribute(selection.workflowSlug, execution.runId);
     return selection.workflowSlug;
   } catch (err) {
+    // TARGET-ONLY-NO-SCRIPT-1121: no script of its Engine serves this channel-less unit: parked, the scheduler holds it out loud.
+    if (err instanceof EngineServesNoScriptError) {
+      await db
+        .update(campaigns)
+        .set({ nextRunAt: new Date(Date.now() + ENGINE_NO_SCRIPT_RECHECK_MS), updatedAt: new Date() })
+        .where(eq(campaigns.id, campaign.id));
+      return null;
+    }
     // A deprecated workflow (410) is replaced once and never asked for again — see retired-workflow.ts.
     const successor = await replaceRetiredWorkflow(err, {
       campaignId: campaign.id,
