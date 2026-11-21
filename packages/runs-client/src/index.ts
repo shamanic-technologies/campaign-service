@@ -222,3 +222,54 @@ export async function getStatsBudget(params: StatsBudgetParams): Promise<StatsBu
     identity: { orgId },
   });
 }
+
+// ─── Produced Units (OUTCOME-PERFORMER-1106 read) ───────────────────────────
+
+export interface OutcomePerformerStatsParams {
+  outcomeKey?: string;
+  orgId?: string;
+  brandId?: string;
+  campaignId?: string;
+  /** First UTC day, YYYY-MM-DD (inclusive). Range since..until <= 400 days. */
+  since?: string;
+  /** Last UTC day, YYYY-MM-DD (inclusive). */
+  until?: string;
+  /** Dimensions to group on (runs-service's names: outcomeKey, day, orgId, brandId, campaignId, ...). */
+  groupBy?: string[];
+}
+
+export interface OutcomePerformerStatsGroup {
+  outcomeKey?: string | null;
+  campaignId?: string | null;
+  day?: string | null;
+  /** Produced occurrences, net of reversals in the window. */
+  count: number;
+  [dimension: string]: unknown;
+}
+
+export interface OutcomePerformerStatsResponse {
+  since: string;
+  until: string;
+  groupBy: string[];
+  groups: OutcomePerformerStatsGroup[];
+  /** Every matching occurrence counted ONCE (a co-branded occurrence sits under each brand in groups). */
+  totals: { count: number; quantity: string };
+}
+
+/**
+ * How many Units (produced outcome occurrences) were declared on runs-service's ledger, grouped by the asked
+ * dimensions (GET /internal/stats/outcome-performers: live off the stored occurrences, a reversed Unit nets out).
+ */
+export async function getOutcomePerformerStats(params: OutcomePerformerStatsParams): Promise<OutcomePerformerStatsResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.outcomeKey) searchParams.set("outcomeKey", params.outcomeKey);
+  if (params.orgId) searchParams.set("orgId", params.orgId);
+  if (params.brandId) searchParams.set("brandId", params.brandId);
+  if (params.campaignId) searchParams.set("campaignId", params.campaignId);
+  if (params.since) searchParams.set("since", params.since);
+  if (params.until) searchParams.set("until", params.until);
+  if (params.groupBy?.length) searchParams.set("groupBy", params.groupBy.join(","));
+  return runsRequest<OutcomePerformerStatsResponse>(`/internal/stats/outcome-performers?${searchParams.toString()}`, {
+    identity: params.orgId ? { orgId: params.orgId } : undefined,
+  });
+}

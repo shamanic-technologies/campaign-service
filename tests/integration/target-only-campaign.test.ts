@@ -17,6 +17,7 @@ vi.mock("@distribute/runs-client", () => ({
   updateRun: vi.fn(),
   listRuns: vi.fn(async () => ({ runs: [] })),
   getStatsBudget: vi.fn(),
+  getOutcomePerformerStats: vi.fn(),
 }));
 
 vi.mock("../../src/lib/startable-pair.js", async (importOriginal) => ({
@@ -48,6 +49,7 @@ vi.mock("../../src/lib/workflows.js", async (importOriginal) => ({
 vi.mock("../../src/lib/sales-funnel-campaigns.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/lib/sales-funnel-campaigns.js")>()),
   salesFunnelUnitMoney: vi.fn().mockResolvedValue({ run: true, pace: { spentCents: 0, ceilingCents: 500 } }),
+  fetchSalesFunnelCaps: vi.fn(),
 }));
 
 import app from "../../src/index.js";
@@ -56,6 +58,7 @@ import { cleanTestData, closeDb } from "../helpers/test-db.js";
 import { db } from "../../src/db/index.js";
 import { campaigns, salesFunnelCampaigns } from "../../src/db/schema.js";
 import { EngineStateUnreadableError, liveEngineFor } from "../../src/lib/engine-dispatch.js";
+import { fetchSalesFunnelCaps } from "../../src/lib/sales-funnel-campaigns.js";
 import { reRunDueCampaigns } from "../../src/lib/scheduler.js";
 import { completeSalesFunnelUnits } from "../../src/lib/sales-funnel-unit-completion.js";
 import { runSalesFunnelNameRepair } from "../../src/lib/sales-funnel-name.js";
@@ -328,6 +331,7 @@ describe("a campaign on its target alone naming NO offer", () => {
     vi.mocked(getStatsBudget).mockResolvedValue({
       windows: [{ label: "all", totalCostInUsdCents: "42.5", actualCostInUsdCents: "42.5", provisionedCostInUsdCents: "0", netTotalCostInUsdCents: "40" } as never],
     });
+    vi.mocked(fetchSalesFunnelCaps).mockResolvedValue({ ok: false, detail: "billing not configured" } as never);
     const born = await launchNoOffer().expect(201);
     const res = await withPerson(request(app).get(`/sales-funnel-campaigns/${born.body.salesFunnelCampaign.id}/progress`)).expect(200);
     expect(res.body).toMatchObject({
@@ -338,10 +342,49 @@ describe("a campaign on its target alone naming NO offer", () => {
       finished: false,
       nextRun: { state: "scheduled" },
     });
-    // billing is not configured in tests: the units figure says why it is missing, never a 0.
+    // runs-service's Units read is not mocked here: the units figure says why it is missing, never a 0.
     expect(res.body.units.made).toBeNull();
-    expect(res.body.units.unavailableReason).toMatch(/^caps_unavailable/);
+    expect(res.body.units.unavailableReason).toMatch(/^runs_unavailable/);
     await withPerson(request(app).get(`/sales-funnel-campaigns/${crypto.randomUUID()}/progress`)).expect(404);
+  });
+
+  // DISTRY-CALL-IS-CAMPAIGN-1121 follow-up (prod 2026-11-21 campaign 47f39eea: 16 newsletter drafts, $1 one-off budget,
+  // no max volume, progress said made null `no_max_volume`).
+  it("budget-only: counts the Units of its target its runs produced since birth, off the ledger", async () => {
+    const { getStatsBudget, getOutcomePerformerStats } = await import("@distribute/runs-client");
+    vi.mocked(getStatsBudget).mockResolvedValue({ windows: [{ label: "all", totalCostInUsdCents: "41.38", actualCostInUsdCents: "41.38", provisionedCostInUsdCents: "0" } as never] });
+    vi.mocked(fetchSalesFunnelCaps).mockResolvedValue({ ok: true, caps: { maxBudget: { amountCents: "100", period: "one_off", consumedCents: "41.38", reached: false }, maxVolume: null } } as never);
+    vi.mocked(getOutcomePerformerStats).mockResolvedValue({ since: "", until: "", groupBy: ["outcomeKey"], groups: [], totals: { count: 16, quantity: "16" } });
+    const born = await launchNoOffer().expect(201);
+    const id = born.body.salesFunnelCampaign.id;
+    const res = await withPerson(request(app).get(`/sales-funnel-campaigns/${id}/progress`)).expect(200);
+    expect(res.body.units).toEqual({ made: 16, maxVolume: null, period: null, unit: TARGET, unavailableReason: null });
+    expect(res.body.spend).toMatchObject({ spentCents: 41.38 });
+    const [unit] = await db.select().from(campaigns).where(eq(campaigns.salesFunnelCampaignId, id));
+    expect(vi.mocked(getOutcomePerformerStats)).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: ORG, campaignId: unit.id, outcomeKey: TARGET, until: new Date().toISOString().slice(0, 10),
+    }));
+  });
+
+  it("budget-only, ledger unreadable: made null with the reason, never 0", async () => {
+    const { getStatsBudget, getOutcomePerformerStats } = await import("@distribute/runs-client");
+    vi.mocked(getStatsBudget).mockResolvedValue({ windows: [] });
+    vi.mocked(fetchSalesFunnelCaps).mockResolvedValue({ ok: true, caps: { maxBudget: null, maxVolume: null } } as never);
+    vi.mocked(getOutcomePerformerStats).mockRejectedValue(new Error("runs-service GET down: 503"));
+    const born = await launchNoOffer().expect(201);
+    const res = await withPerson(request(app).get(`/sales-funnel-campaigns/${born.body.salesFunnelCampaign.id}/progress`)).expect(200);
+    expect(res.body.units.made).toBeNull();
+    expect(res.body.units.unavailableReason).toMatch(/^runs_unavailable: runs-service GET down/);
+  });
+
+  it("volume-capped: billing's figure and cap, unchanged; the ledger is not asked", async () => {
+    const { getStatsBudget, getOutcomePerformerStats } = await import("@distribute/runs-client");
+    vi.mocked(getStatsBudget).mockResolvedValue({ windows: [] });
+    vi.mocked(fetchSalesFunnelCaps).mockResolvedValue({ ok: true, caps: { maxBudget: null, maxVolume: { count: 5, period: "one_off", unit: "outcomes_produced", consumed: 3, reached: false, consumedUnavailableReason: null } } } as never);
+    const born = await launchNoOffer().expect(201);
+    const res = await withPerson(request(app).get(`/sales-funnel-campaigns/${born.body.salesFunnelCampaign.id}/progress`)).expect(200);
+    expect(res.body.units).toEqual({ made: 3, maxVolume: 5, period: "one_off", unit: "outcomes_produced", unavailableReason: null });
+    expect(vi.mocked(getOutcomePerformerStats)).not.toHaveBeenCalled();
   });
 });
 

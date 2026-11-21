@@ -427,8 +427,9 @@ export const SalesFunnelCampaignProgressSchema = z.object({
   salesFunnelCampaignId: z.string(),
   status: z.string(),
   target: z.string().nullable(),
-  // What its max volume counted this period (billing's figure, the one that ends it). null + reason when no max volume
-  // is stated (`no_max_volume`) or billing could not measure it.
+  // With a max volume: what it counted this period (billing's figure, the one that ends it) + the cap. Without one: the
+  // Units of its target its runs produced since its birth (runs-service ledger, a reversed Unit nets out), period null,
+  // unit = the target. null + reason when the count could not be read (never 0).
   units: z.object({
     made: z.number().nullable(),
     maxVolume: z.number().nullable(),
