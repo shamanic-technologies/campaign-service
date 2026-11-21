@@ -66,7 +66,7 @@ const OTHER_FUNNEL = `${ENTRY}@${COLD}+${REACTIVE}@${BOOKING}+meeting_booked_to_
 const withPerson = (r: request.Test) =>
   r.set("x-api-key", API_KEY).set("x-org-id", ORG).set("x-user-id", "user_funnel").set("x-run-id", crypto.randomUUID());
 
-const launch = (body: Record<string, unknown>) => withPerson(request(app).post("/sales-funnel-campaigns")).send(body);
+const launch = (body: Record<string, unknown>) => withPerson(request(app).post("/sales-funnel-campaigns")).send({ brief: "Book meetings with HR leaders by cold email.", ...body });
 const patchFunnel = (id: string, status: string) => withPerson(request(app).patch(`/sales-funnel-campaigns/${id}`)).send({ status });
 
 function planOf(name: string) {

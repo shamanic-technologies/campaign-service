@@ -160,7 +160,7 @@ describe("client campaign actions reported to crm-service", () => {
 
   it("a sales funnel campaign: launch, edit its brief, pause, each one report named by the funnel", async () => {
     const launched = await person(request(app).post("/sales-funnel-campaigns"))
-      .send({ brandId: BRAND, offerId: OFFER, salesFunnelId: "lead_found_to_conversation@sales-cold-email-outreach", status: "stopped" })
+      .send({ brandId: BRAND, offerId: OFFER, salesFunnelId: "lead_found_to_conversation@sales-cold-email-outreach", status: "stopped", brief: "Book meetings with dentists by cold email." })
       .expect(201);
     const fc = launched.body.salesFunnelCampaign;
     expect((await reports(1))[0].body).toMatchObject({ type: "campaign_created", subject: { id: fc.id, name: "Epiphany" }, brandId: BRAND });
@@ -169,7 +169,7 @@ describe("client campaign actions reported to crm-service", () => {
     await person(request(app).patch(`/sales-funnel-campaigns/${fc.id}`)).send({ brief: "Only dental clinics in Texas" }).expect(200);
     expect((await reports(1))[0].body).toMatchObject({
       type: "campaign_updated",
-      changes: [{ label: "Brief", before: null, after: "Only dental clinics in Texas" }],
+      changes: [{ label: "Brief", before: "Book meetings with dentists by cold email.", after: "Only dental clinics in Texas" }],
     });
 
     sent = [];

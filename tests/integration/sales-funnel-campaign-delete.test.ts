@@ -40,7 +40,7 @@ const as = (r: request.Test, org = ORG) =>
   r.set("x-api-key", API_KEY).set("x-org-id", org).set("x-user-id", "user_del").set("x-run-id", crypto.randomUUID());
 
 const launch = () =>
-  as(request(app).post("/sales-funnel-campaigns")).send({ brandId: BRAND, offerId: OFFER, salesFunnelId: FUNNEL, status: "stopped" });
+  as(request(app).post("/sales-funnel-campaigns")).send({ brandId: BRAND, offerId: OFFER, salesFunnelId: FUNNEL, status: "stopped", brief: "Book meetings with HR leaders by cold email." });
 const del = (id: string, org = ORG) => as(request(app).delete(`/sales-funnel-campaigns/${id}`), org);
 
 const billingCalls: { url: string; method: string }[] = [];

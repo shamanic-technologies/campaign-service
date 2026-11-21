@@ -83,7 +83,7 @@ const CATALOGUE = {
 const withPerson = (r: request.Test) =>
   r.set("x-api-key", API_KEY).set("x-org-id", ORG).set("x-user-id", "user_target_only").set("x-run-id", crypto.randomUUID());
 const launch = (body: Record<string, unknown>) =>
-  withPerson(request(app).post("/sales-funnel-campaigns")).send({ brandId: BRAND, offerId: OFFER, status: "ongoing", target: TARGET, ...body });
+  withPerson(request(app).post("/sales-funnel-campaigns")).send({ brandId: BRAND, offerId: OFFER, status: "ongoing", target: TARGET, brief: "Book meetings with HR leaders by cold email.", ...body });
 const patch = (id: string, body: Record<string, unknown>) => withPerson(request(app).patch(`/sales-funnel-campaigns/${id}`)).send(body);
 
 const live = (outcome: string) => ({ outcome, fromOutcome: "start" });
@@ -122,7 +122,7 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
     expect(unit.name).toBe(`Backlink earned ${fc.id.slice(0, 8)}`);
     expect(unit.nextRunAt).not.toBeNull();
 
-    const again = await launch({}).expect(200);
+    const again = await launch({ brief: undefined }).expect(200);
     expect(again.body).toMatchObject({ created: false });
     expect(again.body.salesFunnelCampaign.id).toBe(fc.id);
     expect(await db.select().from(salesFunnelCampaigns)).toHaveLength(1);
@@ -154,7 +154,7 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
     expect(invAgain.body.salesFunnelCampaign.id).toBe(inv.id);
 
     // An old-style call (no brief) still answers the brand's first campaign on the target.
-    const old = await launch({}).expect(200);
+    const old = await launch({ brief: undefined }).expect(200);
     expect(old.body).toMatchObject({ created: false });
     expect(old.body.salesFunnelCampaign.id).toBe(first.id);
     expect(await db.select().from(salesFunnelCampaigns)).toHaveLength(3);

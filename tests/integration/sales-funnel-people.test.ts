@@ -76,7 +76,7 @@ const ENTRY = "lead_found_to_conversation";
 
 const withPerson = (r: request.Test) =>
   r.set("x-api-key", API_KEY).set("x-org-id", ORG).set("x-user-id", "user_copilot").set("x-run-id", crypto.randomUUID());
-const launch = (body: Record<string, unknown>) => withPerson(request(app).post("/sales-funnel-campaigns")).send(body);
+const launch = (body: Record<string, unknown>) => withPerson(request(app).post("/sales-funnel-campaigns")).send({ brief: "Book meetings with HR leaders by cold email.", ...body });
 const patch = (id: string, body: Record<string, unknown>) =>
   withPerson(request(app).patch(`/sales-funnel-campaigns/${id}`)).send(body);
 
@@ -129,7 +129,7 @@ describe("a sales funnel campaign that names its people and carries a brief", ()
     ]);
 
     mockFile.mockClear();
-    const again = await followUp("marie@example.com").expect(200);
+    const again = await followUp("marie@example.com", { brief: undefined }).expect(200);
     expect(mockFile).not.toHaveBeenCalled();
     expect(again.body).toMatchObject({ created: false, started: false });
     expect(again.body.salesFunnelCampaign.id).toBe(fc.id);

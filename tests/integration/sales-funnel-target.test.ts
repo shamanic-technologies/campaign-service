@@ -59,7 +59,7 @@ const CATALOGUE = {
 const withPerson = (r: request.Test, user = "user_target") =>
   r.set("x-api-key", API_KEY).set("x-org-id", ORG).set("x-user-id", user).set("x-run-id", crypto.randomUUID());
 const launch = (body: Record<string, unknown>) =>
-  withPerson(request(app).post("/sales-funnel-campaigns")).send({ brandId: BRAND, offerId: OFFER, salesFunnelId: FUNNEL, status: "stopped", ...body });
+  withPerson(request(app).post("/sales-funnel-campaigns")).send({ brandId: BRAND, offerId: OFFER, salesFunnelId: FUNNEL, status: "stopped", brief: "Book meetings with HR leaders by cold email.", ...body });
 const patch = (id: string, body: Record<string, unknown>, user?: string) =>
   withPerson(request(app).patch(`/sales-funnel-campaigns/${id}`), user).send(body);
 
@@ -88,15 +88,17 @@ describe("funnel campaign target + brief (FACTORY-P1-CAMPAIGN-TARGET-BRIEF)", ()
     await closeDb();
   });
 
-  it("is born targeting its funnel's last step, with its mode, and no brief", async () => {
+  it("is never born without a brief (HUMAN-BRIEF-1121); with one it targets its funnel's last step, with its mode", async () => {
+    const refused = await launch({ brief: undefined }).expect(400);
+    expect(refused.body.reason).toBe("brief_required");
+    expect(await db.select().from(salesFunnelCampaigns)).toHaveLength(0);
     const res = await launch({}).expect(201);
     expect(res.body.salesFunnelCampaign).toMatchObject({
       target: "paid_client",
       mode: "proactive",
       triggerId: null,
-      brief: null,
-      briefUpdatedAt: null,
-      briefUpdatedByUserId: null,
+      brief: "Book meetings with HR leaders by cold email.",
+      briefUpdatedByUserId: "user_target",
     });
     expect(res.body.salesFunnelCampaign).not.toHaveProperty("instruction");
     expect(mockCatalogue).not.toHaveBeenCalled();
@@ -171,7 +173,7 @@ describe("funnel campaign target + brief (FACTORY-P1-CAMPAIGN-TARGET-BRIEF)", ()
     expect(second.body).toMatchObject({ created: true });
     expect(second.body.salesFunnelCampaign.id).not.toBe(first.id);
     expect(second.body.salesFunnelCampaign).toMatchObject({ brief: "Never on Sundays.", target: "paid_client" });
-    const back = await launch({ target: "meeting_booked" }).expect(200);
+    const back = await launch({ target: "meeting_booked", brief: undefined }).expect(200);
     expect(back.body).toMatchObject({ created: false });
     expect(back.body.salesFunnelCampaign).toMatchObject({ id: first.id, brief: "Be short.", target: "meeting_booked" });
   });
