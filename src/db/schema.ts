@@ -255,8 +255,9 @@ export const salesFunnelCampaigns = pgTable(
     id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     orgId: text("org_id").notNull(),
     brandId: text("brand_id").notNull(),
-    // brand-service's offer UUID, carried never derived.
-    offerId: text("offer_id").notNull(),
+    // brand-service's offer UUID, carried never derived. NULL = it names no offer (DISTRY-CALL-IS-CAMPAIGN-1121,
+    // migration 0091): only a campaign on its target alone (lib/target-only-campaign.ts) may omit it.
+    offerId: text("offer_id"),
     // features-service's sales funnel id (`combinationKey`), carried verbatim.
     salesFunnelId: text("sales_funnel_id").notNull(),
     // The funnel's NAME as features-service stated it at creation (display only; the id is the key).
@@ -279,6 +280,10 @@ export const salesFunnelCampaigns = pgTable(
     githubIssue: text("github_issue"),
     // The detector's latest verdict on that issue ({state, detail, checkedAt, ...}); a read, decides nothing.
     githubIssueCheck: jsonb("github_issue_check"),
+    // The caller's own short name for this campaign among the brand's campaigns on the same funnel/target
+    // (migration 0091, OUTREACH-3WAYS-1121), e.g. "investors". '' = the brand's one campaign there (every call
+    // stating none). Part of the identity: the same key hands it back, another key is another campaign beside it.
+    launchKey: text("launch_key").notNull().default(""),
     // The OUTCOME it targets (migration 0081, lib/sales-funnel-target.ts): a catalogue step key, features-service's
     // vocabulary, carried verbatim. Born = the funnel's last step; settable by the org. NULL only until backfilled.
     target: text("target"),
@@ -307,10 +312,11 @@ export const salesFunnelCampaigns = pgTable(
     uniqueIndex("uniq_sales_funnel_campaigns_identity").on(
       table.orgId,
       table.brandId,
-      table.offerId,
+      sql`coalesce(${table.offerId}, '')`,
       table.salesFunnelId,
       table.peopleKey,
       sql`coalesce(${table.githubIssue}, '')`,
+      table.launchKey,
     ),
     index("idx_sales_funnel_campaigns_org_status").on(table.orgId, table.status),
   ],

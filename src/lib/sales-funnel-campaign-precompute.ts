@@ -19,12 +19,14 @@ export interface SalesFunnelCampaignBirth {
   salesFunnelCampaignId: string;
   orgId: string;
   brandId: string;
-  offerId: string;
+  /** null = the campaign names no offer: features-service's cells are per offer, so there is nothing to warm. */
+  offerId: string | null;
   userId: string;
   runId: string;
 }
 
 export async function notifySalesFunnelCampaignPrecompute(b: SalesFunnelCampaignBirth): Promise<void> {
+  if (b.offerId === null) return;
   try {
     const url = process.env.FEATURES_SERVICE_URL;
     const apiKey = process.env.FEATURES_SERVICE_API_KEY;

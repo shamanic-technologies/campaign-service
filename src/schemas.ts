@@ -223,6 +223,8 @@ export const StoppedCampaignSchema = z.object({
 // 12,000 = 8,000 + the 4,000 the retired `instruction` could add when migration 0086 folded it in, so a folded
 // brief stays editable as is (ONE-BRIEF-1105).
 export const MAX_BRIEF_LENGTH = 12000;
+/** A launch key is a short name a caller gives one of its campaigns (OUTREACH-3WAYS-1121). */
+export const MAX_LAUNCH_KEY_LENGTH = 64;
 // What `target` accepts is a LIVE vocabulary (lib/target-step-vocabulary.ts): the doc names the read validation makes.
 export const TargetStepSchema = z.string().trim().min(1, "target must name a step (omit it to keep the sales funnel's last step)").max(200)
   .openapi({ description: TARGET_STEP_DESCRIPTION, example: "paid_client" });
@@ -246,7 +248,11 @@ export const GithubIssueRefSchema = z.object({
  */
 export const CreateSalesFunnelCampaignBody = z.object({
   brandId: z.string().uuid("brandId must be a valid UUID"),
-  offerId: z.string().uuid("offerId must be a valid UUID"),
+  // brand-service's offer UUID. REQUIRED with a salesFunnelId (a sales funnel sells an offer). OPTIONAL without one
+  // (DISTRY-CALL-IS-CAMPAIGN-1121, owner 2026-11-21: a campaign is Target + start + budget + brief): a campaign on its
+  // target alone may name no offer (a newsletter draft, an email check). Its caps are then keyed without an offer at
+  // billing, its brief states the goal alone, and a script needing an offer stops on its own with a plain reason.
+  offerId: z.string().uuid("offerId must be a valid UUID").optional(),
   // features-service's sales funnel id (`GET /internal/catalogue/sales-funnels` rows[].id), verbatim. OPTIONAL
   // (MIGRATE-1105 S8): omitted = the campaign is its TARGET alone, made by that outcome's Engine (one unit, no channel;
   // `target` is then required, `followsPlan`, `people` and `githubIssue` are refused). Its salesFunnelId reads its target.
@@ -278,6 +284,13 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // features-service computes for it (best line to its target) and follows each plan change; false/omitted = it runs
   // its fixed sales funnel.
   followsPlan: z.boolean().optional(),
+  // OPTIONAL (OUTREACH-3WAYS-1121): your own short name for this campaign among the brand's campaigns on the same
+  // target/sales funnel, e.g. "investors" and "industry-peers" for two campaigns aiming at "conversation" with different
+  // briefs. Omitted = the brand's ONE campaign there: an existing one is handed back (today's answer). Stated = the
+  // campaign with that name: handed back when it exists, else a NEW campaign born beside the others, with its own brief
+  // and its own caps at billing (per funnel campaign id). Never changes another campaign.
+  launchKey: z.string().trim().min(1, "launchKey must not be empty (omit it for the brand's one campaign)").max(MAX_LAUNCH_KEY_LENGTH)
+    .regex(/^[a-z0-9][a-z0-9_-]*$/i, "launchKey uses letters, digits, '-' and '_' only").optional(),
 }).strict().openapi("CreateSalesFunnelCampaignBody");
 
 /**
@@ -334,7 +347,8 @@ export const SalesFunnelCampaignSchema = z.object({
   id: z.string(),
   orgId: z.string(),
   brandId: z.string(),
-  offerId: z.string(),
+  // null = it names no offer (a campaign on its target alone, DISTRY-CALL-IS-CAMPAIGN-1121).
+  offerId: z.string().nullable(),
   salesFunnelId: z.string(),
   salesFunnelName: z.string(),
   // "ongoing" | "stopped", the campaign vocabulary.
@@ -346,6 +360,9 @@ export const SalesFunnelCampaignSchema = z.object({
   people: z.array(z.object({ email: z.string(), leadId: z.string().nullable() })).nullable(),
   // The GitHub issue it waits on (lowercased), or null.
   githubIssue: GithubIssueRefSchema.nullable(),
+  // The caller's own short name for it among the brand's campaigns on the same target/funnel (lowercased), or null =
+  // the brand's one campaign there (OUTREACH-3WAYS-1121).
+  launchKey: z.string().nullable(),
   // The detector's latest verdict on that issue (null = not checked yet / waits on none). `state`:
   // open | closed_not_completed | closed_without_merge | merged_not_deployed | in_prod | not_served_by_box |
   // github_unreadable | served_unreadable. Once `in_prod` the event fires and the check is no longer updated.
@@ -388,6 +405,51 @@ export const SalesFunnelCampaignSchema = z.object({
   updatedAt: z.string(),
   units: z.array(SalesFunnelUnitSchema),
 }).openapi("SalesFunnelCampaign");
+
+/**
+ * DISTRY-CALL-IS-CAMPAIGN-1121 (lib/campaign-first-run.ts): WHEN a funnel campaign's next run is expected, or why none
+ * is. Read from what the dispatch reads (status, units due, billing's caps); served on every launch / start / read of one.
+ */
+export const NextRunSchema = z.object({
+  // scheduled (due: dispatched within `withinSeconds` of `at`) | on_event (runs when its trigger fires) | waiting (held:
+  // `reason` unfunded = no max budget / max volume stated yet, cap_reached, unreadable) | finished (its one-off cap is
+  // reached: it made what it was asked for) | stopped | nothing_runs (only customer-operated steps).
+  state: z.enum(["scheduled", "on_event", "waiting", "finished", "stopped", "nothing_runs"]),
+  at: z.string().nullable(),
+  withinSeconds: z.number().nullable(),
+  reason: z.string().nullable(),
+  // One plain-English sentence to repeat to a person.
+  detail: z.string(),
+}).openapi("NextRun");
+
+/** What a funnel campaign has made and spent, whether it finished, and why it is idle. */
+export const SalesFunnelCampaignProgressSchema = z.object({
+  salesFunnelCampaignId: z.string(),
+  status: z.string(),
+  target: z.string().nullable(),
+  // What its max volume counted this period (billing's figure, the one that ends it). null + reason when no max volume
+  // is stated (`no_max_volume`) or billing could not measure it.
+  units: z.object({
+    made: z.number().nullable(),
+    maxVolume: z.number().nullable(),
+    period: z.string().nullable(),
+    unit: z.string().nullable(),
+    unavailableReason: z.string().nullable(),
+  }),
+  // spentCents = what the org pays for its units since birth (after its usage discount), spentBeforeDiscountCents beside
+  // it (runs-service ledger, decimal USD cents). maxBudget* = its max budget and what it consumed this period (billing).
+  spend: z.object({
+    spentCents: z.number().nullable(),
+    spentBeforeDiscountCents: z.number().nullable(),
+    maxBudgetCents: z.number().nullable(),
+    maxBudgetConsumedCents: z.number().nullable(),
+    period: z.string().nullable(),
+    unavailableReason: z.string().nullable(),
+  }),
+  // true = its one-off max budget or max volume is reached: it made what it was asked for (raise the cap for more).
+  finished: z.boolean(),
+  nextRun: NextRunSchema,
+}).openapi("SalesFunnelCampaignProgress");
 
 /** One plan change applied to a funnel campaign that follows its plan. */
 export const SalesFunnelPlanChangeSchema = z.object({
@@ -688,7 +750,8 @@ export const SpendableBudgetCampaign = z.object({
  * campaign is ongoing. Never resolved onto a per-pipe ceiling.
  */
 export const SpendableBudgetSalesFunnel = z.object({
-  offerId: z.string(),
+  // null = a campaign naming no offer (on its target alone, DISTRY-CALL-IS-CAMPAIGN-1121).
+  offerId: z.string().nullable(),
   salesFunnelId: z.string(),
   salesFunnelCampaignId: z.string().nullable(),
   status: z.string().nullable(),

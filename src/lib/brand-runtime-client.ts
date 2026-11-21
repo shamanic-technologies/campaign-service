@@ -51,6 +51,17 @@ export interface BrandRuntimeContext {
  * brand fails loud instead of guessing an offer. Omitted (single-offer brands, and the
  * pre-offer population) keeps today's brand-scoped answer byte-identically.
  */
+/**
+ * brand-service's 409 SEVERAL_OFFERS: the brand sells several things and the caller named none. For a campaign that
+ * names no offer (DISTRY-CALL-IS-CAMPAIGN-1121) this is a plain refusal of the step that needs one, never a crash.
+ */
+export class BrandSellsSeveralOffersError extends Error {
+  constructor(public readonly brandId: string, detail: string) {
+    super(`[campaign-service] BrandService runtime-context: brand ${brandId} sells several offers and none was named (${detail})`);
+    this.name = "BrandSellsSeveralOffersError";
+  }
+}
+
 export async function fetchBrandRuntimeContext(
   brandId: string,
   identity: DownstreamIdentity,
@@ -83,6 +94,7 @@ export async function fetchBrandRuntimeContext(
 
   if (!res.ok) {
     const body = await res.text();
+    if (res.status === 409 && body.includes("SEVERAL_OFFERS")) throw new BrandSellsSeveralOffersError(brandId, body.slice(0, 300));
     throw new Error(`[campaign-service] BrandService runtime-context failed (${res.status}): ${body}`);
   }
 
