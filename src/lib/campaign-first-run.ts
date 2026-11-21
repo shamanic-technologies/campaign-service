@@ -11,7 +11,7 @@
  *   - for progress, billing's caps read (what its max budget / max volume consumed this period) and runs-service's
  *     ledger (what its units spent since birth).
  */
-import { getStatsBudget } from "@distribute/runs-client";
+import { getOutcomePerformerStats, getStatsBudget } from "@distribute/runs-client";
 import type { Campaign, SalesFunnelCampaign } from "../db/schema.js";
 import {
   fetchSalesFunnelCaps,
@@ -130,8 +130,9 @@ export interface CampaignProgress {
   status: string;
   target: string | null;
   /**
-   * What its max volume counted this period (billing's figure: the same one that ends it), with the cap. null when no
-   * max volume is stated (`unitsUnavailableReason`) or billing could not measure it.
+   * With a max volume: what it counted this period (billing's figure: the same one that ends it), with the cap. Without
+   * one (or caps unreadable): the Units of its target its runs produced since its birth (runs-service ledger), `period`
+   * null, `unit` = the target. null + `unavailableReason` when the count could not be read, never 0.
    */
   units: { made: number | null; maxVolume: number | null; period: string | null; unit: string | null; unavailableReason: string | null };
   /**
@@ -150,6 +151,46 @@ export interface CampaignProgress {
   finished: boolean;
   /** Its next run, or why it is idle. */
   nextRun: NextRun;
+}
+
+/** runs-service's Units read spans at most this many UTC days (since..until inclusive). */
+export const LEDGER_UNITS_WINDOW_DAYS = 400;
+
+const utcDay = (d: Date): string => d.toISOString().slice(0, 10);
+
+export type MadeSinceStart = { ok: true; made: number } | { ok: false; reason: string };
+
+/**
+ * DISTRY-CALL-IS-CAMPAIGN-1121 follow-up: the Units of its TARGET its units' runs produced since its birth, read off
+ * runs-service's ledger (the produced occurrences billing's max volume counts too; a reversed Unit nets out). Any
+ * outcome, any channel: never a branch. Unreadable = a named reason, never 0.
+ */
+export async function madeSinceStart(
+  row: Pick<SalesFunnelCampaign, "id" | "orgId" | "target" | "createdAt">,
+  units: readonly Pick<Campaign, "id">[],
+  now: Date,
+): Promise<MadeSinceStart> {
+  if (!row.target) return { ok: false, reason: "no_target" };
+  if (units.length === 0) return { ok: true, made: 0 };
+  const since = utcDay(row.createdAt);
+  const until = utcDay(now);
+  const days = Math.round((Date.parse(until) - Date.parse(since)) / 86_400_000) + 1;
+  if (days > LEDGER_UNITS_WINDOW_DAYS) return { ok: false, reason: "older_than_ledger_window" };
+  try {
+    const counts = await Promise.all(
+      units.map((u) =>
+        getOutcomePerformerStats({ orgId: row.orgId, campaignId: u.id, outcomeKey: row.target!, since, until, groupBy: ["outcomeKey"] }).then((r) => {
+          if (typeof r?.totals?.count !== "number") throw new Error("runs-service outcome-performers stated no totals.count");
+          return r.totals.count;
+        }),
+      ),
+    );
+    return { ok: true, made: counts.reduce((a, b) => a + b, 0) };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error(`[campaign-service] Progress of sales funnel campaign ${row.id}: Units unreadable (${detail})`);
+    return { ok: false, reason: `runs_unavailable: ${detail}` };
+  }
 }
 
 const centsOf = (v: string | undefined): number | null => {
@@ -186,6 +227,9 @@ export async function campaignProgress(
   const caps: SalesFunnelCaps | null = capsRead.ok ? capsRead.caps : null;
   const volume = caps?.maxVolume ?? null;
   const budget = caps?.maxBudget ?? null;
+  // No max volume stated (or caps unreadable): its Units are counted off the ledger since its birth. A stated max volume
+  // keeps billing's figure (the one that ends it), unchanged.
+  const ledgerMade = volume ? null : await madeSinceStart(row, units, now);
 
   let spentCents: number | null = null;
   let spentBeforeDiscountCents: number | null = null;
@@ -211,19 +255,21 @@ export async function campaignProgress(
     salesFunnelCampaignId: row.id,
     status: row.status,
     target: row.target ?? null,
-    units: {
-      made: volume?.consumed ?? null,
-      maxVolume: volume?.count ?? null,
-      period: volume?.period ?? null,
-      unit: volume?.unit ?? null,
-      unavailableReason: !capsRead.ok
-        ? `caps_unavailable: ${capsRead.detail}`
-        : !volume
-          ? "no_max_volume"
-          : volume.consumed === null
-            ? (volume.consumedUnavailableReason ?? "not_measured")
-            : null,
-    },
+    units: volume
+      ? {
+          made: volume.consumed,
+          maxVolume: volume.count,
+          period: volume.period,
+          unit: volume.unit,
+          unavailableReason: volume.consumed === null ? (volume.consumedUnavailableReason ?? "not_measured") : null,
+        }
+      : {
+          made: ledgerMade?.ok ? ledgerMade.made : null,
+          maxVolume: null,
+          period: null,
+          unit: ledgerMade?.ok ? (row.target ?? null) : null,
+          unavailableReason: ledgerMade && !ledgerMade.ok ? ledgerMade.reason : null,
+        },
     spend: {
       spentCents,
       spentBeforeDiscountCents,
