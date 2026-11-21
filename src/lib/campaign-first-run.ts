@@ -134,7 +134,16 @@ export interface CampaignProgress {
    * one (or caps unreadable): the Units of its target its runs produced since its birth (runs-service ledger), `period`
    * null, `unit` = the target. null + `unavailableReason` when the count could not be read, never 0.
    */
-  units: { made: number | null; maxVolume: number | null; period: string | null; unit: string | null; unavailableReason: string | null };
+  units: {
+    made: number | null;
+    maxVolume: number | null;
+    period: string | null;
+    unit: string | null;
+    unavailableReason: string | null;
+    /** Every Unit of its target its runs produced since its birth (ledger), cap or no cap; null + reason when unreadable. */
+    madeSinceStart: number | null;
+    madeSinceStartUnavailableReason: string | null;
+  };
   /**
    * What its units spent since birth (runs-service ledger, decimal USD cents): `spentCents` = what the org pays (after
    * its usage discount), `spentBeforeDiscountCents` beside it. And its max budget this period (billing).
@@ -205,7 +214,7 @@ export async function campaignProgress(
   units: readonly Campaign[],
   now: Date = new Date(),
 ): Promise<CampaignProgress> {
-  const [verdict, capsRead, spendRead] = await Promise.all([
+  const [verdict, capsRead, spendRead, ledgerMade] = await Promise.all([
     verdictOf(row, units, now),
     fetchSalesFunnelCaps({
       orgId: row.orgId,
@@ -222,14 +231,13 @@ export async function campaignProgress(
       (windows) => ({ ok: true as const, windows }),
       (err: unknown) => ({ ok: false as const, detail: err instanceof Error ? err.message : String(err) }),
     ),
+    // Every Unit of its target its runs produced since its birth (ledger), cap or no cap.
+    madeSinceStart(row, units, now),
   ]);
 
   const caps: SalesFunnelCaps | null = capsRead.ok ? capsRead.caps : null;
   const volume = caps?.maxVolume ?? null;
   const budget = caps?.maxBudget ?? null;
-  // No max volume stated (or caps unreadable): its Units are counted off the ledger since its birth. A stated max volume
-  // keeps billing's figure (the one that ends it), unchanged.
-  const ledgerMade = volume ? null : await madeSinceStart(row, units, now);
 
   let spentCents: number | null = null;
   let spentBeforeDiscountCents: number | null = null;
@@ -250,6 +258,10 @@ export async function campaignProgress(
   const oneOffReached =
     (volume?.period === "one_off" && volume.reached === true) || (budget?.period === "one_off" && budget.reached === true);
   const nextRun = nextRunFrom(row, units, verdict, now);
+  const sinceStart = {
+    madeSinceStart: ledgerMade.ok ? ledgerMade.made : null,
+    madeSinceStartUnavailableReason: ledgerMade.ok ? null : ledgerMade.reason,
+  };
 
   return {
     salesFunnelCampaignId: row.id,
@@ -262,13 +274,15 @@ export async function campaignProgress(
           period: volume.period,
           unit: volume.unit,
           unavailableReason: volume.consumed === null ? (volume.consumedUnavailableReason ?? "not_measured") : null,
+          ...sinceStart,
         }
       : {
-          made: ledgerMade?.ok ? ledgerMade.made : null,
+          made: ledgerMade.ok ? ledgerMade.made : null,
           maxVolume: null,
           period: null,
-          unit: ledgerMade?.ok ? (row.target ?? null) : null,
-          unavailableReason: ledgerMade && !ledgerMade.ok ? ledgerMade.reason : null,
+          unit: ledgerMade.ok ? (row.target ?? null) : null,
+          unavailableReason: ledgerMade.ok ? null : ledgerMade.reason,
+          ...sinceStart,
         },
     spend: {
       spentCents,
