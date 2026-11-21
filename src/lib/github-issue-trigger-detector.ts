@@ -96,7 +96,8 @@ export async function detectGithubIssueTriggers(
 
   const waiters = new Map<string, Waiter>();
   for (const u of units) {
-    if (!u.featureSlug || !u.legKey || !u.githubIssue || !githubIssueFromKey(u.githubIssue)) continue;
+    // A campaign waiting on an issue is a sales funnel campaign (a target-only one is refused one), so it names an offer.
+    if (!u.featureSlug || !u.legKey || !u.offerId || !u.githubIssue || !githubIssueFromKey(u.githubIssue)) continue;
     for (const t of triggers) {
       if (!answersTrigger(u, t.type.id, t.transitions)) continue;
       const key = githubIssueIdempotencyKey(t.type.id, u.salesFunnelCampaignId, u.githubIssue);

@@ -39,7 +39,7 @@ export interface SpendableCampaign {
 /** A funnel campaign of the pair, as this computation needs it. */
 export interface SpendableSalesFunnelCampaign {
   id: string;
-  offerId: string;
+  offerId: string | null;
   salesFunnelId: string;
   status: string;
 }
@@ -49,7 +49,7 @@ export interface SpendableSalesFunnelCampaign {
  * (daily x1, weekly / 7, monthly / 30, one_off 0, reactive 0), and the funnel campaign spending it.
  */
 export interface SpendableSalesFunnelLine {
-  offerId: string;
+  offerId: string | null;
   salesFunnelId: string;
   salesFunnelCampaignId: string | null;
   status: string | null;
@@ -164,9 +164,10 @@ export function computeSpendableBudget(
   // SALES FUNNELS: each stated cap counts once, by its max budget per day, under its offer. A cap
   // with no funnel campaign yet is configured money that nothing runs.
   const salesFunnels: SpendableSalesFunnelLine[] = owned.caps.map((cap) => {
-    const fc = owned.salesFunnelCampaigns.find(
-      (f) => f.offerId === cap.offerId && f.salesFunnelId === cap.salesFunnelId,
-    ) ?? null;
+    // A funnel campaign's OWN cap names it; a funnel-wide cap matches its (offer, funnel).
+    const fc = (cap.salesFunnelCampaignId
+      ? owned.salesFunnelCampaigns.find((f) => f.id === cap.salesFunnelCampaignId)
+      : owned.salesFunnelCampaigns.find((f) => f.offerId === cap.offerId && f.salesFunnelId === cap.salesFunnelId)) ?? null;
     const running = fc?.status === "ongoing";
     // billing's own per-day figure of the cap (reactive and one-off = 0), never recomputed here.
     const dailyBudgetCents = cap.maxBudget?.dailyBudgetCents ?? 0;

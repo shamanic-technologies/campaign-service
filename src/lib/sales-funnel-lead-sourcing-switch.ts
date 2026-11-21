@@ -92,10 +92,13 @@ export async function runLeadSourcingSwitch(opts: {
   capsOf?: typeof fetchSalesFunnelCaps;
   catalogue?: { fetchSalesFunnel?: typeof fetchSalesFunnel; declareSalesFunnel?: typeof declareSalesFunnel };
 }): Promise<LeadSourcingSwitchResult> {
-  const parents = await db
-    .select()
-    .from(salesFunnelCampaigns)
-    .where(opts.orgId ? eq(salesFunnelCampaigns.orgId, opts.orgId) : undefined);
+  // A campaign naming no offer runs on its target alone (lib/target-only-campaign.ts): it has no lead source to switch.
+  const parents = (
+    await db
+      .select()
+      .from(salesFunnelCampaigns)
+      .where(opts.orgId ? eq(salesFunnelCampaigns.orgId, opts.orgId) : undefined)
+  ).filter((p): p is typeof p & { offerId: string } => p.offerId !== null);
   const unitsByParent = new Map<string, CampaignRow[]>();
   if (parents.length > 0) {
     const units = await db.select().from(campaigns).where(inArray(campaigns.salesFunnelCampaignId, parents.map((p) => p.id)));
