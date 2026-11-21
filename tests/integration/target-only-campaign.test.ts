@@ -360,7 +360,7 @@ describe("a campaign on its target alone naming NO offer", () => {
     const born = await launchNoOffer().expect(201);
     const id = born.body.salesFunnelCampaign.id;
     const res = await withPerson(request(app).get(`/sales-funnel-campaigns/${id}/progress`)).expect(200);
-    expect(res.body.units).toEqual({ made: 16, maxVolume: null, period: null, unit: TARGET, unavailableReason: null });
+    expect(res.body.units).toEqual({ made: 16, maxVolume: null, period: null, unit: TARGET, unavailableReason: null, madeSinceStart: 16, madeSinceStartUnavailableReason: null });
     expect(res.body.spend).toMatchObject({ spentCents: 41.38 });
     const [unit] = await db.select().from(campaigns).where(eq(campaigns.salesFunnelCampaignId, id));
     expect(vi.mocked(getOutcomePerformerStats)).toHaveBeenCalledWith(expect.objectContaining({
@@ -377,16 +377,18 @@ describe("a campaign on its target alone naming NO offer", () => {
     const res = await withPerson(request(app).get(`/sales-funnel-campaigns/${born.body.salesFunnelCampaign.id}/progress`)).expect(200);
     expect(res.body.units.made).toBeNull();
     expect(res.body.units.unavailableReason).toMatch(/^runs_unavailable: runs-service GET down/);
+    expect(res.body.units.madeSinceStart).toBeNull();
+    expect(res.body.units.madeSinceStartUnavailableReason).toMatch(/^runs_unavailable/);
   });
 
-  it("volume-capped: billing's figure and cap, unchanged; the ledger is not asked", async () => {
+  it("volume-capped: billing's figure and cap, unchanged; Units since birth served beside (a cap set after 17 drafts)", async () => {
     const { getStatsBudget, getOutcomePerformerStats } = await import("@distribute/runs-client");
     vi.mocked(getStatsBudget).mockResolvedValue({ windows: [] });
     vi.mocked(fetchSalesFunnelCaps).mockResolvedValue({ ok: true, caps: { maxBudget: null, maxVolume: { count: 5, period: "one_off", unit: "outcomes_produced", consumed: 3, reached: false, consumedUnavailableReason: null } } } as never);
+    vi.mocked(getOutcomePerformerStats).mockResolvedValue({ since: "", until: "", groupBy: ["outcomeKey"], groups: [], totals: { count: 17, quantity: "17" } });
     const born = await launchNoOffer().expect(201);
     const res = await withPerson(request(app).get(`/sales-funnel-campaigns/${born.body.salesFunnelCampaign.id}/progress`)).expect(200);
-    expect(res.body.units).toEqual({ made: 3, maxVolume: 5, period: "one_off", unit: "outcomes_produced", unavailableReason: null });
-    expect(vi.mocked(getOutcomePerformerStats)).not.toHaveBeenCalled();
+    expect(res.body.units).toEqual({ made: 3, maxVolume: 5, period: "one_off", unit: "outcomes_produced", unavailableReason: null, madeSinceStart: 17, madeSinceStartUnavailableReason: null });
   });
 });
 

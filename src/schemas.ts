@@ -424,6 +424,10 @@ export const SalesFunnelCampaignProgressSchema = z.object({
     period: z.string().nullable(),
     unit: z.string().nullable(),
     unavailableReason: z.string().nullable(),
+    // Every Unit of its target its runs produced since its birth (runs-service ledger), cap or no cap: a cap set after
+    // Units were made counts from its own start in `made`, this one never resets. null + reason when unreadable, never 0.
+    madeSinceStart: z.number().nullable(),
+    madeSinceStartUnavailableReason: z.string().nullable(),
   }),
   // spentCents = what the org pays for its units since birth (after its usage discount), spentBeforeDiscountCents beside
   // it (runs-service ledger, decimal USD cents). maxBudget* = its max budget and what it consumed this period (billing).
