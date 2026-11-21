@@ -413,7 +413,8 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
   id: string;
   orgId: string;
   brandId: string;
-  offerId: string;
+  /** null = it names no offer (a campaign on its target alone, DISTRY-CALL-IS-CAMPAIGN-1121). */
+  offerId: string | null;
   salesFunnelId: string;
   salesFunnelName: string;
   status: "ongoing" | "stopped";

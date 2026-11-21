@@ -30,8 +30,9 @@ import { targetLabelOf } from "./target-only-campaign.js";
 const withoutDashes = (text: string): string => text.replace(/\s*[—–]\s*/g, ", ");
 
 /** PURE: the brief a campaign is born with. */
-export function composeBirthBrief(input: { targetLabel: string; offerName: string; channelNames: readonly string[] }): string {
-  const lines = [`Goal: ${input.targetLabel} for ${input.offerName}.`];
+export function composeBirthBrief(input: { targetLabel: string; offerName: string | null; channelNames: readonly string[] }): string {
+  // A campaign naming no offer (DISTRY-CALL-IS-CAMPAIGN-1121) states its goal alone.
+  const lines = [input.offerName === null ? `Goal: ${input.targetLabel}.` : `Goal: ${input.targetLabel} for ${input.offerName}.`];
   if (input.channelNames.length > 0) lines.push(`Use only these channels: ${input.channelNames.join(", ")}.`);
   return withoutDashes(lines.join("\n"));
 }
@@ -77,7 +78,8 @@ export async function birthBriefFor(
   campaign: {
     orgId: string;
     brandId: string;
-    offerId: string;
+    /** null = it names no offer: its brief states the goal alone, no offer read. */
+    offerId: string | null;
     target: string | null;
     units: ReadonlyArray<{ featureSlug: string | null; legKey: string | null }>;
   },
@@ -92,13 +94,15 @@ export async function birthBriefFor(
   const slugs = channelSlugsInLegOrder(campaign.units, catalogue.legs);
   const unnamed = slugs.filter((s) => !catalogue.nameBySlug?.get(s));
   if (unnamed.length > 0) return { ok: false, reason: "channel_name_missing", detail: `the catalogue publishes no name for ${unnamed.join(", ")}` };
+  const channelNames = slugs.map((s) => catalogue.nameBySlug!.get(s)!);
+  if (campaign.offerId === null) return { ok: true, brief: composeBirthBrief({ targetLabel, offerName: null, channelNames }) };
   const offer: OfferNameRead = await (deps.offerName ?? fetchOfferName)(campaign.brandId, campaign.offerId, {
     orgId: campaign.orgId,
     userId: identity.userId,
     runId: identity.runId,
   });
   if (!offer.ok) return { ok: false, reason: offer.reason === "offer_not_found" ? "offer_not_found" : "offer_unavailable", detail: offer.detail };
-  return { ok: true, brief: composeBirthBrief({ targetLabel, offerName: offer.name, channelNames: slugs.map((s) => catalogue.nameBySlug!.get(s)!) }) };
+  return { ok: true, brief: composeBirthBrief({ targetLabel, offerName: offer.name, channelNames }) };
 }
 
 // ── Repair: a campaign born without one (a source unreadable at birth, or born before this rule) ─────────────────────

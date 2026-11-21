@@ -16,7 +16,7 @@ export interface CustomerPipe {
 
 /** The unit births of a funnel campaign's "Your team" pipes (no workflow: the customer works them). */
 export function customerUnitBirths(
-  parent: { id: string; brandId: string; offerId: string; salesFunnelName: string },
+  parent: { id: string; brandId: string; offerId: string | null; salesFunnelName: string },
   pipes: CustomerPipe[],
 ): SalesFunnelUnitBirth[] {
   const idTag = parent.id.slice(0, 8);
@@ -76,7 +76,7 @@ export async function completeSalesFunnelUnits(opts: { apply: boolean; orgId?: s
   const out: UnitCompletion[] = [];
   for (const parent of parents) {
     // A campaign launched on its target alone has no funnel to complete (lib/target-only-campaign.ts): its one unit is its Engine.
-    if (isTargetOnlyCampaign(parent)) continue;
+    if (isTargetOnlyCampaign(parent) || parent.offerId === null) continue;
     // The funnel it RUNS (a campaign following its plan runs the plan's, lib/sales-funnel-plan.ts).
     const runningFunnelId = parent.runningSalesFunnelId ?? parent.salesFunnelId;
     const funnel = await fetchSalesFunnel(runningFunnelId);

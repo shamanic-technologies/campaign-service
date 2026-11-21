@@ -94,11 +94,6 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
     vi.mocked(liveEngineFor).mockImplementation(async (c) => (c.workflowSlug?.startsWith("engine:") ? live(c.workflowSlug.slice(7)) : null));
   });
 
-  afterAll(async () => {
-    await cleanTestData();
-    await closeDb();
-  });
-
   it("is born with ONE unit, no channel, on its Engine, without reading any sales funnel; launched twice it is one campaign", async () => {
     const res = await launch({ brief: "Earn backlinks from industry blogs." }).expect(201);
     const fc = res.body.salesFunnelCampaign;
@@ -236,4 +231,80 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
     expect(legs.units).toEqual([]);
     expect(mockFunnel).not.toHaveBeenCalled();
   });
+});
+
+// DISTRY-CALL-IS-CAMPAIGN-1121 (owner 2026-11-21): a campaign is Target + start + budget + brief; the OFFER is optional on
+// a campaign on its target alone. Every answer says WHEN its first run will happen; a progress read says what it made.
+describe("a campaign on its target alone naming NO offer", () => {
+  const launchNoOffer = (body: Record<string, unknown> = {}) =>
+    withPerson(request(app).post("/sales-funnel-campaigns")).send({ brandId: BRAND, status: "ongoing", target: TARGET, brief: "One backlink.", ...body });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await cleanTestData();
+    mockCatalogue.mockResolvedValue(CATALOGUE);
+    mockExecute.mockResolvedValue({ runId: "engine-run-1" });
+    vi.mocked(liveEngineFor).mockImplementation(async (c) => (c.workflowSlug?.startsWith("engine:") ? live(c.workflowSlug.slice(7)) : null));
+  });
+
+  it("is born with offerId null on the row and its unit, and its answer names its first run", async () => {
+    const res = await launchNoOffer().expect(201);
+    const fc = res.body.salesFunnelCampaign;
+    expect(fc).toMatchObject({ offerId: null, target: TARGET, salesFunnelId: TARGET, status: "ongoing" });
+    expect(res.body.nextRun).toMatchObject({ state: "scheduled", withinSeconds: 60, reason: null });
+    expect(Date.parse(res.body.nextRun.at)).toBeLessThanOrEqual(Date.now() + 1000);
+    const [unit] = await db.select().from(campaigns).where(eq(campaigns.salesFunnelCampaignId, fc.id));
+    expect(unit).toMatchObject({ offerId: null, workflowSlug: "engine:backlink_earned", status: "ongoing" });
+  });
+
+  it("is ONE campaign per (org, brand, no offer, target): launched again it is handed back; naming an offer is another", async () => {
+    const first = await launchNoOffer().expect(201);
+    const again = await launchNoOffer().expect(200);
+    expect(again.body).toMatchObject({ created: false });
+    expect(again.body.salesFunnelCampaign.id).toBe(first.body.salesFunnelCampaign.id);
+    expect(again.body.nextRun.state).toBe("scheduled");
+    const withOffer = await launch({}).expect(201);
+    expect(withOffer.body.salesFunnelCampaign).toMatchObject({ offerId: OFFER });
+    expect(await db.select().from(salesFunnelCampaigns)).toHaveLength(2);
+  });
+
+  it("refuses a SALES FUNNEL with no offer (a funnel sells one), writing nothing", async () => {
+    const res = await launchNoOffer({ salesFunnelId: "lead_found_to_paid_client@x" }).expect(400);
+    expect(res.body.reason).toBe("offer_required");
+    expect(mockPlan).not.toHaveBeenCalled();
+    expect(await db.select().from(salesFunnelCampaigns)).toHaveLength(0);
+  });
+
+  it("stopped then started: the stop says stopped, the start names its first run", async () => {
+    const born = await launchNoOffer({ status: "stopped" }).expect(201);
+    expect(born.body.nextRun).toMatchObject({ state: "stopped", at: null });
+    const started = await patch(born.body.salesFunnelCampaign.id, { status: "activate" }).expect(200);
+    expect(started.body.nextRun).toMatchObject({ state: "scheduled" });
+  });
+
+  it("serves its progress: spend from the ledger, caps from billing (named when unreadable, never 0), and its next run", async () => {
+    const { getStatsBudget } = await import("@distribute/runs-client");
+    vi.mocked(getStatsBudget).mockResolvedValue({
+      windows: [{ label: "all", totalCostInUsdCents: "42.5", actualCostInUsdCents: "42.5", provisionedCostInUsdCents: "0", netTotalCostInUsdCents: "40" } as never],
+    });
+    const born = await launchNoOffer().expect(201);
+    const res = await withPerson(request(app).get(`/sales-funnel-campaigns/${born.body.salesFunnelCampaign.id}/progress`)).expect(200);
+    expect(res.body).toMatchObject({
+      salesFunnelCampaignId: born.body.salesFunnelCampaign.id,
+      status: "ongoing",
+      target: TARGET,
+      spend: { spentCents: 40, spentBeforeDiscountCents: 42.5 },
+      finished: false,
+      nextRun: { state: "scheduled" },
+    });
+    // billing is not configured in tests: the units figure says why it is missing, never a 0.
+    expect(res.body.units.made).toBeNull();
+    expect(res.body.units.unavailableReason).toMatch(/^caps_unavailable/);
+    await withPerson(request(app).get(`/sales-funnel-campaigns/${crypto.randomUUID()}/progress`)).expect(404);
+  });
+});
+
+afterAll(async () => {
+  await cleanTestData();
+  await closeDb();
 });
