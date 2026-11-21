@@ -1,5 +1,5 @@
 import { adoptSalesFunnelUnitWorkflows, repairSalesFunnelUnitLegWorkflows } from "../lib/sales-funnel-unit-workflows.js";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -44,6 +44,7 @@ import { SALES_FUNNEL_CAMPAIGN_FIELD_LABELS, describeChanges, reportCampaignActi
 import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sales-funnel-target.js";
 import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "../lib/engine-dispatch.js";
 import { isTargetOnlyCampaign, targetLabelOf, targetOnlyUnitBirth } from "../lib/target-only-campaign.js";
+import { statesCaps, writeSalesFunnelCampaignCaps, type StatedCampaignCaps } from "../lib/sales-funnel-campaign-caps.js";
 import { campaignProgress, nextRunOf } from "../lib/campaign-first-run.js";
 import { appendSettingChanges, readSettingChanges, settingChangeRowsOf, SETTING_CHANGES_RECORDED_SINCE } from "../lib/sales-funnel-setting-changes.js";
 import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass, runSwitchOffFor } from "../lib/sales-funnel-plan.js";
@@ -166,6 +167,29 @@ async function fileNamedPeopleOf(
 }
 
 /**
+ * ONE-CAMPAIGN-VOLUME-1122: write the caps the caller stated on this ONE campaign at billing (lib/sales-funnel-campaign-
+ * caps.ts). Nothing stated = nothing asked (`{}`). Billing down or refusing = 502 `billing_unavailable` naming the
+ * campaign (a retry of the same create hands it back and writes them), `null` returned: the caller stops.
+ */
+async function writeStatedCaps(
+  row: SalesFunnelCampaign,
+  stated: StatedCampaignCaps,
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<{ caps?: unknown } | null> {
+  if (!statesCaps(stated)) return {};
+  const written = await writeSalesFunnelCampaignCaps(row, stated, { userId: req.userId ?? null, runId: req.runId ?? null });
+  if (written.ok) return { caps: written.caps };
+  console.error(`[campaign-service] Caps of sales funnel campaign ${row.id} not written at billing: ${written.detail}`);
+  res.status(502).json({
+    error: "We couldn't save this campaign's volume and max budget just now. Please try again in a minute.",
+    reason: "billing_unavailable",
+    salesFunnelCampaignId: row.id,
+  });
+  return null;
+}
+
+/**
  * POST /sales-funnel-campaigns — launch a sales funnel as ONE campaign (a person's act, or the
  * agent acting for one). `status` is REQUIRED: "stopped" creates it switched off.
  *
@@ -185,8 +209,9 @@ router.post(
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId: statedOfferId, salesFunnelId: statedFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan } =
+      const { brandId, offerId: statedOfferId, salesFunnelId: statedFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan, maxBudget, maxVolume } =
         CreateSalesFunnelCampaignBody.parse(req.body);
+      const statedCaps: StatedCampaignCaps = { maxBudget, maxVolume };
       // MIGRATE-1105 S8 (lib/target-only-campaign.ts): no sales funnel = the campaign is its TARGET alone, made by that
       // outcome's Engine. It follows no plan and only prospects (one unit from Start), so it names nobody and waits on
       // no issue. Its funnel id reads its target (billing's caps and its identity are keyed on it).
@@ -255,6 +280,9 @@ router.post(
         if (status === "ongoing" && incumbent.status !== "ongoing") {
           const refusal = await paymentStartRefusal(orgId);
           if (refusal) return res.status(refusal.status).json(refusal.body);
+          // Its money first: a start meets the caps the caller just stated.
+          const caps = await writeStatedCaps(incumbent, statedCaps, req, res);
+          if (!caps) return;
           const started = await setSalesFunnelCampaignStatus({
             salesFunnelCampaignId: incumbent.id,
             orgId,
@@ -269,9 +297,12 @@ router.post(
             salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, started!.units), nextRun: await nextRunOf(named.row, started!.units),
             created: false,
             started: true,
+            ...caps,
             ...(named.filing ? { filing: named.filing } : {}),
           });
         }
+        const caps = await writeStatedCaps(incumbent, statedCaps, req, res);
+        if (!caps) return;
         const units = (await unitsOf([incumbent.id], orgId)).get(incumbent.id)!;
         reportSalesFunnelCampaignAction(req, incumbentBefore, incumbent, false);
         const named = await fileNamedPeopleOf(incumbent, units, req);
@@ -279,6 +310,7 @@ router.post(
           salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, units), nextRun: await nextRunOf(named.row, units),
           created: false,
           started: false,
+          ...caps,
           ...(named.filing ? { filing: named.filing } : {}),
         });
       }
@@ -459,6 +491,8 @@ router.post(
       console.log(
         `[campaign-service] Sales funnel campaign ${born.salesFunnelCampaign.id} (${birth.salesFunnelName}) born ${status} — org=${orgId} brand=${brandId} offer=${offerId}, units ${born.units.map((u) => u.id).join(", ")}`,
       );
+      // Its money before its first run: the caps it was born with land at billing before the scheduler wakes.
+      const caps = await writeStatedCaps(born.salesFunnelCampaign, statedCaps, req, res);
       if (status === "ongoing") wakeScheduler();
       reportSalesFunnelCampaignAction(req, null, born.salesFunnelCampaign, true);
       if (followsPlan && status === "ongoing") void runPlanCheckFor(born.salesFunnelCampaign.id);
@@ -471,11 +505,14 @@ router.post(
         userId: req.userId!,
         runId: req.runId!,
       });
+      // Born, but billing did not take its caps: answered 502 above (a retry hands it back and writes them).
+      if (!caps) return;
       const named = await fileNamedPeopleOf(born.salesFunnelCampaign, born.units, req);
       return res.status(201).json({
         salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, born.units), nextRun: await nextRunOf(named.row, born.units),
         created: true,
         started: status === "ongoing",
+        ...caps,
         ...(named.filing ? { filing: named.filing } : {}),
       });
     } catch (error) {
@@ -569,7 +606,8 @@ router.patch(
   validateBody(UpdateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { status, target, brief, followsPlan } = UpdateSalesFunnelCampaignBody.parse(req.body);
+      const { status, target, brief, followsPlan, maxBudget, maxVolume } = UpdateSalesFunnelCampaignBody.parse(req.body);
+      const statedCaps: StatedCampaignCaps = { maxBudget, maxVolume };
       const orgId = req.orgId!;
       const existing = await db.query.salesFunnelCampaigns.findFirst({
         where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
@@ -592,6 +630,9 @@ router.patch(
         const check = await checkTargetStep(target);
         if (!check.ok) return res.status(check.status).json(check.body);
       }
+      // Its caps first (a volume change moves them at billing), so a start below meets them.
+      const caps = await writeStatedCaps(existing, statedCaps, req, res);
+      if (!caps) return;
       const edits = statedEdits(existing, { target, brief, followsPlan }, req.userId);
       // Turned to follow its plan, or started while it does: checked against its plan at once (after the write).
       const checkPlanNow = (followsPlan === true && !existing.followsPlan) || (status === "activate" && (followsPlan ?? existing.followsPlan));
@@ -610,7 +651,7 @@ router.patch(
         reportSalesFunnelCampaignAction(req, existing, reworded, false);
         if (checkPlanNow) void runPlanCheckFor(reworded.id);
         const units = (await unitsOf([reworded.id], orgId)).get(reworded.id)!;
-        return res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(reworded, units), nextRun: await nextRunOf(reworded, units) });
+        return res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(reworded, units), nextRun: await nextRunOf(reworded, units), ...caps });
       }
 
       if (status === "activate") {
@@ -635,7 +676,7 @@ router.patch(
       if (status === "activate") wakeScheduler();
       if (checkPlanNow) void runPlanCheckFor(parent.id);
       const units = switchedOff ? (await unitsOf([parent.id], orgId)).get(parent.id)! : written.units;
-      res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, units), nextRun: await nextRunOf(parent, units) });
+      res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, units), nextRun: await nextRunOf(parent, units), ...caps });
     } catch (error) {
       if (error instanceof SameBriefCampaignError) {
         return res.status(409).json({
