@@ -223,8 +223,6 @@ export const StoppedCampaignSchema = z.object({
 // 12,000 = 8,000 + the 4,000 the retired `instruction` could add when migration 0086 folded it in, so a folded
 // brief stays editable as is (ONE-BRIEF-1105).
 export const MAX_BRIEF_LENGTH = 12000;
-/** A launch key is a short name a caller gives one of its campaigns (OUTREACH-3WAYS-1121). */
-export const MAX_LAUNCH_KEY_LENGTH = 64;
 // What `target` accepts is a LIVE vocabulary (lib/target-step-vocabulary.ts): the doc names the read validation makes.
 export const TargetStepSchema = z.string().trim().min(1, "target must name a step (omit it to keep the sales funnel's last step)").max(200)
   .openapi({ description: TARGET_STEP_DESCRIPTION, example: "paid_client" });
@@ -284,13 +282,6 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // features-service computes for it (best line to its target) and follows each plan change; false/omitted = it runs
   // its fixed sales funnel.
   followsPlan: z.boolean().optional(),
-  // OPTIONAL (OUTREACH-3WAYS-1121): your own short name for this campaign among the brand's campaigns on the same
-  // target/sales funnel, e.g. "investors" and "industry-peers" for two campaigns aiming at "conversation" with different
-  // briefs. Omitted = the brand's ONE campaign there: an existing one is handed back (today's answer). Stated = the
-  // campaign with that name: handed back when it exists, else a NEW campaign born beside the others, with its own brief
-  // and its own caps at billing (per funnel campaign id). Never changes another campaign.
-  launchKey: z.string().trim().min(1, "launchKey must not be empty (omit it for the brand's one campaign)").max(MAX_LAUNCH_KEY_LENGTH)
-    .regex(/^[a-z0-9][a-z0-9_-]*$/i, "launchKey uses letters, digits, '-' and '_' only").optional(),
 }).strict().openapi("CreateSalesFunnelCampaignBody");
 
 /**
@@ -360,9 +351,6 @@ export const SalesFunnelCampaignSchema = z.object({
   people: z.array(z.object({ email: z.string(), leadId: z.string().nullable() })).nullable(),
   // The GitHub issue it waits on (lowercased), or null.
   githubIssue: GithubIssueRefSchema.nullable(),
-  // The caller's own short name for it among the brand's campaigns on the same target/funnel (lowercased), or null =
-  // the brand's one campaign there (OUTREACH-3WAYS-1121).
-  launchKey: z.string().nullable(),
   // The detector's latest verdict on that issue (null = not checked yet / waits on none). `state`:
   // open | closed_not_completed | closed_without_merge | merged_not_deployed | in_prod | not_served_by_box |
   // github_unreadable | served_unreadable. Once `in_prod` the event fires and the check is no longer updated.

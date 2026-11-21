@@ -165,11 +165,15 @@ describe("funnel campaign target + brief (FACTORY-P1-CAMPAIGN-TARGET-BRIEF)", ()
     expect(list.body.salesFunnelCampaigns[0]).toMatchObject({ target: "meeting_booked", brief: "Meetings only." });
   });
 
-  it("a hand-back applies a stated brief/target and leaves the rest", async () => {
-    await launch({ brief: "Be short." }).expect(201);
-    const back = await launch({ brief: "Never on Sundays." }).expect(200);
+  it("a new brief is a new campaign beside the first, never a reword of it; a hand-back applies a stated target (OUTREACH-3WAYS-1121)", async () => {
+    const first = (await launch({ brief: "Be short." }).expect(201)).body.salesFunnelCampaign;
+    const second = await launch({ brief: "Never on Sundays." }).expect(201);
+    expect(second.body).toMatchObject({ created: true });
+    expect(second.body.salesFunnelCampaign.id).not.toBe(first.id);
+    expect(second.body.salesFunnelCampaign).toMatchObject({ brief: "Never on Sundays.", target: "paid_client" });
+    const back = await launch({ target: "meeting_booked" }).expect(200);
     expect(back.body).toMatchObject({ created: false });
-    expect(back.body.salesFunnelCampaign).toMatchObject({ brief: "Never on Sundays.", target: "paid_client" });
+    expect(back.body.salesFunnelCampaign).toMatchObject({ id: first.id, brief: "Be short.", target: "meeting_booked" });
   });
 
   it("backfill fills every row missing a target from its funnel's last step, never overwrites a stated one", async () => {

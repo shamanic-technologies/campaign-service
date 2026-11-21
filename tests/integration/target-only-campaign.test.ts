@@ -125,44 +125,46 @@ describe("a campaign on its target alone (no sales funnel), run by its Engine", 
     expect(await db.select().from(salesFunnelCampaigns)).toHaveLength(1);
   });
 
-  it("two campaigns of one brand on the same target live side by side, each under its own launchKey and brief (OUTREACH-3WAYS-1121)", async () => {
-    // Today's call (no launchKey): the brand's one campaign on the target.
+  it("as many campaigns on one target as there are briefs; the same brief or no brief hands one back (OUTREACH-3WAYS-1121)", async () => {
+    // Today's call: the brand's campaign on the target.
     const first = (await launch({ brief: "Earn backlinks from industry blogs." }).expect(201)).body.salesFunnelCampaign;
-    expect(first.launchKey).toBeNull();
 
-    const investors = await launch({ launchKey: "Investors", brief: "Start a conversation with equity investors." }).expect(201);
-    const peers = await launch({ launchKey: "industry-peers", brief: "Network with peers in our industry." }).expect(201);
+    const investors = await launch({ brief: "Start a conversation with equity investors." }).expect(201);
+    const peers = await launch({ brief: "Network with peers in our industry." }).expect(201);
     const inv = investors.body.salesFunnelCampaign;
     const peer = peers.body.salesFunnelCampaign;
     expect(investors.body).toMatchObject({ created: true, started: true });
-    expect(inv).toMatchObject({ launchKey: "investors", target: TARGET, salesFunnelId: TARGET, brief: "Start a conversation with equity investors." });
-    expect(peer).toMatchObject({ launchKey: "industry-peers", target: TARGET, salesFunnelId: TARGET, brief: "Network with peers in our industry." });
+    expect(inv).toMatchObject({ target: TARGET, salesFunnelId: TARGET, brief: "Start a conversation with equity investors." });
+    expect(peer).toMatchObject({ target: TARGET, salesFunnelId: TARGET, brief: "Network with peers in our industry." });
     expect(new Set([first.id, inv.id, peer.id]).size).toBe(3);
     // Each owns its own unit (its own Engine run, its own caps at billing: keyed on the funnel campaign id).
     expect(new Set([first.units[0].campaignId, inv.units[0].campaignId, peer.units[0].campaignId]).size).toBe(3);
 
-    // No create ever rewrites another campaign's brief.
+    // A new brief never rewrites another campaign's brief.
     const rows = await db.select().from(salesFunnelCampaigns);
     expect(rows).toHaveLength(3);
     expect(rows.find((r) => r.id === first.id)!.brief).toBe("Earn backlinks from industry blogs.");
 
-    // The same key again hands that campaign back (key compared case-insensitively), never a third.
-    const invAgain = await launch({ launchKey: "investors" }).expect(200);
+    // The same brief again hands that campaign back, never a fourth.
+    const invAgain = await launch({ brief: "Start a conversation with equity investors." }).expect(200);
     expect(invAgain.body).toMatchObject({ created: false });
     expect(invAgain.body.salesFunnelCampaign.id).toBe(inv.id);
-    expect(invAgain.body.salesFunnelCampaign.brief).toBe("Start a conversation with equity investors.");
 
-    // An old-style call (no launchKey) still answers the brand's one campaign, never a keyed one.
+    // An old-style call (no brief) still answers the brand's first campaign on the target.
     const old = await launch({}).expect(200);
     expect(old.body).toMatchObject({ created: false });
     expect(old.body.salesFunnelCampaign.id).toBe(first.id);
     expect(await db.select().from(salesFunnelCampaigns)).toHaveLength(3);
+
+    // Editing a brief into another campaign's exact brief is refused by name, nothing written.
+    const clash = await patch(peer.id, { brief: "Start a conversation with equity investors." }).expect(409);
+    expect(clash.body.reason).toBe("same_brief_campaign_exists");
+    const [peerRow] = await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.id, peer.id));
+    expect(peerRow.brief).toBe("Network with peers in our industry.");
   });
 
-  it("refuses a launchKey that is not a short name", async () => {
-    expect((await launch({ launchKey: "" }).expect(400)).body).toBeDefined();
-    expect((await launch({ launchKey: "two words" }).expect(400)).body).toBeDefined();
-    expect((await launch({ launchKey: "x".repeat(65) }).expect(400)).body).toBeDefined();
+  it("refuses the retired launchKey", async () => {
+    await launch({ launchKey: "investors" }).expect(400);
     expect(await db.select().from(salesFunnelCampaigns)).toHaveLength(0);
   });
 
