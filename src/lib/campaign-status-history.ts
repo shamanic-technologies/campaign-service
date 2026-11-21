@@ -425,6 +425,8 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
   peopleKey?: string;
   /** The GitHub issue it waits on (`owner/repo#n`, lib/github-issue-trigger.ts); null/absent = none. */
   githubIssue?: string | null;
+  /** The caller's own name for it among the brand's campaigns on the same funnel/target (OUTREACH-3WAYS-1121); '' / absent = none. */
+  launchKey?: string;
   /** The outcome it targets, its brief (+ who stated it) and what it starts from (lib/sales-funnel-target.ts). */
   target?: string | null;
   brief?: string | null;
@@ -454,6 +456,7 @@ export async function insertSalesFunnelCampaignWithUnits(input: {
         people: input.people ?? null,
         peopleKey: input.peopleKey ?? "",
         githubIssue: input.githubIssue ?? null,
+        launchKey: input.launchKey ?? "",
         target: input.target ?? null,
         brief: input.brief ?? null,
         briefUpdatedAt: input.brief ? now : null,

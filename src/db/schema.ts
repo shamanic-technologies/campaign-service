@@ -279,6 +279,10 @@ export const salesFunnelCampaigns = pgTable(
     githubIssue: text("github_issue"),
     // The detector's latest verdict on that issue ({state, detail, checkedAt, ...}); a read, decides nothing.
     githubIssueCheck: jsonb("github_issue_check"),
+    // The caller's own short name for this campaign among the brand's campaigns on the same funnel/target
+    // (migration 0091, OUTREACH-3WAYS-1121), e.g. "investors". '' = the brand's one campaign there (every call
+    // stating none). Part of the identity: the same key hands it back, another key is another campaign beside it.
+    launchKey: text("launch_key").notNull().default(""),
     // The OUTCOME it targets (migration 0081, lib/sales-funnel-target.ts): a catalogue step key, features-service's
     // vocabulary, carried verbatim. Born = the funnel's last step; settable by the org. NULL only until backfilled.
     target: text("target"),
@@ -311,6 +315,7 @@ export const salesFunnelCampaigns = pgTable(
       table.salesFunnelId,
       table.peopleKey,
       sql`coalesce(${table.githubIssue}, '')`,
+      table.launchKey,
     ),
     index("idx_sales_funnel_campaigns_org_status").on(table.orgId, table.status),
   ],
