@@ -44,6 +44,7 @@ import { SALES_FUNNEL_CAMPAIGN_FIELD_LABELS, describeChanges, reportCampaignActi
 import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sales-funnel-target.js";
 import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "../lib/engine-dispatch.js";
 import { isTargetOnlyCampaign, targetLabelOf, targetOnlyUnitBirth } from "../lib/target-only-campaign.js";
+import { campaignProgress, nextRunOf } from "../lib/campaign-first-run.js";
 import { birthBriefFor, repairMissingBriefs } from "../lib/sales-funnel-birth-brief.js";
 import { appendSettingChanges, readSettingChanges, settingChangeRowsOf, SETTING_CHANGES_RECORDED_SINCE } from "../lib/sales-funnel-setting-changes.js";
 import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass, runSwitchOffFor } from "../lib/sales-funnel-plan.js";
@@ -176,7 +177,7 @@ router.post(
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId, salesFunnelId: statedFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan, launchKey: launchKeyInput } =
+      const { brandId, offerId: statedOfferId, salesFunnelId: statedFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan, launchKey: launchKeyInput } =
         CreateSalesFunnelCampaignBody.parse(req.body);
       // OUTREACH-3WAYS-1121: the caller's own name for this campaign among the brand's campaigns on the same funnel/target.
       // '' (omitted) = the brand's one campaign there, today's identity; another name is another campaign beside it.
@@ -192,6 +193,11 @@ router.post(
         if (namedInput) return refuse("people_need_reactive_funnel", "A campaign that names its people only answers triggers, but a campaign on its target alone finds new people.");
         if (issueInput) return refuse("github_issue_needs_github_trigger", "A campaign on its target alone never runs when a GitHub issue reaches production, so it would never run.");
       }
+      // A sales funnel sells an offer; a campaign on its target alone may name none (DISTRY-CALL-IS-CAMPAIGN-1121).
+      if (!targetOnly && statedOfferId === undefined) {
+        return res.status(400).json({ error: "State the offer this sales funnel sells (offerId).", reason: "offer_required" });
+      }
+      const offerId: string | null = statedOfferId ?? null;
       const salesFunnelId = statedFunnelId ?? target!;
       // The GitHub issue it waits on (lib/github-issue-trigger.ts): part of its identity too.
       const issueRef = issueInput ? parseGithubIssue(issueInput) : null;
@@ -218,7 +224,7 @@ router.post(
           where: and(
             eq(salesFunnelCampaigns.orgId, orgId),
             eq(salesFunnelCampaigns.brandId, brandId),
-            eq(salesFunnelCampaigns.offerId, offerId),
+            offerId === null ? isNull(salesFunnelCampaigns.offerId) : eq(salesFunnelCampaigns.offerId, offerId),
             eq(salesFunnelCampaigns.salesFunnelId, salesFunnelId),
             eq(salesFunnelCampaigns.peopleKey, peopleKey),
             githubIssue ? eq(salesFunnelCampaigns.githubIssue, githubIssue) : isNull(salesFunnelCampaigns.githubIssue),
@@ -253,7 +259,7 @@ router.post(
           reportSalesFunnelCampaignAction(req, incumbentBefore, started!.salesFunnelCampaign, true);
           const named = await fileNamedPeopleOf(started!.salesFunnelCampaign, started!.units, req);
           return res.status(200).json({
-            salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, started!.units),
+            salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, started!.units), nextRun: await nextRunOf(named.row, started!.units),
             created: false,
             started: true,
             ...(named.filing ? { filing: named.filing } : {}),
@@ -263,7 +269,7 @@ router.post(
         reportSalesFunnelCampaignAction(req, incumbentBefore, incumbent, false);
         const named = await fileNamedPeopleOf(incumbent, units, req);
         return res.status(200).json({
-          salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, units),
+          salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, units), nextRun: await nextRunOf(named.row, units),
           created: false,
           started: false,
           ...(named.filing ? { filing: named.filing } : {}),
@@ -320,7 +326,7 @@ router.post(
           userId: req.userId!,
           runId: req.runId!,
           brandId,
-          offerId,
+          offerId: offerId!, // stated: required with a sales funnel (checked above)
         });
         if (!resolved.ok) {
           const { status: httpStatus, code, message, missingSteps, offerSteps, pipeId, notRunnableReason, notRunnableDetail } = resolved.refusal;
@@ -435,7 +441,7 @@ router.post(
           if (winner) {
             const units = (await unitsOf([winner.id], orgId)).get(winner.id)!;
             return res.status(200).json({
-              salesFunnelCampaign: serializeSalesFunnelCampaign(winner, units),
+              salesFunnelCampaign: serializeSalesFunnelCampaign(winner, units), nextRun: await nextRunOf(winner, units),
               created: false,
               started: false,
             });
@@ -461,7 +467,7 @@ router.post(
       });
       const named = await fileNamedPeopleOf(born.salesFunnelCampaign, born.units, req);
       return res.status(201).json({
-        salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, born.units),
+        salesFunnelCampaign: serializeSalesFunnelCampaign(named.row, born.units), nextRun: await nextRunOf(named.row, born.units),
         created: true,
         started: status === "ongoing",
         ...(named.filing ? { filing: named.filing } : {}),
@@ -516,9 +522,29 @@ router.get("/sales-funnel-campaigns/:id", requireApiKey, serviceAuth, async (req
     });
     if (!parent) return res.status(404).json({ error: "Sales funnel campaign not found" });
     const units = (await unitsOf([parent.id], orgId)).get(parent.id)!;
-    res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, units) });
+    res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, units), nextRun: await nextRunOf(parent, units) });
   } catch (error) {
     console.error("[campaign-service] Get sales funnel campaign error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /sales-funnel-campaigns/:id/progress — what the campaign has made and spent, whether it has finished (a one-off
+ * max budget or max volume reached), and its next run or why it is idle (DISTRY-CALL-IS-CAMPAIGN-1121,
+ * lib/campaign-first-run.ts). Same facts the dispatch reads; a sibling outage reads as `unavailableReason`, never 0.
+ */
+router.get("/sales-funnel-campaigns/:id/progress", requireApiKey, serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const orgId = req.orgId!;
+    const parent = await db.query.salesFunnelCampaigns.findFirst({
+      where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
+    });
+    if (!parent) return res.status(404).json({ error: "Sales funnel campaign not found" });
+    const units = (await unitsOf([parent.id], orgId)).get(parent.id)!;
+    res.json(await campaignProgress(parent, units));
+  } catch (error) {
+    console.error("[campaign-service] Sales funnel campaign progress error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -578,7 +604,7 @@ router.patch(
         reportSalesFunnelCampaignAction(req, existing, reworded, false);
         if (checkPlanNow) void runPlanCheckFor(reworded.id);
         const units = (await unitsOf([reworded.id], orgId)).get(reworded.id)!;
-        return res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(reworded, units) });
+        return res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(reworded, units), nextRun: await nextRunOf(reworded, units) });
       }
 
       if (status === "activate") {
@@ -603,7 +629,7 @@ router.patch(
       if (status === "activate") wakeScheduler();
       if (checkPlanNow) void runPlanCheckFor(parent.id);
       const units = switchedOff ? (await unitsOf([parent.id], orgId)).get(parent.id)! : written.units;
-      res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, units) });
+      res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, units), nextRun: await nextRunOf(parent, units) });
     } catch (error) {
       console.error("[campaign-service] Update sales funnel campaign error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -666,6 +692,10 @@ router.post("/sales-funnel-campaigns/:id/entries", requireApiKey, serviceAuth, a
       where: and(eq(salesFunnelCampaigns.id, req.params.id), eq(salesFunnelCampaigns.orgId, orgId)),
     });
     if (!parent) return res.status(404).json({ error: "Sales funnel campaign not found" });
+    // An entry is a line of a sales funnel, which sells an offer: a campaign naming none runs its target alone.
+    if (parent.offerId === null) {
+      return res.status(400).json({ error: "This campaign names no offer, so it runs its outcome alone and takes no other entry.", reason: "entry_needs_offer" });
+    }
     const resolved = await resolveSalesFunnelPlan(salesFunnelId, {
       orgId,
       userId: req.userId!,

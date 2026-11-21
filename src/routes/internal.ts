@@ -34,7 +34,7 @@ import type { z } from "zod";
 import { recurringCampaignStatuses, RecurringStatusCatalogueError } from "../lib/recurring-status.js";
 import { wakeScheduler } from "../lib/scheduler.js";
 import { traceEvent } from "../lib/trace-event.js";
-import { fetchBrandRuntimeContext } from "../lib/brand-runtime-client.js";
+import { BrandSellsSeveralOffersError, fetchBrandRuntimeContext } from "../lib/brand-runtime-client.js";
 import { markAudienceExhausted, resolveAudienceExhaustion, getFreshExhaustedAudienceIds, hasExhaustedAudience, NO_SERVEABLE_AUDIENCE_RECHECK_MS } from "../lib/audience-exhaustion.js";
 import { recordAudienceAvailability } from "../lib/campaign-audience-availability.js";
 import { stopOrgCampaignsWithHistory, TRANSITION_SOURCES } from "../lib/campaign-status-history.js";
@@ -491,6 +491,15 @@ router.post("/start-run", requireApiKey, requirePipelineHeaders, trackingHeaders
       searchParams,
     });
   } catch (error) {
+    // A campaign naming no offer (DISTRY-CALL-IS-CAMPAIGN-1121) on a brand selling several: the step reading the brand
+    // for an offer stops with a plain reason, never a crash. A campaign naming one never lands here (it names it).
+    if (error instanceof BrandSellsSeveralOffersError) {
+      console.warn(`[campaign-service] /start-run ${req.campaignId}: ${error.message}`);
+      return res.status(409).json({
+        error: "This campaign names no offer and its brand sells several, so this step cannot tell which offer it is for.",
+        reason: "offer_required",
+      });
+    }
     console.error("[campaign-service] Unhandled error:", error);
     res.status(500).json({ error: "Internal server error" });
   }

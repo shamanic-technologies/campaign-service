@@ -255,8 +255,9 @@ export const salesFunnelCampaigns = pgTable(
     id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     orgId: text("org_id").notNull(),
     brandId: text("brand_id").notNull(),
-    // brand-service's offer UUID, carried never derived.
-    offerId: text("offer_id").notNull(),
+    // brand-service's offer UUID, carried never derived. NULL = it names no offer (DISTRY-CALL-IS-CAMPAIGN-1121,
+    // migration 0091): only a campaign on its target alone (lib/target-only-campaign.ts) may omit it.
+    offerId: text("offer_id"),
     // features-service's sales funnel id (`combinationKey`), carried verbatim.
     salesFunnelId: text("sales_funnel_id").notNull(),
     // The funnel's NAME as features-service stated it at creation (display only; the id is the key).
@@ -311,7 +312,7 @@ export const salesFunnelCampaigns = pgTable(
     uniqueIndex("uniq_sales_funnel_campaigns_identity").on(
       table.orgId,
       table.brandId,
-      table.offerId,
+      sql`coalesce(${table.offerId}, '')`,
       table.salesFunnelId,
       table.peopleKey,
       sql`coalesce(${table.githubIssue}, '')`,

@@ -157,6 +157,26 @@ const SalesFunnelCapsResponse = z.object({
 });
 export type SalesFunnelCaps = z.infer<typeof SalesFunnelCapsResponse>;
 
+/**
+ * The ONE spelling of billing's caps path for a funnel (or ONE funnel campaign of it). A campaign naming NO offer
+ * (DISTRY-CALL-IS-CAMPAIGN-1121: a campaign on its target alone may omit it) is keyed without the offer segment at
+ * billing; every campaign naming one keeps the path it always had, byte for byte.
+ */
+export function billingCapsPath(scope: {
+  brandId: string;
+  offerId: string | null;
+  salesFunnelId: string;
+  salesFunnelCampaignId?: string | null;
+}): string {
+  return (
+    `/internal/brands/${encodeURIComponent(scope.brandId)}` +
+    (scope.offerId ? `/offers/${encodeURIComponent(scope.offerId)}` : "") +
+    `/sales-funnels/${encodeURIComponent(scope.salesFunnelId)}` +
+    (scope.salesFunnelCampaignId ? `/campaigns/${encodeURIComponent(scope.salesFunnelCampaignId)}` : "") +
+    "/caps"
+  );
+}
+
 type CapsRead = { ok: true; caps: SalesFunnelCaps } | { ok: false; detail: string };
 const capsCache = new Map<string, { at: number; read: Promise<CapsRead> }>();
 
@@ -175,7 +195,8 @@ export async function fetchSalesFunnelCaps(
   scope: {
     orgId: string;
     brandId: string;
-    offerId: string;
+    /** null = the campaign names no offer (DISTRY-CALL-IS-CAMPAIGN-1121): billing keys its caps without one. */
+    offerId: string | null;
     salesFunnelId: string;
     /**
      * The funnel CAMPAIGN asking (billing v0.83.25, migration 0083): the cap it is HELD to, its own
@@ -195,18 +216,14 @@ export async function fetchSalesFunnelCaps(
     return { ok: false, detail: `funnel campaign ${scope.salesFunnelCampaignId} unreadable: ${err instanceof Error ? err.message : String(err)}` };
   }
   scope = { ...scope, salesFunnelId: capFunnelId };
-  const key = `${scope.orgId}|${scope.brandId}|${scope.offerId}|${scope.salesFunnelId}|${scope.salesFunnelCampaignId ?? ""}`;
+  const key = `${scope.orgId}|${scope.brandId}|${scope.offerId ?? ""}|${scope.salesFunnelId}|${scope.salesFunnelCampaignId ?? ""}`;
   const hit = capsCache.get(key);
   if (hit && nowMs - hit.at < CAPS_READ_TTL_MS) return hit.read;
   const read = (async (): Promise<CapsRead> => {
     const url = process.env.BILLING_SERVICE_URL;
     const apiKey = process.env.BILLING_SERVICE_API_KEY;
     if (!url || !apiKey) return { ok: false, detail: "billing-service not configured" };
-    const path =
-      `/internal/brands/${encodeURIComponent(scope.brandId)}/offers/${encodeURIComponent(scope.offerId)}` +
-      `/sales-funnels/${encodeURIComponent(scope.salesFunnelId)}` +
-      (scope.salesFunnelCampaignId ? `/campaigns/${encodeURIComponent(scope.salesFunnelCampaignId)}` : "") +
-      "/caps";
+    const path = billingCapsPath(scope);
     try {
       const res = await fetch(`${url.replace(/\/$/, "")}${path}`, {
         headers: { "x-api-key": apiKey, "x-org-id": scope.orgId },
@@ -231,7 +248,10 @@ export async function fetchSalesFunnelCaps(
 
 /** One sales funnel's stated caps, as billing lists them for a brand. */
 export interface StatedSalesFunnelCap {
-  offerId: string;
+  /** null = the cap of a campaign naming no offer (DISTRY-CALL-IS-CAMPAIGN-1121). */
+  offerId: string | null;
+  /** The funnel CAMPAIGN whose own cap this is (billing serves it on a per-campaign cap); null = funnel-wide. */
+  salesFunnelCampaignId: string | null;
   salesFunnelId: string;
   /**
    * `dailyBudgetCents` is billing's OWN figure of the cap per day (v0.83.13: daily x1, weekly / 7,
@@ -249,8 +269,9 @@ export interface StatedSalesFunnelCap {
 const BrandSalesFunnelCapsResponse = z.object({
   caps: z.array(
     z.object({
-      offerId: z.string(),
+      offerId: z.string().nullable(),
       salesFunnelId: z.string(),
+      salesFunnelCampaignId: z.string().optional(),
       funded: z.boolean(),
       fundedBy: FundedBy.nullable(),
       maxBudget: z.object({ amountCents: Figure, period: CapPeriod, dailyBudgetCents: Figure }).nullable(),
@@ -290,6 +311,7 @@ export async function fetchBrandSalesFunnelCaps(
         return {
           offerId: c.offerId,
           salesFunnelId: c.salesFunnelId,
+          salesFunnelCampaignId: c.salesFunnelCampaignId ?? null,
           maxBudget,
           fundedBy: c.funded ? c.fundedBy : null,
         };
@@ -364,9 +386,10 @@ export async function salesFunnelUnitMoney(
     ...(figures ? { figures } : {}),
   });
 
-  if (!unit.brandId || !unit.offerId || !unit.salesFunnelId) {
-    console.error(`[campaign-service] Sales funnel unit ${unit.id} states no brand, offer or sales funnel — held`);
-    return held("unreadable", "Sales funnel caps unavailable", "the unit states no brand, offer or sales funnel, so its caps cannot be asked.");
+  // The offer is optional (a campaign on its target alone may name none: its caps are keyed without one at billing).
+  if (!unit.brandId || !unit.salesFunnelId) {
+    console.error(`[campaign-service] Sales funnel unit ${unit.id} states no brand or sales funnel — held`);
+    return held("unreadable", "Sales funnel caps unavailable", "the unit states no brand or sales funnel, so its caps cannot be asked.");
   }
   const read = await fetchSalesFunnelCaps(
     {
@@ -455,8 +478,8 @@ export async function salesFunnelPollRoom(
   callCents: number,
   now: Date = new Date(),
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  if (!unit.brandId || !unit.offerId || !unit.salesFunnelId) {
-    return { ok: false, reason: "sales funnel unit states no brand, offer or sales funnel" };
+  if (!unit.brandId || !unit.salesFunnelId) {
+    return { ok: false, reason: "sales funnel unit states no brand or sales funnel" };
   }
   const read = await fetchSalesFunnelCaps(
     {

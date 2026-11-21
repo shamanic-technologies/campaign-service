@@ -2,6 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { listRuns } from "@distribute/runs-client";
 import { db } from "../db/index.js";
 import { campaigns, salesFunnelCampaigns, triggerEventDeliveries, type SalesFunnelCampaign } from "../db/schema.js";
+import { billingCapsPath } from "./sales-funnel-campaigns.js";
 
 /**
  * DELETE a sales funnel campaign created by mistake (owner 2026-10-14: a client or its AI agent creates
@@ -79,8 +80,7 @@ async function clearOwnBillingCaps(parent: SalesFunnelCampaign, userId?: string,
   if (userId) headers["x-user-id"] = userId;
   if (runId) headers["x-run-id"] = runId;
   const res = await fetch(
-    `${url.replace(/\/$/, "")}/internal/brands/${encodeURIComponent(parent.brandId)}/offers/${encodeURIComponent(parent.offerId)}` +
-      `/sales-funnels/${encodeURIComponent(parent.salesFunnelId)}/campaigns/${encodeURIComponent(parent.id)}/caps`,
+    `${url.replace(/\/$/, "")}${billingCapsPath({ brandId: parent.brandId, offerId: parent.offerId, salesFunnelId: parent.salesFunnelId, salesFunnelCampaignId: parent.id })}`,
     { method: "DELETE", headers, signal: AbortSignal.timeout(15_000) },
   );
   if (!res.ok && res.status !== 404) {

@@ -15,9 +15,9 @@ BEGIN
     SELECT 1 FROM pg_indexes
     WHERE indexname = 'uniq_sales_funnel_campaigns_identity' AND indexdef LIKE '%launch_key%'
   ) THEN
-    CREATE UNIQUE INDEX IF NOT EXISTS "uniq_sales_funnel_campaigns_identity_0091"
-      ON "sales_funnel_campaigns" ("org_id", "brand_id", "offer_id", "sales_funnel_id", "people_key", coalesce("github_issue", ''), "launch_key");
+    CREATE UNIQUE INDEX IF NOT EXISTS "uniq_sales_funnel_campaigns_identity_0092"
+      ON "sales_funnel_campaigns" ("org_id", "brand_id", coalesce("offer_id", ''), "sales_funnel_id", "people_key", coalesce("github_issue", ''), "launch_key");
     DROP INDEX IF EXISTS "uniq_sales_funnel_campaigns_identity";
-    ALTER INDEX "uniq_sales_funnel_campaigns_identity_0091" RENAME TO "uniq_sales_funnel_campaigns_identity";
+    ALTER INDEX "uniq_sales_funnel_campaigns_identity_0092" RENAME TO "uniq_sales_funnel_campaigns_identity";
   END IF;
 END $$;

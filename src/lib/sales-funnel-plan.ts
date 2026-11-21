@@ -225,6 +225,9 @@ export async function checkSalesFunnelCampaignPlan(
   const userId = row.createdByUserId;
   const runId = units.find((u) => u.anchorRunId)?.anchorRunId ?? row.parentRunId;
   if (!userId || !runId) return done("plan_unreadable", "The campaign states no creator or run to read its plan under.");
+  // A plan is a sales funnel of an offer: a campaign naming none (its target alone) follows no plan (refused at launch).
+  if (row.offerId === null) return done("plan_not_runnable", "The campaign names no offer, so it runs its target alone and follows no plan.");
+  const offerId = row.offerId;
 
   const read = await (deps.plan ?? fetchFactoryPlan)(row, { userId, runId });
   if (!read.ok) {
@@ -250,7 +253,7 @@ export async function checkSalesFunnelCampaignPlan(
     return done("following", `It runs its plan ${running}.`, { plan: planMeta, pipesAfter: base.pipesBefore });
   }
 
-  const resolved = await (deps.resolve ?? resolveSalesFunnelPlan)(shadow.funnelId, { orgId: row.orgId, userId, runId, brandId: row.brandId, offerId: row.offerId });
+  const resolved = await (deps.resolve ?? resolveSalesFunnelPlan)(shadow.funnelId, { orgId: row.orgId, userId, runId, brandId: row.brandId, offerId });
   if (!resolved.ok) {
     const r = resolved.refusal;
     return done(r.status === 502 ? "plan_unreadable" : "plan_not_runnable", `Its plan ${shadow.funnelId} cannot be run: ${r.code}: ${r.message}`, { plan: planMeta });
@@ -357,8 +360,10 @@ export async function switchOffPlan(row: SalesFunnelCampaign, deps: PlanDeps = {
   const userId = row.createdByUserId;
   const runId = units.find((u) => u.anchorRunId)?.anchorRunId ?? row.parentRunId;
   if (!userId || !runId) return fail("The campaign states no creator or run to read its funnel under.");
+  if (row.offerId === null) return fail("The campaign names no offer, so it has no funnel to return to.");
+  const offerId = row.offerId;
   try {
-    const resolved = await (deps.resolve ?? resolveSalesFunnelPlan)(own, { orgId: row.orgId, userId, runId, brandId: row.brandId, offerId: row.offerId });
+    const resolved = await (deps.resolve ?? resolveSalesFunnelPlan)(own, { orgId: row.orgId, userId, runId, brandId: row.brandId, offerId });
     if (!resolved.ok) return fail(`Its funnel ${own} could not be read: ${resolved.refusal.code}: ${resolved.refusal.message}`);
     const planned = resolved.plan.units;
     const applied = await applySalesFunnelPlanChange({

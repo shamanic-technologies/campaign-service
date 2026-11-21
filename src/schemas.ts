@@ -248,7 +248,11 @@ export const GithubIssueRefSchema = z.object({
  */
 export const CreateSalesFunnelCampaignBody = z.object({
   brandId: z.string().uuid("brandId must be a valid UUID"),
-  offerId: z.string().uuid("offerId must be a valid UUID"),
+  // brand-service's offer UUID. REQUIRED with a salesFunnelId (a sales funnel sells an offer). OPTIONAL without one
+  // (DISTRY-CALL-IS-CAMPAIGN-1121, owner 2026-11-21: a campaign is Target + start + budget + brief): a campaign on its
+  // target alone may name no offer (a newsletter draft, an email check). Its caps are then keyed without an offer at
+  // billing, its brief states the goal alone, and a script needing an offer stops on its own with a plain reason.
+  offerId: z.string().uuid("offerId must be a valid UUID").optional(),
   // features-service's sales funnel id (`GET /internal/catalogue/sales-funnels` rows[].id), verbatim. OPTIONAL
   // (MIGRATE-1105 S8): omitted = the campaign is its TARGET alone, made by that outcome's Engine (one unit, no channel;
   // `target` is then required, `followsPlan`, `people` and `githubIssue` are refused). Its salesFunnelId reads its target.
@@ -343,7 +347,8 @@ export const SalesFunnelCampaignSchema = z.object({
   id: z.string(),
   orgId: z.string(),
   brandId: z.string(),
-  offerId: z.string(),
+  // null = it names no offer (a campaign on its target alone, DISTRY-CALL-IS-CAMPAIGN-1121).
+  offerId: z.string().nullable(),
   salesFunnelId: z.string(),
   salesFunnelName: z.string(),
   // "ongoing" | "stopped", the campaign vocabulary.
@@ -400,6 +405,51 @@ export const SalesFunnelCampaignSchema = z.object({
   updatedAt: z.string(),
   units: z.array(SalesFunnelUnitSchema),
 }).openapi("SalesFunnelCampaign");
+
+/**
+ * DISTRY-CALL-IS-CAMPAIGN-1121 (lib/campaign-first-run.ts): WHEN a funnel campaign's next run is expected, or why none
+ * is. Read from what the dispatch reads (status, units due, billing's caps); served on every launch / start / read of one.
+ */
+export const NextRunSchema = z.object({
+  // scheduled (due: dispatched within `withinSeconds` of `at`) | on_event (runs when its trigger fires) | waiting (held:
+  // `reason` unfunded = no max budget / max volume stated yet, cap_reached, unreadable) | finished (its one-off cap is
+  // reached: it made what it was asked for) | stopped | nothing_runs (only customer-operated steps).
+  state: z.enum(["scheduled", "on_event", "waiting", "finished", "stopped", "nothing_runs"]),
+  at: z.string().nullable(),
+  withinSeconds: z.number().nullable(),
+  reason: z.string().nullable(),
+  // One plain-English sentence to repeat to a person.
+  detail: z.string(),
+}).openapi("NextRun");
+
+/** What a funnel campaign has made and spent, whether it finished, and why it is idle. */
+export const SalesFunnelCampaignProgressSchema = z.object({
+  salesFunnelCampaignId: z.string(),
+  status: z.string(),
+  target: z.string().nullable(),
+  // What its max volume counted this period (billing's figure, the one that ends it). null + reason when no max volume
+  // is stated (`no_max_volume`) or billing could not measure it.
+  units: z.object({
+    made: z.number().nullable(),
+    maxVolume: z.number().nullable(),
+    period: z.string().nullable(),
+    unit: z.string().nullable(),
+    unavailableReason: z.string().nullable(),
+  }),
+  // spentCents = what the org pays for its units since birth (after its usage discount), spentBeforeDiscountCents beside
+  // it (runs-service ledger, decimal USD cents). maxBudget* = its max budget and what it consumed this period (billing).
+  spend: z.object({
+    spentCents: z.number().nullable(),
+    spentBeforeDiscountCents: z.number().nullable(),
+    maxBudgetCents: z.number().nullable(),
+    maxBudgetConsumedCents: z.number().nullable(),
+    period: z.string().nullable(),
+    unavailableReason: z.string().nullable(),
+  }),
+  // true = its one-off max budget or max volume is reached: it made what it was asked for (raise the cap for more).
+  finished: z.boolean(),
+  nextRun: NextRunSchema,
+}).openapi("SalesFunnelCampaignProgress");
 
 /** One plan change applied to a funnel campaign that follows its plan. */
 export const SalesFunnelPlanChangeSchema = z.object({
@@ -700,7 +750,8 @@ export const SpendableBudgetCampaign = z.object({
  * campaign is ongoing. Never resolved onto a per-pipe ceiling.
  */
 export const SpendableBudgetSalesFunnel = z.object({
-  offerId: z.string(),
+  // null = a campaign naming no offer (on its target alone, DISTRY-CALL-IS-CAMPAIGN-1121).
+  offerId: z.string().nullable(),
   salesFunnelId: z.string(),
   salesFunnelCampaignId: z.string().nullable(),
   status: z.string().nullable(),
