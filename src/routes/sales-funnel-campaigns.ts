@@ -165,6 +165,8 @@ async function fileNamedPeopleOf(
  *
  * A funnel campaign that EXISTS is never created again (owner rule 2): the identity's row is handed
  * back whatever its status, started when the caller asked for "ongoing", untouched otherwise.
+ * Its identity includes the caller's optional `launchKey` (OUTREACH-3WAYS-1121): two campaigns of one brand on the
+ * same target each state their own key and live side by side; a call stating none keeps today's answer.
  */
 router.post(
   "/sales-funnel-campaigns",
@@ -175,8 +177,11 @@ router.post(
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId: statedOfferId, salesFunnelId: statedFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan } =
+      const { brandId, offerId: statedOfferId, salesFunnelId: statedFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan, launchKey: launchKeyInput } =
         CreateSalesFunnelCampaignBody.parse(req.body);
+      // OUTREACH-3WAYS-1121: the caller's own name for this campaign among the brand's campaigns on the same funnel/target.
+      // '' (omitted) = the brand's one campaign there, today's identity; another name is another campaign beside it.
+      const launchKey = launchKeyInput?.toLowerCase() ?? "";
       // MIGRATE-1105 S8 (lib/target-only-campaign.ts): no sales funnel = the campaign is its TARGET alone, made by that
       // outcome's Engine. It follows no plan and only prospects (one unit from Start), so it names nobody and waits on
       // no issue. Its funnel id reads its target (billing's caps and its identity are keyed on it).
@@ -223,6 +228,7 @@ router.post(
             eq(salesFunnelCampaigns.salesFunnelId, salesFunnelId),
             eq(salesFunnelCampaigns.peopleKey, peopleKey),
             githubIssue ? eq(salesFunnelCampaigns.githubIssue, githubIssue) : isNull(salesFunnelCampaigns.githubIssue),
+            eq(salesFunnelCampaigns.launchKey, launchKey),
           ),
         });
 
@@ -415,6 +421,7 @@ router.post(
           people,
           peopleKey,
           githubIssue,
+          launchKey,
           target: birth.target,
           brief: bornBrief,
           // A brief WE wrote is stated by nobody (a person's own is theirs).

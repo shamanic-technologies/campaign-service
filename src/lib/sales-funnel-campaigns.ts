@@ -625,6 +625,7 @@ export function serializeSalesFunnelCampaign(row: SalesFunnelCampaign, units: Ca
     createdByUserId: row.createdByUserId,
     people: storedPeople(row.people),
     githubIssue: serializeGithubIssue(row.githubIssue),
+    launchKey: row.launchKey || null,
     githubIssueCheck: (row.githubIssueCheck ?? null) as GithubIssueCheck | null,
     target: row.target ?? null,
     brief: row.brief ?? null,

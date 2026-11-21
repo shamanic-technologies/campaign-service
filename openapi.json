@@ -487,6 +487,10 @@
           "githubIssue": {
             "$ref": "#/components/schemas/GithubIssueRef"
           },
+          "launchKey": {
+            "type": "string",
+            "nullable": true
+          },
           "githubIssueCheck": {
             "type": "object",
             "nullable": true,
@@ -621,6 +625,7 @@
           "createdByUserId",
           "people",
           "githubIssue",
+          "launchKey",
           "githubIssueCheck",
           "target",
           "brief",
@@ -804,6 +809,12 @@
           },
           "followsPlan": {
             "type": "boolean"
+          },
+          "launchKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$/i"
           }
         },
         "required": [
