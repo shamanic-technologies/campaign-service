@@ -238,11 +238,33 @@ export const GithubIssueRefSchema = z.object({
 }).strict().openapi("GithubIssueRef");
 
 /**
+ * ONE-CAMPAIGN-VOLUME-1122 (lib/sales-funnel-campaign-caps.ts): the caps a client states on ONE campaign, written at
+ * billing on that campaign (its own max budget / max volume, every unit of it held to them). Billing's words and body.
+ */
+export const CampaignCapPeriodSchema = z.enum(["one_off", "daily", "weekly", "monthly"]).openapi("CampaignCapPeriod", {
+  description: "UTC. daily = the calendar day; weekly = Monday to Monday; monthly = the calendar month; one_off = once.",
+});
+export const CampaignMaxBudgetSchema = z.object({
+  amountCents: z.number().int().min(0, "maxBudget.amountCents must be 0 or more"),
+  period: CampaignCapPeriodSchema,
+}).strict().openapi("CampaignMaxBudget", {
+  description: "The most this campaign spends per period, all its parts together (billing's max budget on this campaign). null clears it.",
+});
+export const CampaignMaxVolumeSchema = z.object({
+  count: z.number().int().min(0, "maxVolume.count must be 0 or more"),
+  period: CampaignCapPeriodSchema,
+}).strict().openapi("CampaignMaxVolume", {
+  description:
+    "The volume this campaign aims at per period (billing's max volume on this campaign: it stops for the period once reached). " +
+    "What it counts (e.g. meetings booked for a campaign targeting them) is billing's, served on its caps read as `unit`. null clears it.",
+});
+
+/**
  * A person (or the agent acting for them) launches a SALES FUNNEL as one campaign: brand x offer x
  * sales funnel. Everything else is resolved here: the pipes are features-service's statement of the
  * funnel, each pipe's workflow is this service's choice (re-picked every run), and the money is
- * billing's funnel caps. `.strict()`: a caller reaching for a workflow, a pipe list or a budget is
- * told no rather than having it silently stripped.
+ * billing's caps on this campaign (`maxBudget` / `maxVolume`, written there in the same request). `.strict()`: a
+ * caller reaching for a workflow or a pipe list is told no rather than having it silently stripped.
  */
 export const CreateSalesFunnelCampaignBody = z.object({
   brandId: z.string().uuid("brandId must be a valid UUID"),
@@ -282,6 +304,10 @@ export const CreateSalesFunnelCampaignBody = z.object({
   // features-service computes for it (best line to its target) and follows each plan change; false/omitted = it runs
   // its fixed sales funnel.
   followsPlan: z.boolean().optional(),
+  // OPTIONAL (ONE-CAMPAIGN-VOLUME-1122): the campaign's max budget and the volume it aims at, per period, written at
+  // billing on THIS campaign in the same request (a new campaign or the one handed back). Omitted = untouched.
+  maxBudget: CampaignMaxBudgetSchema.nullable().optional(),
+  maxVolume: CampaignMaxVolumeSchema.nullable().optional(),
 }).strict().openapi("CreateSalesFunnelCampaignBody");
 
 /**
@@ -297,9 +323,13 @@ export const UpdateSalesFunnelCampaignBody = z.object({
   // true = follow its plan (the pipes and plays features-service plans for it, adapting to each plan change);
   // false = keep the funnel it runs now, fixed.
   followsPlan: z.boolean().optional(),
+  // Its max budget / the volume it aims at, per period (billing's caps on THIS campaign; null clears, omitted keeps).
+  maxBudget: CampaignMaxBudgetSchema.nullable().optional(),
+  maxVolume: CampaignMaxVolumeSchema.nullable().optional(),
 }).strict().refine(
-  (b) => b.status !== undefined || b.target !== undefined || b.brief !== undefined || b.followsPlan !== undefined,
-  { message: "state status, target, brief and/or followsPlan" },
+  (b) => b.status !== undefined || b.target !== undefined || b.brief !== undefined || b.followsPlan !== undefined
+    || b.maxBudget !== undefined || b.maxVolume !== undefined,
+  { message: "state status, target, brief, followsPlan, maxBudget and/or maxVolume" },
 ).openapi("UpdateSalesFunnelCampaignBody");
 
 export const SalesFunnelCampaignsQuery = z.object({

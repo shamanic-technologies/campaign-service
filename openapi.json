@@ -804,6 +804,12 @@
           },
           "followsPlan": {
             "type": "boolean"
+          },
+          "maxBudget": {
+            "$ref": "#/components/schemas/CampaignMaxBudget"
+          },
+          "maxVolume": {
+            "$ref": "#/components/schemas/CampaignMaxVolume"
           }
         },
         "required": [
@@ -811,6 +817,54 @@
           "status"
         ],
         "additionalProperties": false
+      },
+      "CampaignMaxBudget": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "amountCents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "period": {
+            "$ref": "#/components/schemas/CampaignCapPeriod"
+          }
+        },
+        "required": [
+          "amountCents",
+          "period"
+        ],
+        "additionalProperties": false,
+        "description": "The most this campaign spends per period, all its parts together (billing's max budget on this campaign). null clears it."
+      },
+      "CampaignCapPeriod": {
+        "type": "string",
+        "enum": [
+          "one_off",
+          "daily",
+          "weekly",
+          "monthly"
+        ],
+        "description": "UTC. daily = the calendar day; weekly = Monday to Monday; monthly = the calendar month; one_off = once."
+      },
+      "CampaignMaxVolume": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "period": {
+            "$ref": "#/components/schemas/CampaignCapPeriod"
+          }
+        },
+        "required": [
+          "count",
+          "period"
+        ],
+        "additionalProperties": false,
+        "description": "The volume this campaign aims at per period (billing's max volume on this campaign: it stops for the period once reached). What it counts (e.g. meetings booked for a campaign targeting them) is billing's, served on its caps read as `unit`. null clears it."
       },
       "OpenOnDemandRunResponse": {
         "type": "object",
@@ -1035,6 +1089,12 @@
           },
           "followsPlan": {
             "type": "boolean"
+          },
+          "maxBudget": {
+            "$ref": "#/components/schemas/CampaignMaxBudget"
+          },
+          "maxVolume": {
+            "$ref": "#/components/schemas/CampaignMaxVolume"
           }
         },
         "additionalProperties": false
