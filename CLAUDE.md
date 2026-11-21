@@ -144,7 +144,7 @@ Owner: « On doit pouvoir créer autant de campaigns différentes qu'on veut ave
 
 ### A campaign's progress counts its Units, cap or no cap (2026-11-21, DISTRY-CALL-IS-CAMPAIGN-1121; `lib/campaign-first-run.ts`)
 
-`GET /sales-funnel-campaigns/:id/progress` `units`: a stated max volume = billing's figure + cap, unchanged; none (or caps unreadable) = `madeSinceStart`: produced Units of its TARGET on its units' runs since its birth day, runs-service `GET /internal/stats/outcome-performers` (the ledger billing counts, reversals net out), `period` null, `unit` = the target. Unreadable = null + `runs_unavailable: …` / `no_target` / `older_than_ledger_window` (400 days), never 0. Prod 2026-11-21 campaign 47f39eea (budget only) read `no_max_volume` beside 17 drafts.
+`GET /sales-funnel-campaigns/:id/progress` `units`: a stated max volume = billing's figure + cap, unchanged; none (or caps unreadable) = `madeSinceStart`: produced Units of its TARGET on its units' runs since its birth day, runs-service `GET /internal/stats/outcome-performers` (the ledger billing counts, reversals net out), `period` null, `unit` = the target. Unreadable = null + `runs_unavailable: …` / `no_target` / `older_than_ledger_window` (400 days), never 0. `units.madeSinceStart` serves that same ledger count ALWAYS (a cap set after Units were made restarts `made` at its own start; 47f39eea: cap 1 set after 17 drafts read `made: 0`). Prod 2026-11-21 campaign 47f39eea (budget only) read `no_max_volume` beside 17 drafts.
 
 ### ONE text per campaign: its BRIEF, read by every LLM (2026-11-05, ONE-BRIEF-1105 + -REMOVE; `lib/retired-instruction.ts`, migrations 0086/0087)
 

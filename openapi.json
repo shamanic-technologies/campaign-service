@@ -936,6 +936,14 @@
               "unavailableReason": {
                 "type": "string",
                 "nullable": true
+              },
+              "madeSinceStart": {
+                "type": "number",
+                "nullable": true
+              },
+              "madeSinceStartUnavailableReason": {
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -943,7 +951,9 @@
               "maxVolume",
               "period",
               "unit",
-              "unavailableReason"
+              "unavailableReason",
+              "madeSinceStart",
+              "madeSinceStartUnavailableReason"
             ]
           },
           "spend": {
