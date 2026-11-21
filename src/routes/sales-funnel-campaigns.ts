@@ -99,6 +99,9 @@ function statedEdits(
   return edits;
 }
 
+/** A brief edit would give this campaign the exact brief another campaign on the same target holds (OUTREACH-3WAYS-1121). */
+class SameBriefCampaignError extends Error {}
+
 async function applyEdits(row: SalesFunnelCampaign, edits: Partial<typeof salesFunnelCampaigns.$inferInsert>, actorUserId: string | null): Promise<SalesFunnelCampaign> {
   if (Object.keys(edits).length === 0) return row;
   // CAMPAIGN-CHANGE-LOG-1119: each changed word is appended to its history in the same transaction.
@@ -110,6 +113,10 @@ async function applyEdits(row: SalesFunnelCampaign, edits: Partial<typeof salesF
       .returning();
     if (written) await appendSettingChanges(tx, settingChangeRowsOf(row, row, { target: edits.target, brief: edits.brief, followsPlan: edits.followsPlan }, actorUserId, "edit"));
     return written;
+  }).catch((error: unknown) => {
+    const pg = pgErrorOf(error);
+    if (pg.code === "23505" && (pg.constraint ?? pg.constraint_name) === "uniq_sales_funnel_campaigns_identity") throw new SameBriefCampaignError();
+    throw error;
   });
 }
 
@@ -165,8 +172,10 @@ async function fileNamedPeopleOf(
  *
  * A funnel campaign that EXISTS is never created again (owner rule 2): the identity's row is handed
  * back whatever its status, started when the caller asked for "ongoing", untouched otherwise.
- * Its identity includes the caller's optional `launchKey` (OUTREACH-3WAYS-1121): two campaigns of one brand on the
- * same target each state their own key and live side by side; a call stating none keeps today's answer.
+ * Its identity includes its BRIEF (owner 2026-11-21, OUTREACH-3WAYS-1121): as many campaigns as wanted on one target, as
+ * long as each brief differs. A stated brief another campaign of the identity already holds = that campaign handed back;
+ * a new brief = a new campaign beside the others (never a reword of another one); no brief = the identity's oldest
+ * campaign handed back (every caller before).
  */
 router.post(
   "/sales-funnel-campaigns",
@@ -177,11 +186,8 @@ router.post(
   validateBody(CreateSalesFunnelCampaignBody),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { brandId, offerId: statedOfferId, salesFunnelId: statedFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan, launchKey: launchKeyInput } =
+      const { brandId, offerId: statedOfferId, salesFunnelId: statedFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan } =
         CreateSalesFunnelCampaignBody.parse(req.body);
-      // OUTREACH-3WAYS-1121: the caller's own name for this campaign among the brand's campaigns on the same funnel/target.
-      // '' (omitted) = the brand's one campaign there, today's identity; another name is another campaign beside it.
-      const launchKey = launchKeyInput?.toLowerCase() ?? "";
       // MIGRATE-1105 S8 (lib/target-only-campaign.ts): no sales funnel = the campaign is its TARGET alone, made by that
       // outcome's Engine. It follows no plan and only prospects (one unit from Start), so it names nobody and waits on
       // no issue. Its funnel id reads its target (billing's caps and its identity are keyed on it).
@@ -221,6 +227,7 @@ router.post(
 
       const findIncumbent = () =>
         db.query.salesFunnelCampaigns.findFirst({
+          orderBy: [asc(salesFunnelCampaigns.createdAt)],
           where: and(
             eq(salesFunnelCampaigns.orgId, orgId),
             eq(salesFunnelCampaigns.brandId, brandId),
@@ -228,7 +235,8 @@ router.post(
             eq(salesFunnelCampaigns.salesFunnelId, salesFunnelId),
             eq(salesFunnelCampaigns.peopleKey, peopleKey),
             githubIssue ? eq(salesFunnelCampaigns.githubIssue, githubIssue) : isNull(salesFunnelCampaigns.githubIssue),
-            eq(salesFunnelCampaigns.launchKey, launchKey),
+            // A stated brief names its campaign; none = the identity's oldest (OUTREACH-3WAYS-1121).
+            brief !== undefined ? eq(salesFunnelCampaigns.brief, brief) : undefined,
           ),
         });
 
@@ -421,7 +429,6 @@ router.post(
           people,
           peopleKey,
           githubIssue,
-          launchKey,
           target: birth.target,
           brief: bornBrief,
           // A brief WE wrote is stated by nobody (a person's own is theirs).
@@ -631,6 +638,12 @@ router.patch(
       const units = switchedOff ? (await unitsOf([parent.id], orgId)).get(parent.id)! : written.units;
       res.json({ salesFunnelCampaign: serializeSalesFunnelCampaign(parent, units), nextRun: await nextRunOf(parent, units) });
     } catch (error) {
+      if (error instanceof SameBriefCampaignError) {
+        return res.status(409).json({
+          error: "Another campaign of this brand on the same target already has exactly this brief. Change the wording, or use that campaign.",
+          reason: "same_brief_campaign_exists",
+        });
+      }
       console.error("[campaign-service] Update sales funnel campaign error:", error);
       res.status(500).json({ error: "Internal server error" });
     }

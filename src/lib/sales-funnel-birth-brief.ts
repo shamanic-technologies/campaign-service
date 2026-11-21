@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { pgErrorOf } from "./pg-error.js";
 import { db } from "../db/index.js";
 import { appendSettingChanges, settingChangeRowsOf } from "./sales-funnel-setting-changes.js";
 import { campaigns, salesFunnelCampaigns } from "../db/schema.js";
@@ -112,7 +113,7 @@ export interface BriefRepairRow {
   orgId: string;
   outcome: "written" | "would_write" | "skipped";
   brief: string | null;
-  reason: Extract<BirthBriefRead, { ok: false }>["reason"] | "brief_stated_meanwhile" | null;
+  reason: Extract<BirthBriefRead, { ok: false }>["reason"] | "brief_stated_meanwhile" | "same_brief_campaign_exists" | null;
   detail: string | null;
 }
 
@@ -156,6 +157,8 @@ export async function repairMissingBriefs(input: { apply: boolean; orgId?: strin
       out.push({ ...base, outcome: "would_write", brief: read.brief, reason: null, detail: null });
       continue;
     }
+    // OUTREACH-3WAYS-1121: the brief joins the identity, so a composed brief another campaign of the identity already holds
+    // is refused by the unique index: skipped by name, never the whole pass.
     const written = await db.transaction(async (tx) => {
       const done = await tx
         .update(salesFunnelCampaigns)
@@ -165,7 +168,15 @@ export async function repairMissingBriefs(input: { apply: boolean; orgId?: strin
       // CAMPAIGN-CHANGE-LOG-1119: it had no brief (the `never` guard), so the history is from nothing.
       if (done.length > 0) await appendSettingChanges(tx, settingChangeRowsOf({ id: r.id, orgId: r.orgId }, { brief: null }, { brief: read.brief }, null, "birth_brief"));
       return done;
+    }).catch((error: unknown) => {
+      const pg = pgErrorOf(error);
+      if (pg.code === "23505" && (pg.constraint ?? pg.constraint_name) === "uniq_sales_funnel_campaigns_identity") return null;
+      throw error;
     });
+    if (written === null) {
+      out.push({ ...base, outcome: "skipped", brief: null, reason: "same_brief_campaign_exists", detail: null });
+      continue;
+    }
     out.push(
       written.length > 0
         ? { ...base, outcome: "written", brief: read.brief, reason: null, detail: null }
