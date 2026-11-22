@@ -201,6 +201,20 @@ describe("a plan never drains a launched pipe the brief names (PLAN-SWITCH-OFF-1
     expect((await rowOf(row.id)).planCheck).toMatchObject({ state: "plan_contradicts_brief", planSalesFunnelId: PLAN });
   });
 
+  it("a carried red whose kept unit the brief no longer names re-applies the same plan: the unit drains, green", async () => {
+    const { row } = await bornCampaign({ brief: BRIEF });
+    await runPlanFollowerPass(new Date(), deps({ launchedNamedPipes: NAMED_PIPES }));
+    expect(((await rowOf(row.id)).planCheck as PlanCheck).state).toBe("plan_contradicts_brief");
+    // features-service's judgment moved (MON-PLAN-FOLLOWING-1122): AI Meeting Booking is no longer a launched named pipe.
+    await runPlanFollowerPass(new Date(), deps({ launchedNamedPipes: [`${SEND}|start_to_conversation`] }));
+    const check = (await rowOf(row.id)).planCheck as PlanCheck;
+    expect(check).toMatchObject({ state: "applied", planSalesFunnelId: PLAN });
+    expect((await unitsOf(row.id)).find((u) => u.featureSlug === MEETING)!.planRole).toBe("draining");
+    // And then it simply follows its plan.
+    await runPlanFollowerPass(new Date(), deps({ launchedNamedPipes: [`${SEND}|start_to_conversation`] }));
+    expect(((await rowOf(row.id)).planCheck as PlanCheck).state).toBe("following");
+  });
+
   it("no launched pipe named (no brief, or a plan stored before): the plan drains as before", async () => {
     const { row } = await bornCampaign();
     const result = await checkSalesFunnelCampaignPlan(row, { apply: true }, deps());

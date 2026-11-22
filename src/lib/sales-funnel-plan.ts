@@ -270,13 +270,18 @@ export async function checkSalesFunnelCampaignPlan(
       { plan: planMeta },
     );
   }
+  // Units a plan left out but kept running because the brief named them: still on the funnel they ran before.
+  const keptByBriefUnits = units.filter((u) => u.status === "ongoing" && u.planRole !== "draining" && (u.salesFunnelId ?? row.salesFunnelId) !== running);
+  const stillNamed = launchedNamedUnits(keptByBriefUnits, read.plan.plan?.launchedNamedPipes ?? []);
   if (shadow.funnelId === running) {
-    // A unit kept because the brief names it stays red while the plan still leaves it out.
+    // A unit kept because the brief names it stays red while the plan still leaves it out. A kept unit the brief no
+    // longer names (judged by a since-deleted second judge, MON-PLAN-FOLLOWING-1122) re-applies the same plan: drained.
     const prev = row.planCheck as PlanCheck | null;
-    if (row.followsPlan && prev?.state === "plan_contradicts_brief" && prev.planSalesFunnelId === shadow.funnelId) {
-      return done("plan_contradicts_brief", prev.detail, { plan: planMeta, pipesAfter: base.pipesBefore });
+    const carried = row.followsPlan && prev?.state === "plan_contradicts_brief" && prev.planSalesFunnelId === shadow.funnelId;
+    if (carried && stillNamed.length === keptByBriefUnits.length && keptByBriefUnits.length > 0) {
+      return done("plan_contradicts_brief", prev!.detail, { plan: planMeta, pipesAfter: base.pipesBefore });
     }
-    return done("following", `It runs its plan ${running}.`, { plan: planMeta, pipesAfter: base.pipesBefore });
+    if (!carried || keptByBriefUnits.length === 0) return done("following", `It runs its plan ${running}.`, { plan: planMeta, pipesAfter: base.pipesBefore });
   }
 
   const resolved = await (deps.resolve ?? resolveSalesFunnelPlan)(shadow.funnelId, { orgId: row.orgId, userId, runId, brandId: row.brandId, offerId }, { target: row.target });
