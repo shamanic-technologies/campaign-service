@@ -4,9 +4,8 @@ import { db } from "../db/index.js";
 import { campaigns, planFollowingDays, salesFunnelCampaigns, salesFunnelPlanChanges, type Campaign, type SalesFunnelCampaign } from "../db/schema.js";
 import { applySalesFunnelPlanChange, type PlanUnitDecision, type SalesFunnelUnitBirth } from "./campaign-status-history.js";
 import { acquisitionChannelForFeature, derivedCampaignName } from "./campaign-identity.js";
-import { sameLeg } from "./leg-identity.js";
+import { legKeySpellings, sameLeg } from "./leg-identity.js";
 import { ensureSourcesOnStart } from "./source-campaign-store.js";
-import { briefNamedUnits, type BriefGuardDeps } from "./sales-funnel-plan-brief.js";
 import { resolveSalesFunnelPlan, type SalesFunnelUnitPlan } from "./startable-pair.js";
 import { isTargetOnlyCampaign } from "./target-only-campaign.js";
 
@@ -36,8 +35,9 @@ import { isTargetOnlyCampaign } from "./target-only-campaign.js";
  *   - No plan, an unreadable or failed plan, a plan we cannot run: nothing changes, loud log, red on Monitoring
  *     (`GET /internal/ops/plan-following`). Never stops, never runs uncapped. Never an email.
  *   - Every change applied is recorded (`sales_funnel_plan_changes`: when, from which funnel to which, each unit).
- *   - A channel the BRIEF names is never drained by a plan (lib/sales-funnel-plan-brief.ts): kept running, red
- *     `plan_contradicts_brief` with the plan's id (until a plan keeps it).
+ *   - A pipe the campaign was LAUNCHED on whose channel the BRIEF names is never drained by a plan: kept running, red
+ *     `plan_contradicts_brief` with the plan's id (until a plan keeps it). Which pipes those are is features-service's
+ *     ONE judgment, served on the plan (`plan.launchedNamedPipes`, MON-PLAN-FOLLOWING-1122), never asked again here.
  *   - SWITCHED OFF (PLAN-SWITCH-OFF-1029): the campaign goes back to its OWN funnel (`sales_funnel_id`) through the same
  *     reconciliation: its funnel's units run again (out of draining, back on its funnel), units the plan bore that its
  *     funnel does not name drain (never stopped: they owe follow-ups), `running_sales_funnel_id` = its funnel, a
@@ -93,10 +93,13 @@ const FactoryShadowBody = z
     status: z.string(),
     failure: z.string().nullable().optional(),
     computedAt: z.string(),
+    pipeVerdicts: z.array(z.object({ pipeId: z.string(), channelName: z.string() }).passthrough()).optional(),
     plan: z
       .object({
         shadow: PlanLine.nullable(),
         shadowUnavailableReason: z.string().nullable().optional(),
+        /** Pipes (`<channel>|<leg>`) of the funnel the campaign was launched on whose channel its brief names. */
+        launchedNamedPipes: z.array(z.string()).optional(),
       })
       .passthrough()
       .nullable(),
@@ -186,7 +189,30 @@ export interface PlanCheckResult {
   units: Array<{ campaignId: string | null; pipeId: string; action: string }> | null;
 }
 
-export interface PlanDeps extends BriefGuardDeps {
+/**
+ * PURE: the units a plan would drain that it must keep (MON-PLAN-FOLLOWING-1122): a unit on a pipe the campaign was
+ * LAUNCHED on whose channel the brief names (features-service's `launchedNamedPipes`, the same judgment its plan keeps
+ * them by). A unit a previous plan added is the planner's own choice: draining it never contradicts the brief. Prod
+ * 2026-11-22: a second judge here read « Cold email pitching the offer only » as naming cold email (p 0.54 to 0.90) and
+ * kept a stale plan's cold email units running beside the plan, red for 11 days.
+ */
+export function launchedNamedUnits<U extends Pick<Campaign, "id" | "featureSlug" | "legKey" | "status">>(
+  wouldDrain: readonly U[],
+  launchedNamedPipes: readonly string[],
+  channelNameOf: (pipeId: string) => string | undefined = () => undefined,
+): Array<{ unitId: string; featureSlug: string; channelName: string }> {
+  const named = new Set(launchedNamedPipes);
+  const keep: Array<{ unitId: string; featureSlug: string; channelName: string }> = [];
+  for (const u of wouldDrain) {
+    if (u.status !== "ongoing" || !u.featureSlug || !u.legKey) continue;
+    // The unit's pipe id in each spelling of its leg (an outbound leg has two), matched verbatim, never parsed.
+    const id = legKeySpellings(u.featureSlug, u.legKey).map((leg) => `${u.featureSlug}|${leg}`).find((x) => named.has(x));
+    if (id) keep.push({ unitId: u.id, featureSlug: u.featureSlug, channelName: channelNameOf(id) ?? u.featureSlug });
+  }
+  return keep;
+}
+
+export interface PlanDeps {
   plan?: typeof fetchFactoryPlan;
   resolve?: typeof resolveSalesFunnelPlan;
 }
@@ -270,15 +296,17 @@ export async function checkSalesFunnelCampaignPlan(
     return done("following", `Dry run: it would move from ${running} to ${shadow.funnelId}.`, { plan: planMeta, pipesAfter, units: preview });
   }
 
-  // The backstop: a running unit the plan would drain whose channel the brief names is kept running.
+  // The backstop: a running unit on a launched pipe the brief names (features-service's judgment) is kept running.
   const drainIds = new Set(decisions.filter((d) => d.action === "draining").map((d) => d.unitId));
-  const guard = await briefNamedUnits(row, units.filter((u) => drainIds.has(u.id)), deps);
-  if (!guard.ok) {
-    return done("apply_failed", `Its plan ${shadow.funnelId} was not applied: ${guard.detail}`, { plan: planMeta, pipesAfter, units: preview });
-  }
-  const keptByBrief = new Set(guard.keep.map((k) => k.unitId));
-  const contradiction = guard.keep.length
-    ? `Its plan ${shadow.funnelId} leaves out ${[...new Set(guard.keep.map((k) => k.channelName))].join(", ")}, which its brief names: kept running.`
+  const names = new Map((read.plan.pipeVerdicts ?? []).map((v) => [v.pipeId, v.channelName]));
+  const keep = launchedNamedUnits(
+    units.filter((u) => drainIds.has(u.id)),
+    read.plan.plan?.launchedNamedPipes ?? [],
+    (pipeId) => names.get(pipeId),
+  );
+  const keptByBrief = new Set(keep.map((k) => k.unitId));
+  const contradiction = keep.length
+    ? `Its plan ${shadow.funnelId} leaves out ${[...new Set(keep.map((k) => k.channelName))].join(", ")}, which its brief names: kept running.`
     : null;
 
   try {
