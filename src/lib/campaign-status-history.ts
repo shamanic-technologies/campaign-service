@@ -680,8 +680,8 @@ export interface PlanUnitDecision {
   pipeId: string;
   /** kept: its pipe is in the plan (moves to the plan's funnel, so its play is the plan's); draining: its pipe left
    *  the plan, it stays as it is (ON keeps answering people it owes, takes no new people: lib/sales-funnel-plan.ts);
-   *  kept_by_brief: its pipe left the plan but the campaign's brief names its channel, so it is left untouched, running
-   *  (lib/sales-funnel-plan-brief.ts), only recorded. */
+   *  kept_by_brief: its pipe left the plan but the campaign was launched on it and its brief names its channel
+   *  (features-service's `launchedNamedPipes`), so it is left untouched, running, only recorded. */
   action: "kept" | "draining" | "kept_by_brief";
   /** The trigger it runs on under the plan's funnel (kept units only). */
   runsOnTriggerId?: string | null;

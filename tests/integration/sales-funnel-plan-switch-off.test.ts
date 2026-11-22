@@ -24,7 +24,6 @@ import { insertSalesFunnelCampaignWithUnits } from "../../src/lib/campaign-statu
 import { acquisitionChannelForFeature } from "../../src/lib/campaign-identity.js";
 import { checkSalesFunnelCampaignPlan, runPlanFollowerPass, switchOffPlan, type PlanCheck, type PlanDeps } from "../../src/lib/sales-funnel-plan.js";
 import type { SalesFunnelUnitPlan } from "../../src/lib/startable-pair.js";
-import type { ChannelCatalogueRead } from "../../src/lib/channel-operator-client.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "b645207b-0000-4000-8000-0000000000d1";
@@ -83,29 +82,22 @@ async function bornCampaign(opts: { brief?: string } = {}) {
   return { row, units: born.units };
 }
 
-const catalogue = async (): Promise<ChannelCatalogueRead> => ({
-  ok: true,
-  operatorBySlug: new Map(),
-  legsBySlug: new Map(),
-  legs: [],
-  stepKeys: new Set(),
-  nameBySlug: new Map([
-    [SEND, "Email Sending"],
-    [MEETING, "AI Meeting Booking"],
-    [ATTEND, "Your team: meeting attendance"],
-  ]),
-});
+// features-service's ONE judgment: the launched pipes whose channel the brief names (MON-PLAN-FOLLOWING-1122).
+const NAMED_PIPES = [`${SEND}|start_to_conversation`, `${MEETING}|conversation_to_meeting_booked`];
 
-function deps(opts: { judge?: PlanDeps["judgeBrief"] } = {}): PlanDeps {
+function deps(opts: { launchedNamedPipes?: string[] } = {}): PlanDeps {
   return {
     plan: vi.fn(async () => ({
       ok: true as const,
-      plan: { status: "ok", failure: null, computedAt: "2026-10-29T09:58:14.000Z", plan: { shadow: { funnelId: PLAN, legs: [] } } },
+      plan: {
+        status: "ok",
+        failure: null,
+        computedAt: "2026-10-29T09:58:14.000Z",
+        pipeVerdicts: [{ pipeId: `${MEETING}|conversation_to_meeting_booked`, channelName: "AI Meeting Booking" }],
+        plan: { shadow: { funnelId: PLAN, legs: [] }, launchedNamedPipes: opts.launchedNamedPipes ?? [] },
+      },
     })),
     resolve: vi.fn(async (salesFunnelId: string) => ({ ok: true as const, plan: { salesFunnelId, salesFunnelName: "x", units: unitsFor(salesFunnelId) } })),
-    catalogue,
-    // The brief names Email Sending and AI Meeting Booking, not the your-team pipes.
-    judgeBrief: opts.judge ?? vi.fn(async (_unitId: string, input: { channelSlug: string }) => (input.channelSlug === MEETING || input.channelSlug === SEND ? 0.95 : 0.05)),
   };
 }
 
@@ -180,14 +172,14 @@ describe("switching a plan off puts the campaign back on its own funnel (PLAN-SW
   });
 });
 
-describe("a plan never drains a channel the brief names (PLAN-SWITCH-OFF-1029)", () => {
+describe("a plan never drains a launched pipe the brief names (PLAN-SWITCH-OFF-1029, MON-PLAN-FOLLOWING-1122)", () => {
   beforeEach(async () => {
     await cleanTestData();
   });
 
   it("the named channel keeps running, the rest of the plan applies, red plan_contradicts_brief with the plan's id, and it stays red", async () => {
     const { row } = await bornCampaign({ brief: BRIEF });
-    const d = deps();
+    const d = deps({ launchedNamedPipes: NAMED_PIPES });
     // The pass applies it and stores the verdict.
     await runPlanFollowerPass(new Date(), d);
     const check = (await rowOf(row.id)).planCheck as PlanCheck;
@@ -200,35 +192,19 @@ describe("a plan never drains a channel the brief names (PLAN-SWITCH-OFF-1029)",
     expect(by(ATTEND).planRole).toBe("draining");
     expect(by(SEND).salesFunnelId).toBe(PLAN);
     expect(by(REPLY).planRole).toBeNull();
-    // Only the channels a drain was proposed for were judged.
-    expect((d.judgeBrief as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1].channelSlug).sort()).toEqual([MEETING, ATTEND]);
 
     const [change] = await db.select().from(salesFunnelPlanChanges).where(eq(salesFunnelPlanChanges.salesFunnelCampaignId, row.id));
     expect((change.units as Array<{ pipeId: string; action: string }>).find((u) => u.pipeId.startsWith(MEETING))!.action).toBe("kept_by_brief");
 
-    // The next pass: the plan still leaves it out, still red (and never re-judged).
+    // The next pass: the plan still leaves it out, still red.
     await runPlanFollowerPass(new Date(), d);
     expect((await rowOf(row.id)).planCheck).toMatchObject({ state: "plan_contradicts_brief", planSalesFunnelId: PLAN });
-    expect((d.judgeBrief as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
   });
 
-  it("the brief unjudgeable: nothing applied, red", async () => {
-    const { row } = await bornCampaign({ brief: BRIEF });
-    const before = await unitsOf(row.id);
-    const result = await checkSalesFunnelCampaignPlan(row, { apply: true }, deps({ judge: vi.fn(async () => { throw new Error("chat-service 503"); }) }));
-    expect(result.check.state).toBe("apply_failed");
-    expect(result.check.detail).toContain("chat-service 503");
-    const after = await unitsOf(row.id);
-    expect(after.map((u) => [u.id, u.planRole, u.salesFunnelId]).sort()).toEqual(before.map((u) => [u.id, u.planRole, u.salesFunnelId]).sort());
-    expect((await rowOf(row.id)).runningSalesFunnelId).toBeNull();
-  });
-
-  it("no brief: nothing judged, the plan drains as before", async () => {
+  it("no launched pipe named (no brief, or a plan stored before): the plan drains as before", async () => {
     const { row } = await bornCampaign();
-    const d = deps();
-    const result = await checkSalesFunnelCampaignPlan(row, { apply: true }, d);
+    const result = await checkSalesFunnelCampaignPlan(row, { apply: true }, deps());
     expect(result.check.state).toBe("applied");
-    expect(d.judgeBrief).not.toHaveBeenCalled();
     expect((await unitsOf(row.id)).find((u) => u.featureSlug === MEETING)!.planRole).toBe("draining");
   });
 });
