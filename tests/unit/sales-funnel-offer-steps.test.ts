@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchOfferSteps, missingOfferSteps } from "../../src/lib/sales-funnel-offer-steps.js";
+import { fetchOfferSteps, missingOfferSteps, stepsWalkedBeforeTarget } from "../../src/lib/sales-funnel-offer-steps.js";
 
 const identity = { orgId: "org-1", userId: "user-1", runId: "run-1" };
 
@@ -41,5 +41,23 @@ describe("missingOfferSteps", () => {
     expect(missingOfferSteps(["lead_found", "website_visit", "website_visit", "purchase", "purchase", "paid_client"], ["website_visit"]))
       .toEqual(["purchase"]);
     expect(missingOfferSteps(["website_visit", "meeting_booked"], ["meeting_booked", "website_visit"])).toEqual([]);
+  });
+});
+
+describe("stepsWalkedBeforeTarget (GS-STEP11-NO-CAMPAIGN-1122)", () => {
+  const meetings = [
+    { fromStepKey: null, toStepKey: "lead_found" },
+    { fromStepKey: "lead_found", toStepKey: "conversation" },
+    { fromStepKey: "conversation", toStepKey: "meeting_booked" },
+    { fromStepKey: "meeting_booked", toStepKey: "meeting_attended" },
+    { fromStepKey: "meeting_attended", toStepKey: "paid_client" },
+  ];
+  it("keeps only the steps walked before the Target (the Target and what follows are the client's own sales)", () => {
+    expect(stepsWalkedBeforeTarget(meetings, "meeting_booked")).toEqual(["lead_found", "lead_found", "conversation", "conversation"]);
+  });
+  it("walks every step with no Target, or a Target the funnel never reaches", () => {
+    const all = ["lead_found", "lead_found", "conversation", "conversation", "meeting_booked", "meeting_booked", "meeting_attended", "meeting_attended", "paid_client"];
+    expect(stepsWalkedBeforeTarget(meetings, null)).toEqual(all);
+    expect(stepsWalkedBeforeTarget(meetings, "purchase")).toEqual(all);
   });
 });
