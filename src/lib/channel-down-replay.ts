@@ -167,8 +167,7 @@ export async function judgeRefusals(now: Date = new Date(), limit = JUDGE_LIMIT)
 
 /**
  * One Jev call under a run of the campaign's own tree (opened, then closed completed / failed). The channel-down
- * question by default; another judgment of that campaign's production names its own question + task
- * (lib/sales-funnel-plan-brief.ts).
+ * question by default; another judgment of that campaign's production names its own question + task.
  */
 export async function judgeUnderCampaignRun(
   campaignId: string,
