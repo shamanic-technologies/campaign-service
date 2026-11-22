@@ -7,7 +7,7 @@ import { fetchStartableWorkflowSlug } from "./startable-workflow-client.js";
 import { fetchLegSeedWorkflowSlug } from "./leg-seed-workflow.js";
 import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
 import { fetchPipe, fetchSalesFunnel, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
-import { fetchOfferSteps, missingOfferSteps } from "./sales-funnel-offer-steps.js";
+import { fetchOfferSteps, missingOfferSteps, stepsWalkedBeforeTarget } from "./sales-funnel-offer-steps.js";
 import { unitRunsOnTrigger } from "./sales-funnel-head-trigger.js";
 import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "./engine-dispatch.js";
 
@@ -262,6 +262,9 @@ export async function resolveSalesFunnelPlan(
   salesFunnelId: string,
   identity: IdentityHeaders & { userId: string; runId: string; brandId: string; offerId: string },
   deps: {
+    /** The Target the campaign is aimed at (stated, or its own stored one): only the steps walked BEFORE it must be the
+     * offer's (GS-STEP11-NO-CAMPAIGN-1122). Absent / null = every step of the funnel. */
+    target?: string | null;
     offerSteps?: typeof fetchOfferSteps;
     salesFunnel?: typeof fetchSalesFunnel;
     pipe?: typeof fetchPipe;
@@ -315,7 +318,7 @@ export async function resolveSalesFunnelPlan(
     return refuseLaunch(502, "offer_steps_unavailable", "We couldn't read the steps of this offer's business just now. Please try again in a minute.");
   }
   if (offerSteps.stated) {
-    const salesFunnelSteps: string[] = [];
+    const walked: Array<{ fromStepKey: string | null; toStepKey: string | null }> = [];
     const unpublished: string[] = [];
     for (const leg of read.value.legs) {
       const published = catalogue.legs.find((l) => l.legKey === leg.legKey);
@@ -323,13 +326,15 @@ export async function resolveSalesFunnelPlan(
         unpublished.push(leg.legKey);
         continue;
       }
-      for (const step of [published.fromStepKey, published.toStepKey]) if (step) salesFunnelSteps.push(step);
+      walked.push({ fromStepKey: published.fromStepKey ?? null, toStepKey: published.toStepKey ?? null });
     }
     if (unpublished.length > 0) {
       console.error(`[campaign-service] Sales funnel ${salesFunnelId}: legs ${unpublished.join(", ")} not in the channel catalogue — steps unknown, not launched`);
       return refuseLaunch(502, "sales_funnel_steps_unknown", `We couldn't tell which steps the sales funnel "${read.value.name}" goes through. Please try again in a minute.`);
     }
-    const missing = missingOfferSteps(salesFunnelSteps, offerSteps.steps);
+    // The campaign MAKES its Target: the steps after it are the client's own sales, never a precondition
+    // (GS-STEP11-NO-CAMPAIGN-1122); no Target known = every step the funnel walks.
+    const missing = missingOfferSteps(stepsWalkedBeforeTarget(walked, deps.target ?? null), offerSteps.steps);
     if (missing.length > 0) {
       const one = missing.length === 1;
       console.warn(`[campaign-service] Sales funnel ${salesFunnelId} not launched for offer ${identity.offerId}: its business has not stated ${missing.join(", ")}`);
