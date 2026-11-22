@@ -188,7 +188,8 @@ describe("sales funnel campaigns (brand x offer x sales funnel, one unit per pip
       offerSteps: ["conversation", "website_visit"],
     });
     // The plan is asked for THIS offer's steps.
-    expect(mockPlan).toHaveBeenCalledWith(EPIPHANY, expect.objectContaining({ orgId: ORG, brandId: BRAND, offerId: OFFER }));
+    // No Target stated = the whole-funnel check (GS-STEP11-NO-CAMPAIGN-1122).
+    expect(mockPlan).toHaveBeenCalledWith(EPIPHANY, expect.objectContaining({ orgId: ORG, brandId: BRAND, offerId: OFFER }), { target: null });
     expect(await db.select().from(salesFunnelCampaigns).where(eq(salesFunnelCampaigns.orgId, ORG))).toEqual([]);
     expect(await db.select().from(campaigns).where(eq(campaigns.orgId, ORG))).toEqual([]);
 
