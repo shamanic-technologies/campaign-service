@@ -376,7 +376,7 @@ router.post(
           runId: req.runId!,
           brandId,
           offerId: offerId!, // stated: required with a sales funnel (checked above)
-        });
+        }, { target: target ?? null });
         if (!resolved.ok) {
           const { status: httpStatus, code, message, missingSteps, offerSteps, pipeId, notRunnableReason, notRunnableDetail } = resolved.refusal;
           console.warn(
@@ -755,7 +755,7 @@ router.post("/sales-funnel-campaigns/:id/entries", requireApiKey, serviceAuth, a
       runId: req.runId!,
       brandId: parent.brandId,
       offerId: parent.offerId,
-    });
+    }, { target: parent.target });
     if (!resolved.ok) {
       const { status: httpStatus, code, message } = resolved.refusal;
       return res.status(httpStatus).json({ error: message, reason: code });

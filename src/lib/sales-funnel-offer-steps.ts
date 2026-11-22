@@ -76,3 +76,26 @@ export function missingOfferSteps(salesFunnelSteps: readonly string[], statedSte
   }
   return missing;
 }
+
+/**
+ * THE STEPS A CAMPAIGN NEEDS THE OFFER'S BUSINESS TO HAVE (GS-STEP11-NO-CAMPAIGN-1122, same rule as features-service's
+ * per-offer read with `?target=`): a campaign MAKES its Target; the steps its funnel walks AFTER the Target are the
+ * client's own sales, never a precondition, and the Target itself is what we produce. So only the steps walked BEFORE
+ * the Target count: every step of the legs up to the first leg reaching the Target, that leg's `toStep` (the Target)
+ * excluded. A funnel that never reaches its Target, or no Target known, = every step it walks (the whole-funnel check:
+ * Doc Dinners' direct-purchase funnel stays refused). `legs` are the funnel's legs IN FUNNEL ORDER with the catalogue's
+ * step keys (null = Start), read never derived.
+ */
+export function stepsWalkedBeforeTarget(
+  legs: ReadonlyArray<{ fromStepKey: string | null; toStepKey: string | null }>,
+  target: string | null,
+): string[] {
+  const steps: string[] = [];
+  const reachesTarget = target !== null && legs.some((l) => l.toStepKey === target);
+  for (const leg of legs) {
+    if (leg.fromStepKey) steps.push(leg.fromStepKey);
+    if (reachesTarget && leg.toStepKey === target) return steps;
+    if (leg.toStepKey) steps.push(leg.toStepKey);
+  }
+  return steps;
+}

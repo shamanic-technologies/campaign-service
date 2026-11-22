@@ -535,6 +535,8 @@ describe("resolveSalesFunnelPlan — the steps the offer's business has (owner 2
     { legKey: "meeting_attended_to_paid_client", fromStepKey: "meeting_attended", toStepKey: "paid_client" },
     { legKey: "start_to_lead_found", fromStepKey: null, toStepKey: "lead_found" },
     { legKey: "lead_found_to_website_visit", fromStepKey: "lead_found", toStepKey: "website_visit" },
+    { legKey: "lead_found_to_conversation", fromStepKey: "lead_found", toStepKey: "conversation" },
+    { legKey: "conversation_to_meeting_booked", fromStepKey: "conversation", toStepKey: "meeting_booked" },
   ];
   const LI = "organic-linkedin-publishing";
   const catalogue = {
@@ -542,7 +544,7 @@ describe("resolveSalesFunnelPlan — the steps the offer's business has (owner 2
     legsBySlug: new Map([[LI, new Set(["start_to_website_visit"])], ["your-team", new Set(legs.map((l) => l.legKey))]]),
     operatorBySlug: new Map([[LI, "platform"], ["your-team", "customer"]]),
     legs,
-    stepKeys: new Set(["website_visit", "purchase", "meeting_booked", "meeting_attended", "paid_client", "lead_found"]),
+    stepKeys: new Set(["website_visit", "purchase", "meeting_booked", "meeting_attended", "paid_client", "lead_found", "conversation"]),
   } as unknown as ChannelCatalogueRead;
   // Every leg is one pipe here (the entry by LinkedIn, the rest by the customer's own team).
   const funnelOf = (name: string, legKeys: string[]) => ({
@@ -603,6 +605,30 @@ describe("resolveSalesFunnelPlan — the steps the offer's business has (owner 2
       .toMatchObject({ ok: false, refusal: { status: 502, code: "offer_steps_unavailable" } });
     expect(await resolveSalesFunnelPlan("f", identity, deps(PURCHASE, { ok: false, notFound: true, detail: "HTTP 404" })))
       .toMatchObject({ ok: false, refusal: { status: 400, code: "offer_not_found" } });
+  });
+
+  // GS-STEP11-NO-CAMPAIGN-1122: the campaign MAKES its Target; only the steps walked BEFORE it must be the offer's.
+  const SIGNUP_SAAS = ["conversation", "website_visit", "signup"];
+  const MEETINGS_BOOKED = ["lead_found_to_conversation", "conversation_to_meeting_booked", "meeting_booked_to_meeting_attended", "meeting_attended_to_paid_client"];
+
+  it("launches a meetings-booked funnel aimed at meeting_booked for an offer without meeting_booked / meeting_attended", async () => {
+    const res = await resolveSalesFunnelPlan("f", identity, { ...deps(MEETINGS_BOOKED, { ok: true, stated: true, steps: SIGNUP_SAAS }), target: "meeting_booked" });
+    expect(res.ok).toBe(true);
+  });
+
+  it("still refuses that funnel with no Target known, and a step BEFORE the Target the offer lacks", async () => {
+    expect(await resolveSalesFunnelPlan("f", identity, deps(MEETINGS_BOOKED, { ok: true, stated: true, steps: SIGNUP_SAAS })))
+      .toMatchObject({ refusal: { status: 409, code: "offer_lacks_steps", missingSteps: ["meeting_booked", "meeting_attended"] } });
+    // Aimed at meeting_booked, but the offer has no conversation: a step before the Target, never waived.
+    expect(await resolveSalesFunnelPlan("f", identity, { ...deps(MEETINGS_BOOKED, { ok: true, stated: true, steps: ["website_visit"] }), target: "meeting_booked" }))
+      .toMatchObject({ refusal: { status: 409, code: "offer_lacks_steps", missingSteps: ["conversation"] } });
+  });
+
+  it("still refuses a direct-purchase funnel missing purchase BEFORE its Target (Doc Dinners), and one that never reaches its Target", async () => {
+    expect(await resolveSalesFunnelPlan("f", identity, { ...deps(PURCHASE, { ok: true, stated: true, steps: SIGNUP_SAAS }), target: "paid_client" }))
+      .toMatchObject({ refusal: { status: 409, code: "offer_lacks_steps", missingSteps: ["purchase"] } });
+    expect(await resolveSalesFunnelPlan("f", identity, { ...deps(PURCHASE, { ok: true, stated: true, steps: SIGNUP_SAAS }), target: "meeting_booked" }))
+      .toMatchObject({ refusal: { status: 409, code: "offer_lacks_steps", missingSteps: ["purchase"] } });
   });
 
   it("refuses rather than guesses when a leg of the funnel is not in the catalogue (steps unknown)", async () => {
