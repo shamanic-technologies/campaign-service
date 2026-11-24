@@ -256,7 +256,9 @@ export const CampaignMaxVolumeSchema = z.object({
 }).strict().openapi("CampaignMaxVolume", {
   description:
     "The volume this campaign aims at per period (billing's max volume on this campaign: it stops for the period once reached). " +
-    "What it counts (e.g. meetings booked for a campaign targeting them) is billing's, served on its caps read as `unit`. null clears it.",
+    "What it counts (e.g. meetings booked for a campaign targeting them) is billing's, served on its caps read as `unit`. null clears it. " +
+    "A max volume always comes with a max budget in $ (`maxBudget`) beside it: a volume with no max budget is refused 400 " +
+    "`max_budget_required_with_max_volume`, nothing written. A max budget alone is fine.",
 });
 
 /**
@@ -306,6 +308,7 @@ export const CreateSalesFunnelCampaignBody = z.object({
   followsPlan: z.boolean().optional(),
   // OPTIONAL (ONE-CAMPAIGN-VOLUME-1122): the campaign's max budget and the volume it aims at, per period, written at
   // billing on THIS campaign in the same request (a new campaign or the one handed back). Omitted = untouched.
+  // VOL-NEEDS-USD-1124: a stated maxVolume REQUIRES a stated maxBudget (400 max_budget_required_with_max_volume).
   maxBudget: CampaignMaxBudgetSchema.nullable().optional(),
   maxVolume: CampaignMaxVolumeSchema.nullable().optional(),
 }).strict().openapi("CreateSalesFunnelCampaignBody");
@@ -324,6 +327,8 @@ export const UpdateSalesFunnelCampaignBody = z.object({
   // false = keep the funnel it runs now, fixed.
   followsPlan: z.boolean().optional(),
   // Its max budget / the volume it aims at, per period (billing's caps on THIS campaign; null clears, omitted keeps).
+  // VOL-NEEDS-USD-1124: the caps it ends with never hold a max volume without a max budget (400
+  // max_budget_required_with_max_volume, nothing written): clearing the max budget means clearing the volume too.
   maxBudget: CampaignMaxBudgetSchema.nullable().optional(),
   maxVolume: CampaignMaxVolumeSchema.nullable().optional(),
 }).strict().refine(

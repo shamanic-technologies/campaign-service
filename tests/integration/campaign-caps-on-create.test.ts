@@ -154,9 +154,55 @@ describe("ONE-CAMPAIGN-VOLUME-1122: one campaign to booked meetings, its volume 
 
   it("a half it never had on its own stays empty (a funnel-wide cap is never copied onto the campaign)", async () => {
     const fc = (await create().expect(201)).body.salesFunnelCampaign;
-    ownCaps = { capScope: "sales_funnel", maxBudget: { amountCents: "99999", period: "monthly" }, maxVolume: null };
-    await as(request(app).patch(`/sales-funnel-campaigns/${fc.id}`)).send({ maxVolume: { count: 5, period: "monthly" } }).expect(200);
-    expect(puts().at(-1)!.body).toEqual({ maxBudget: null, maxVolume: { count: 5, period: "monthly" } });
+    ownCaps = { capScope: "sales_funnel", maxBudget: null, maxVolume: { count: 3, period: "daily" } };
+    await as(request(app).patch(`/sales-funnel-campaigns/${fc.id}`)).send({ maxBudget: { amountCents: 500, period: "monthly" } }).expect(200);
+    expect(puts().at(-1)!.body).toEqual({ maxBudget: { amountCents: 500, period: "monthly" }, maxVolume: null });
+  });
+
+  describe("VOL-NEEDS-USD-1124: a max volume never stands without a max budget in $", () => {
+    it("a create stating a volume and no max budget is refused by name, nothing born, billing asked nothing", async () => {
+      const res = await create({ maxVolume: { count: 1, period: "daily" } }).expect(400);
+      expect(res.body.reason).toBe("max_budget_required_with_max_volume");
+      expect(billingCalls).toEqual([]);
+      expect(await db.select().from(campaigns)).toHaveLength(0);
+    });
+
+    it("a create stating a volume with maxBudget null is refused too", async () => {
+      const res = await create({ maxVolume: { count: 1, period: "daily" }, maxBudget: null }).expect(400);
+      expect(res.body.reason).toBe("max_budget_required_with_max_volume");
+      expect(billingCalls).toEqual([]);
+    });
+
+    it("a max budget alone stays valid", async () => {
+      await create({ maxBudget: { amountCents: 1000, period: "daily" } }).expect(201);
+      expect(puts()[0].body).toEqual({ maxBudget: { amountCents: 1000, period: "daily" }, maxVolume: null });
+    });
+
+    it("a PATCH adding a volume to a campaign with no own max budget is refused, nothing written", async () => {
+      const fc = (await create().expect(201)).body.salesFunnelCampaign;
+      ownCaps = { capScope: "sales_funnel", maxBudget: { amountCents: "99999", period: "monthly" }, maxVolume: null };
+      const res = await as(request(app).patch(`/sales-funnel-campaigns/${fc.id}`)).send({ maxVolume: { count: 5, period: "monthly" }, brief: "Other words" }).expect(400);
+      expect(res.body.reason).toBe("max_budget_required_with_max_volume");
+      expect(res.body.salesFunnelCampaignId).toBe(fc.id);
+      expect(puts()).toEqual([]);
+      const read = await as(request(app).get(`/sales-funnel-campaigns/${fc.id}`)).expect(200);
+      expect(read.body.salesFunnelCampaign.brief).toBe(BRIEF);
+    });
+
+    it("a PATCH clearing the max budget while a volume stays is refused", async () => {
+      const fc = (await create({ maxVolume: { count: 10, period: "weekly" }, maxBudget: { amountCents: 26000, period: "weekly" } }).expect(201)).body.salesFunnelCampaign;
+      billingCalls.length = 0;
+      ownCaps = { capScope: "sales_funnel_campaign", maxBudget: { amountCents: "26000", period: "weekly" }, maxVolume: { count: 10, period: "weekly" } };
+      const res = await as(request(app).patch(`/sales-funnel-campaigns/${fc.id}`)).send({ maxBudget: null }).expect(400);
+      expect(res.body.reason).toBe("max_budget_required_with_max_volume");
+      expect(puts()).toEqual([]);
+    });
+
+    it("clearing both halves is fine", async () => {
+      const fc = (await create({ maxVolume: { count: 10, period: "weekly" }, maxBudget: { amountCents: 26000, period: "weekly" } }).expect(201)).body.salesFunnelCampaign;
+      await as(request(app).patch(`/sales-funnel-campaigns/${fc.id}`)).send({ maxBudget: null, maxVolume: null }).expect(200);
+      expect(puts().at(-1)!.body).toEqual({ maxBudget: null, maxVolume: null });
+    });
   });
 
   it("billing refusing = 502 naming the campaign; the same create again hands it back and writes the caps", async () => {
@@ -174,7 +220,7 @@ describe("ONE-CAMPAIGN-VOLUME-1122: one campaign to booked meetings, its volume 
   });
 
   it("refuses a malformed cap by name, nothing written", async () => {
-    const res = await create({ maxVolume: { count: -1, period: "weekly" } }).expect(400);
+    const res = await create({ maxVolume: { count: -1, period: "weekly" }, maxBudget: { amountCents: 100, period: "weekly" } }).expect(400);
     expect(JSON.stringify(res.body)).toContain("maxVolume.count");
     expect(billingCalls).toEqual([]);
     expect(await db.select().from(campaigns)).toHaveLength(0);

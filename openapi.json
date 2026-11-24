@@ -864,7 +864,7 @@
           "period"
         ],
         "additionalProperties": false,
-        "description": "The volume this campaign aims at per period (billing's max volume on this campaign: it stops for the period once reached). What it counts (e.g. meetings booked for a campaign targeting them) is billing's, served on its caps read as `unit`. null clears it."
+        "description": "The volume this campaign aims at per period (billing's max volume on this campaign: it stops for the period once reached). What it counts (e.g. meetings booked for a campaign targeting them) is billing's, served on its caps read as `unit`. null clears it. A max volume always comes with a max budget in $ (`maxBudget`) beside it: a volume with no max budget is refused 400 `max_budget_required_with_max_volume`, nothing written. A max budget alone is fine."
       },
       "OpenOnDemandRunResponse": {
         "type": "object",

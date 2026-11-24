@@ -44,7 +44,14 @@ import { SALES_FUNNEL_CAMPAIGN_FIELD_LABELS, describeChanges, reportCampaignActi
 import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sales-funnel-target.js";
 import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "../lib/engine-dispatch.js";
 import { isTargetOnlyCampaign, targetLabelOf, targetOnlyUnitBirth } from "../lib/target-only-campaign.js";
-import { statesCaps, writeSalesFunnelCampaignCaps, type StatedCampaignCaps } from "../lib/sales-funnel-campaign-caps.js";
+import {
+  MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME,
+  MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME_ERROR,
+  statesCaps,
+  volumeWithoutBudget,
+  writeSalesFunnelCampaignCaps,
+  type StatedCampaignCaps,
+} from "../lib/sales-funnel-campaign-caps.js";
 import { campaignProgress, nextRunOf } from "../lib/campaign-first-run.js";
 import { appendSettingChanges, readSettingChanges, settingChangeRowsOf, SETTING_CHANGES_RECORDED_SINCE } from "../lib/sales-funnel-setting-changes.js";
 import { dryRunPlans, readPlanChanges, readPlanFollowing, runPlanCheckFor, runPlanFollowerPass, runSwitchOffFor } from "../lib/sales-funnel-plan.js";
@@ -180,6 +187,10 @@ async function writeStatedCaps(
   if (!statesCaps(stated)) return {};
   const written = await writeSalesFunnelCampaignCaps(row, stated, { userId: req.userId ?? null, runId: req.runId ?? null });
   if (written.ok) return { caps: written.caps };
+  if (written.refused) {
+    res.status(400).json({ error: written.detail, reason: written.refused, salesFunnelCampaignId: row.id });
+    return null;
+  }
   console.error(`[campaign-service] Caps of sales funnel campaign ${row.id} not written at billing: ${written.detail}`);
   res.status(502).json({
     error: "We couldn't save this campaign's volume and max budget just now. Please try again in a minute.",
@@ -212,6 +223,10 @@ router.post(
       const { brandId, offerId: statedOfferId, salesFunnelId: statedFunnelId, status, people: namedInput, githubIssue: issueInput, target, brief, followsPlan, maxBudget, maxVolume } =
         CreateSalesFunnelCampaignBody.parse(req.body);
       const statedCaps: StatedCampaignCaps = { maxBudget, maxVolume };
+      // VOL-NEEDS-USD-1124: a max volume is stated with its max budget in $, in the same create (nothing written else).
+      if (volumeWithoutBudget(statedCaps)) {
+        return res.status(400).json({ error: MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME_ERROR, reason: MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME });
+      }
       // MIGRATE-1105 S8 (lib/target-only-campaign.ts): no sales funnel = the campaign is its TARGET alone, made by that
       // outcome's Engine. It follows no plan and only prospects (one unit from Start), so it names nobody and waits on
       // no issue. Its funnel id reads its target (billing's caps and its identity are keyed on it).

@@ -8,6 +8,12 @@
  *
  * Both halves are one billing statement (its body requires both keys): a half the caller leaves out keeps the
  * campaign's OWN cap billing holds now (a funnel-wide cap is never copied onto the campaign), else none.
+ *
+ * VOL-NEEDS-USD-1124 (owner 2026-11-24, « ajoute aussi un max en $ »; replaces 2026-10-11 « max $ ET/OU max volume »
+ * on the volume side): a max volume never stands alone. Every write whose resulting caps hold a max volume holds a max
+ * budget in $ too, else it is refused by name (`max_budget_required_with_max_volume`, the code billing refuses with),
+ * nothing written. A max budget alone stays valid. Why: "Threads Posts" had only a volume billing could not count, its
+ * lead sourcing spent $8.12 in one morning with nothing to stop it. Never a default $ invented here: the caller states it.
  */
 import type { SalesFunnelCampaign } from "../db/schema.js";
 import { billingCapsPath, resetSalesFunnelCapsCache } from "./sales-funnel-campaigns.js";
@@ -27,7 +33,18 @@ export interface StatedCampaignCaps {
   maxVolume?: MaxVolumeStatement | null;
 }
 
-export type CapsWrite = { ok: true; caps: unknown } | { ok: false; detail: string };
+export const MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME = "max_budget_required_with_max_volume";
+export const MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME_ERROR =
+  "A campaign with a max volume also needs a max budget in $ (maxBudget), so spend stops even when the volume can't be counted.";
+
+export type CapsWrite =
+  | { ok: true; caps: unknown }
+  | { ok: false; detail: string; refused?: typeof MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME };
+
+/** True when these caps hold a max volume with no max budget beside it (VOL-NEEDS-USD-1124). Pure. */
+export function volumeWithoutBudget(caps: { maxBudget?: MaxBudgetStatement | null; maxVolume?: MaxVolumeStatement | null }): boolean {
+  return !!caps.maxVolume && !caps.maxBudget;
+}
 
 /** True when the request states at least one cap. Pure. */
 export function statesCaps(stated: StatedCampaignCaps): boolean {
@@ -105,10 +122,14 @@ export async function writeSalesFunnelCampaignCaps(
       if (!read.ok) return read;
       own = read.own;
     }
+    const body = capsBody(stated, own);
+    if (volumeWithoutBudget(body)) {
+      return { ok: false, refused: MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME, detail: MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME_ERROR };
+    }
     const res = await fetch(`${config.url}${path}`, {
       method: "PUT",
       headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify(capsBody(stated, own)),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(15_000),
     });
     const text = await res.text();

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { capsBody, statesCaps } from "../../src/lib/sales-funnel-campaign-caps.js";
+import { capsBody, statesCaps, volumeWithoutBudget } from "../../src/lib/sales-funnel-campaign-caps.js";
 
 describe("capsBody (ONE-CAMPAIGN-VOLUME-1122)", () => {
   const own = { maxBudget: { amountCents: 26000, period: "weekly" as const }, maxVolume: { count: 10, period: "weekly" as const } };
@@ -16,5 +16,12 @@ describe("capsBody (ONE-CAMPAIGN-VOLUME-1122)", () => {
     expect(statesCaps({})).toBe(false);
     expect(statesCaps({ maxBudget: undefined, maxVolume: undefined })).toBe(false);
     expect(statesCaps({ maxVolume: null })).toBe(true);
+  });
+  it("volumeWithoutBudget (VOL-NEEDS-USD-1124)", () => {
+    expect(volumeWithoutBudget({ maxVolume: { count: 1, period: "daily" } })).toBe(true);
+    expect(volumeWithoutBudget({ maxVolume: { count: 1, period: "daily" }, maxBudget: null })).toBe(true);
+    expect(volumeWithoutBudget({ maxVolume: { count: 1, period: "daily" }, maxBudget: { amountCents: 100, period: "daily" } })).toBe(false);
+    expect(volumeWithoutBudget({ maxBudget: { amountCents: 100, period: "daily" } })).toBe(false);
+    expect(volumeWithoutBudget({ maxVolume: null })).toBe(false);
   });
 });
