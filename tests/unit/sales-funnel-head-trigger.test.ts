@@ -90,7 +90,6 @@ describe("resolveSalesFunnelPlan stamps the trigger on the units of a trigger-he
     [replyPipe.pipeId]: { channelSlug: "ai-meeting-booking", legKey: REPLY_LEG, mode: "reactive" },
   };
   const deps = (pipeIds: string[], triggerId: string | null) => ({
-    offerSteps: vi.fn(async () => ({ ok: true as const, stated: false as const })),
     salesFunnel: vi.fn(async () => ({
       ok: true as const,
       value: {
