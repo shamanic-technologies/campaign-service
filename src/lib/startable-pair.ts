@@ -7,7 +7,6 @@ import { fetchStartableWorkflowSlug } from "./startable-workflow-client.js";
 import { fetchLegSeedWorkflowSlug } from "./leg-seed-workflow.js";
 import { SOURCE_LEG_KEY, isLiveSourceOrigin, isSourceOriginSlug } from "./source-campaigns.js";
 import { fetchPipe, fetchSalesFunnel, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
-import { fetchOfferSteps, missingOfferSteps, stepsWalkedBeforeTarget } from "./sales-funnel-offer-steps.js";
 import { unitRunsOnTrigger } from "./sales-funnel-head-trigger.js";
 import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "./engine-dispatch.js";
 
@@ -231,16 +230,8 @@ export interface SalesFunnelRefusal {
     | "no_workflow"
     | "play_allows_no_workflow"
     | "catalogue_unavailable"
-    | "workflow_unavailable"
-    | "offer_not_found"
-    | "offer_steps_unavailable"
-    | "sales_funnel_steps_unknown"
-    | "offer_lacks_steps";
+    | "workflow_unavailable";
   message: string;
-  /** `offer_lacks_steps` only: the funnel's steps the offer's business has not stated, in funnel order. */
-  missingSteps?: string[];
-  /** `offer_lacks_steps` only: the steps the offer's business HAS stated (brand-service, verbatim). */
-  offerSteps?: string[];
   /** `play_allows_no_workflow` only: the pipe (play id) nothing may run, and features-service's reason, verbatim. */
   pipeId?: string;
   notRunnableReason?: string | null;
@@ -262,10 +253,6 @@ export async function resolveSalesFunnelPlan(
   salesFunnelId: string,
   identity: IdentityHeaders & { userId: string; runId: string; brandId: string; offerId: string },
   deps: {
-    /** The Target the campaign is aimed at (stated, or its own stored one): only the steps walked BEFORE it must be the
-     * offer's (GS-STEP11-NO-CAMPAIGN-1122). Absent / null = every step of the funnel. */
-    target?: string | null;
-    offerSteps?: typeof fetchOfferSteps;
     salesFunnel?: typeof fetchSalesFunnel;
     pipe?: typeof fetchPipe;
     catalogue?: () => Promise<ChannelCatalogueRead>;
@@ -305,54 +292,9 @@ export async function resolveSalesFunnelPlan(
     return unavailable();
   }
 
-  // Owner 2026-10-12: a funnel through a step the offer's business does not have is never born (Doc Dinners was
-  // sold two funnels through Direct purchase after saying it has no purchase step). An offer that never stated its
-  // steps is unchanged; an unreadable statement refuses the launch (never created on a guess).
-  const offerSteps = await (deps.offerSteps ?? fetchOfferSteps)(identity.brandId, identity.offerId, identity);
-  if (!offerSteps.ok) {
-    if (offerSteps.notFound) {
-      console.warn(`[campaign-service] Sales funnel ${salesFunnelId}: offer ${identity.offerId} not on brand ${identity.brandId}: ${offerSteps.detail}`);
-      return refuseLaunch(400, "offer_not_found", "We don't know this offer on this brand.");
-    }
-    console.error(`[campaign-service] Sales funnel ${salesFunnelId}: steps of offer ${identity.offerId} unreadable: ${offerSteps.detail}`);
-    return refuseLaunch(502, "offer_steps_unavailable", "We couldn't read the steps of this offer's business just now. Please try again in a minute.");
-  }
-  if (offerSteps.stated) {
-    const walked: Array<{ fromStepKey: string | null; toStepKey: string | null }> = [];
-    const unpublished: string[] = [];
-    for (const leg of read.value.legs) {
-      const published = catalogue.legs.find((l) => l.legKey === leg.legKey);
-      if (!published) {
-        unpublished.push(leg.legKey);
-        continue;
-      }
-      walked.push({ fromStepKey: published.fromStepKey ?? null, toStepKey: published.toStepKey ?? null });
-    }
-    if (unpublished.length > 0) {
-      console.error(`[campaign-service] Sales funnel ${salesFunnelId}: legs ${unpublished.join(", ")} not in the channel catalogue — steps unknown, not launched`);
-      return refuseLaunch(502, "sales_funnel_steps_unknown", `We couldn't tell which steps the sales funnel "${read.value.name}" goes through. Please try again in a minute.`);
-    }
-    // The campaign MAKES its Target: the steps after it are the client's own sales, never a precondition
-    // (GS-STEP11-NO-CAMPAIGN-1122); no Target known = every step the funnel walks.
-    const missing = missingOfferSteps(stepsWalkedBeforeTarget(walked, deps.target ?? null), offerSteps.steps);
-    if (missing.length > 0) {
-      const one = missing.length === 1;
-      console.warn(`[campaign-service] Sales funnel ${salesFunnelId} not launched for offer ${identity.offerId}: its business has not stated ${missing.join(", ")}`);
-      return {
-        ok: false as const,
-        refusal: {
-          status: 409 as const,
-          code: "offer_lacks_steps" as const,
-          message:
-            `The sales funnel "${read.value.name}" goes through ${one ? "a step" : "steps"} this offer's business has not said it has: ${missing.join(", ")}. ` +
-            `Ask the client whether its business has ${one ? "this step" : "these steps"}, add ${one ? "it" : "them"} to the offer's steps, then launch again.`,
-          missingSteps: missing,
-          offerSteps: offerSteps.steps,
-        },
-      };
-    }
-  }
-
+  // No offer-steps check (THREADS-POSTS-STOPPED-1124, owner 2026-11-24 « tu me soules avec tes cas particuliers »):
+  // which script fits a campaign is Jev's reading of its Target + brief per Engine, then the Rating. A coded list of
+  // steps an offer "has" refused a plan back onto Threads posts for 3 days. Never re-add a step check here.
   const units: SalesFunnelUnitPlan[] = [];
   for (const pipeId of read.value.pipeIds) {
     const pipe = await (deps.pipe ?? fetchPipe)(pipeId);
