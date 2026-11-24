@@ -440,7 +440,12 @@ export async function salesFunnelUnitMoney(
     });
   }
   const volume = caps.maxVolume;
-  if (volume) {
+  // MON-BUDGETS-UNREADABLE-1124: `volume_not_measured_on_channel` is a STRUCTURAL limitation (billing cannot count
+  // first contacts on some channels, e.g. threads-post), not a transient failure. Holding every pipe of the funnel
+  // forever on a cap that can never be enforced is wrong: treat it as "volume not reached" and let the unit run.
+  // A transient measurement failure (any OTHER reason) still holds fail-closed, as before.
+  const volumeNotMeasuredOnChannel = volume?.consumedUnavailableReason === "volume_not_measured_on_channel";
+  if (volume && !volumeNotMeasuredOnChannel) {
     if (volume.consumed === null || volume.reached === null) {
       console.error(
         `[campaign-service] Sales funnel ${unit.salesFunnelId} max volume consumption unmeasured (${volume.consumedUnavailableReason}: ${volume.consumedUnavailableDetail ?? ""}) — unit ${unit.id} held`,
@@ -457,9 +462,14 @@ export async function salesFunnelUnitMoney(
       });
     }
   }
+  if (volumeNotMeasuredOnChannel) {
+    console.info(
+      `[campaign-service] Sales funnel ${unit.salesFunnelId} max volume not measurable on channel (${volume!.consumedUnavailableDetail ?? ""}): volume cap unenforced, unit ${unit.id} runs`,
+    );
+  }
   // A reactive pipe answers people already contacted: it ranks first in its cohort's turn.
   if (reactive) return { run: true, pace: { spentCents: 0, ceilingCents: 1 } };
-  if (!budget) return { run: true, pace: { spentCents: volume!.consumed!, ceilingCents: volume!.count } };
+  if (!budget) return { run: true, pace: { spentCents: volumeNotMeasuredOnChannel ? 0 : volume!.consumed!, ceilingCents: volume!.count } };
   return { run: true, pace: { spentCents: budget.consumedCents!, ceilingCents: amountCents } };
 }
 
@@ -497,10 +507,14 @@ export async function salesFunnelPollRoom(
   if (fundedBy === "max_volume") {
     const volume = read.caps.maxVolume;
     if (!volume) return { ok: false, reason: "sales funnel funded by max volume serves no max volume" };
-    if (volume.consumed === null || volume.reached === null) {
-      return { ok: false, reason: `sales funnel volume unmeasured (${volume.consumedUnavailableReason})` };
+    // MON-BUDGETS-UNREADABLE-1124: volume_not_measured_on_channel is structural, not transient — let the poll proceed
+    // (a poll consumes no volume; the cap is unenforceable on this channel anyway).
+    if (volume.consumedUnavailableReason !== "volume_not_measured_on_channel") {
+      if (volume.consumed === null || volume.reached === null) {
+        return { ok: false, reason: `sales funnel volume unmeasured (${volume.consumedUnavailableReason})` };
+      }
+      if (volume.reached) return { ok: false, reason: `sales funnel ${volume.period} max volume reached: ${volume.consumed} of ${volume.count}` };
     }
-    if (volume.reached) return { ok: false, reason: `sales funnel ${volume.period} max volume reached: ${volume.consumed} of ${volume.count}` };
     return { ok: true };
   }
   const budget = read.caps.maxBudget;

@@ -124,9 +124,9 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
   });
 
   describe("billing's funding verdict (owner 2026-10-11: a max $ AND/OR a max volume)", () => {
-    const volume = (consumed: number | null, reached: boolean | null, count = 10) => ({
+    const volume = (consumed: number | null, reached: boolean | null, count = 10, unavailableReason: string | null = consumed === null ? "runs_unavailable" : null) => ({
       count, period: "daily", unit: "first_contacts", consumed, reached,
-      consumedUnavailableReason: consumed === null ? "volume_not_measured_on_channel" : null,
+      consumedUnavailableReason: unavailableReason,
     });
     const volumeOnly = (v: unknown, pipes: unknown = null) => ({ stated: true, funded: true, fundedBy: "max_volume", maxBudget: null, maxVolume: v, pipes });
 
@@ -140,12 +140,22 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
       expect((await withCaps(volumeOnly(volume(3, false), pipes), true, reactive)).verdict).toEqual({ run: true, pace: { spentCents: 0, ceilingCents: 1 } });
     });
 
-    it("holds a volume-only funnel once its max volume is reached, and LOUDLY when it cannot be measured", async () => {
+    it("holds a volume-only funnel once its max volume is reached, and LOUDLY when it cannot be measured (transient)", async () => {
       expect((await withCaps(volumeOnly(volume(10, true)))).verdict).toMatchObject({ run: false, kind: "cap_reached", reason: "Sales funnel max volume reached" });
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      // A TRANSIENT measurement failure (runs_unavailable) holds fail-closed.
       expect((await withCaps(volumeOnly(volume(null, null)))).verdict).toMatchObject({ run: false, kind: "unreadable", reason: "Sales funnel volume unavailable" });
-      expect(errors.mock.calls.flat().join(" ")).toContain("volume_not_measured_on_channel");
+      expect(errors.mock.calls.flat().join(" ")).toContain("runs_unavailable");
       errors.mockRestore();
+    });
+
+    it("runs a volume-only funnel when volume is not measurable on the channel (structural, MON-BUDGETS-UNREADABLE-1124)", async () => {
+      // volume_not_measured_on_channel is a STRUCTURAL limitation, not a transient failure: the unit runs uncapped.
+      const infos = vi.spyOn(console, "info").mockImplementation(() => {});
+      const unmeasured = volume(null, null, 10, "volume_not_measured_on_channel");
+      expect((await withCaps(volumeOnly(unmeasured))).verdict).toEqual({ run: true, pace: { spentCents: 0, ceilingCents: 10 } });
+      expect(infos.mock.calls.flat().join(" ")).toContain("volume cap unenforced");
+      infos.mockRestore();
     });
 
     it("holds unfunded when billing says not funded, whatever caps it shows", async () => {
@@ -181,7 +191,10 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
       };
       expect(await room(volumeOnly(volume(3, false)))).toEqual({ ok: true });
       expect(await room(volumeOnly(volume(10, true)))).toMatchObject({ ok: false });
+      // Transient unmeasured volume still blocks the poll.
       expect(await room(volumeOnly(volume(null, null)))).toMatchObject({ ok: false });
+      // Structural (volume_not_measured_on_channel) lets the poll proceed (MON-BUDGETS-UNREADABLE-1124).
+      expect(await room(volumeOnly(volume(null, null, 10, "volume_not_measured_on_channel")))).toEqual({ ok: true });
       expect(await room({ stated: false, funded: false, fundedBy: null, maxBudget: null, maxVolume: null, pipes: null })).toMatchObject({ ok: false });
       // A budget still binds the read when one funds the funnel.
       expect(await room({ stated: true, funded: true, fundedBy: "both", maxBudget: budget("1000", "998", false), maxVolume: volume(3, false), pipes: null })).toMatchObject({ ok: false });
@@ -236,11 +249,19 @@ describe("a sales funnel unit's money is its funnel's caps", () => {
     expect(unfunded).not.toHaveProperty("figures");
   });
 
-  it("holds a proactive pipe LOUDLY when a consumption cannot be measured (never read as not reached)", async () => {
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("runs when volume_not_measured_on_channel and budget is fine (MON-BUDGETS-UNREADABLE-1124)", async () => {
+    const infos = vi.spyOn(console, "info").mockImplementation(() => {});
+    // volume_not_measured_on_channel is structural: skip the volume hold, budget decides.
     const { verdict } = await withCaps({ stated: true, funded: true, fundedBy: "both", maxBudget: budget("1000", "10", false), maxVolume: { count: 5, period: "daily", unit: "first_contacts", consumed: null, reached: null, consumedUnavailableReason: "volume_not_measured_on_channel" }, pipes: null });
+    expect(verdict).toEqual({ run: true, pace: { spentCents: 10, ceilingCents: 1000 } });
+    infos.mockRestore();
+  });
+
+  it("holds a proactive pipe LOUDLY when volume consumption is unmeasured for a TRANSIENT reason", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { verdict } = await withCaps({ stated: true, funded: true, fundedBy: "both", maxBudget: budget("1000", "10", false), maxVolume: { count: 5, period: "daily", unit: "first_contacts", consumed: null, reached: null, consumedUnavailableReason: "runs_unavailable" }, pipes: null });
     expect(verdict).toMatchObject({ run: false, kind: "unreadable" });
-    expect(errors.mock.calls.flat().join(" ")).toContain("volume_not_measured_on_channel");
+    expect(errors.mock.calls.flat().join(" ")).toContain("runs_unavailable");
     errors.mockRestore();
   });
 
