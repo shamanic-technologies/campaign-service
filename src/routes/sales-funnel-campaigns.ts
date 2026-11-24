@@ -391,16 +391,15 @@ router.post(
           runId: req.runId!,
           brandId,
           offerId: offerId!, // stated: required with a sales funnel (checked above)
-        }, { target: target ?? null });
+        });
         if (!resolved.ok) {
-          const { status: httpStatus, code, message, missingSteps, offerSteps, pipeId, notRunnableReason, notRunnableDetail } = resolved.refusal;
+          const { status: httpStatus, code, message, pipeId, notRunnableReason, notRunnableDetail } = resolved.refusal;
           console.warn(
             `[campaign-service] Not launching sales funnel ${salesFunnelId} — org=${orgId} brand=${brandId} offer=${offerId}: ${code}`,
           );
           return res.status(httpStatus).json({
             error: message,
             reason: code,
-            ...(missingSteps ? { missingSteps, offerSteps } : {}),
             ...(code === "play_allows_no_workflow" ? { pipeId, notRunnableReason, notRunnableDetail } : {}),
           });
         }
@@ -770,7 +769,7 @@ router.post("/sales-funnel-campaigns/:id/entries", requireApiKey, serviceAuth, a
       runId: req.runId!,
       brandId: parent.brandId,
       offerId: parent.offerId,
-    }, { target: parent.target });
+    });
     if (!resolved.ok) {
       const { status: httpStatus, code, message } = resolved.refusal;
       return res.status(httpStatus).json({ error: message, reason: code });

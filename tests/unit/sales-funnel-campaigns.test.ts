@@ -280,7 +280,6 @@ describe("resolveSalesFunnelPlan — what a funnel campaign is made of", () => {
     "google-ads-unknown|x": { channelSlug: "pr-cold-email-outreach", legKey: ENTRY, mode: "proactive" },
   };
   const deps = (pipeIds: string[] | "404" | "down") => ({
-    offerSteps: vi.fn(async () => ({ ok: true as const, stated: false as const })),
     salesFunnel: vi.fn(async () =>
       pipeIds === "404"
         ? { ok: false as const, notFound: true as const, detail: "404" }
@@ -558,9 +557,7 @@ describe("resolveSalesFunnelPlan — the steps the offer's business has (owner 2
   });
   const PURCHASE = ["start_to_website_visit", "website_visit_to_purchase", "purchase_to_paid_client"];
   const MEETING = ["start_to_website_visit", "website_visit_to_meeting_booked", "meeting_booked_to_meeting_attended", "meeting_attended_to_paid_client"];
-  const DOC_DINNERS = ["conversation", "booking_call", "meeting_booked", "meeting_attended", "website_visit"];
-  const deps = (legKeys: string[], offerSteps: Awaited<ReturnType<typeof import("../../src/lib/sales-funnel-offer-steps.js").fetchOfferSteps>>) => ({
-    offerSteps: vi.fn(async () => offerSteps),
+  const deps = (legKeys: string[]) => ({
     salesFunnel: vi.fn(async () => funnelOf("Philanthropy", legKeys)),
     pipe: vi.fn(async (id: string) => {
       const [channelSlug, legKey] = id.split("|");
@@ -570,70 +567,21 @@ describe("resolveSalesFunnelPlan — the steps the offer's business has (owner 2
     workflow: vi.fn(async () => ({ ok: true as const, workflowSlug: "aurora-v3" })),
   });
 
-  it("refuses a funnel through a step the offer's business has not stated, naming it, and asks for nothing else", async () => {
-    const d = deps(PURCHASE, { ok: true, stated: true, steps: DOC_DINNERS });
-    const res = await resolveSalesFunnelPlan("f", identity, d);
-    expect(res).toMatchObject({
-      ok: false,
-      refusal: { status: 409, code: "offer_lacks_steps", missingSteps: ["purchase"], offerSteps: DOC_DINNERS },
-    });
-    if (res.ok) return;
-    expect(res.refusal.message).toContain("purchase");
-    expect(res.refusal.message).toContain("Philanthropy");
-    expect(d.offerSteps).toHaveBeenCalledWith("brand", "offer", identity);
-    // Refused before any pipe's workflow is resolved.
-    expect(d.workflow).not.toHaveBeenCalled();
+  // THREADS-POSTS-STOPPED-1124 (owner 2026-11-24): which script fits a campaign is Jev's reading of its Target + brief
+  // per Engine, then the Rating; campaign-service never checks the steps an offer "has" (the coded check refused a
+  // plan back onto Threads posts for 3 days: threads_post_published was not in its hand-kept list).
+  it("launches a funnel whatever steps the offer's business stated, and never reads them", async () => {
+    for (const legs of [PURCHASE, MEETING]) {
+      const d = deps(legs);
+      expect((await resolveSalesFunnelPlan("f", identity, d)).ok).toBe(true);
+      expect(d.workflow).toHaveBeenCalled();
+    }
   });
 
-  it("launches a funnel whose every step is stated; Start, lead found and paid client always count as present", async () => {
-    expect((await resolveSalesFunnelPlan("f", identity, deps(MEETING, { ok: true, stated: true, steps: DOC_DINNERS }))).ok).toBe(true);
-    const sourced = ["lead_found_to_website_visit", "website_visit_to_meeting_booked", "meeting_booked_to_meeting_attended", "meeting_attended_to_paid_client"];
-    expect((await resolveSalesFunnelPlan("f", identity, deps(sourced, { ok: true, stated: true, steps: ["website_visit", "meeting_booked", "meeting_attended"] }))).ok).toBe(true);
-  });
-
-  it("names every missing step once, in funnel order; a stated EMPTY list is a statement too", async () => {
-    const res = await resolveSalesFunnelPlan("f", identity, deps(MEETING, { ok: true, stated: true, steps: [] }));
-    expect(res).toMatchObject({ refusal: { code: "offer_lacks_steps", missingSteps: ["website_visit", "meeting_booked", "meeting_attended"], offerSteps: [] } });
-  });
-
-  it("leaves an offer that never stated its steps unchanged (nothing filtered)", async () => {
-    expect((await resolveSalesFunnelPlan("f", identity, deps(PURCHASE, { ok: true, stated: false }))).ok).toBe(true);
-  });
-
-  it("fails LOUD when the steps cannot be read, and names an offer not on the brand apart", async () => {
-    expect(await resolveSalesFunnelPlan("f", identity, deps(PURCHASE, { ok: false, notFound: false, detail: "HTTP 503" })))
-      .toMatchObject({ ok: false, refusal: { status: 502, code: "offer_steps_unavailable" } });
-    expect(await resolveSalesFunnelPlan("f", identity, deps(PURCHASE, { ok: false, notFound: true, detail: "HTTP 404" })))
-      .toMatchObject({ ok: false, refusal: { status: 400, code: "offer_not_found" } });
-  });
-
-  // GS-STEP11-NO-CAMPAIGN-1122: the campaign MAKES its Target; only the steps walked BEFORE it must be the offer's.
-  const SIGNUP_SAAS = ["conversation", "website_visit", "signup"];
-  const MEETINGS_BOOKED = ["lead_found_to_conversation", "conversation_to_meeting_booked", "meeting_booked_to_meeting_attended", "meeting_attended_to_paid_client"];
-
-  it("launches a meetings-booked funnel aimed at meeting_booked for an offer without meeting_booked / meeting_attended", async () => {
-    const res = await resolveSalesFunnelPlan("f", identity, { ...deps(MEETINGS_BOOKED, { ok: true, stated: true, steps: SIGNUP_SAAS }), target: "meeting_booked" });
-    expect(res.ok).toBe(true);
-  });
-
-  it("still refuses that funnel with no Target known, and a step BEFORE the Target the offer lacks", async () => {
-    expect(await resolveSalesFunnelPlan("f", identity, deps(MEETINGS_BOOKED, { ok: true, stated: true, steps: SIGNUP_SAAS })))
-      .toMatchObject({ refusal: { status: 409, code: "offer_lacks_steps", missingSteps: ["meeting_booked", "meeting_attended"] } });
-    // Aimed at meeting_booked, but the offer has no conversation: a step before the Target, never waived.
-    expect(await resolveSalesFunnelPlan("f", identity, { ...deps(MEETINGS_BOOKED, { ok: true, stated: true, steps: ["website_visit"] }), target: "meeting_booked" }))
-      .toMatchObject({ refusal: { status: 409, code: "offer_lacks_steps", missingSteps: ["conversation"] } });
-  });
-
-  it("still refuses a direct-purchase funnel missing purchase BEFORE its Target (Doc Dinners), and one that never reaches its Target", async () => {
-    expect(await resolveSalesFunnelPlan("f", identity, { ...deps(PURCHASE, { ok: true, stated: true, steps: SIGNUP_SAAS }), target: "paid_client" }))
-      .toMatchObject({ refusal: { status: 409, code: "offer_lacks_steps", missingSteps: ["purchase"] } });
-    expect(await resolveSalesFunnelPlan("f", identity, { ...deps(PURCHASE, { ok: true, stated: true, steps: SIGNUP_SAAS }), target: "meeting_booked" }))
-      .toMatchObject({ refusal: { status: 409, code: "offer_lacks_steps", missingSteps: ["purchase"] } });
-  });
-
-  it("refuses rather than guesses when a leg of the funnel is not in the catalogue (steps unknown)", async () => {
-    const d = deps(["start_to_website_visit", "website_visit_to_mystery"], { ok: true, stated: true, steps: DOC_DINNERS });
-    expect(await resolveSalesFunnelPlan("f", identity, d)).toMatchObject({ ok: false, refusal: { status: 502, code: "sales_funnel_steps_unknown" } });
+  it("no offer-steps reader is left in src", async () => {
+    const { readFileSync, existsSync } = await import("node:fs");
+    expect(existsSync("src/lib/sales-funnel-offer-steps.ts")).toBe(false);
+    expect(readFileSync("src/lib/startable-pair.ts", "utf8")).not.toMatch(/offer_lacks_steps|fetchOfferSteps|missingOfferSteps/);
   });
 });
 
