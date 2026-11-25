@@ -36,6 +36,8 @@ import app from "../../src/index.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
 import { db } from "../../src/db/index.js";
 import { campaigns } from "../../src/db/schema.js";
+import { reRunDueCampaigns, claimStuckCampaigns } from "../../src/lib/scheduler.js";
+import { executeCampaignWorkflow } from "../../src/lib/workflows.js";
 
 const API_KEY = process.env.CAMPAIGN_SERVICE_API_KEY || "test-api-key";
 const ORG = "c0ffee00-0000-4000-8000-0000000000a1";
@@ -217,6 +219,51 @@ describe("ONE-CAMPAIGN-VOLUME-1122: one campaign to booked meetings, its volume 
     expect(again.body.salesFunnelCampaign.id).toBe(first.body.salesFunnelCampaignId);
     expect(again.body.created).toBe(false);
     expect(again.body.caps).toMatchObject({ funded: true });
+  });
+
+  describe("CAMPAIGN-HELD-1125: the signup creates its ONE campaign set up but NOT started", () => {
+    const caps = { maxVolume: { count: 10, period: "weekly" }, maxBudget: { amountCents: 26000, period: "weekly" } };
+
+    it("status stopped = brief, Target and caps written in the same request, nothing runs, even when due long ago", async () => {
+      const res = await create({ ...caps, status: "stopped" }).expect(201);
+      const fc = res.body.salesFunnelCampaign;
+      expect(res.body.created).toBe(true);
+      expect(res.body.started).toBe(false);
+      expect(fc.status).toBe("stopped");
+      expect(fc.brief).toBe(BRIEF);
+      expect(fc.target).toBe("meeting_booked");
+      expect(puts()).toEqual([{ url: capsPath(fc.id), method: "PUT", body: { maxBudget: caps.maxBudget, maxVolume: caps.maxVolume } }]);
+
+      const units = await db.select().from(campaigns);
+      expect(units).toHaveLength(3);
+      expect(units.every((u) => u.status === "stopped" && u.nextRunAt === null)).toBe(true);
+
+      // Even a unit made due long ago is never dispatched while its campaign is stopped (10+ min, any tick).
+      await db.update(campaigns).set({ nextRunAt: new Date(Date.now() - 60 * 60 * 1000) });
+      await reRunDueCampaigns();
+      await claimStuckCampaigns();
+      expect(executeCampaignWorkflow).not.toHaveBeenCalled();
+      expect((await db.select().from(campaigns)).every((u) => u.status === "stopped")).toBe(true);
+    });
+
+    it("the same create again hands it back STILL stopped (idempotent retry), never a second campaign", async () => {
+      const first = (await create({ ...caps, status: "stopped" }).expect(201)).body.salesFunnelCampaign;
+      const again = await create({ ...caps, status: "stopped" }).expect(200);
+      expect(again.body.salesFunnelCampaign.id).toBe(first.id);
+      expect(again.body.created).toBe(false);
+      expect(again.body.started).toBe(false);
+      expect(again.body.salesFunnelCampaign.status).toBe("stopped");
+      expect(await db.select().from(campaigns)).toHaveLength(3);
+    });
+
+    it("the existing start path (PATCH status=activate) then starts it: every part ongoing and due now", async () => {
+      const fc = (await create({ ...caps, status: "stopped" }).expect(201)).body.salesFunnelCampaign;
+      const res = await as(request(app).patch(`/sales-funnel-campaigns/${fc.id}`)).send({ status: "activate" }).expect(200);
+      expect(res.body.salesFunnelCampaign.status).toBe("ongoing");
+      const units = await db.select().from(campaigns);
+      expect(units.every((u) => u.status === "ongoing")).toBe(true);
+      expect(units.filter((u) => u.workflowSlug).every((u) => u.nextRunAt !== null)).toBe(true);
+    });
   });
 
   it("refuses a malformed cap by name, nothing written", async () => {
