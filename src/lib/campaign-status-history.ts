@@ -13,6 +13,7 @@ import {
 import { signalMissionStatusChanged, type StatusActor } from "./mission-status-notification.js";
 import { STOP_REASONS } from "./stop-reason.js";
 import { isSourceOriginSlug } from "./source-campaigns.js";
+import { runsOnItsTarget, targetOnlyUnitBirth } from "./target-only-campaign.js";
 
 /** The transaction handle `db.transaction` hands its callback. */
 export type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -772,5 +773,78 @@ export async function applySalesFunnelPlanChange(write: {
       appliedAt: now,
     });
     return { applied: true as const, salesFunnelCampaign: parent, units: [...byId.values(), ...born], changeUnits };
+  });
+}
+
+/** What the move onto its Target did to one unit (`campaignId` null = a dry run's unit not born yet). */
+export interface OnTargetUnitChange {
+  campaignId: string | null;
+  pipeId: string;
+  action: "draining" | "born";
+}
+
+/** The `sales_funnel_plan_changes.reason` of a move onto its Target. */
+export const ON_TARGET_CHANGE_REASON = "on_target";
+
+/**
+ * Move ONE funnel campaign onto its Target's Engine (PLAN-RECURSIVE-PER-ENGINE-1124-CS, lib/sales-funnel-on-target.ts),
+ * in ONE transaction: every unit not already draining is marked draining (status untouched: it answers the people it
+ * owes, takes no new people), ONE unit is born on its Target's Engine (`engine:<target>`, no channel, no leg, in the
+ * campaign's status, due now when ongoing, birth transition source `sales_funnel_plan`), the campaign stops following
+ * a plan of pipes and its running funnel returns home, and the change is recorded (`reason: 'on_target'`).
+ *
+ * The campaign's `sales_funnel_id` and status never move (billing's caps key; the customer's statement), and the born
+ * unit carries that same `sales_funnel_id`. Decided on the rows read INSIDE the transaction: a campaign already on its
+ * target is a no-op.
+ */
+export async function moveSalesFunnelCampaignOnTarget(write: { salesFunnelCampaignId: string; orgId: string }): Promise<
+  | { applied: true; salesFunnelCampaign: SalesFunnelCampaign; unit: CampaignRow; changeUnits: OnTargetUnitChange[] }
+  | { applied: false; reason: "not_found" | "no_target" | "already_on_target" }
+> {
+  return db.transaction(async (tx) => {
+    const now = new Date();
+    const [locked] = await tx
+      .select()
+      .from(salesFunnelCampaigns)
+      .where(and(eq(salesFunnelCampaigns.id, write.salesFunnelCampaignId), eq(salesFunnelCampaigns.orgId, write.orgId)))
+      .for("update");
+    if (!locked) return { applied: false as const, reason: "not_found" as const };
+    if (locked.target === null) return { applied: false as const, reason: "no_target" as const };
+    const before = await tx
+      .select()
+      .from(campaigns)
+      .where(and(eq(campaigns.orgId, write.orgId), eq(campaigns.salesFunnelCampaignId, locked.id)));
+    if (runsOnItsTarget(locked, before)) return { applied: false as const, reason: "already_on_target" as const };
+
+    const drained = before.filter((u) => u.planRole !== "draining");
+    if (drained.length > 0) {
+      await tx
+        .update(campaigns)
+        .set({ planRole: "draining", updatedAt: now })
+        .where(inArray(campaigns.id, drained.map((u) => u.id)));
+    }
+    const fromSalesFunnelId = locked.runningSalesFunnelId ?? locked.salesFunnelId;
+    const [parent] = await tx
+      .update(salesFunnelCampaigns)
+      .set({ followsPlan: false, runningSalesFunnelId: locked.salesFunnelId, updatedAt: now })
+      .where(eq(salesFunnelCampaigns.id, locked.id))
+      .returning();
+    const birth = targetOnlyUnitBirth(locked.target, `${locked.salesFunnelName} ${locked.id.slice(0, 8)}`);
+    const [unit] = await insertSalesFunnelUnits(tx, parent, [birth], TRANSITION_SOURCES.SALES_FUNNEL_PLAN, parent.salesFunnelId);
+    const changeUnits: OnTargetUnitChange[] = [
+      ...drained.map((u) => ({ campaignId: u.id, pipeId: `${u.featureSlug}|${u.legKey}`, action: "draining" as const })),
+      { campaignId: unit.id, pipeId: birth.workflowSlug, action: "born" as const },
+    ];
+    await tx.insert(salesFunnelPlanChanges).values({
+      salesFunnelCampaignId: locked.id,
+      orgId: write.orgId,
+      fromSalesFunnelId,
+      toSalesFunnelId: birth.workflowSlug,
+      planComputedAt: null,
+      units: changeUnits,
+      reason: ON_TARGET_CHANGE_REASON,
+      appliedAt: now,
+    });
+    return { applied: true as const, salesFunnelCampaign: parent, unit, changeUnits };
   });
 }

@@ -866,6 +866,235 @@
         "additionalProperties": false,
         "description": "The volume this campaign aims at per period (billing's max volume on this campaign: it stops for the period once reached). What it counts (e.g. meetings booked for a campaign targeting them) is billing's, served on its caps read as `unit`. null clears it. A max volume always comes with a max budget in $ (`maxBudget`) beside it: a volume with no max budget is refused 400 `max_budget_required_with_max_volume`, nothing written. A max budget alone is fine."
       },
+      "SalesFunnelTargetMoveResponse": {
+        "type": "object",
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          },
+          "moved": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "salesFunnelCampaignId": {
+                  "type": "string"
+                },
+                "orgId": {
+                  "type": "string"
+                },
+                "brandId": {
+                  "type": "string"
+                },
+                "salesFunnelName": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "target": {
+                  "type": "string"
+                },
+                "followsPlan": {
+                  "type": "boolean"
+                },
+                "pipesBefore": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "pipesAfter": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "units": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "campaignId": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "pipeId": {
+                        "type": "string"
+                      },
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "draining",
+                          "born"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "campaignId",
+                      "pipeId",
+                      "action"
+                    ]
+                  }
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "salesFunnelCampaignId",
+                "orgId",
+                "brandId",
+                "salesFunnelName",
+                "status",
+                "target",
+                "followsPlan",
+                "pipesBefore",
+                "pipesAfter",
+                "units"
+              ]
+            }
+          },
+          "wouldMove": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "salesFunnelCampaignId": {
+                  "type": "string"
+                },
+                "orgId": {
+                  "type": "string"
+                },
+                "brandId": {
+                  "type": "string"
+                },
+                "salesFunnelName": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "target": {
+                  "type": "string"
+                },
+                "followsPlan": {
+                  "type": "boolean"
+                },
+                "pipesBefore": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "pipesAfter": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "units": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "campaignId": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "pipeId": {
+                        "type": "string"
+                      },
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "draining",
+                          "born"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "campaignId",
+                      "pipeId",
+                      "action"
+                    ]
+                  }
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "salesFunnelCampaignId",
+                "orgId",
+                "brandId",
+                "salesFunnelName",
+                "status",
+                "target",
+                "followsPlan",
+                "pipesBefore",
+                "pipesAfter",
+                "units"
+              ]
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "salesFunnelCampaignId": {
+                  "type": "string"
+                },
+                "orgId": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "already_on_target",
+                    "no_target"
+                  ]
+                }
+              },
+              "required": [
+                "salesFunnelCampaignId",
+                "orgId",
+                "reason"
+              ]
+            }
+          }
+        },
+        "required": [
+          "applied",
+          "skipped"
+        ]
+      },
+      "SalesFunnelTargetMoveBody": {
+        "type": "object",
+        "properties": {
+          "apply": {
+            "type": "boolean"
+          },
+          "orgId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "salesFunnelCampaignIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "followsPlanOnly": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "OpenOnDemandRunResponse": {
         "type": "object",
         "properties": {
@@ -5316,6 +5545,51 @@
                     "byTarget",
                     "failures"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/sales-funnel-campaigns/target-move": {
+      "post": {
+        "tags": [
+          "Sales funnel campaigns"
+        ],
+        "summary": "Move funnel campaigns onto their Target's Engine: one Engine unit instead of one unit per pipe (staff, dry run by default)",
+        "description": "PLAN-RECURSIVE-PER-ENGINE-1124-CS. Scope = `orgId`, `salesFunnelCampaignIds` (1..200), `followsPlanOnly`; no scope field = every funnel campaign. For each campaign stating a target and not already on it, in one transaction: ONE unit is born on its Target's Engine (`engine:<target>`, no channel, no leg, in the campaign's status), every unit per pipe is marked draining (never stopped: it answers the people it owes, takes no new people), the campaign stops following a plan of pipes, and the change is recorded in its plan changes (`reason: on_target`). The campaign's id, status and `sales_funnel_id` (the key its caps are stated under at billing) never move. `apply` false (default) = a dry run, nothing written (`wouldMove`); `apply: true` answers `moved` (a row carrying `error` was not moved). `skipped[].reason`: already_on_target | no_target. Idempotent.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SalesFunnelTargetMoveBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What moved (or would move) and what was skipped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelTargetMoveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

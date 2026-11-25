@@ -75,6 +75,8 @@ import {
   NextRunSchema,
   SalesFunnelCampaignProgressSchema,
   SalesFunnelPlanChangeSchema,
+  SalesFunnelTargetMoveBody,
+  SalesFunnelTargetMoveResponse,
 } from "../src/schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -240,6 +242,20 @@ registry.registerPath({
   request: { body: { content: { "application/json": { schema: z.object({ apply: z.boolean().optional() }) } } } },
   responses: {
     200: { description: "What was (or would be) filled", content: { "application/json": { schema: z.object({ apply: z.boolean(), scanned: z.number(), filled: z.number(), byTarget: z.record(z.string(), z.number()), failures: z.array(z.object({ salesFunnelCampaignId: z.string(), salesFunnelId: z.string(), reason: z.string(), detail: z.string().optional() })) }) } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/sales-funnel-campaigns/target-move",
+  tags: ["Sales funnel campaigns"],
+  summary: "Move funnel campaigns onto their Target's Engine: one Engine unit instead of one unit per pipe (staff, dry run by default)",
+  description: "PLAN-RECURSIVE-PER-ENGINE-1124-CS. Scope = `orgId`, `salesFunnelCampaignIds` (1..200), `followsPlanOnly`; no scope field = every funnel campaign. For each campaign stating a target and not already on it, in one transaction: ONE unit is born on its Target's Engine (`engine:<target>`, no channel, no leg, in the campaign's status), every unit per pipe is marked draining (never stopped: it answers the people it owes, takes no new people), the campaign stops following a plan of pipes, and the change is recorded in its plan changes (`reason: on_target`). The campaign's id, status and `sales_funnel_id` (the key its caps are stated under at billing) never move. `apply` false (default) = a dry run, nothing written (`wouldMove`); `apply: true` answers `moved` (a row carrying `error` was not moved). `skipped[].reason`: already_on_target | no_target. Idempotent.",
+  security: [{ [apiKeyAuth.name]: [] }],
+  request: { body: { content: { "application/json": { schema: SalesFunnelTargetMoveBody } } } },
+  responses: {
+    200: { description: "What moved (or would move) and what was skipped", content: { "application/json": { schema: SalesFunnelTargetMoveResponse } } },
+    400: { description: "Invalid body", content: { "application/json": { schema: ErrorResponse } } },
   },
 });
 
