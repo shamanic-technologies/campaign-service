@@ -7,7 +7,7 @@ import { acquisitionChannelForFeature, derivedCampaignName } from "./campaign-id
 import { legKeySpellings, sameLeg } from "./leg-identity.js";
 import { ensureSourcesOnStart } from "./source-campaign-store.js";
 import { resolveSalesFunnelPlan, type SalesFunnelUnitPlan } from "./startable-pair.js";
-import { isTargetOnlyCampaign } from "./target-only-campaign.js";
+import { isTargetOnlyCampaign, runsOnItsTarget } from "./target-only-campaign.js";
 
 /**
  * A FUNNEL CAMPAIGN THAT FOLLOWS ITS PLAN (owner 2026-10-28, FACTORY-P1-FOLLOW-PLAN, GTM Factory v10 phase 1).
@@ -56,6 +56,7 @@ export type PlanCheckState =
   | "applied"
   | "stopped"
   | "switched_off"
+  | "on_target"
   | "plan_contradicts_brief"
   | "restore_failed"
   | "no_plan"
@@ -247,6 +248,8 @@ export async function checkSalesFunnelCampaignPlan(
     return { ...base, pipesAfter: null, units: null, ...rest, check: { state, detail, checkedAt: now.toISOString(), ...(plan ?? {}) } };
   };
 
+  // PLAN-RECURSIVE-PER-ENGINE-1124-CS: moved onto its Target's Engine (lib/sales-funnel-on-target.ts), nothing moves it back.
+  if (runsOnItsTarget(row, units)) return done("on_target", "It runs on its Target's Engine: no plan of pipes applies.", { pipesAfter: base.pipesBefore });
   if (row.status !== "ongoing" && opts.apply) return done("stopped", "The campaign is stopped: its plan is checked once it runs.");
   const userId = row.createdByUserId;
   const runId = units.find((u) => u.anchorRunId)?.anchorRunId ?? row.parentRunId;
@@ -384,7 +387,8 @@ export async function switchOffPlan(row: SalesFunnelCampaign, deps: PlanDeps = {
     .from(campaigns)
     .where(and(eq(campaigns.orgId, row.orgId), eq(campaigns.salesFunnelCampaignId, row.id)))
     .orderBy(asc(campaigns.createdAt));
-  if (row.followsPlan || !awayFromOwnFunnel(row, units)) return null;
+  // A campaign running on its Target's Engine keeps its pipes draining: never restored (lib/sales-funnel-on-target.ts).
+  if (row.followsPlan || runsOnItsTarget(row, units) || !awayFromOwnFunnel(row, units)) return null;
   const base = { salesFunnelCampaignId: row.id, orgId: row.orgId, brandId: row.brandId, runningSalesFunnelId: running, pipesBefore: runningPipes(units) };
   const fail = (detail: string): PlanCheckResult => {
     console.error(`[campaign-service] Funnel campaign ${row.id} switched off but not back on its funnel ${own}: ${detail}`);
@@ -609,6 +613,11 @@ export async function dryRunPlans(scope: { orgId: string; brandId?: string; sale
   const rows = await db.select().from(salesFunnelCampaigns).where(and(...conditions));
   const out: PlanCheckResult[] = [];
   // A campaign launched on its target alone follows no plan (refused at launch and edit): nothing to dry-run.
-  for (const row of rows) if (!isTargetOnlyCampaign(row)) out.push(await checkSalesFunnelCampaignPlan(row, { apply: false }, deps));
+  // Same for a campaign moved onto its Target's Engine (lib/sales-funnel-on-target.ts): its check answers `on_target`.
+  for (const row of rows) {
+    if (isTargetOnlyCampaign(row)) continue;
+    const result = await checkSalesFunnelCampaignPlan(row, { apply: false }, deps);
+    if (result.check.state !== "on_target") out.push(result);
+  }
   return out;
 }

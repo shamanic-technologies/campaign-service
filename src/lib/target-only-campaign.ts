@@ -21,6 +21,21 @@ export function isEngineOnlyUnit(unit: { featureSlug?: string | null; legKey?: s
 }
 
 /**
+ * PLAN-RECURSIVE-PER-ENGINE-1124-CS: does a funnel campaign run as ONE unit on its Target's Engine? True for a campaign
+ * launched on its target alone, and for a funnel campaign MOVED onto its target (lib/sales-funnel-on-target.ts): it
+ * keeps its `sales_funnel_id` (billing's caps key) and owns an Engine unit of its target. An Engine unit of ANOTHER
+ * outcome does not count. Pure; lives here (re-exported by lib/sales-funnel-on-target.ts) so the status writer reads it
+ * without an import cycle.
+ */
+export function runsOnItsTarget(
+  parent: { target: string | null; salesFunnelId: string },
+  units: ReadonlyArray<{ featureSlug?: string | null; legKey?: string | null; workflowSlug?: string | null }>,
+): boolean {
+  if (isTargetOnlyCampaign(parent)) return true;
+  return parent.target !== null && units.some((u) => isEngineOnlyUnit(u) && engineOutcomeOfSlug(u.workflowSlug) === parent.target);
+}
+
+/**
  * The NAME a target-only campaign reads everywhere a client sees it: its outcome's label as features-service publishes
  * it ("Backlink earned"), never its key and never a map of ours. null = the catalogue publishes no label for it: the
  * caller refuses (launch) or skips (repair), loud, never falls back to the key. Pure.

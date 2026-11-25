@@ -413,7 +413,7 @@ export const SalesFunnelCampaignSchema = z.object({
   followsPlan: z.boolean(),
   // The funnel it runs now: the last plan applied, else `salesFunnelId`.
   runningSalesFunnelId: z.string(),
-  // The latest plan check (null = never checked). `state`: following | applied | stopped | switched_off | no_plan |
+  // The latest plan check (null = never checked). `state`: following | applied | stopped | switched_off | on_target | no_plan |
   // plan_unreadable | plan_not_ready | plan_not_runnable | apply_failed | plan_contradicts_brief (a channel its brief
   // names was kept running though the plan leaves it out) | restore_failed (switched off, not back on its funnel yet).
   // Red on Monitoring: from no_plan on.
@@ -487,13 +487,52 @@ export const SalesFunnelPlanChangeSchema = z.object({
   planComputedAt: z.string().nullable(),
   appliedAt: z.string(),
   // Why it moved: plan (a plan applied) | switched_off (the switch turned off: back to its own funnel) |
-  // switched_off_by_hand (the same restore, written by hand) | kept_by_brief_by_hand (a brief-named unit undrained by hand).
+  // switched_off_by_hand (the same restore, written by hand) | kept_by_brief_by_hand (a brief-named unit undrained by hand) |
+  // on_target (moved onto its Target's Engine: `toSalesFunnelId` = `engine:<target>`).
   reason: z.string(),
   // What each unit did: born (a new pipe), kept (in the plan, now on its play), draining (left the plan),
   // kept_by_brief (left the plan, kept running: the brief names its channel).
   units: z.array(z.object({ campaignId: z.string(), pipeId: z.string(), action: z.string() })),
 }).openapi("SalesFunnelPlanChange");
 
+
+// POST /internal/sales-funnel-campaigns/target-move (staff, PLAN-RECURSIVE-PER-ENGINE-1124-CS, lib/sales-funnel-on-target.ts):
+// which funnel campaigns move onto their Target's Engine is this call's scope (no field = every campaign).
+export const SalesFunnelTargetMoveBody = z.object({
+  // false (default) = a dry run: nothing written.
+  apply: z.boolean().optional(),
+  orgId: z.string().min(1).optional(),
+  salesFunnelCampaignIds: z.array(z.string().uuid()).min(1).max(200).optional(),
+  // Only campaigns that follow their plan today.
+  followsPlanOnly: z.boolean().optional(),
+}).strict().openapi("SalesFunnelTargetMoveBody");
+
+const SalesFunnelTargetMoveItem = z.object({
+  salesFunnelCampaignId: z.string(),
+  orgId: z.string(),
+  brandId: z.string(),
+  salesFunnelName: z.string(),
+  status: z.string(),
+  target: z.string(),
+  followsPlan: z.boolean(),
+  // Its ongoing units taking new people before the move, `<featureSlug>|<legKey>`, sorted.
+  pipesBefore: z.array(z.string()),
+  // Always [`engine:<target>`].
+  pipesAfter: z.array(z.string()),
+  // draining = a unit per pipe, kept as it is, takes no new people; born = its one Engine unit (campaignId null on a dry run).
+  units: z.array(z.object({ campaignId: z.string().nullable(), pipeId: z.string(), action: z.enum(["draining", "born"]) })),
+  // Apply only: this campaign could not be moved (nothing written for it).
+  error: z.string().optional(),
+});
+
+export const SalesFunnelTargetMoveResponse = z.object({
+  applied: z.boolean(),
+  // Apply: what moved (a row with `error` did not).
+  moved: z.array(SalesFunnelTargetMoveItem).optional(),
+  // Dry run: what would move.
+  wouldMove: z.array(SalesFunnelTargetMoveItem).optional(),
+  skipped: z.array(z.object({ salesFunnelCampaignId: z.string(), orgId: z.string(), reason: z.enum(["already_on_target", "no_target"]) })),
+}).openapi("SalesFunnelTargetMoveResponse");
 
 export const UpdateCampaignBody = z.object({
   name: z.string().optional(),

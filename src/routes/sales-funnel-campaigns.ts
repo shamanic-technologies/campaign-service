@@ -12,6 +12,7 @@ import { refuseRetiredInstruction } from "../lib/retired-instruction.js";
 import {
   CreateSalesFunnelCampaignBody,
   SalesFunnelCampaignsQuery,
+  SalesFunnelTargetMoveBody,
   UpdateSalesFunnelCampaignBody,
 } from "../schemas.js";
 import { paymentStartRefusal } from "../lib/payment-hold.js";
@@ -43,7 +44,8 @@ import { pgErrorOf } from "../lib/pg-error.js";
 import { SALES_FUNNEL_CAMPAIGN_FIELD_LABELS, describeChanges, reportCampaignAction } from "../lib/account-activity.js";
 import { backfillSalesFunnelCampaignTargets, checkTargetStep } from "../lib/sales-funnel-target.js";
 import { EngineStateUnreadableError, engineUnitWorkflowSlug, liveEngineFor } from "../lib/engine-dispatch.js";
-import { isTargetOnlyCampaign, targetLabelOf, targetOnlyUnitBirth } from "../lib/target-only-campaign.js";
+import { isTargetOnlyCampaign, runsOnItsTarget, targetLabelOf, targetOnlyUnitBirth } from "../lib/target-only-campaign.js";
+import { moveOnTarget } from "../lib/sales-funnel-on-target.js";
 import {
   MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME,
   MAX_BUDGET_REQUIRED_WITH_MAX_VOLUME_ERROR,
@@ -629,7 +631,16 @@ router.patch(
       if (!existing) return res.status(404).json({ error: "Sales funnel campaign not found" });
       // A campaign launched on its target alone (lib/target-only-campaign.ts): its one unit IS its target's Engine, so the
       // target never moves, and it has no sales funnel to follow a plan on.
-      if (isTargetOnlyCampaign(existing)) {
+      // Same for a funnel campaign MOVED onto its Target's Engine (lib/sales-funnel-on-target.ts): its Engine unit is
+      // named after its target, and a plan of pipes would un-drain what the move drained. Units read only when stated.
+      const onItsTarget =
+        isTargetOnlyCampaign(existing) ||
+        ((followsPlan === true || (target !== undefined && target !== existing.target)) &&
+          runsOnItsTarget(
+            existing,
+            await db.select().from(campaigns).where(and(eq(campaigns.orgId, orgId), eq(campaigns.salesFunnelCampaignId, existing.id))),
+          ));
+      if (onItsTarget) {
         if (target !== undefined && target !== existing.target) {
           return res.status(409).json({
             error: `This campaign is made by the Engine of "${existing.target}", so its target can't change. Launch a new campaign on the other target.`,
@@ -894,6 +905,25 @@ router.post("/internal/sales-funnel-campaigns/plan-check", requireApiKey, async 
   } catch (error) {
     if (error instanceof z.ZodError) return res.status(400).json({ error: error.issues.map((i) => i.message).join("; ") });
     console.error("[campaign-service] Plan check error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /internal/sales-funnel-campaigns/target-move {apply?, orgId?, salesFunnelCampaignIds?, followsPlanOnly?} — staff
+ * (PLAN-RECURSIVE-PER-ENGINE-1124-CS, lib/sales-funnel-on-target.ts). Moves the funnel campaigns of the scope (no
+ * field = every campaign) onto their Target's Engine: ONE Engine unit born, their units per pipe draining, their
+ * `sales_funnel_id` (billing's caps key) untouched. `apply` false (default) = a DRY RUN, nothing written. Idempotent.
+ */
+router.post("/internal/sales-funnel-campaigns/target-move", requireApiKey, async (req, res) => {
+  try {
+    const { apply, ...scope } = SalesFunnelTargetMoveBody.parse(req.body ?? {});
+    const result = await moveOnTarget(scope, { apply: apply === true });
+    if (result.applied && result.moves.some((m) => !m.error && m.status === "ongoing")) wakeScheduler();
+    res.json({ applied: result.applied, [result.applied ? "moved" : "wouldMove"]: result.moves, skipped: result.skipped });
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") });
+    console.error("[campaign-service] Target move error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
