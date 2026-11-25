@@ -6,7 +6,7 @@ import { insertSalesFunnelUnits, type SalesFunnelUnitBirth } from "./campaign-st
 import { sameLeg, storedLegKey } from "./leg-identity.js";
 import { acquisitionChannelForFeature, derivedCampaignName } from "./campaign-identity.js";
 import { fetchPipe, fetchSalesFunnel, isSourcingLeg, legsWithoutChannel } from "./sales-funnel-catalogue-client.js";
-import { isTargetOnlyCampaign } from "./target-only-campaign.js";
+import { isTargetOnlyCampaign, runsOnItsTarget } from "./target-only-campaign.js";
 
 /** A pipe of the funnel the CUSTOMER's own team works ("Your team"): a unit with no workflow. */
 export interface CustomerPipe {
@@ -79,12 +79,14 @@ export async function completeSalesFunnelUnits(opts: { apply: boolean; orgId?: s
     if (isTargetOnlyCampaign(parent) || parent.offerId === null) continue;
     // The funnel it RUNS (a campaign following its plan runs the plan's, lib/sales-funnel-plan.ts).
     const runningFunnelId = parent.runningSalesFunnelId ?? parent.salesFunnelId;
-    const funnel = await fetchSalesFunnel(runningFunnelId);
-    if (!funnel.ok) throw new Error(`sales funnel ${runningFunnelId} unreadable: ${funnel.detail}`);
     const units = await db
       .select()
       .from(campaigns)
       .where(and(eq(campaigns.orgId, parent.orgId), eq(campaigns.salesFunnelCampaignId, parent.id)));
+    // Moved onto its Target's Engine (lib/sales-funnel-on-target.ts): its one Engine unit works every leg, none is born back.
+    if (runsOnItsTarget(parent, units)) continue;
+    const funnel = await fetchSalesFunnel(runningFunnelId);
+    if (!funnel.ok) throw new Error(`sales funnel ${runningFunnelId} unreadable: ${funnel.detail}`);
     const entry: UnitCompletion = {
       salesFunnelCampaignId: parent.id,
       orgId: parent.orgId,
