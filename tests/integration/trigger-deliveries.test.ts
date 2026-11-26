@@ -57,6 +57,7 @@ import { fireDueTriggerEvents } from "../../src/lib/trigger-events.js";
 import {
   DELIVERY_SETTLE_AFTER_MS,
   TRIGGER_DELIVERY_MAX,
+  TRIGGER_DELIVERY_NOTHING_YET_MAX,
   deliveryOf,
   resetDeliverySettleClock,
   resetEarlyEnds,
@@ -218,17 +219,19 @@ describe("an occurrence carrying something is consumed only by a run that did it
     expect((await deliveries(res.body.event.id))[0].status).toBe("no_work");
   });
 
-  it(`after ${TRIGGER_DELIVERY_MAX} runs that all found NOTHING TO DO the occurrence ends skipped no_work, never failed`, async () => {
+  it(`after ${TRIGGER_DELIVERY_NOTHING_YET_MAX} runs that all found NOTHING TO DO the occurrence ends skipped no_work, never failed`, async () => {
     const campaign = await emailSending();
     const res = await postEvent({ triggerId: PUSHED, brandId: BRAND, offerId: OFFER, person: PERSON, item: ITEM });
     const eventId = res.body.event.id as string;
-    for (let i = 1; i <= TRIGGER_DELIVERY_MAX; i++) {
+    for (let i = 1; i <= TRIGGER_DELIVERY_NOTHING_YET_MAX; i++) {
       const live = (await deliveries(eventId)).find((d) => d.status === "dispatched")!;
       const settled = await settleTriggerDelivery(live.runId, { success: true, stopCampaign: false, noWorkAvailable: true });
-      if (i < TRIGGER_DELIVERY_MAX) {
+      if (i < TRIGGER_DELIVERY_NOTHING_YET_MAX) {
         expect(settled.kind).toBe("redelivered");
         await db.update(campaigns).set({ consecutiveRunFailures: 0 }).where(eq(campaigns.id, campaign.id));
         const pending = await eventRow(eventId);
+        // HELLO-LATE-1126: nothing yet = asked again in 2 min for the first ~20 min, never the failure backoff.
+        if (i <= 9) expect(pending.dueAt.getTime() - Date.now()).toBeLessThanOrEqual(2 * 60_000);
         expect(await fireDueTriggerEvents(new Date(pending.dueAt.getTime() + 1000))).toBe(1);
       } else {
         expect(settled.kind).toBe("gave_up");
@@ -236,7 +239,7 @@ describe("an occurrence carrying something is consumed only by a run that did it
     }
     const event = await eventRow(eventId);
     expect(event).toMatchObject({ status: "done", outcome: "skipped", skipReason: "no_work", ranCampaignIds: [] });
-    expect(event.lastError).toContain(`all ${TRIGGER_DELIVERY_MAX} runs found nothing to do`);
+    expect(event.lastError).toContain(`all ${TRIGGER_DELIVERY_NOTHING_YET_MAX} runs found nothing to do`);
     expect((await deliveries(eventId)).every((d) => d.status === "no_work")).toBe(true);
   });
 
@@ -269,6 +272,8 @@ describe("an occurrence carrying something is consumed only by a run that did it
         expect(settled.kind).toBe("redelivered");
         await db.update(campaigns).set({ consecutiveRunFailures: 0 }).where(eq(campaigns.id, campaign.id));
         const pending = await eventRow(eventId);
+        // A failed run keeps the failure backoff (2, 10, 30 min...).
+        if (i === 2) expect(pending.dueAt.getTime() - Date.now()).toBeGreaterThan(9 * 60_000);
         expect(await fireDueTriggerEvents(new Date(pending.dueAt.getTime() + 1000))).toBe(1);
       } else {
         expect(settled.kind).toBe("gave_up");
