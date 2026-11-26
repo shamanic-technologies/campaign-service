@@ -86,10 +86,28 @@ export function eventCarries(detail: unknown): boolean {
   return Array.isArray(people) && people.length > 0;
 }
 
-/** The delay before the next delivery, after `failedRuns` failed runs (>= 1). Pure. */
-export function redeliveryDelayMs(failedRuns: number): number {
-  const i = Math.min(Math.max(failedRuns, 1), TRIGGER_DELIVERY_RETRY_DELAYS_MS.length) - 1;
-  return TRIGGER_DELIVERY_RETRY_DELAYS_MS[i];
+/**
+ * NOTHING YET IS NOT A FAILURE (HELLO-LATE-1126). When every run so far ended well with nothing to do (`no_work`), the
+ * fact the run waits on is usually still landing (prod 2026-11-25: a number given during the onboarding walk, the
+ * account created 13 min later; the founder hello's runs found nothing to say hello about, the redelivery backed off
+ * 2, 10, 30 min and the hello left 30 min after the account existed). Such a chain is asked again every 2 min for its
+ * first ~20 min, then on the same backoff, over the same ~4 h. A run that failed puts the chain back on the failure
+ * backoff and `TRIGGER_DELIVERY_MAX`. Each "nothing yet" run ends before any send (that is what `no_work` says).
+ */
+export const TRIGGER_DELIVERY_NOTHING_YET_DELAYS_MS = [2, 2, 2, 2, 2, 2, 2, 2, 2, 10, 30, 60, 120].map((m) => m * 60_000);
+/** Runs a campaign gets for one occurrence when every one of them found nothing to do yet. */
+export const TRIGGER_DELIVERY_NOTHING_YET_MAX = TRIGGER_DELIVERY_NOTHING_YET_DELAYS_MS.length + 1;
+
+/** Runs a campaign gets for one occurrence: `TRIGGER_DELIVERY_MAX`, or the "nothing yet" count when no run failed. Pure. */
+export function deliveryMax(nothingToDo: boolean): number {
+  return nothingToDo ? TRIGGER_DELIVERY_NOTHING_YET_MAX : TRIGGER_DELIVERY_MAX;
+}
+
+/** The delay before the next delivery, after `failedRuns` unfinished runs (>= 1), all `no_work` or not. Pure. */
+export function redeliveryDelayMs(failedRuns: number, nothingToDo = false): number {
+  const delays = nothingToDo ? TRIGGER_DELIVERY_NOTHING_YET_DELAYS_MS : TRIGGER_DELIVERY_RETRY_DELAYS_MS;
+  const i = Math.min(Math.max(failedRuns, 1), delays.length) - 1;
+  return delays[i];
 }
 
 /** What a run states it did with the item / person its occurrence carried (`/end-run` `delivery`). */
@@ -281,13 +299,14 @@ async function settleDispatched(
       eq(triggerEventDeliveries.campaignId, d.campaignId),
       inArray(triggerEventDeliveries.status, [...UNFINISHED_DELIVERY_STATUSES]),
     ));
-  const giveUp = failedRuns.length >= TRIGGER_DELIVERY_MAX;
   // Every run ended well and found nothing to do: the occurrence ends skipped, never "failed".
   const nothingToDo = failedRuns.every((r) => r.status === "no_work");
+  const maxRuns = deliveryMax(nothingToDo);
+  const giveUp = failedRuns.length >= maxRuns;
   const gaveUpOutcome = nothingToDo
     ? { OUTCOME: "skipped", REASON: TRIGGER_EVENT_NOTHING_TO_DO }
     : TRIGGER_EVENT_FAILED;
-  const dueAt = new Date(now.getTime() + redeliveryDelayMs(failedRuns.length));
+  const dueAt = new Date(now.getTime() + redeliveryDelayMs(failedRuns.length, nothingToDo));
 
   for (let attempt = 1; attempt <= FIRING_TRIES; attempt++) {
     const applied = await db.transaction(async (tx) => {
@@ -337,7 +356,7 @@ async function settleDispatched(
       }
 
       const retry = [...new Set([...(pending ? strings(own.retryCampaignIds) : []), d.campaignId])];
-      const why = `campaign ${d.campaignId}: run ${runId} did not complete its work (${failedRuns.length} of ${TRIGGER_DELIVERY_MAX}), redelivered at ${dueAt.toISOString()}`;
+      const why = `campaign ${d.campaignId}: run ${runId} did not complete its work (${failedRuns.length} of ${maxRuns}), redelivered at ${dueAt.toISOString()}`;
       await tx
         .update(triggerEvents)
         .set({
@@ -366,7 +385,7 @@ async function settleDispatched(
         return { kind: "gave_up", eventId: d.eventId, campaignId: d.campaignId, failedRuns: failedRuns.length };
       }
       console.warn(
-        `[campaign-service] trigger event ${d.eventId}: run ${runId} of campaign ${d.campaignId} did not complete its work (${failedRuns.length} of ${TRIGGER_DELIVERY_MAX}); redelivered at ${dueAt.toISOString()}`,
+        `[campaign-service] trigger event ${d.eventId}: run ${runId} of campaign ${d.campaignId} did not complete its work (${failedRuns.length} of ${maxRuns}); redelivered at ${dueAt.toISOString()}`,
       );
       return { kind: "redelivered", eventId: d.eventId, campaignId: d.campaignId, failedRuns: failedRuns.length, dueAt };
     }
