@@ -94,9 +94,23 @@ export function eventConcernsPeople(people: readonly NamedPerson[], eventLeadId:
  * (REPLY-PHONE-ONLY-1015). The phone rides beside an email too (lead-service infers the timezone from it);
  * lead-service refuses a phone shorter than 3 characters: such a value carries no country. Pure.
  */
-export function personIdentity(input: { email: string | null; phone?: string | null }): { email?: string; phone?: string } {
+export function personIdentity(input: {
+  email: string | null;
+  phone?: string | null;
+  handle?: string | null;
+  humanId?: string | null;
+}): { email?: string; phone?: string; handle?: string; humanId?: string } {
   const phone = input.phone && input.phone.trim().length >= 3 ? input.phone.trim() : null;
-  return { ...(input.email ? { email: input.email } : {}), ...(phone ? { phone } : {}) };
+  // LEAD-REPLY-CHANNEL-1127: a person known by neither an email nor a phone (a Telegram / LinkedIn writer) is
+  // identified by their messaging handle (`msg:<network>:<id>`), with human-service's id beside it when known.
+  // Stated ONLY then: an email / phone body is byte-identical to before.
+  const handle = !input.email && !phone && input.handle?.trim() ? input.handle.trim() : null;
+  return {
+    ...(input.email ? { email: input.email } : {}),
+    ...(phone ? { phone } : {}),
+    ...(handle ? { handle } : {}),
+    ...(handle && input.humanId ? { humanId: input.humanId } : {}),
+  };
 }
 
 /**
@@ -139,6 +153,8 @@ export async function scheduleNamedPersonDue(input: {
   /** Null = a person known only by phone (REPLY-PHONE-ONLY-1015): identified by `phone` (E.164). */
   email: string | null;
   phone?: string | null;
+  /** A person known by neither email nor phone: identified by `handle` (LEAD-REPLY-CHANNEL-1127). */
+  handle?: string | null;
   now?: Date;
   statedBy?: PersonStatement | null;
 }): Promise<ScheduleDueOutcome> {
@@ -233,6 +249,10 @@ export async function fileNamedPerson(input: {
   phone?: string | null;
   /** IANA zone the client stated for the person: always wins at lead-service. */
   timezone?: string | null;
+  /** A person known by neither email nor phone: filed on `handle` (LEAD-REPLY-CHANNEL-1127). */
+  handle?: string | null;
+  /** human-service's id of a handle-identified person, when known. */
+  humanId?: string | null;
 }): Promise<FileNamedPersonOutcome> {
   const url = process.env.LEAD_SERVICE_URL;
   const apiKey = process.env.LEAD_SERVICE_API_KEY;

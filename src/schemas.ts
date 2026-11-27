@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isIanaTimezone } from "./lib/iana-timezone.js";
 import { canonicalPhone, isE164Phone } from "./lib/e164-phone.js";
+import { isMessagingHandle } from "./lib/messaging-handle.js";
 import { TARGET_STEP_DESCRIPTION } from "./lib/target-step-vocabulary.js";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 
@@ -979,11 +980,29 @@ export const RecordTriggerEventBody = z.object({
       .optional(),
     /** The contact in the brand's own CRM the person came from, carried verbatim. */
     crmContact: z.object({ provider: z.string().min(1), contactId: z.string().min(1) }).strict().optional(),
+    /**
+     * The person's MESSAGING HANDLE on the app they wrote from, as the caller's CRM states it:
+     * `msg:<network>:<id>` (e.g. `msg:telegram:123456789`). REQUIRED when neither an email nor an E.164 phone
+     * is known (LEAD-REPLY-CHANNEL-1127: a Telegram or LinkedIn writer carries neither): such a person is filed
+     * and made due at lead-service BY HANDLE and reaches the answering pipe exactly like a phone-identified one.
+     * Email or phone stated = they identify the person, as before; the handle is then carried only.
+     */
+    handle: z.string().trim().max(300)
+      .refine(isMessagingHandle, "person.handle must read msg:<network>:<id> (e.g. msg:telegram:123456789)")
+      .optional(),
+    /** human-service's id of the person, when the caller resolved it (carried; filed beside a handle). */
+    humanId: z.string().uuid("person.humanId must be a uuid").optional(),
+    /** The caller's own id of the person (e.g. crm-service's person id), carried verbatim. */
+    crmPersonId: z.string().trim().min(1).max(200).optional(),
   }).strict()
-    .refine((p) => p.email !== undefined || (p.phone !== undefined && isE164Phone(p.phone)), {
-      message: "person needs an email, or a phone in E.164 (e.g. +447700900123) when no email is known",
-      path: ["phone"],
-    })
+    .refine(
+      (p) => p.email !== undefined || (p.phone !== undefined && isE164Phone(p.phone)) || p.handle !== undefined,
+      {
+        message:
+          "person needs an email, or a phone in E.164 (e.g. +447700900123), or a messaging handle (msg:<network>:<id>) when neither is known",
+        path: ["phone"],
+      },
+    )
     .optional(),
   /**
    * What the occurrence carries (e.g. a form: `{formName, answers, submittedAt}`), opaque JSON kept on the
