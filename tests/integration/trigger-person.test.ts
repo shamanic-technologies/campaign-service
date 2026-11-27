@@ -178,6 +178,31 @@ describe("an event naming a person by identity (lib/trigger-person.ts)", () => {
     });
   });
 
+  it("LEAD-REPLY-CHANNEL-1127: a person known only by their messaging handle is recorded, filed and made due BY HANDLE, and reaches the pipe", async () => {
+    const campaign = await meetingBooking("ongoing");
+    const humanId = "5b1d1a3e-0000-4000-8000-0000000000aa";
+    const person = { handle: "msg:telegram:123456789", name: "Ada (Telegram)", humanId, crmPersonId: "crm-person-1" };
+    const res = await postEvent({ triggerId: FORM, brandId: BRAND, offerId: OFFER, person, item: ITEM });
+    expect(res.status).toBe(201);
+    expect(res.body.event).toMatchObject({ status: "done", outcome: "ran", ranCampaignIds: [campaign.id] });
+    expect(res.body.event.detail.person).toMatchObject({ email: null, phone: null, ...person });
+    expect(mockFile).toHaveBeenCalledWith(expect.objectContaining({
+      campaignId: campaign.id,
+      email: null,
+      phone: null,
+      handle: "msg:telegram:123456789",
+      humanId,
+      name: "Ada (Telegram)",
+      statedBy: { triggerEventId: res.body.event.id, triggerId: FORM },
+    }));
+    expect(mockDue).toHaveBeenCalledWith(expect.objectContaining({ campaignId: campaign.id, email: null, handle: "msg:telegram:123456789" }));
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(mockExecute.mock.calls[0][1].trigger).toMatchObject({
+      leadId: "lead-jane",
+      person: { email: null, phone: null, handle: "msg:telegram:123456789", humanId, crmPersonId: "crm-person-1" },
+    });
+  });
+
   it("REPLY-PHONE-ONLY-1015: a person with neither email nor an E.164 phone is refused by name, nothing written", async () => {
     await meetingBooking("ongoing");
     for (const person of [{ name: "Nobody" }, { phone: "07700 900123", name: "Local number" }]) {

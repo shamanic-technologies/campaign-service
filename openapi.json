@@ -2667,6 +2667,19 @@
                   "contactId"
                 ],
                 "additionalProperties": false
+              },
+              "handle": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "humanId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "crmPersonId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
               }
             },
             "additionalProperties": false

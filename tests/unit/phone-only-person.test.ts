@@ -38,3 +38,29 @@ describe("a person known only by phone", () => {
     expect(personLabel({ email: "a@x.com", phone: "+447700900123" })).toBe("a@x.com");
   });
 });
+
+/** LEAD-REPLY-CHANNEL-1127: a Telegram / LinkedIn writer carries neither an email nor a phone, only their handle. */
+describe("a person known only by their messaging handle", () => {
+  const base = { triggerId: "lead_event", brandId: "75d7e3e8-0000-4000-8000-000000000022", offerId: "231bb036-0000-4000-8000-000000000023" };
+  const HUMAN = "5b1d1a3e-0000-4000-8000-0000000000aa";
+
+  it("the door accepts a handle with no email and no phone, any network; refuses a malformed one", () => {
+    for (const handle of ["msg:telegram:123456789", "msg:linkedin:ACoAAB-xyz", "msg:anyapp:@someone"]) {
+      expect(RecordTriggerEventBody.safeParse({ ...base, person: { handle, name: "Ada", humanId: HUMAN, crmPersonId: "p-1" } }).success).toBe(true);
+    }
+    for (const handle of ["telegram:123", "msg::123", "msg:Telegram:1", "msg:telegram:"]) {
+      expect(RecordTriggerEventBody.safeParse({ ...base, person: { handle } }).success).toBe(false);
+    }
+    expect(RecordTriggerEventBody.safeParse({ ...base, person: { humanId: HUMAN, crmPersonId: "p-1" } }).success).toBe(false);
+    expect(RecordTriggerEventBody.safeParse({ ...base, person: { handle: "msg:telegram:1", humanId: "not-a-uuid" } }).success).toBe(false);
+  });
+
+  it("canonical + read back: the handle survives a retry, carried beside an email or phone untouched", () => {
+    const p = eventPerson({ handle: " msg:telegram:123 ", name: "Ada", humanId: HUMAN, crmPersonId: "p-1" });
+    expect(p).toEqual({ email: null, name: "Ada", phone: null, crmContact: null, handle: "msg:telegram:123", humanId: HUMAN, crmPersonId: "p-1" });
+    expect(storedEventPerson(JSON.parse(JSON.stringify(p)))).toEqual(p);
+    expect(personLabel(p)).toBe("msg:telegram:123");
+    // A push stating no handle: byte-identical shape to before.
+    expect(eventPerson({ email: "a@x.com" })).toEqual({ email: "a@x.com", name: null, phone: null, crmContact: null });
+  });
+});

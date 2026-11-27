@@ -38,6 +38,8 @@ export interface PersonRunInFlight {
   campaignId: string;
   email: string | null;
   phone: string | null;
+  /** Messaging handle of a person known by neither email nor phone (LEAD-REPLY-CHANNEL-1127). */
+  handle?: string | null;
 }
 
 /** The person-carrying runs in flight on these campaigns. */
@@ -49,6 +51,7 @@ export async function personRunsInFlight(campaignIds: readonly string[], now: Da
       campaignId: triggerEventDeliveries.campaignId,
       email: sql<string | null>`${triggerEvents.detail}->'person'->>'email'`,
       phone: sql<string | null>`${triggerEvents.detail}->'person'->>'phone'`,
+      handle: sql<string | null>`${triggerEvents.detail}->'person'->>'handle'`,
     })
     .from(triggerEventDeliveries)
     .innerJoin(triggerEvents, eq(triggerEvents.id, triggerEventDeliveries.eventId))
@@ -64,13 +67,16 @@ export async function personRunsInFlight(campaignIds: readonly string[], now: Da
 /** workflow-service's admission subject for a run about this person (`email:<addr>`, else `phone:<e164>`). Pure. */
 export function executionSubjectOf(person: EventPerson): string | undefined {
   if (person.email) return `email:${person.email}`;
-  return person.phone ? `phone:${person.phone}` : undefined;
+  if (person.phone) return `phone:${person.phone}`;
+  return person.handle ? `handle:${person.handle}` : undefined;
 }
 
 /** Whether a run in flight is about this person (same email, or same phone for a phone-only person). Pure. */
-export function samePerson(run: Pick<PersonRunInFlight, "email" | "phone">, person: EventPerson): boolean {
+export function samePerson(run: Pick<PersonRunInFlight, "email" | "phone" | "handle">, person: EventPerson): boolean {
   if (person.email) return run.email === person.email;
-  return !!person.phone && !run.email && run.phone === person.phone;
+  if (person.phone) return !run.email && run.phone === person.phone;
+  // A handle-only person (LEAD-REPLY-CHANNEL-1127): the same handle, on a run that names them by nothing else.
+  return !!person.handle && !run.email && !run.phone && run.handle === person.handle;
 }
 
 /**
@@ -107,7 +113,8 @@ const RESERVATION_TTL_MS = 2 * 60_000;
 const reservations = new Map<string, PersonRunInFlight & { cohortKey: string; at: number }>();
 const cohortLocks = new Map<string, Promise<unknown>>();
 
-const personKey = (p: Pick<PersonRunInFlight, "email" | "phone">) => (p.email ? `e:${p.email}` : `p:${p.phone ?? ""}`);
+const personKey = (p: Pick<PersonRunInFlight, "email" | "phone" | "handle">) =>
+  p.email ? `e:${p.email}` : p.phone ? `p:${p.phone}` : `h:${p.handle ?? ""}`;
 
 async function underCohortLock<T>(cohortKey: string, work: () => Promise<T>): Promise<T> {
   const prior = cohortLocks.get(cohortKey) ?? Promise.resolve();
@@ -142,8 +149,8 @@ export async function reservePersonRun(
     for (const r of [...stored, ...held]) byPerson.set(`${r.campaignId}|${personKey(r)}`, r);
     const hold = personRunHold(campaignId, person, [...byPerson.values()]);
     if (hold) return { ok: false as const, ...hold };
-    const key = `${cohortKey}|${campaignId}|${personKey({ email: person.email, phone: person.phone ?? null })}|${crypto.randomUUID()}`;
-    reservations.set(key, { campaignId, email: person.email, phone: person.phone ?? null, cohortKey, at: now.getTime() });
+    const key = `${cohortKey}|${campaignId}|${personKey({ email: person.email, phone: person.phone ?? null, handle: person.handle ?? null })}|${crypto.randomUUID()}`;
+    reservations.set(key, { campaignId, email: person.email, phone: person.phone ?? null, handle: person.handle ?? null, cohortKey, at: now.getTime() });
     for (const [k, r] of reservations) if (now.getTime() - r.at >= RESERVATION_TTL_MS) reservations.delete(k);
     return { ok: true as const, release: () => void reservations.delete(key) };
   });
@@ -151,7 +158,7 @@ export async function reservePersonRun(
 
 /** The delivery rows of these dispatched runs exist now: their in-memory claims are no longer needed. */
 export function releasePersonRunReservations(campaignIds: readonly string[], person: EventPerson): void {
-  const who = personKey({ email: person.email, phone: person.phone ?? null });
+  const who = personKey({ email: person.email, phone: person.phone ?? null, handle: person.handle ?? null });
   for (const [k, r] of reservations) {
     if (campaignIds.includes(r.campaignId) && personKey(r) === who) reservations.delete(k);
   }
@@ -225,7 +232,9 @@ export async function personAnsweredAfterFact(
     ? sql`e.detail->'person'->>'email' = ${person.email}`
     : person.phone
       ? sql`(e.detail->'person'->>'email') IS NULL AND e.detail->'person'->>'phone' = ${person.phone}`
-      : null;
+      : person.handle
+        ? sql`(e.detail->'person'->>'email') IS NULL AND (e.detail->'person'->>'phone') IS NULL AND e.detail->'person'->>'handle' = ${person.handle}`
+        : null;
   if (!samePersonSql) return null;
   const rows = (await db.execute(sql`
     SELECT d.run_id, d.dispatched_at

@@ -98,6 +98,8 @@ export async function owedOccurrencesOf(campaignId: string, now: Date = new Date
             (e.detail->'person'->>'email' IS NOT NULL AND lower(o.detail->'person'->>'email') = lower(e.detail->'person'->>'email'))
             OR (e.detail->'person'->>'phone' IS NOT NULL AND o.detail->'person'->>'phone' = e.detail->'person'->>'phone')
             OR (e.detail->'item'->>'humanId' IS NOT NULL AND o.detail->'item'->>'humanId' = e.detail->'item'->>'humanId')
+            OR (e.detail->'person'->>'handle' IS NOT NULL AND o.detail->'person'->>'handle' = e.detail->'person'->>'handle')
+            OR (e.detail->'person'->>'humanId' IS NOT NULL AND o.detail->'person'->>'humanId' = e.detail->'person'->>'humanId')
           )
       )
     ORDER BY l.dispatched_at DESC

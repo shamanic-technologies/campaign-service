@@ -113,4 +113,54 @@ describe("scheduleNamedPersonDue: who lead-service makes due", () => {
     expect(out).toEqual({ ok: true });
     expect(calls[0].body).toEqual({ phone: "+447700900123", dueAt: "2026-10-15T16:00:00.000Z" });
   });
+
+});
+
+describe("LEAD-REPLY-CHANNEL-1127: a person named by their messaging handle", () => {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  let answer: { status: number; body: unknown } = { status: 201, body: {} };
+  beforeEach(() => {
+    process.env.LEAD_SERVICE_URL = "http://lead:3000";
+    process.env.LEAD_SERVICE_API_KEY = "k";
+    calls.length = 0;
+    vi.stubGlobal("fetch", async (url: string, init: { body: string }) => {
+      calls.push({ url, body: JSON.parse(init.body) });
+      return new Response(JSON.stringify(answer.body), { status: answer.status });
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("LEAD-REPLY-CHANNEL-1127: a person known only by handle is filed and made due on the handle (+ humanId on the filing)", async () => {
+    answer = { status: 201, body: { leadId: "lead-3", status: "filed" } };
+    const out = await fileNamedPerson({
+      orgId: "o",
+      campaignId: "c",
+      email: null,
+      phone: null,
+      handle: "msg:telegram:123",
+      humanId: "5b1d1a3e-0000-4000-8000-0000000000aa",
+      statedBy: { triggerEventId: "e" },
+      name: "Ada",
+    });
+    expect(out).toEqual({ ok: true, leadId: "lead-3", filed: true });
+    expect(calls[0].body).toEqual({
+      handle: "msg:telegram:123",
+      humanId: "5b1d1a3e-0000-4000-8000-0000000000aa",
+      statedBy: { triggerEventId: "e" },
+      name: "Ada",
+    });
+    answer = { status: 200, body: { followup: { dueAt: "2026-11-27T00:00:00.000Z" } } };
+    await scheduleNamedPersonDue({ orgId: "o", campaignId: "c", email: null, phone: null, handle: "msg:telegram:123", statedBy: { triggerEventId: "e" } });
+    expect(calls[1].url).toBe("http://lead:3000/orgs/campaigns/c/followups/schedule-by-email");
+    expect(calls[1].body).toMatchObject({ handle: "msg:telegram:123", statedBy: { triggerEventId: "e" } });
+    expect(calls[1].body).not.toHaveProperty("email");
+  });
+
+  it("LEAD-REPLY-CHANNEL-1127: an email or phone identifies the person; the handle is never sent beside them", async () => {
+    answer = { status: 201, body: { leadId: "lead-1", status: "filed" } };
+    await fileNamedPerson({ orgId: "o", campaignId: "c", email: "a@x.com", handle: "msg:telegram:1", humanId: "h" });
+    await fileNamedPerson({ orgId: "o", campaignId: "c", email: null, phone: "+447700900123", handle: "msg:telegram:1" });
+    expect(calls[0].body).toEqual({ email: "a@x.com" });
+    expect(calls[1].body).toEqual({ phone: "+447700900123" });
+  });
 });

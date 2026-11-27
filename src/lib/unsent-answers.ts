@@ -318,6 +318,10 @@ export async function answeredLaterByOwnRuns(eventIds: string[]): Promise<Set<st
           AND o.detail->'person'->>'phone' = e.detail->'person'->>'phone')
         OR (e.detail->'item'->>'humanId' IS NOT NULL
           AND o.detail->'item'->>'humanId' = e.detail->'item'->>'humanId')
+        OR (e.detail->'person'->>'handle' IS NOT NULL
+          AND o.detail->'person'->>'handle' = e.detail->'person'->>'handle')
+        OR (e.detail->'person'->>'humanId' IS NOT NULL
+          AND o.detail->'person'->>'humanId' = e.detail->'person'->>'humanId')
       )`);
   return new Set(found.map((r) => r.event_id));
 }
@@ -328,7 +332,7 @@ export async function answeredLaterByOwnRuns(eventIds: string[]): Promise<Set<st
  */
 async function settleByConversation(
   red: Array<{
-    p: { event_id: string; org_id: string; brand_id: string; fact_at: Date | string; item_relation_key: string | null; item_human_id: string | null; person: { email?: string | null; phone?: string | null } | null };
+    p: { event_id: string; org_id: string; brand_id: string; fact_at: Date | string; item_relation_key: string | null; item_human_id: string | null; person: { email?: string | null; phone?: string | null; humanId?: string | null } | null };
     state: AnswerState;
   }>,
 ): Promise<void> {
@@ -346,6 +350,8 @@ async function settleByConversation(
       if (c.p.person?.phone) ask.phone = c.p.person.phone;
       if (c.p.item_relation_key) ask.relationKey = c.p.item_relation_key;
       if (c.p.item_human_id) ask.humanId = c.p.item_human_id;
+      // A person known only by their messaging handle (LEAD-REPLY-CHANNEL-1127) is asked by human-service's id.
+      else if (c.p.person?.humanId) ask.humanId = c.p.person.humanId;
       if (ask.email || ask.phone || ask.relationKey || ask.humanId) asks.push(ask);
     }
     try {
