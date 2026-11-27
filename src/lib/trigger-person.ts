@@ -57,6 +57,16 @@ export interface EventPerson {
   timezone?: string | null;
   /** The contact in the brand's own CRM the person came from, carried verbatim. */
   crmContact?: { provider: string; contactId: string } | null;
+  /**
+   * The person's MESSAGING HANDLE as crm-service states it (`msg:<network>:<id>`, LEAD-REPLY-CHANNEL-1127): the
+   * identity of a person known by neither an email nor a phone (a Telegram / LinkedIn writer). Filed and made due
+   * at lead-service by `handle`. Absent = never stated (a push stating none is byte-identical to before).
+   */
+  handle?: string | null;
+  /** human-service's id of the person, when the caller resolved it. Carried, never an identity on its own here. */
+  humanId?: string | null;
+  /** The caller's own id of the person (crm-service's person id), carried verbatim. */
+  crmPersonId?: string | null;
 }
 
 /** How soon an event held back for a passing reason (`PERSON_EVENT_RETRY_SKIPS`) is tried again, while young. */
@@ -129,16 +139,24 @@ export function eventPerson(input: {
   phone?: string;
   timezone?: string;
   crmContact?: { provider: string; contactId: string };
+  handle?: string;
+  humanId?: string;
+  crmPersonId?: string;
 }): EventPerson {
   const email = input.email ? canonicalEmail(input.email) : null;
+  const handle = input.handle?.trim() || null;
   return {
     email,
     name: input.name?.trim() || null,
-    // The identity of a phone-only person is its canonical E.164 spelling (validated at the door).
+    // The identity of a phone-only person is its canonical E.164 spelling (validated at the door). A stated phone
+    // that is no E.164 number beside a handle (handle-identified person) is not an identity: dropped, never guessed.
     phone: email ? input.phone?.trim() || null : input.phone ? canonicalPhone(input.phone) || null : null,
     // Present only when stated: a push stating none is byte-identical to before (row, `/execute`).
     ...(input.timezone?.trim() ? { timezone: input.timezone.trim() } : {}),
     crmContact: input.crmContact ?? null,
+    ...(handle ? { handle } : {}),
+    ...(input.humanId?.trim() ? { humanId: input.humanId.trim() } : {}),
+    ...(input.crmPersonId?.trim() ? { crmPersonId: input.crmPersonId.trim() } : {}),
   };
 }
 
@@ -147,8 +165,10 @@ export function storedEventPerson(value: unknown): EventPerson | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const r = value as Record<string, unknown>;
   const email = typeof r.email === "string" && r.email ? r.email : null;
-  // A person with no email is identified by phone (REPLY-PHONE-ONLY-1015); neither = no person.
-  if (!email && !(typeof r.phone === "string" && r.phone)) return null;
+  const handle = typeof r.handle === "string" && r.handle ? r.handle : null;
+  // A person with no email is identified by phone (REPLY-PHONE-ONLY-1015), else by their messaging handle
+  // (LEAD-REPLY-CHANNEL-1127); none = no person.
+  if (!email && !(typeof r.phone === "string" && r.phone) && !handle) return null;
   const crm = r.crmContact && typeof r.crmContact === "object" ? (r.crmContact as Record<string, unknown>) : null;
   return {
     email,
@@ -158,6 +178,9 @@ export function storedEventPerson(value: unknown): EventPerson | null {
     crmContact: crm && typeof crm.provider === "string" && typeof crm.contactId === "string"
       ? { provider: crm.provider, contactId: crm.contactId }
       : null,
+    ...(handle ? { handle } : {}),
+    ...(typeof r.humanId === "string" && r.humanId ? { humanId: r.humanId } : {}),
+    ...(typeof r.crmPersonId === "string" && r.crmPersonId ? { crmPersonId: r.crmPersonId } : {}),
   };
 }
 
@@ -198,6 +221,8 @@ export async function oweEventPerson(
     // client gave (a +44 number = UK) and the zone they stated, if any. No zone is ever made up here.
     phone: person.phone ?? null,
     timezone: person.timezone ?? null,
+    handle: person.handle ?? null,
+    humanId: person.humanId ?? null,
   });
   if (!filed.ok) {
     if (
@@ -215,6 +240,7 @@ export async function oweEventPerson(
     campaignId: campaign.id,
     email: person.email,
     phone: person.phone ?? null,
+    handle: person.handle ?? null,
     now,
     statedBy: statedBy ?? null,
   });
@@ -222,7 +248,7 @@ export async function oweEventPerson(
   return { ok: true, leadId: filed.leadId };
 }
 
-/** How a person is named in a log line or a skip detail: email, else phone. Pure. */
-export function personLabel(person: Pick<EventPerson, "email" | "phone">): string {
-  return person.email ?? person.phone ?? "an unidentified person";
+/** How a person is named in a log line or a skip detail: email, else phone, else messaging handle. Pure. */
+export function personLabel(person: Pick<EventPerson, "email" | "phone" | "handle">): string {
+  return person.email ?? person.phone ?? person.handle ?? "an unidentified person";
 }
